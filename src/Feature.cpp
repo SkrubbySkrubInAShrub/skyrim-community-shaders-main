@@ -156,12 +156,16 @@ void Feature::Load(json& o_json)
 			logger::info("Loading default settings for {}", GetName());
 			RestoreDefaultSettings();
 		}
+		// Capture loaded/default settings as fallback for weather lerping
+		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetName());
 	}
 }
 
 void Feature::Save(json& o_json)
 {
 	SaveSettings(o_json[GetName()]);
+	// Update user settings fallback for weather lerping when user saves
+	WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetName());
 }
 
 bool Feature::ValidateCache(CSimpleIniA& a_ini)

@@ -38,6 +38,7 @@ namespace WeatherVariables
 		virtual void SaveToJson(json& j) const = 0;
 		virtual void LoadFromJson(const json& j) = 0;
 		virtual void SetToDefault() = 0;
+		virtual void CaptureUserSettings() = 0;  // Capture current value as user settings fallback
 		virtual std::string GetName() const = 0;
 		virtual std::string GetDisplayName() const = 0;
 		virtual std::string GetTooltip() const = 0;
@@ -52,7 +53,7 @@ namespace WeatherVariables
 			T* valuePtr, T defaultValue,
 			std::function<T(const T&, const T&, float)> lerpFunc = nullptr) :
 			name(name),
-			displayName(displayName), tooltip(tooltip), valuePtr(valuePtr), defaultValue(defaultValue), lerpFunc(lerpFunc)
+			displayName(displayName), tooltip(tooltip), valuePtr(valuePtr), defaultValue(defaultValue), userSettingsValue(defaultValue), hasUserSettings(false), lerpFunc(lerpFunc)
 		{
 			if (!lerpFunc) {
 				// Default lerp for float types
@@ -62,6 +63,28 @@ namespace WeatherVariables
 					};
 				}
 			}
+		}
+
+		// Capture current value as the user settings value (call after loading from UserSettings.json)
+		void CaptureUserSettingsValue()
+		{
+			if (valuePtr) {
+				userSettingsValue = *valuePtr;
+				hasUserSettings = true;
+			}
+		}
+
+		// Set user settings value directly
+		void SetUserSettingsValue(const T& value)
+		{
+			userSettingsValue = value;
+			hasUserSettings = true;
+		}
+
+		// Get the fallback value (user settings if available, otherwise programmatic default)
+		T GetFallbackValue() const
+		{
+			return hasUserSettings ? userSettingsValue : defaultValue;
 		}
 
 		void Lerp(const json& from, const json& to, float factor) override
@@ -78,15 +101,17 @@ namespace WeatherVariables
 				return;
 			}
 
-			T fromVal = defaultValue;
-			T toVal = defaultValue;
+			// Use user settings value as fallback when no override exists
+			T fallbackValue = GetFallbackValue();
+			T fromVal = fallbackValue;
+			T toVal = fallbackValue;
 
 			if (hasFromOverride) {
 				try {
 					fromVal = from.get<T>();
 				} catch (const nlohmann::json::type_error& e) {
 					logger::debug("Type error in Lerp 'from' for {}: {}", name, e.what());
-					fromVal = defaultValue;
+					fromVal = fallbackValue;
 				}
 			}
 
@@ -95,7 +120,7 @@ namespace WeatherVariables
 					toVal = to.get<T>();
 				} catch (const nlohmann::json::type_error& e) {
 					logger::debug("Type error in Lerp 'to' for {}: {}", name, e.what());
-					toVal = defaultValue;
+					toVal = fallbackValue;
 				}
 			}
 
@@ -128,6 +153,11 @@ namespace WeatherVariables
 			}
 		}
 
+		void CaptureUserSettings() override
+		{
+			CaptureUserSettingsValue();
+		}
+
 		std::string GetName() const override { return name; }
 		std::string GetDisplayName() const override { return displayName; }
 		std::string GetTooltip() const override { return tooltip; }
@@ -138,6 +168,8 @@ namespace WeatherVariables
 		std::string tooltip;
 		T* valuePtr;
 		T defaultValue;
+		T userSettingsValue;
+		bool hasUserSettings;
 		std::function<T(const T&, const T&, float)> lerpFunc;
 	};
 
@@ -302,6 +334,14 @@ namespace WeatherVariables
 			}
 		}
 
+		// Capture current values as user settings (call after loading from UserSettings.json)
+		void CaptureAllUserSettings()
+		{
+			for (auto& var : variables) {
+				var->CaptureUserSettings();
+			}
+		}
+
 		const std::vector<std::shared_ptr<IWeatherVariable>>& GetVariables() const { return variables; }
 
 	private:
@@ -377,6 +417,15 @@ namespace WeatherVariables
 			auto* registry = GetFeatureRegistry(featureName);
 			if (registry) {
 				registry->LoadAllFromJson(j);
+			}
+		}
+
+		// Capture current values as user settings fallback (call after loading from UserSettings.json)
+		void CaptureFeatureUserSettings(const std::string& featureName)
+		{
+			auto* registry = GetFeatureRegistry(featureName);
+			if (registry) {
+				registry->CaptureAllUserSettings();
 			}
 		}
 
