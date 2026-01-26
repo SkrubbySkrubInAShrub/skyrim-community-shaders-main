@@ -158,6 +158,8 @@ void Feature::Load(json& o_json)
 		}
 		// Capture loaded/default settings as fallback for weather lerping
 		WeatherVariables::GlobalWeatherRegistry::GetSingleton()->CaptureFeatureUserSettings(GetName());
+		logger::debug("Captured user settings for {} as weather lerping fallback", GetName());
+		logger::debug("Captured these settings: {}", CaptureFeatureUserSettings(GetName()));
 	}
 }
 
