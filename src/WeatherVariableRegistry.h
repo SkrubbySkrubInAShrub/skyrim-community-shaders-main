@@ -71,7 +71,6 @@ namespace WeatherVariables
 			if (valuePtr) {
 				userSettingsValue = *valuePtr;
 				hasUserSettings = true;
-				logger::debug("Captured user settings value for weather variable: {}", name);
 			}
 		}
 
@@ -104,12 +103,8 @@ namespace WeatherVariables
 
 			// Use user settings value as fallback when no override exists
 			T fallbackValue = GetFallbackValue();
-			if (hasUserSettings) {
-				logger::debug("Using user settings fallback for weather variable: {}", name);
-			}
 			T fromVal = fallbackValue;
 			T toVal = fallbackValue;
-
 
 			if (hasFromOverride) {
 				try {
@@ -127,8 +122,6 @@ namespace WeatherVariables
 					logger::debug("Type error in Lerp 'to' for {}: {}", name, e.what());
 					toVal = fallbackValue;
 				}
-			} else if (hasFromOverride) {
-				logger::debug("No 'to' override for weather variable: {}, using user settings fallback", name);
 			}
 
 			*valuePtr = lerpFunc(fromVal, toVal, factor);
@@ -344,7 +337,6 @@ namespace WeatherVariables
 		// Capture current values as user settings (call after loading from UserSettings.json)
 		void CaptureAllUserSettings()
 		{
-			logger::debug("Capturing all user settings for feature weather variables");
 			for (auto& var : variables) {
 				var->CaptureUserSettings();
 			}
@@ -433,7 +425,6 @@ namespace WeatherVariables
 		{
 			auto* registry = GetFeatureRegistry(featureName);
 			if (registry) {
-				logger::debug("Capturing user settings for feature: {}", featureName);
 				registry->CaptureAllUserSettings();
 			}
 		}
