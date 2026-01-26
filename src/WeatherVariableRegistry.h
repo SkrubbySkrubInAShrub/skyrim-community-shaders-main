@@ -103,7 +103,7 @@ namespace WeatherVariables
 
 			// Use user settings value as fallback when no override exists
 			T fallbackValue = GetFallbackValue();
-			T fromVal = fallbackValue;
+			T fromVal = defaultValue;
 			T toVal = fallbackValue;
 
 			if (hasFromOverride) {
@@ -111,7 +111,7 @@ namespace WeatherVariables
 					fromVal = from.get<T>();
 				} catch (const nlohmann::json::type_error& e) {
 					logger::debug("Type error in Lerp 'from' for {}: {}", name, e.what());
-					fromVal = fallbackValue;
+					fromVal = defaultValue;
 				}
 			}
 
