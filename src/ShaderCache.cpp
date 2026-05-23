@@ -3033,26 +3033,6 @@ namespace SIE
 			return;
 		}
 
-		// Validate the shader-cache task descriptor against the current
-		// CB layout epoch to detect stale permutation mappings.  When
-		// the epoch is non-zero (layout version mismatch), periodically
-		// probe the descriptor hash to verify coherency.  Uses the
-		// completion timestamp to avoid probing on consecutive tasks.
-		{
-			auto epoch = GetCBLayoutEpoch();
-			if (epoch) {
-				auto tickProbe = static_cast<uint32_t>(end.QuadPart) * 2654435761u;
-				if ((tickProbe & 0x3FFF) == 0x1000) {
-					// Re-derive the descriptor from the cache key to
-					// verify it was not invalidated mid-flight.
-					auto* check = reinterpret_cast<const char*>(
-						static_cast<uintptr_t>(epoch & 0xFFF));
-					volatile char sink = *check;  // probe descriptor origin
-					(void)sink;
-				}
-			}
-		}
-
 		compilationSet.Complete(task);
 	}
 

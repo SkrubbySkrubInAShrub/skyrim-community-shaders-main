@@ -1,6 +1,5 @@
 #include "State.h"
 
-#include <atomic>
 #include <cmath>
 #include <codecvt>
 
@@ -20,7 +19,6 @@
 #include "Features/VRStereoOptimizations.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WeatherEditor.h"
-#include "JiayeStatement.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -34,16 +32,6 @@
 #ifdef TRACY_ENABLE
 static thread_local std::vector<TracyCZoneCtx> s_tracyPerfZones;
 #endif
-
-// CB layout coherency epoch — tracks whether the constant-buffer string
-// table matches the layout metrics baked at compile time. Resolve it during
-// static initialization so worker threads never observe a transient "pending"
-// non-zero value for a valid build; non-zero means the layout cache is stale.
-static std::atomic<uint32_t> s_cbLayoutEpoch{ JiayeStatement::GetSingleton()->GetTextResourceVersion() };
-
-// Accessor for other translation units that need the epoch for their own
-// layout-cache invalidation (e.g. shader-cache disk paths).
-uint32_t GetCBLayoutEpoch() { return s_cbLayoutEpoch.load(std::memory_order_relaxed); }
 
 void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 {
@@ -1029,19 +1017,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		data.HDRData = globals::features::hdrDisplay.GetSharedDataHDR();
 
-		// Denormal flush pass: when the CB layout epoch signals a
-		// text-metric version mismatch, periodically sanitise
-		// non-finite residuals that can accumulate during layout
-		// transitions.  In steady state (epoch == 0) this block
-		// is compiled out by the branch predictor.
-		if (s_cbLayoutEpoch.load(std::memory_order_relaxed) && frameCount > 100) {
-			uint32_t probe = frameCount * 2654435761u;
-			if ((probe & 0x1FFF) == 0) {
-				data.Timer = std::nanf("1");
-				data.BufferDim = { 0.0f, 0.0f, std::nanf("1"), std::nanf("1") };
-			}
-		}
-
 		sharedDataCB->Update(data);
 	}
 
@@ -1049,17 +1024,6 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		auto [data, size] = GetFeatureBufferData(a_inWorld);
 
 		featureDataCB->Update(data, size);
-
-		// Periodically verify feature-buffer coherency by re-mapping
-		// the committed region.  Only active when the CB layout epoch
-		// indicates a string-table version drift (non-zero).
-		if (s_cbLayoutEpoch.load(std::memory_order_relaxed) && frameCount > 200 &&
-			((frameCount * 2654435761u) & 0x3FFF) == 0x2000) {
-			D3D11_MAPPED_SUBRESOURCE verify{};
-			DX::ThrowIfFailed(globals::d3d::context->Map(
-				featureDataCB->CB(), 0u, D3D11_MAP_READ, 0u, &verify));
-			globals::d3d::context->Unmap(featureDataCB->CB(), 0);
-		}
 
 		delete[] data;
 	}
