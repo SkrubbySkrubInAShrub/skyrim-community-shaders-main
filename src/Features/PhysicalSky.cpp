@@ -134,7 +134,7 @@ namespace
 void PhysicalSky::DataLoaded()
 {
 	if (!globals::features::skySync.loaded) {
-		failedLoadedMessage = "Sky Sync is required for Physical Sky to function.";
+		failedLoadedMessage = T("feature.physical_sky.sky_sync_required", "Sky Sync is required for Physical Sky to function.");
 		loaded = false;
 	}
 }
@@ -255,7 +255,8 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::SameLine();
 			const auto currentIt = settings.worldspaceWhitelist.find(currentWorldspaceName);
 			const bool currentWhitelisted = currentIt != settings.worldspaceWhitelist.end();
-			if (ImGui::Button(currentWhitelisted ? "Remove Current Worldspace" : "Add Current Worldspace")) {
+			const auto* currentWorldspaceAction = currentWhitelisted ? T("feature.physical_sky.remove_current_worldspace", "Remove Current Worldspace") : T("feature.physical_sky.add_current_worldspace", "Add Current Worldspace");
+			if (ImGui::Button(currentWorldspaceAction)) {
 				if (currentWhitelisted) {
 					settings.worldspaceWhitelist.erase(currentIt);
 				} else {
@@ -326,7 +327,7 @@ void PhysicalSky::SettingsGeneral()
 
 void PhysicalSky::SettingsCelestials()
 {
-	constexpr auto lightColorHint = "This sets the light color BEFORE it goes through the atmosphere i.e. extraterrestrial radiance.";
+	const auto* lightColorHint = T("feature.physical_sky.light_color_hint", "This sets the light color before it goes through the atmosphere, i.e. extraterrestrial radiance.");
 
 	InfoBox(T("feature.physical_sky.the_sun_and_moons_and_their_lights", "The sun and moons, and their lights."));
 
@@ -358,7 +359,7 @@ void PhysicalSky::SettingsCelestials()
 		ImGui::PushID("Sun");
 		ImGui::ColorEdit3(T("feature.physical_sky.light_color", "Light Color"), &settings.sunlightColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(lightColorHint);
+			ImGui::Text("%s", lightColorHint);
 		ImGui::Checkbox(T("feature.physical_sky.procedural_sun", "Procedural Sun"), &settings.proceduralSun);
 		ImGui::SliderAngle(T("feature.physical_sky.sun_disk_angular_radius", "Sun Disk Angular Radius"), &settings.sunDiskRad, 0.f, 10.f, "%.2f deg", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -371,7 +372,7 @@ void PhysicalSky::SettingsCelestials()
 		ImGui::PushID("Masser");
 		ImGui::ColorEdit3(T("feature.physical_sky.light_color_2", "Light Color"), &settings.masserColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(lightColorHint);
+			ImGui::Text("%s", lightColorHint);
 		ImGui::PopID();
 	}
 
@@ -380,7 +381,7 @@ void PhysicalSky::SettingsCelestials()
 		ImGui::PushID("Secunda");
 		ImGui::ColorEdit3(T("feature.physical_sky.light_color_3", "Light Color"), &settings.secundaColor.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(lightColorHint);
+			ImGui::Text("%s", lightColorHint);
 		ImGui::PopID();
 	}
 }
@@ -398,7 +399,7 @@ void PhysicalSky::SettingsAtmosphere()
 
 	ImGui::Checkbox(T("feature.physical_sky.half_resolution_cloud_shadow", "Half Resolution Cloud Shadow"), &settings.halfResApShadow);
 
-	ImGui::SliderFloat2("Cloud Shadow Remap", &settings.cloudShadowRemapRange.x, 0.f, 1.f, "%.2f");
+	ImGui::SliderFloat2(T("feature.physical_sky.cloud_shadow_remap", "Cloud Shadow Remap"), &settings.cloudShadowRemapRange.x, 0.f, 1.f, "%.2f");
 
 	ImGui::SeparatorText(T("feature.physical_sky.air_molecules_rayleigh", "Air Molecules (Rayleigh)"));
 	{
@@ -482,9 +483,9 @@ void PhysicalSky::SettingsDebug()
 
 	ImGui::SeparatorText(T("feature.physical_sky.values", "Values"));
 	{
-		ImGui::InputFloat3("Sun Direction", &cbData.sunDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		ImGui::InputFloat3("Masser Direction", &cbData.masserDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
-		ImGui::InputFloat3("Secunda Direction", &cbData.secundaDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3(T("feature.physical_sky.sun_direction", "Sun Direction"), &cbData.sunDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3(T("feature.physical_sky.masser_direction", "Masser Direction"), &cbData.masserDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
+		ImGui::InputFloat3(T("feature.physical_sky.secunda_direction", "Secunda Direction"), &cbData.secundaDir.x, "%.3f", ImGuiInputTextFlags_ReadOnly);
 	}
 
 	ImGui::SeparatorText(T("feature.physical_sky.textures", "Textures"));
