@@ -7,10 +7,7 @@
 
 #define I18N_KEY_PREFIX "feature.unified_water."
 
-#include <cmath>
 #include <imgui_internal.h>
-#include <unordered_map>
-#include <vector>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	UnifiedWater::Settings,
