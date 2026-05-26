@@ -94,7 +94,7 @@ void UnifiedWater::DrawOverlay()
 			ImGui::End();
 			return;
 		}
-		ImGui::TextUnformatted(progressTitle.c_str());
+		ImGui::TextUnformatted(progressTitle);
 		ImGui::ProgressBar(percent, ImVec2(0.0f, 0.0f), progressOverlay.c_str());
 
 		ImGui::End();

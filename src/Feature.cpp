@@ -368,6 +368,8 @@ std::string Feature::GetDisplayCategory() const
 		return T("feature.category.materials", "Materials");
 	if (category == FeatureCategories::kOther)
 		return T("feature.category.other", "Other");
+	if (category == FeatureCategories::kPostProcessing)
+		return T("feature.category.post_processing", "Post-Processing");
 	if (category == FeatureCategories::kSky)
 		return T("feature.category.sky", "Sky");
 	if (category == FeatureCategories::kUtility)
