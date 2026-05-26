@@ -53,8 +53,8 @@ void LUT::DrawSettings()
 			ImGui::RadioButton(T("feature.post_processing.lut.map_per_channel", "Map Per Channel"), &LutType, 1);
 			ImGui::EndTable();
 		}
-	ImGui::InputFloat3("Input Min", &settings.InputMin.x);
-	ImGui::InputFloat3("Input Max", &settings.InputMax.x);
+	ImGui::InputFloat3(T("feature.post_processing.lut.input_min", "Input Min"), &settings.InputMin.x);
+	ImGui::InputFloat3(T("feature.post_processing.lut.input_max", "Input Max"), &settings.InputMax.x);
 }
 
 void LUT::RestoreDefaultSettings()

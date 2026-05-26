@@ -14,6 +14,8 @@
 #include <DirectXPackedVector.h>
 #include <DirectXTex.h>
 
+#include <format>
+
 #include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
 
@@ -79,7 +81,8 @@ void drawHDRStatus()
 {
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded && hdr.settings.enableHDR) {
-		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), ICON_FA_CHECK " HDR Output Active");
+		auto hdrOutputActive = std::format("{} {}", ICON_FA_CHECK, T("feature.post_processing.color_grading.hdr_output_active", "HDR Output Active"));
+		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s", hdrOutputActive.c_str());
 		ImGui::Text(T("feature.post_processing.color_grading.paper_white_nits_from_hdr_settings", "Paper White: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPaperWhite));
 		ImGui::Text(T("feature.post_processing.color_grading.peak_brightness_nits_from_hdr_settings", "Peak Brightness: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPeakNits));
 	} else {
@@ -374,8 +377,8 @@ void ColorGrading::DrawSettings()
 			Util::ShiftSlider(T("feature.post_processing.color_grading.midtones_offset", "Midtones Offset"), &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
 			Util::ShiftSlider(T("feature.post_processing.color_grading.highlights_gain", "Highlights Gain"), &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
 			Util::ShiftSlider(T("feature.post_processing.color_grading.highlights_offset", "Highlights Offset"), &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
-			ImGui::InputFloat2("Shadows Start/End", &settings.shadowsHighlightsRange.x, "%.3f");
-			ImGui::InputFloat2("Highlights Start/End", &settings.shadowsHighlightsRange.z, "%.3f");
+			ImGui::InputFloat2(T("feature.post_processing.color_grading.shadows_start_end", "Shadows Start/End"), &settings.shadowsHighlightsRange.x, "%.3f");
+			ImGui::InputFloat2(T("feature.post_processing.color_grading.highlights_start_end", "Highlights Start/End"), &settings.shadowsHighlightsRange.z, "%.3f");
 			ImGui::TreePop();
 		}
 
@@ -541,7 +544,7 @@ void ColorGrading::DrawSettings()
 	}
 
 	ImGui::SeparatorText(T("feature.post_processing.color_grading.game_color_grading", "Game Color Grading"));
-	ImGui::SliderFloat3("Cinematic Blend", &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
+	ImGui::SliderFloat3(T("feature.post_processing.color_grading.cinematic_blend", "Cinematic Blend"), &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.color_grading.saturation_brightness_and_contrast", "Saturation, Brightness and Contrast."));
 	ImGui::SliderFloat(T("feature.post_processing.color_grading.fade_blend", "Fade Blend"), &settings.gameFadeBlend, 0.f, 1.f, "%.3f");

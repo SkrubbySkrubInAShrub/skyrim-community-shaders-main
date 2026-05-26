@@ -9,20 +9,19 @@ struct ScreenSpacePointLightShadows : Feature
 	}
 
 	virtual inline std::string GetName() override { return "Screen Space Point Light Shadows"; }
+	virtual inline std::string GetDisplayName() override { return T("feature.screen_space_point_light_shadows.name", "Screen Space Point Light Shadows"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpacePointLightShadows"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "SSPLS"; }
 	bool HasShaderDefine(RE::BSShader::Type) override { return true; };
-	virtual std::string_view GetCategory() const override { return "Lighting"; }
+	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return {
-			"Screen Space Point Light Shadows adds contact shadows and soft shadows for point lights in the game.",
-			{
-				"Adjustable settings",
-				"Drain your GPU",
-				"Greatly enhances vibes",
-				"Won't really look correct"
-			}
+			T("feature.screen_space_point_light_shadows.description", "Screen Space Point Light Shadows adds contact shadows and soft shadows for point lights in the game."),
+			{ T("feature.screen_space_point_light_shadows.key_feature_1", "Adds screen-space contact shadows for point lights."),
+				T("feature.screen_space_point_light_shadows.key_feature_2", "Optional soft shadow filtering."),
+				T("feature.screen_space_point_light_shadows.key_feature_3", "Configurable ray length, distance, and step count."),
+				T("feature.screen_space_point_light_shadows.key_feature_4", "Improves local light grounding in shadowed areas.") }
 		};
 	}
 
