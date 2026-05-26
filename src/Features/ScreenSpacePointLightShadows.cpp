@@ -1,5 +1,6 @@
 #include "ScreenSpacePointLightShadows.h"
 
+#include "I18n/I18n.h"
 #include "JiayeStatement.h"
 #include "LightLimitFix.h"
 #include "State.h"
@@ -18,20 +19,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void ScreenSpacePointLightShadows::DrawSettings()
 {
-	ImGui::Checkbox("Enable Screen Space Point Light Shadows", (bool*)&settings.Enable);
+	ImGui::Checkbox(T("feature.screen_space_point_light_shadows.enable_screen_space_point_light_shadows", "Enable Screen Space Point Light Shadows"), (bool*)&settings.Enable);
 
 	ImGui::Spacing();
 	ImGui::Spacing();
 
-	ImGui::SliderFloat("Strength", &settings.Strength, 0.0f, 1.0f, "%.2f");
-	ImGui::SliderInt("Max Step", (int*)&settings.StepLimit, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
-	ImGui::SliderFloat("Ray Length", &settings.RayLength, 0.0f, 1.0f, "%.2f");
-	ImGui::SliderFloat("Compare Tolerance Scale", &settings.CompareToleranceScale, 0.0f, 10.0f, "%.2f");
-	ImGui::SliderFloat("Max Distance", &settings.MaxDistance, 0.0f, 8192.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_point_light_shadows.strength", "Strength"), &settings.Strength, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderInt(T("feature.screen_space_point_light_shadows.max_step", "Max Step"), (int*)&settings.StepLimit, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T("feature.screen_space_point_light_shadows.ray_length", "Ray Length"), &settings.RayLength, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_point_light_shadows.compare_tolerance_scale", "Compare Tolerance Scale"), &settings.CompareToleranceScale, 0.0f, 10.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_point_light_shadows.max_distance", "Max Distance"), &settings.MaxDistance, 0.0f, 8192.0f, "%.2f");
 
 	ImGui::Spacing();
-	ImGui::Checkbox("Enable Soft Shadows", (bool*)&settings.EnableSoftShadows);
-	ImGui::SliderFloat("Soft Shadow Scale", &settings.SoftShadowScale, 0.0f, 50.0f, "%.2f");
+	ImGui::Checkbox(T("feature.screen_space_point_light_shadows.enable_soft_shadows", "Enable Soft Shadows"), (bool*)&settings.EnableSoftShadows);
+	ImGui::SliderFloat(T("feature.screen_space_point_light_shadows.soft_shadow_scale", "Soft Shadow Scale"), &settings.SoftShadowScale, 0.0f, 50.0f, "%.2f");
 
 	JiayeStatement::GetSingleton()->DrawJSInfo();
 }

@@ -1,5 +1,6 @@
 #include "MotionBlur.h"
 #include "Features/Upscaling.h"
+#include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "Util.h"
 
@@ -165,7 +166,7 @@ void MotionBlur::SaveSettings(json& j)
 
 void MotionBlur::DrawSettings()
 {
-	ImGui::Text("Motion Blur Settings");
+	ImGui::Text(T("feature.post_processing.motion_blur.motion_blur_settings", "Motion Blur Settings"));
 
 	// Motion scale presets
 	const char* presets[] = {
@@ -173,17 +174,17 @@ void MotionBlur::DrawSettings()
 	};
 
 	int preset = static_cast<int>(settings.ScalePreset);
-	if (ImGui::Combo("Motion Length", &preset, presets, IM_ARRAYSIZE(presets))) {
+	if (ImGui::Combo(T("feature.post_processing.motion_blur.motion_length", "Motion Length"), &preset, presets, IM_ARRAYSIZE(presets))) {
 		settings.ScalePreset = static_cast<MotionScale>(preset);
 	}
 
 	// Samples (each UI sample represents 2 actual samples)
-	ImGui::SliderInt("Samples", &settings.SampleCount, 8, 16, "%d");
+	ImGui::SliderInt(T("feature.post_processing.motion_blur.samples", "Samples"), &settings.SampleCount, 8, 16, "%d");
 	ImGui::SameLine();
-	ImGui::TextDisabled("(?)");
+	ImGui::TextDisabled(T("feature.post_processing.motion_blur.a", "(?)"));
 	if (ImGui::IsItemHovered()) {
 		ImGui::BeginTooltip();
-		ImGui::Text("Sample count is doubled internally for smoother results.\nMore samples = better quality but slower performance");
+		ImGui::Text(T("feature.post_processing.motion_blur.sample_count_is_doubled_internally_for_smoother_results", "Sample count is doubled internally for smoother results.\nMore samples = better quality but slower performance"));
 		ImGui::EndTooltip();
 	}
 }

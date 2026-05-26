@@ -9,6 +9,7 @@
 #include "State.h"
 
 #include "DynamicCubemaps.h"
+#include "I18n/I18n.h"
 #include "ScreenSpaceGI.h"
 #include "Skylighting.h"
 
@@ -63,67 +64,67 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void ScreenSpaceRayTracing::DrawSettings()
 {
-	ImGui::Checkbox("Enable Specular", &settings.EnableSpecular);
+	ImGui::Checkbox(T("feature.screen_space_ray_tracing.enable_specular", "Enable Specular"), &settings.EnableSpecular);
 	ImGui::SameLine();
-	ImGui::Checkbox("Enable Diffuse", &settings.EnableDiffuse);
-	ImGui::SliderInt("Max Steps", (int*)&settings.MaxSteps, 1, 256);
-	ImGui::SliderInt("Max Mip Level", (int*)&settings.MaxMips, 1, maxMips, "%d", ImGuiSliderFlags_AlwaysClamp);
-	recompileFlag |= ImGui::SliderInt("Diffuse SPP", (int*)&settings.DiffuseSPP, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::Checkbox(T("feature.screen_space_ray_tracing.enable_diffuse", "Enable Diffuse"), &settings.EnableDiffuse);
+	ImGui::SliderInt(T("feature.screen_space_ray_tracing.max_steps", "Max Steps"), (int*)&settings.MaxSteps, 1, 256);
+	ImGui::SliderInt(T("feature.screen_space_ray_tracing.max_mip_level", "Max Mip Level"), (int*)&settings.MaxMips, 1, maxMips, "%d", ImGuiSliderFlags_AlwaysClamp);
+	recompileFlag |= ImGui::SliderInt(T("feature.screen_space_ray_tracing.diffuse_spp", "Diffuse SPP"), (int*)&settings.DiffuseSPP, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Samples per pixel for diffuse component. Higher values reduce noise but impact performance.");
-	ImGui::SliderFloat("Specular Multiplier", &settings.SpecularMult, 0.0f, 5.0f, "%.2f");
-	ImGui::SliderFloat("Diffuse Multiplier", &settings.DiffuseMult, 0.01f, 5.0f, "%.2f");
-	ImGui::SliderFloat("Occlusion Strength", &settings.OcclusionStrength, 0.0f, 1.0f, "%.2f");
-	ImGui::SliderFloat("Ambient Multiplier", &settings.AmbientMult, 0.0f, 1.0f, "%.2f");
+		ImGui::Text(T("feature.screen_space_ray_tracing.samples_per_pixel_for_diffuse_component_higher_values", "Samples per pixel for diffuse component. Higher values reduce noise but impact performance."));
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.specular_multiplier", "Specular Multiplier"), &settings.SpecularMult, 0.0f, 5.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.diffuse_multiplier", "Diffuse Multiplier"), &settings.DiffuseMult, 0.01f, 5.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.occlusion_strength", "Occlusion Strength"), &settings.OcclusionStrength, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.ambient_multiplier", "Ambient Multiplier"), &settings.AmbientMult, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Mix diffuse with vanilla ambient color. Not suggested if using dynamic cubemaps as fallback.");
+		ImGui::Text(T("feature.screen_space_ray_tracing.mix_diffuse_with_vanilla_ambient_color_not_suggested", "Mix diffuse with vanilla ambient color. Not suggested if using dynamic cubemaps as fallback."));
 
 	ImGui::Separator();
 
-	ImGui::SliderFloat("Thickness", &settings.Thickness, 0.0f, 50.0f, "%.2f");
-	ImGui::SliderFloat("Normal Bias", &settings.NormalBias, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.thickness", "Thickness"), &settings.Thickness, 0.0f, 50.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.normal_bias", "Normal Bias"), &settings.NormalBias, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("To avoid false hits from nearby geometry, increase this value to push the ray origin along the normal.");
-	ImGui::SliderFloat("BRDF Bias", &settings.BRDFBias, 0.0f, 1.0f, "%.2f");
+		ImGui::Text(T("feature.screen_space_ray_tracing.to_avoid_false_hits_from_nearby_geometry_increase", "To avoid false hits from nearby geometry, increase this value to push the ray origin along the normal."));
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.brdf_bias", "BRDF Bias"), &settings.BRDFBias, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Specular only. Higher BRDF bias reduces noise but makes reflections more glossy.");
-	ImGui::Checkbox("Use Dynamic Cubemaps as Fallback for Diffuse", &settings.UseDynamicCubemapsAsFallback);
+		ImGui::Text(T("feature.screen_space_ray_tracing.specular_only_higher_brdf_bias_reduces_noise_but", "Specular only. Higher BRDF bias reduces noise but makes reflections more glossy."));
+	ImGui::Checkbox(T("feature.screen_space_ray_tracing.use_dynamic_cubemaps_as_fallback_for_diffuse", "Use Dynamic Cubemaps as Fallback for Diffuse"), &settings.UseDynamicCubemapsAsFallback);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections.");
-	ImGui::Checkbox("Use Dynamic Cubemaps as Fallback for Specular", &settings.UseDynamicCubemapsAsFallbackSpecular);
+		ImGui::Text(T("feature.screen_space_ray_tracing.when_ray_marching_misses_use_dynamic_cubemaps_for", "When ray marching misses, use dynamic cubemaps for reflections."));
+	ImGui::Checkbox(T("feature.screen_space_ray_tracing.use_dynamic_cubemaps_as_fallback_for_specular", "Use Dynamic Cubemaps as Fallback for Specular"), &settings.UseDynamicCubemapsAsFallbackSpecular);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("When ray marching misses, use dynamic cubemaps for reflections. Recommended for specular.");
-	ImGui::SliderFloat("Cubemap Normalization", &settings.CubemapNormalization, 0.0f, 1.0f, "%.2f");
+		ImGui::Text(T("feature.screen_space_ray_tracing.when_ray_marching_misses_use_dynamic_cubemaps_for_2", "When ray marching misses, use dynamic cubemaps for reflections. Recommended for specular."));
+	ImGui::SliderFloat(T("feature.screen_space_ray_tracing.cubemap_normalization", "Cubemap Normalization"), &settings.CubemapNormalization, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Matches cubemap luminance with ambient color.");
+		ImGui::Text(T("feature.screen_space_ray_tracing.matches_cubemap_luminance_with_ambient_color", "Matches cubemap luminance with ambient color."));
 
 	ImGui::Separator();
 
-	ImGui::Checkbox("Enable Spatiotemporal Variance-Guided Filtering", &settings.EnableSVGF);
+	ImGui::Checkbox(T("feature.screen_space_ray_tracing.enable_spatiotemporal_variance_guided_filtering", "Enable Spatiotemporal Variance-Guided Filtering"), &settings.EnableSVGF);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("SVGF denoiser. This may introduce some blurriness and temporal artifacts but significantly reduces noise.");
+		ImGui::Text(T("feature.screen_space_ray_tracing.svgf_denoiser_this_may_introduce_some_blurriness_and", "SVGF denoiser. This may introduce some blurriness and temporal artifacts but significantly reduces noise."));
 	if (settings.EnableSVGF) {
-		ImGui::SliderInt("Max Accumulated Frames", (int*)&settings.MaxAccumulatedFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
-		ImGui::SliderInt("À Trous Iterations", (int*)&settings.AtrousIterations, 1, 5, "%d", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderInt(T("feature.screen_space_ray_tracing.max_accumulated_frames", "Max Accumulated Frames"), (int*)&settings.MaxAccumulatedFrames, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderInt(T("feature.screen_space_ray_tracing.trous_iterations", "À Trous Iterations"), (int*)&settings.AtrousIterations, 1, 5, "%d", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Number of À Trous wavelet filter iterations. More iterations yield smoother results but may blur details and have a higher computational cost.");
-		ImGui::SliderFloat("Color Phi", &settings.ColorPhi, 0.01f, 32.0f, "%.2f");
+			ImGui::Text(T("feature.screen_space_ray_tracing.number_of_trous_wavelet_filter_iterations_more_iterations", "Number of À Trous wavelet filter iterations. More iterations yield smoother results but may blur details and have a higher computational cost."));
+		ImGui::SliderFloat(T("feature.screen_space_ray_tracing.color_phi", "Color Phi"), &settings.ColorPhi, 0.01f, 32.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls sensitivity to color differences in the À Trous filter. Lower values preserve more detail but may retain noise.");
-		ImGui::SliderFloat("Normal Phi", &settings.NormalPhi, 1.0f, 1024.0f, "%.2f");
+			ImGui::Text(T("feature.screen_space_ray_tracing.controls_sensitivity_to_color_differences_in_the_trous", "Controls sensitivity to color differences in the À Trous filter. Lower values preserve more detail but may retain noise."));
+		ImGui::SliderFloat(T("feature.screen_space_ray_tracing.normal_phi", "Normal Phi"), &settings.NormalPhi, 1.0f, 1024.0f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Controls sensitivity to normal differences in the À Trous filter. Higher values preserve more detail but may retain noise.");
+			ImGui::Text(T("feature.screen_space_ray_tracing.controls_sensitivity_to_normal_differences_in_the_trous", "Controls sensitivity to normal differences in the À Trous filter. Higher values preserve more detail but may retain noise."));
 	}
 #ifdef ENABLE_SHARC
-	ImGui::Checkbox("(Broken) Enable SHARC", &settings.EnableSharc);
+	ImGui::Checkbox(T("feature.screen_space_ray_tracing.broken_enable_sharc", "(Broken) Enable SHARC"), &settings.EnableSharc);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("(Experimental) Enables Spatially Hashed Radiance Cache (SHARC) to improve diffuse quality. This requires more memory and might impact performance.");
+		ImGui::Text(T("feature.screen_space_ray_tracing.experimental_enables_spatially_hashed_radiance_cache_sharc_to", "(Experimental) Enables Spatially Hashed Radiance Cache (SHARC) to improve diffuse quality. This requires more memory and might impact performance."));
 #endif
-	ImGui::SeparatorText("Debug");
+	ImGui::SeparatorText(T("feature.screen_space_ray_tracing.debug", "Debug"));
 
-	if (ImGui::TreeNode("Buffer Viewer")) {
+	if (ImGui::TreeNode(T("feature.screen_space_ray_tracing.buffer_viewer", "Buffer Viewer"))) {
 		static float debugRescale = .3f;
-		ImGui::SliderFloat("View Resize", &debugRescale, 0.f, 1.f);
+		ImGui::SliderFloat(T("feature.screen_space_ray_tracing.view_resize", "View Resize"), &debugRescale, 0.f, 1.f);
 
 		BUFFER_VIEWER_NODE(texDepth, debugRescale)
 		BUFFER_VIEWER_NODE(texColor, debugRescale)
