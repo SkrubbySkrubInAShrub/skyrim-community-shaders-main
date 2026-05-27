@@ -16,6 +16,14 @@
 bool HomePageRenderer::isFirstTimeSetupShown = false;
 uint32_t HomePageRenderer::keyThatClosedDialog = 0;
 
+namespace
+{
+	bool ShouldShowChineseAIOText()
+	{
+		return I18n::GetSingleton()->GetCurrentLocale().starts_with("zh");
+	}
+}
+
 bool HomePageRenderer::ShouldSkipKeyRelease(uint32_t key)
 {
 	if (keyThatClosedDialog && key == keyThatClosedDialog) {
@@ -182,16 +190,11 @@ void HomePageRenderer::RenderQuickLinksSection()
 
 	ImGui::Separator();
 
-	ImVec2 jiayeInfoSize = ImGui::CalcTextSize("About this AIO version");
+	const bool showChineseAIOText = ShouldShowChineseAIOText();
+	const char* aioTitle = showChineseAIOText ? "关于此AIO版本" : "About this AIO version";
+	ImVec2 jiayeInfoSize = ImGui::CalcTextSize(aioTitle);
 	ImGui::SetCursorPosX((windowSize.x - jiayeInfoSize.x) * 0.5f);
-	ImGui::Text("About this AIO version");
-
-	static bool englishShown = true;
-	float buttonWidth = ThemeManager::Constants::POPUP_BUTTON_WIDTH;
-	ImGui::SetCursorPosX((windowSize.x - buttonWidth) * 0.5f);
-	if (ImGui::Button("English / 中文", ImVec2(buttonWidth, 0))) {
-		englishShown = !englishShown;
-	}
+	ImGui::Text("%s", aioTitle);
 
 	constexpr const char* aboutAIO_ZH =
 		"本社区着色器AIO版本是由本人Jiaye发布的测试版本，基于主线版本添加了一些额外的功能和调整。"
@@ -213,11 +216,7 @@ void HomePageRenderer::RenderQuickLinksSection()
 		"If you obtained this AIO version through paid groups, paid bundles, or other paid channels, you have been scammed.\n"
 		"Any AIO versions of Community Shaders other than those personally released by me (Jiaye) are unrelated to me, and I have no obligation to provide support.";
 
-	if (!englishShown) {
-		ImGui::TextWrapped("%s", aboutAIO_ZH);
-	} else {
-		ImGui::TextWrapped("%s", aboutAIO_EN);
-	}
+	ImGui::TextWrapped("%s", showChineseAIOText ? aboutAIO_ZH : aboutAIO_EN);
 }
 
 void HomePageRenderer::RenderFAQSection()
