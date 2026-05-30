@@ -75,7 +75,7 @@ public:
 		float Wetness;
 		float PuddleWetness;
 		Settings settings;
-		uint pad0;
+		uint pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
