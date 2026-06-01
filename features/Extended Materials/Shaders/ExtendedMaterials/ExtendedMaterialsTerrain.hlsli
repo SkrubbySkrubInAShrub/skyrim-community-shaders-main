@@ -61,9 +61,12 @@
 			return;
 		}
 
+		// pow(base, k) == exp2(k * log2(base)); base is loop-invariant here, so hoist its
+		// log2 out of the 6-tap loop (FXC keeps it inside the pow intrinsic otherwise).
+		float logHeightBlend = log2(max(abs(heightBlend), 0.0001));
 		[loop] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
 		{
-			weights[hbIdx] *= pow(max(abs(heightBlend), 0.0001), HEIGHT_MULT * heights[hbIdx]);
+			weights[hbIdx] *= exp2((HEIGHT_MULT * heights[hbIdx]) * logHeightBlend);
 		}
 
 		[loop] for (int j = 0; j < 6; j++)
@@ -109,7 +112,7 @@
 #define EM_PBR_DISP_LAYER_QUAD(N, TILEFLAG, TEX, WGT) \
 		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01) \
 		{ \
-			[unroll] for (uint k = 0; k < 4; k++) \
+			[loop] for (uint k = 0; k < 4; k++) \
 				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, uvs[k], mipLevels[N], sharedOffset).x, params[N]); \
 		}
 
@@ -135,7 +138,9 @@
 		return total;
 	}
 
-	// Ray-march coarse step: one branch tree per layer; inner [unroll] fans out four UVs (same IR as manual unroll).
+	// Ray-march coarse step: one branch tree per layer; inner [loop] fans out four UVs. Kept as a runtime
+	// [loop] (not [unroll]) so FXC compiles one sampler body per layer instead of four -> large compile-time
+	// cut for the TERRAIN_VARIATION dual-tap path. Result is value-identical (independent per-UV iterations).
 	float4 GetTerrainHeightQuadRayMarch(float screenNoise, PS_INPUT input,
 		float2 u0, float2 u1, float2 u2, float2 u3,
 		float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
@@ -145,8 +150,8 @@
 		float heightBlend = 1 + blendFactor * HEIGHT_POWER;
 		float2 uvs[4] = { u0, u1, u2, u3 };
 		float h4[4][6];
-		[unroll] for (uint qi = 0; qi < 4; qi++)
-			[unroll] for (uint lj = 0; lj < 6; lj++)
+		[loop] for (uint qi = 0; qi < 4; qi++)
+			[loop] for (uint lj = 0; lj < 6; lj++)
 				h4[qi][lj] = 0;
 
 		EM_PBR_DISP_FOREACH(EM_PBR_DISP_LAYER_QUAD)
@@ -186,12 +191,12 @@
 		if ((WGT) > 0.01) { \
 			[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0) \
 			{ \
-				[unroll] for (uint k = 0; k < 4; k++) \
+				[loop] for (uint k = 0; k < 4; k++) \
 					h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset).x, params[N]); \
 			} \
 			else \
 			{ \
-				[unroll] for (uint k = 0; k < 4; k++) \
+				[loop] for (uint k = 0; k < 4; k++) \
 					h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset).w, params[N]); \
 			} \
 		}
@@ -199,12 +204,12 @@
 #define EM_LEGACY_LAYER345_QUAD(N, THFLAG, THSAMPLER, COLSAMPLER, WPRIMARY, WELSE) \
 		[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0 && (WPRIMARY) > 0.01) \
 		{ \
-			[unroll] for (uint k = 0; k < 4; k++) \
+			[loop] for (uint k = 0; k < 4; k++) \
 				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset).x, params[N]); \
 		} \
 		else if ((WELSE) > 0.01) \
 		{ \
-			[unroll] for (uint k = 0; k < 4; k++) \
+			[loop] for (uint k = 0; k < 4; k++) \
 				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset).w, params[N]); \
 		}
 
@@ -227,7 +232,8 @@
 		return total;
 	}
 
-	// Legacy TH/color paths: same branching as GetTerrainHeight; fan out four UVs per branch.
+	// Legacy TH/color paths: same branching as GetTerrainHeight; [loop] fans out four UVs per branch
+	// (runtime loop keeps FXC from inlining four sampler copies per layer).
 	float4 GetTerrainHeightQuadRayMarch(float screenNoise, PS_INPUT input,
 		float2 u0, float2 u1, float2 u2, float2 u3,
 		float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
@@ -237,8 +243,8 @@
 		float heightBlend = 1 + blendFactor * HEIGHT_POWER;
 		float2 uvs[4] = { u0, u1, u2, u3 };
 		float h4[4][6];
-		[unroll] for (uint qi = 0; qi < 4; qi++)
-			[unroll] for (uint lj = 0; lj < 6; lj++)
+		[loop] for (uint qi = 0; qi < 4; qi++)
+			[loop] for (uint lj = 0; lj < 6; lj++)
 				h4[qi][lj] = 0;
 
 		EM_LEGACY_LAYER012_QUAD(0, Permutation::ExtraFeatureFlags::THLand0HasDisplacement, TexLandTHDisp0Sampler, TexColorSampler, w1.x)
@@ -314,8 +320,6 @@
 		if (quality > 0.0) {
 			uint tapCount = ParallaxShadowTapCount(quality);
 			float shadowStrength = ShadowIntensity * (4.0 / tapCount);
-			float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
-			float4 sh = sh0.xxxx;
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 			float2 rayDir = L.xy * 0.1;
 			float shadowScaleInv = 1.0;
@@ -327,14 +331,19 @@
 			rayDir *= scale;
 			shadowScaleInv = rcp(scale);
 #	endif
-			sh.x = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers.x, mipLevel, quality, heights);
-			if (quality > 0.25)
-				sh.y = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers.y, mipLevel, quality, heights);
-			if (quality > 0.5)
-				sh.z = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers.z, mipLevel, quality, heights);
-			if (quality > 0.75)
-				sh.w = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers.w, mipLevel, quality, heights);
-			return 1.0 - saturate(dot(max(0, sh - sh0) * shadowScaleInv, shadowStrength));
+			// Accumulate per-tap occlusion in a scalar. A float4 is NOT a natively addressable
+			// l-value, so sh[i] = ... force-unrolls the [loop] (X3531) — the opposite of the goal.
+			// multipliers[i] == rcp((i+1)+noise); tapCount already matches the q>0.25/0.5/0.75
+			// ladder, so the same taps run. Sum matches the old
+			// dot(max(0, sh-sh0)*shadowScaleInv, shadowStrength) up to FP associativity.
+			// FXC now inlines ONE GetTerrainHeight body instead of up to four.
+			float shadowAccum = 0.0;
+			[loop] for (uint i = 0; i < tapCount; i++)
+			{
+				float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp((float)(i + 1) + noise), mipLevel, quality, heights);
+				shadowAccum += max(0, shi - sh0) * shadowScaleInv;
+			}
+			return 1.0 - saturate(shadowAccum * shadowStrength);
 		}
 		return 1.0;
 	}
@@ -348,8 +357,6 @@
 		if (!TerrainHasSignificantBlend(input.LandBlendWeights1, input.LandBlendWeights2.xy))
 			return 1.0;
 
-		float4 multipliers = rcp((float4(1, 2, 3, 4) + noise));
-		float4 sh = sh0.xxxx;
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
 		float2 rayDir = lightDirection.xy * 0.1;
 		float shadowScaleInv = 1.0;
@@ -362,11 +369,16 @@
 		shadowScaleInv = rcp(scale);
 #	endif
 
-		sh.x = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers.x, mipLevels, quality, heights);
-		if (tapCount > 1)
-			sh.y = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers.y, mipLevels, quality, heights);
+		// Scalar accumulate: float4 sh[i] l-value would force-unroll the [loop] (X3531).
+		// multipliers[i] == rcp((i+1)+noise); one inlined GetTerrainHeight body instead of two.
+		float shadowAccum = 0.0;
+		[loop] for (uint i = 0; i < tapCount; i++)
+		{
+			float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp((float)(i + 1) + noise), mipLevels, quality, heights);
+			shadowAccum += max(0, shi - sh0) * shadowScaleInv;
+		}
 
-		return 1.0 - saturate(dot(max(0, sh - sh0) * shadowScaleInv, shadowStrength));
+		return 1.0 - saturate(shadowAccum * shadowStrength);
 	}
 
 	float EvaluateTerrainParallaxShadowMultiplier(PS_INPUT input, float2 coords, float mipLevels[6], float3 lightDirection, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, out float sh0)

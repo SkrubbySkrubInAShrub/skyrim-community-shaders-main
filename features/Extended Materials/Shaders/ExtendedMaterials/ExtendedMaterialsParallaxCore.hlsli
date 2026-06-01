@@ -95,9 +95,24 @@
 
 			// Straight down: ~0.5x (-> typically clamps to 4). Grazing: up to ~2x.
 			float angleStepMul = lerp(0.5, 2.0, grazing2);
-			uint numSteps = max(minSteps, (uint)(scale * baseMaxSteps * angleStepMul));
+
+			// Distance LOD: parallax displacement is sub-texel once the surface is minified, so
+			// ramp step + secant counts down with mip. Bit-identical near camera (mip <= 1 -> scale 1).
+			// Ramp only (no hard switch) keeps the transition pop-free; runtime [loop]s so no extra
+			// compiled code / FXC cost.
+#if defined(LANDSCAPE)
+			float parallaxLODMip = mipLevels[0];
+#else
+			float parallaxLODMip = mipLevel;
+#endif
+			float distStepScale = lerp(0.35, 1.0, saturate((4.0 - parallaxLODMip) * (1.0 / 3.0)));
+
+			uint numSteps = max(minSteps, (uint)(scale * baseMaxSteps * angleStepMul * distStepScale));
 			numSteps = min(numSteps, maxStepsCap);
 			numSteps = (numSteps + 2) & ~3;
+
+			// 5 secant iterations near camera, down to ~3 at distance (matches step ramp).
+			uint secantIters = (uint)(lerp(2.0, 5.0, distStepScale) + 0.5);
 
 			float stepSize = rcp(numSteps);
 
@@ -182,7 +197,7 @@
 				float hFar = pt2.y;
 				float fFar = hFar - tFar;
 
-				[loop] for (uint i = 0; i < 5; i++)
+				[loop] for (uint i = 0; i < secantIters; i++)
 				{
 					float denominator = fNear - fFar;
 					float r = abs(denominator) > EPSILON_DIVISION ? saturate(fNear / denominator) : 0.5;
