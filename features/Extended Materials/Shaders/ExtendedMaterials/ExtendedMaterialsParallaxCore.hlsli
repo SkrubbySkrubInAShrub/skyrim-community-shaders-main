@@ -86,15 +86,18 @@
 			// Keep it extremely cheap: use TS normal (0,0,1) so N·V is just Vz after renormalization.
 			const float baseMaxSteps = 8;
 			const uint minSteps = 4;
-			const uint maxStepsCap = 32;
+			const uint maxStepsCap = 64;  // headroom for grazing; only true grazing rays reach it
 
 			float invViewLen = rsqrt(max(dot(viewDirTS, viewDirTS), 1e-6));
 			float ndotv = saturate(viewDirTS.z * invViewLen);          // 1 = looking "down", 0 = grazing
-			float grazing = 1.0 - ndotv;
-			float grazing2 = grazing * grazing;                        // bias towards keeping steps low until fairly grazing
 
-			// Straight down: ~0.5x (-> typically clamps to 4). Grazing: up to ~2x.
-			float angleStepMul = lerp(0.5, 2.0, grazing2);
+			// A grazing ray's path length through the height slab grows as 1/cos = 1/ndotv, so the
+			// step count must too or the per-step UV stride overshoots a texel and the march steps
+			// OVER thin/tall features (stair-step / swim / flattening artifacts). The old quadratic
+			// curve capped the boost at 2x (~16 steps at grazing) which badly under-sampled it.
+			// 0.5x looking straight down -> up to 8x near the horizon; clamp at ndotv 0.0625 (~86.4°)
+			// bounds cost. baseMaxSteps(8) * 8 == maxStepsCap(64), so grazing rays fill the budget.
+			float angleStepMul = clamp(0.5 * rcp(max(ndotv, 0.0625)), 0.5, 8.0);
 
 			// Distance LOD: parallax displacement is sub-texel once the surface is minified, so
 			// ramp step + secant counts down with mip. Bit-identical near camera (mip <= 1 -> scale 1).
