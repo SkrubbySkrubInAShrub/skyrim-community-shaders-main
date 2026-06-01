@@ -13,7 +13,11 @@
 		mipLevels[5] = GetMipLevel(coords, TexLandColor6Sampler);
 	}
 
-	// Offsets are ignored when TERRAIN_VARIATION is unset (SampleLevel path).
+	// Parallax/height sampling: dual-tap stochastic blend, matching the albedo/normal path so the
+	// displaced height field stays aligned with the de-tiled surface being shaded. StochasticEffectParallax
+	// is deliberately branchless (this wrapper is inlined 24+ times across the unrolled ray-march/secant/
+	// soft-shadow paths, where duplicated control flow is what explodes FXC compile time). Offset is
+	// ignored when TERRAIN_VARIATION is unset (plain SampleLevel path).
 	inline float4 TerrainParallaxTexSample(Texture2D tex, float2 uv, float mipLevel, StochasticOffsets sharedOffset)
 	{
 #	if defined(TERRAIN_VARIATION)

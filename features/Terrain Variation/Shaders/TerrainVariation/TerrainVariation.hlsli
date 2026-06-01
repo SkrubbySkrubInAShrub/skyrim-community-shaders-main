@@ -16,9 +16,12 @@ static const float HEIGHT_INFLUENCE = 0.3;
 static const float3 LUMINANCE_WEIGHTS = float3(0.2126, 0.7152, 0.0722);
 static const float HEIGHT_BLEND_FADE_MIP_START = 1.6;
 static const float HEIGHT_BLEND_FADE_MIP_RANGE = 2.2;
-// TV distant/minified fallback: bypass stochastic blend and use one sample.
-static const float TV_SINGLE_SAMPLE_MIP_START = 2.9;
-static const float TV_SINGLE_SAMPLE_PARALLAX_MIP_START = 2.6;
+// TV distant/minified fallback: single sample with primary offset (skip dual-sample blend only).
+// The second sample's weight fades to zero across [START - FADE_RANGE, START] so the single-sample
+// branch is reached only once it contributes nothing -> no pop/seam at the transition.
+static const float TV_SINGLE_SAMPLE_MIP_START = 3.0;
+static const float TV_SINGLE_SAMPLE_FADE_RANGE = 0.6;
+static const float TV_SINGLE_SAMPLE_FADE_RCP = 1.0 / TV_SINGLE_SAMPLE_FADE_RANGE;
 // Golden ratio for frac(rnd * φ) low-discrepancy jitter; precompute once per pixel at callsite when possible.
 static const float STOCHASTIC_LOD_PHI = 1.618;
 
@@ -53,6 +56,16 @@ inline float2 hashLOD(float2 p)
 }
 
 // --------------------- COMPUTE FUNCTIONS --------------------- //
+inline StochasticOffsets ZeroStochasticOffsets()
+{
+	StochasticOffsets o;
+	o.offset1 = 0;
+	o.offset2 = 0;
+	o.offset3 = 0;
+	o.weights = 0;
+	return o;
+}
+
 inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 {
 	float2 skewUV = mul(SKEW_MATRIX, landscapeUV * WORLD_SCALE);
@@ -105,7 +118,7 @@ inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 inline StochasticOffsets ComputeStochasticOffsetsLOD(float2 landscapeUV)
 {
 	[branch] if (!SharedData::terrainVariationSettings.enableLODTerrainTilingFix)
-		return (StochasticOffsets)0;
+		return ZeroStochasticOffsets();
 
 	float2 cellID = floor(landscapeUV * 255437.0);
 	float2 h1 = hashLOD(cellID);
@@ -147,10 +160,12 @@ inline float StochasticHeightBlendInfluence(float mipLevel)
 	return HEIGHT_INFLUENCE * (1.0 - heightFade);
 }
 
-inline float4 StochasticBlendTwoSamples(float mipLevel, float4 s1, float4 s2, float3 weights, float blendFactor1, float blendFactor2)
+// secondSampleScale fades the second tap's contribution to zero near the single-sample cutoff so the
+// branch boundary is continuous (no pop). At scale 0 the result is exactly s1.
+inline float4 StochasticBlendTwoSamples(float mipLevel, float4 s1, float4 s2, float3 weights, float blendFactor1, float blendFactor2, float secondSampleScale)
 {
 	float w1 = StochasticContrastWeight(weights.x);
-	float w2 = StochasticContrastWeight(weights.y);
+	float w2 = StochasticContrastWeight(weights.y) * secondSampleScale;
 	float hi = StochasticHeightBlendInfluence(mipLevel);
 	w1 *= (1.0 + hi * blendFactor1);
 	w2 *= (1.0 + hi * blendFactor2);
@@ -161,45 +176,60 @@ inline float4 StochasticBlendTwoSamples(float mipLevel, float4 s1, float4 s2, fl
 // LOD terrain stochastic sampling — 2 SampleBias, fixed blend (pass jitter from StochasticSampleLODJitter(screenNoise)).
 inline float4 StochasticSampleLOD(float2 jitter, Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsetsLOD)
 {
-	float lodOn = SharedData::terrainVariationSettings.enableLODTerrainTilingFix ? 1.0 : 0.0;
+	// Feature off: a single plain fetch (offsets are zero anyway) instead of two identical reads + lerp.
+	[branch] if (!SharedData::terrainVariationSettings.enableLODTerrainTilingFix)
+		return tex.SampleBias(samp, uv, SharedData::MipBias);
+
 	float2 j1 = (offsetsLOD.offset1 + jitter) * 0.01;
 	float2 j2 = (offsetsLOD.offset2 + float2(jitter.y, -jitter.x)) * 0.01;
-	float4 s1 = tex.SampleBias(samp, uv + j1 * lodOn, SharedData::MipBias);
-	float4 s2 = tex.SampleBias(samp, uv + j2 * lodOn, SharedData::MipBias);
-	float blendW = lerp(0.5, offsetsLOD.weights.x, lodOn);
-	return lerp(s2, s1, blendW);
+	float4 s1 = tex.SampleBias(samp, uv + j1, SharedData::MipBias);
+	float4 s2 = tex.SampleBias(samp, uv + j2, SharedData::MipBias);
+	return lerp(s2, s1, offsetsLOD.weights.x);
 }
 
-// 2-sample height-blended stochastic sampling; mip threshold avoids wasteful distant work.
+// 2-sample height-blended stochastic sampling. Uses one shared gradient (SampleGrad) for both taps so
+// filtering stays consistent and anisotropy is preserved; the second tap fades out with distance.
 // Sorting in ComputeStochasticOffsets guarantees offset1/offset2 are the two
 // highest-weight barycentric vertices, so dropping offset3 loses minimal quality.
 inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float extraLandMipBias)
 {
-	float mipLevel = tex.CalculateLevelOfDetail(samp, uv) + SharedData::MipBias + extraLandMipBias;
-	// Far/minified: skip TV blending math + second sample.
-	[branch] if (mipLevel >= TV_SINGLE_SAMPLE_MIP_START)
-		return tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
+	// One gradient pair, reused for the mip estimate and both taps (no separate CalculateLevelOfDetail op).
+	float2 dUVdx = ddx(uv);
+	float2 dUVdy = ddy(uv);
 
-	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
-	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+	float2 texDim;
+	tex.GetDimensions(texDim.x, texDim.y);
+	float2 dxT = dUVdx * texDim;
+	float2 dyT = dUVdy * texDim;
+	float mipLevel = max(0.5 * log2(max(dot(dxT, dxT), dot(dyT, dyT))), 0.0) + SharedData::MipBias + extraLandMipBias;
+
+	float secondSampleFade = saturate((TV_SINGLE_SAMPLE_MIP_START - mipLevel) * TV_SINGLE_SAMPLE_FADE_RCP);
+
+	float4 s1 = tex.SampleGrad(samp, uv + offsets.offset1, dUVdx, dUVdy);
+	// Far/minified: second tap has fully faded out -> one anisotropic sample (still offset, still breaks tiling).
+	[branch] if (secondSampleFade <= 0.0)
+		return s1;
+
+	float4 s2 = tex.SampleGrad(samp, uv + offsets.offset2, dUVdx, dUVdy);
 
 	float h1 = lerp(dot(s1.rgb, LUMINANCE_WEIGHTS), s1.a, step(0.001, s1.a));
 	float h2 = lerp(dot(s2.rgb, LUMINANCE_WEIGHTS), s2.a, step(0.001, s2.a));
 
-	return StochasticBlendTwoSamples(mipLevel, s1, s2, offsets.weights, h1, h2);
+	return StochasticBlendTwoSamples(mipLevel, s1, s2, offsets.weights, h1, h2, secondSampleFade);
 }
 
-// 2-sample parallax sampling — uses heightmap (alpha) only for blend weights.
+// 2-sample parallax/height sampling. MUST use the same dual-tap stochastic blend (same offsets/weights)
+// as StochasticEffect so the displaced height field stays aligned with the de-tiled albedo/normal —
+// otherwise parallax is computed against a different surface than the one being shaded.
+// Deliberately BRANCHLESS: this is inlined dozens of times across the unrolled ray-march / secant /
+// soft-shadow paths, and it's the duplicated control flow (not the second fetch) that explodes FXC
+// compile time. The second tap fades with distance via secondSampleScale, mirroring StochasticEffect.
 inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets)
 {
-	// Keep parallax height active, but cut TV to one sample once heavily minified.
-	[branch] if (mipLevel >= TV_SINGLE_SAMPLE_PARALLAX_MIP_START)
-		return tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
-
+	float secondSampleFade = saturate((TV_SINGLE_SAMPLE_MIP_START - mipLevel) * TV_SINGLE_SAMPLE_FADE_RCP);
 	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
 	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
-
-	return StochasticBlendTwoSamples(mipLevel, s1, s2, offsets.weights, s1.a, s2.a);
+	return StochasticBlendTwoSamples(mipLevel, s1, s2, offsets.weights, s1.a, s2.a, secondSampleFade);
 }
 
 inline float4 SampleTerrain(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float extraLandMipBias)
