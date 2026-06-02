@@ -1,5 +1,7 @@
 #pragma once
 
+#include "I18n/I18n.h"
+
 struct Skin : Feature
 {
 	static Skin* GetSingleton()
@@ -95,6 +97,13 @@ struct Skin : Feature
 	float4 currentWetness = { 0.0f, 0.0f, 0.0f, 0.0f };
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
+
+	struct WaterHeightCacheEntry
+	{
+		uint frameCount = 0;
+		float waterHeight = 0.0f;
+	};
+	std::unordered_map<uint32_t, WaterHeightCacheEntry> waterHeightCache;  // keyed by actor formID
 
 	struct ExtraTextures
 	{

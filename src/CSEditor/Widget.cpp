@@ -11,7 +11,7 @@
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
-#define I18N_KEY_PREFIX "weather_editor."
+#define I18N_KEY_PREFIX "cs_editor."
 
 void Widget::Save()
 {
@@ -528,7 +528,9 @@ void Widget::DrawSearchDropdown()
 
 			if (searchResults.size() > WidgetUI::kSearchDropdownMaxResults) {
 				ImGui::Separator();
-				ImGui::TextDisabled("%s", T(TKEY("more_results"), "... %zu more results"), searchResults.size() - WidgetUI::kSearchDropdownMaxResults);
+				auto count = searchResults.size() - WidgetUI::kSearchDropdownMaxResults;
+				auto formatted = std::vformat(T(TKEY("more_results"), "... {} more results"), std::make_format_args(count));
+				ImGui::TextDisabled("%s", formatted.c_str());
 			}
 		}
 	}

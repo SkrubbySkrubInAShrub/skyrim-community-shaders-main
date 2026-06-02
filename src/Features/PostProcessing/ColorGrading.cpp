@@ -14,9 +14,6 @@
 #include <DirectXPackedVector.h>
 #include <DirectXTex.h>
 
-#include <format>
-
-#include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -63,13 +60,13 @@ bool exposureSlider(float* val)
 
 	bool retval;
 	if constexpr (num == 1)
-		retval = ImGui::SliderFloat(T("feature.post_processing.color_grading.exposure", "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = ImGui::SliderFloat("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 2)
-		retval = Util::ShiftSlider<2>(T("feature.post_processing.color_grading.exposure", "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<2>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 3)
-		retval = Util::ShiftSlider<3>(T("feature.post_processing.color_grading.exposure_2", "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<3>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 4)
-		retval = Util::ShiftSlider<4>(T("feature.post_processing.color_grading.exposure_3", "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<4>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
 
 	for (int i = 0; i < num; i++)
 		val[i] = exp2(tempVal[i]);
@@ -82,11 +79,11 @@ void drawHDRStatus()
 	auto& hdr = globals::features::hdrDisplay;
 	if (hdr.loaded && hdr.settings.enableHDR) {
 		auto hdrOutputActive = std::format("{} {}", ICON_FA_CHECK, T("feature.post_processing.color_grading.hdr_output_active", "HDR Output Active"));
-		ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "%s", hdrOutputActive.c_str());
+		ImGui::TextColored(Util::Colors::GetSuccess(), "%s", hdrOutputActive.c_str());
 		ImGui::Text(T("feature.post_processing.color_grading.paper_white_nits_from_hdr_settings", "Paper White: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPaperWhite));
 		ImGui::Text(T("feature.post_processing.color_grading.peak_brightness_nits_from_hdr_settings", "Peak Brightness: %.0f nits (from HDR settings)"), static_cast<float>(hdr.settings.hdrPeakNits));
 	} else {
-		ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), T("feature.post_processing.color_grading.sdr_output_hdr_display_not_enabled", "SDR Output (HDR Display not enabled)"));
+		ImGui::TextColored(Util::Colors::GetDisabled(), "%s", T("feature.post_processing.color_grading.sdr_output_hdr_display_not_enabled", "SDR Output (HDR Display not enabled)"));
 	}
 }
 
@@ -111,7 +108,7 @@ struct TonemapperInfo
 	static auto& GetTonemappers()
 	{
 		using f4 = float4;
-		constexpr auto shiftHint = []() { ImGui::TextWrapped(T("feature.post_processing.color_grading.press_shift_to_control_all_channels_at_the", "Press Shift to control all channels at the same time.")); };
+		constexpr auto shiftHint = []() { ImGui::TextWrapped("Press Shift to control all channels at the same time."); };
 
 		static std::vector<TonemapperInfo> tonemappers = {
 			{ "Reinhard"sv, "Reinhard"sv,
@@ -125,7 +122,7 @@ struct TonemapperInfo
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.white_point", "White Point"), &params[0].y, 0.f, 10.f, "%.2f"); },
+					ImGui::SliderFloat("White Point", &params[0].y, 0.f, 10.f, "%.2f"); },
 				{ f4{ 1.f, 2.f, 0.f, 0.f } } },
 
 			{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
@@ -141,7 +138,7 @@ struct TonemapperInfo
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.cutoff", "Cutoff"), &params[0].y, 0.f, .5f, "%.2f"); },
+					ImGui::SliderFloat("Cutoff", &params[0].y, 0.f, .5f, "%.2f"); },
 				{ f4{ 1.f, .19f, 0.f, 0.f } } },
 
 			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
@@ -150,11 +147,11 @@ struct TonemapperInfo
 				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.contrast", "Contrast"), &params[0].y, 1.f, 2.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.shoulder", "Shoulder"), &params[0].z, 0.01f, 2.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.maximum_hdr_value", "Maximum HDR Value"), &params[0].w, 1.f, 10.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.input_mid_level", "Input Mid-Level"), &params[1].x, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.output_mid_level", "Output Mid-Level"), &params[1].y, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Contrast", &params[0].y, 1.f, 2.f, "%.2f");
+					ImGui::SliderFloat("Shoulder", &params[0].z, 0.01f, 2.f, "%.2f");
+					ImGui::SliderFloat("Maximum HDR Value", &params[0].w, 1.f, 10.f, "%.2f");
+					ImGui::SliderFloat("Input Mid-Level", &params[1].x, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Output Mid-Level", &params[1].y, 0.f, 1.f, "%.2f");
 					drawHDRStatus(); },
 				{ f4{ 1.f, 1.6f, 0.977f, 8.f }, f4{ 0.18f, 0.267f, 0.f, 0.f } } },
 
@@ -164,18 +161,18 @@ struct TonemapperInfo
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.black_point", "Black Point"), &params[0].y, 0.f, 5.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.white_point_2", "White Point"), &params[0].z, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat("Black Point", &params[0].y, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat("White Point", &params[0].z, 0.f, 5.f, "%.2f");
 
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.cross_over_point", "Cross-over Point"), &params[0].w, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat("Cross-over Point", &params[0].w, 0.f, 5.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text(T("feature.post_processing.color_grading.point_where_the_toe_and_shoulder_are_pieced", "Point where the toe and shoulder are pieced together into a single curve."));
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.shoulder_strength", "Shoulder Strength"), &params[1].x, 0.f, 1.f, "%.2f");
+						ImGui::Text("Point where the toe and shoulder are pieced together into a single curve.");
+					ImGui::SliderFloat("Shoulder Strength", &params[1].x, 0.f, 1.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text(T("feature.post_processing.color_grading.amount_of_blending_between_a_straight_line_curve", "Amount of blending between a straight-line curve and a purely asymptotic curve for the shoulder."));
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.toe_strength", "Toe Strength"), &params[1].y, 0.f, 1.f, "%.2f");
+						ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the shoulder.");
+					ImGui::SliderFloat("Toe Strength", &params[1].y, 0.f, 1.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text(T("feature.post_processing.color_grading.amount_of_blending_between_a_straight_line_curve_2", "Amount of blending between a straight-line curve and a purely asymptotic curve for the toe.")); },
+						ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the toe."); },
 				{ f4{ 1.f, 0.f, 2.f, 0.3f }, f4{ 0.8f, 0.7f, 0.f, 0.f } } },
 
 			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
@@ -184,12 +181,12 @@ struct TonemapperInfo
 				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.max_brightness", "Max Brightness"), &params[0].y, 0.01f, 2.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.contrast_2", "Contrast"), &params[0].z, 0.f, 5.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.linear_section_start", "Linear Section Start"), &params[0].w, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.linear_section_length", "Linear Section Length"), &params[1].x, .01f, .99f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.black_tightness_shape", "Black Tightness Shape"), &params[1].y, 1.f, 3.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.black_tightness_offset", "Black Tightness Offset"), &params[1].z, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Max Brightness", &params[0].y, 0.01f, 2.f, "%.2f");
+					ImGui::SliderFloat("Contrast", &params[0].z, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat("Linear Section Start", &params[0].w, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Linear Section Length", &params[1].x, .01f, .99f, "%.2f");
+					ImGui::SliderFloat("Black Tightness Shape", &params[1].y, 1.f, 3.f, "%.2f");
+					ImGui::SliderFloat("Black Tightness Offset", &params[1].z, 0.f, 1.f, "%.2f");
 					drawHDRStatus(); },
 				{ f4{ 1.f, 1.f, 1.f, .22f }, f4{ 0.4f, 1.33f, 0.f, 0.f } } },
 
@@ -199,10 +196,10 @@ struct TonemapperInfo
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.slope", "Slope"), &params[0].y, 0.f, 2.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.power", "Power"), &params[0].z, 0.f, 2.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.offset", "Offset"), &params[0].w, -1.f, 1.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.saturation", "Saturation"), &params[1].x, 0.f, 2.f, "%.2f"); },
+					ImGui::SliderFloat("Slope", &params[0].y, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat("Power", &params[0].z, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat("Offset", &params[0].w, -1.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Saturation", &params[1].x, 0.f, 2.f, "%.2f"); },
 				{ f4{ 1.f, 1.f, 1.f, 0.f }, f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Melon"sv, "MelonTonemap"sv,
@@ -237,7 +234,7 @@ struct TonemapperInfo
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.clip_point", "Clip Point"), &params[0].y, 1.f, 100.f, "%.2f");
+					ImGui::SliderFloat("Clip Point", &params[0].y, 1.f, 100.f, "%.2f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 100.f, 0.f, 0.f } } },
@@ -247,7 +244,7 @@ struct TonemapperInfo
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.min_luminance", "Min Luminance"), &params[0].y, 0.0001f, 1.f, "%.4f");
+					ImGui::SliderFloat("Min Luminance", &params[0].y, 0.0001f, 1.f, "%.4f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 0.0001f, 0.f, 0.f } } },
@@ -257,9 +254,9 @@ struct TonemapperInfo
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.rolloff_start", "Rolloff Start"), &params[0].y, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.saturation_boost", "Saturation Boost"), &params[0].z, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.hue_correction", "Hue Correction"), &params[0].w, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Rolloff Start", &params[0].y, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Saturation Boost", &params[0].z, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat("Hue Correction", &params[0].w, 0.f, 1.f, "%.2f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 0.25f, 0.3f, 0.6f } } },
@@ -269,7 +266,7 @@ struct TonemapperInfo
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat(T("feature.post_processing.color_grading.white_clip", "White Clip"), &params[0].y, 1.f, 500.f, "%.2f");
+					ImGui::SliderFloat("White Clip", &params[0].y, 1.f, 500.f, "%.2f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 100.f, 0.f, 0.f } } }
@@ -299,49 +296,49 @@ struct TonemapperInfo
 
 void ColorGrading::DrawSettings()
 {
-	ImGui::Checkbox(T("feature.post_processing.color_grading.skip_ldr_color_grading", "Skip LDR Color Grading"), &settings.skipLDR);
+	ImGui::Checkbox("Skip LDR Color Grading", &settings.skipLDR);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.color_grading.skip_color_grading_after_tonemapping_this_includes_lift", "Skip color grading after tonemapping. This includes Lift Gamma Gain. Will be automatically skipped with HDR on."));
+		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain. Will be automatically skipped with HDR on.");
 
-	ImGui::Checkbox(T("feature.post_processing.color_grading.skip_lut_direct_color_grading", "Skip LUT (Direct Color Grading)"), &settings.skipLUT);
+	ImGui::Checkbox("Skip LUT (Direct Color Grading)", &settings.skipLUT);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.color_grading.skip_baking_color_grading_into_a_lut_and", "Skip baking color grading into a LUT and apply it directly per-pixel. More accurate but slower."));
+		ImGui::Text("Skip baking color grading into a LUT and apply it directly per-pixel. More accurate but slower.");
 
-	ImGui::Checkbox(T("feature.post_processing.color_grading.convert_linear_to_log_before_hdr_color_grading", "Convert Linear to Log Before HDR Color Grading"), &settings.useLog);
+	ImGui::Checkbox("Convert Linear to Log Before HDR Color Grading", &settings.useLog);
 	if (settings.useLog) {
-		ImGui::Checkbox(T("feature.post_processing.color_grading.convert_log_to_linear_after_hdr_color_grading", "Convert Log to Linear After HDR Color Grading"), &settings.invertLog);
-		ImGui::Combo(T("feature.post_processing.color_grading.log_type", "Log Type"), (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
+		ImGui::Checkbox("Convert Log to Linear After HDR Color Grading", &settings.invertLog);
+		ImGui::Combo("Log Type", (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
-	ImGui::SeparatorText(T("feature.post_processing.color_grading.color_grading", "Color Grading"));
+	ImGui::SeparatorText("Color Grading");
 	{
-		ImGui::SliderFloat(T("feature.post_processing.color_grading.input_gamma", "Input Gamma"), &settings.inOutGamma.z, 0.f, 3.f, "%.3f");
-		ImGui::SliderFloat(T("feature.post_processing.color_grading.output_gamma", "Output Gamma"), &settings.inOutGamma.w, 0.f, 3.f, "%.3f");
+		ImGui::SliderFloat("Input Gamma", &settings.inOutGamma.z, 0.f, 3.f, "%.3f");
+		ImGui::SliderFloat("Output Gamma", &settings.inOutGamma.w, 0.f, 3.f, "%.3f");
 
-		ImGui::Text(T("feature.post_processing.color_grading.pre_tonemapping_settings", "Pre-Tonemapping Settings"));
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.exposure_temperature_tint", "Exposure/Temperature/Tint"))) {
+		ImGui::Text("Pre-Tonemapping Settings");
+		if (ImGui::TreeNode("Exposure/Temperature/Tint")) {
 			exposureSlider(&settings.exposureTemperatureTint.x);
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.temperature", "Temperature"), &settings.exposureTemperatureTint.y, 10.f, 150.f, "%1.f00K");
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.tint", "Tint"), &settings.exposureTemperatureTint.z, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Temperature", &settings.exposureTemperatureTint.y, 10.f, 150.f, "%1.f00K");
+			ImGui::SliderFloat("Tint", &settings.exposureTemperatureTint.z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.asc_cdl", "ASC CDL"))) {
-			Util::ShiftSlider(T("feature.post_processing.color_grading.slope", "Slope"), &settings.slope.x, 0.f, 2.f, "%.2f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.power", "Power"), &settings.power.x, 0.f, 2.f, "%.2f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.offset", "Offset"), &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
+		if (ImGui::TreeNode("ASC CDL")) {
+			Util::ShiftSlider("Slope", &settings.slope.x, 0.f, 2.f, "%.2f");
+			Util::ShiftSlider("Power", &settings.power.x, 0.f, 2.f, "%.2f");
+			Util::ShiftSlider("Offset", &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.oklch_saturation", "OKLCH Saturation"))) {
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.saturation_2", "Saturation"), &settings.oklchSaturation.x, 0.f, 2.f, "%.3f");
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.vibrance", "Vibrance"), &settings.oklchSaturation.y, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.hue_shift", "Hue Shift"), &settings.oklchSaturation.z, -1.f, 1.f, "%.3f");
+		if (ImGui::TreeNode("OKLCH Saturation")) {
+			ImGui::SliderFloat("Saturation", &settings.oklchSaturation.x, 0.f, 2.f, "%.3f");
+			ImGui::SliderFloat("Vibrance", &settings.oklchSaturation.y, 0.f, 3.f, "%.3f");
+			ImGui::SliderFloat("Hue Shift", &settings.oklchSaturation.z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.oklch_color_mixer", "OKLCH Color Mixer"))) {
-			ImGui::Text(T("feature.post_processing.color_grading.adjust_brightness_vibrance_and_hue_shift_of_specific", "Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space."));
+		if (ImGui::TreeNode("OKLCH Color Mixer")) {
+			ImGui::Text("Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space.");
 			constexpr std::array<ImColor, 7> hues = { {
 				{ 255, 0, 0 },
 				{ 182, 124, 1 },
@@ -364,46 +361,46 @@ void ColorGrading::DrawSettings()
 				}
 				ImGui::EndTable();
 			}
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.hue_shift_2", "Hue Shift"), &settings.oklchColorMixer[hueId].x, -1.f, 1.f, "%.3f");
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.vibrance_2", "Vibrance"), &settings.oklchColorMixer[hueId].y, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat(T("feature.post_processing.color_grading.brightness", "Brightness"), &settings.oklchColorMixer[hueId].z, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Hue Shift", &settings.oklchColorMixer[hueId].x, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat("Vibrance", &settings.oklchColorMixer[hueId].y, 0.f, 3.f, "%.3f");
+			ImGui::SliderFloat("Brightness", &settings.oklchColorMixer[hueId].z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.shadows_midtones_highlights", "Shadows/Midtones/Highlights"))) {
-			Util::ShiftSlider(T("feature.post_processing.color_grading.shadows_gain", "Shadows Gain"), &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.shadows_offset", "Shadows Offset"), &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.midtones_gain", "Midtones Gain"), &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.midtones_offset", "Midtones Offset"), &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.highlights_gain", "Highlights Gain"), &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.highlights_offset", "Highlights Offset"), &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
-			ImGui::InputFloat2(T("feature.post_processing.color_grading.shadows_start_end", "Shadows Start/End"), &settings.shadowsHighlightsRange.x, "%.3f");
-			ImGui::InputFloat2(T("feature.post_processing.color_grading.highlights_start_end", "Highlights Start/End"), &settings.shadowsHighlightsRange.z, "%.3f");
+		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
+			Util::ShiftSlider("Shadows Gain", &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Shadows Offset", &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider("Midtones Gain", &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Midtones Offset", &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider("Highlights Gain", &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Highlights Offset", &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
+			ImGui::InputFloat2("Shadows Start/End", &settings.shadowsHighlightsRange.x, "%.3f");
+			ImGui::InputFloat2("Highlights Start/End", &settings.shadowsHighlightsRange.z, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.contrast_3", "Contrast"))) {
-			Util::ShiftSlider(T("feature.post_processing.color_grading.contrast", "Contrast"), &settings.contrast.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider(T("feature.post_processing.color_grading.pivot", "Pivot"), &settings.pivot.x, 0.f, 1.f, "%.3f");
+		if (ImGui::TreeNode("Contrast")) {
+			Util::ShiftSlider("Contrast", &settings.contrast.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider("Pivot", &settings.pivot.x, 0.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		ImGui::Text(T("feature.post_processing.color_grading.post_tonemapping_settings", "Post-Tonemapping Settings"));
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.lift_gamma_gain", "Lift Gamma Gain"))) {
-			ImGui::DragFloat4(T("feature.post_processing.color_grading.lift", "Lift"), &settings.lift.x, 1e-3f, -1.f, 1.f, "%.3f");
-			ImGui::DragFloat4(T("feature.post_processing.color_grading.gamma", "Gamma"), &settings.gamma.x, 1e-3f, -1.5f, 1.5f, "%.3f");
-			ImGui::DragFloat4(T("feature.post_processing.color_grading.gain", "Gain"), &settings.gain.x, 1e-3f, 0.f, 2.f, "%.3f");
+		ImGui::Text("Post-Tonemapping Settings");
+		if (ImGui::TreeNode("Lift Gamma Gain")) {
+			ImGui::DragFloat4("Lift", &settings.lift.x, 1e-3f, -1.f, 1.f, "%.3f");
+			ImGui::DragFloat4("Gamma", &settings.gamma.x, 1e-3f, -1.5f, 1.5f, "%.3f");
+			ImGui::DragFloat4("Gain", &settings.gain.x, 1e-3f, 0.f, 2.f, "%.3f");
 			ImGui::TreePop();
 		}
 	}
 
-	ImGui::SeparatorText(T("feature.post_processing.color_grading.tonemapping", "Tonemapping"));
-	ImGui::Checkbox(T("feature.post_processing.color_grading.enable_tonemapping", "Enable Tonemapping"), &settings.enableTonemap);
+	ImGui::SeparatorText("Tonemapping");
+	ImGui::Checkbox("Enable Tonemapping", &settings.enableTonemap);
 	if (settings.enableTonemap) {
 		auto& hdrRef = globals::features::hdrDisplay;
 		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
 
-		if (ImGui::Checkbox(T("feature.post_processing.color_grading.use_opendrt", "Use OpenDRT"), &settings.useOpenDrt))
+		if (ImGui::Checkbox("Use OpenDRT", &settings.useOpenDrt))
 			recompileFlag = true;
 
 		if (settings.useOpenDrt) {
@@ -417,7 +414,7 @@ void ColorGrading::DrawSettings()
 		} else {
 			auto& tonemappers = TonemapperInfo::GetTonemappers();
 
-			if (ImGui::BeginCombo(T("feature.post_processing.color_grading.tonemapper", "Tonemapper"), tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
+			if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
 				for (int i = 0; i < (int)tonemappers.size(); ++i) {
 					// Hide non-HDR tonemappers when HDR is active
 					if (hdrActive && !tonemappers[i].supportsHDR)
@@ -438,7 +435,7 @@ void ColorGrading::DrawSettings()
 			ImGui::Spacing();
 			ImGui::TextWrapped(tonemappers[tonemapperType].desc.data());
 			ImGui::Spacing();
-			if (ImGui::Button(T("feature.post_processing.color_grading.reset", "Reset"), { -1, 0 }))
+			if (ImGui::Button("Reset", { -1, 0 }))
 				settings.tonemapParams = tonemappers[tonemapperType].default_settings;
 			ImGui::Spacing();
 
@@ -448,12 +445,12 @@ void ColorGrading::DrawSettings()
 		}
 
 		// Tonemapping curve visualization (GPU-evaluated, RGB overlay)
-		if (ImGui::TreeNode(T("feature.post_processing.color_grading.curve_preview", "Curve Preview"))) {
+		if (ImGui::TreeNode("Curve Preview")) {
 			curveReadbackRequested = true;
 			curveReadbackRequestFrame = ImGui::GetFrameCount();
 
 			if (settings.skipLUT) {
-				ImGui::TextDisabled(T("feature.post_processing.color_grading.enable_lut_generation_to_see_curve_preview_uncheck", "Enable LUT generation to see curve preview (uncheck 'Skip LUT')"));
+				ImGui::TextDisabled("Enable LUT generation to see curve preview (uncheck 'Skip LUT')");
 			} else {
 				// Determine Y-axis max from data
 				float yMax = 1.f;
@@ -527,15 +524,15 @@ void ColorGrading::DrawSettings()
 					dl->AddLine({ mousePos.x, canvasPos.y }, { mousePos.x, canvasPos.y + canvasSize.y }, IM_COL32(200, 200, 200, 100));
 
 					ImGui::BeginTooltip();
-					ImGui::Text(T("feature.post_processing.color_grading.pre", "Pre:  %.3f"), preValue);
-					ImGui::TextColored(ImVec4(0.9f, 0.25f, 0.25f, 1), T("feature.post_processing.color_grading.post_r", "Post R: %.3f"), curveR[idx]);
-					ImGui::TextColored(ImVec4(0.25f, 0.8f, 0.25f, 1), T("feature.post_processing.color_grading.post_g", "Post G: %.3f"), curveG[idx]);
-					ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.95f, 1), T("feature.post_processing.color_grading.post_b", "Post B: %.3f"), curveB[idx]);
+					ImGui::Text("Pre:  %.3f", preValue);
+					ImGui::TextColored(ImVec4(0.9f, 0.25f, 0.25f, 1), "Post R: %.3f", curveR[idx]);
+					ImGui::TextColored(ImVec4(0.25f, 0.8f, 0.25f, 1), "Post G: %.3f", curveG[idx]);
+					ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.95f, 1), "Post B: %.3f", curveB[idx]);
 					ImGui::EndTooltip();
 				}
 
 				// Axis labels
-				ImGui::TextDisabled(T("feature.post_processing.color_grading.pre_0_hdr_linear_post_0", "Pre: 0 - %.1f (HDR linear)  |  Post: 0 - %.1f%s"), CurveMaxInput, yMax, hdrActive ? " (HDR)" : "");
+				ImGui::TextDisabled("Pre: 0 - %.1f (HDR linear)  |  Post: 0 - %.1f%s", CurveMaxInput, yMax, hdrActive ? " (HDR)" : "");
 			}
 			ImGui::TreePop();
 		} else {
@@ -543,13 +540,13 @@ void ColorGrading::DrawSettings()
 		}
 	}
 
-	ImGui::SeparatorText(T("feature.post_processing.color_grading.game_color_grading", "Game Color Grading"));
-	ImGui::SliderFloat3(T("feature.post_processing.color_grading.cinematic_blend", "Cinematic Blend"), &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
+	ImGui::SeparatorText("Game Color Grading");
+	ImGui::SliderFloat3("Cinematic Blend", &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.color_grading.saturation_brightness_and_contrast", "Saturation, Brightness and Contrast."));
-	ImGui::SliderFloat(T("feature.post_processing.color_grading.fade_blend", "Fade Blend"), &settings.gameFadeBlend, 0.f, 1.f, "%.3f");
-	ImGui::SliderFloat(T("feature.post_processing.color_grading.tint_blend", "Tint Blend"), &settings.gameTintBlend, 0.f, 1.f, "%.3f");
-	ImGui::SeparatorText(T("feature.post_processing.color_grading.color_space_transform", "Color Space Transform"));
+		ImGui::Text("Saturation, Brightness and Contrast.");
+	ImGui::SliderFloat("Fade Blend", &settings.gameFadeBlend, 0.f, 1.f, "%.3f");
+	ImGui::SliderFloat("Tint Blend", &settings.gameTintBlend, 0.f, 1.f, "%.3f");
+	ImGui::SeparatorText("Color Space Transform");
 	{
 		auto& spaces = getAvailableColorSpaces();
 		auto& hdr = globals::features::hdrDisplay;
@@ -562,20 +559,20 @@ void ColorGrading::DrawSettings()
 		auto& llSettings = globals::features::linearLighting.settings;
 		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
 		const char* inputSpaceName = wideGamutActive ? spaces[5] : spaces[0];
-		ImGui::TextDisabled(T("feature.post_processing.color_grading.input_color_space", "Input Color Space: %s (%s)"), inputSpaceName, wideGamutActive ? "auto-detected from Linear Lighting ACEScg" : "fixed");
-		ImGui::Combo(T("feature.post_processing.color_grading.working_color_space", "Working Color Space"), &settings.processColorSpace, spaces.data(), (int)spaces.size());
-		ImGui::TextDisabled(T("feature.post_processing.color_grading.output_color_space_auto_from_hdr_display", "Output Color Space: %s (auto from HDR Display)"), spaces[outputColorSpace]);
+		ImGui::TextDisabled("Input Color Space: %s (%s)", inputSpaceName, wideGamutActive ? "auto-detected from Linear Lighting ACEScg" : "fixed");
+		ImGui::Combo("Working Color Space", &settings.processColorSpace, spaces.data(), (int)spaces.size());
+		ImGui::TextDisabled("Output Color Space: %s (auto from HDR Display)", spaces[outputColorSpace]);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(T("feature.post_processing.color_grading.output_switches_automatically_sdr_srgb_hdr_bt2020", "Output switches automatically: SDR -> sRGB, HDR -> BT2020."));
+			ImGui::Text("Output switches automatically: SDR -> sRGB, HDR -> BT2020.");
 
 		UpdateColorSpaceTransforms(hdrEnabled);
 	}
 
-	if (ImGui::Button(T("feature.post_processing.color_grading.save_lut_and_output_image", "Save LUT and Output Image"))) {
+	if (ImGui::Button("Save LUT and Output Image")) {
 		saveImagesFlag = true;
 	}
 	ImGui::SameLine();
-	ImGui::Text(T("feature.post_processing.color_grading.output_will_be_saved_to", "Output will be saved to: %s"), outputPath.c_str());
+	ImGui::Text("Output will be saved to: %s", outputPath.c_str());
 }
 
 void ColorGrading::RestoreDefaultSettings()
