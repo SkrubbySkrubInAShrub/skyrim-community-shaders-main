@@ -355,7 +355,6 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::physicalSky.loaded) {
 			defines.emplace_back("PHYSICAL_SKY", "");
 		}
-
 		lightScatteringCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ExponentialHeightFog\\VolumetricFogLightScatteringCS.hlsl", defines, "cs_5_0"));
 	}
 	return lightScatteringCS;
@@ -571,7 +570,6 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(17, 1, nullDepthSrv);
 	context->CSSetShaderResources(35, 3, nullSrvs);
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
-	context->CSSetShaderResources(61, 4, nullSrvs);
 	context->CSSetShaderResources(76, 2, nullSrvs);
 	context->CSSetShaderResources(98, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
@@ -579,12 +577,17 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetConstantBuffers(0, 1, nullCb);
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	context->CopyResource(lightScatteringHistory->resource.get(), lightScattering->resource.get());
-	hasLightScatteringHistory = true;
-	if (depthSrv) {
-		context->CopyResource(conservativeDepthHistory->resource.get(), conservativeDepth->resource.get());
-		hasConservativeDepthHistory = true;
+	if (temporalReprojection) {
+		context->CopyResource(lightScatteringHistory->resource.get(), lightScattering->resource.get());
+		hasLightScatteringHistory = true;
+		if (depthSrv) {
+			context->CopyResource(conservativeDepthHistory->resource.get(), conservativeDepth->resource.get());
+			hasConservativeDepthHistory = true;
+		} else {
+			hasConservativeDepthHistory = false;
+		}
 	} else {
+		hasLightScatteringHistory = false;
 		hasConservativeDepthHistory = false;
 	}
 
@@ -712,6 +715,22 @@ void ExponentialHeightFog::RegisterWeatherVariables()
 		1000.0f, 200000.0f));
 
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
+		"Volumetric Start Distance",
+		"volumetricFogStartDistance",
+		"Start distance of volumetric fog from the camera",
+		&settings.volumetricFogStartDistance,
+		0.0f,
+		0.0f, 200000.0f));
+
+	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
+		"Volumetric Near Fade In Distance",
+		"volumetricFogNearFadeInDistance",
+		"Distance over which volumetric fog fades in near the camera",
+		&settings.volumetricFogNearFadeInDistance,
+		1000.0f,
+		0.0f, 20000.0f));
+
+	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"Volumetric Extinction Scale",
 		"volumetricFogExtinctionScale",
 		"Scale applied to volumetric fog extinction",
@@ -726,6 +745,14 @@ void ExponentialHeightFog::RegisterWeatherVariables()
 		&settings.volumetricFogScatteringDistribution,
 		0.2f,
 		-0.9f, 0.9f));
+
+	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
+		"Volumetric Directional Scattering Intensity",
+		"volumetricDirectionalScatteringIntensity",
+		"Scale applied to volumetric fog directional light scattering",
+		&settings.volumetricDirectionalScatteringIntensity,
+		1.0f,
+		0.0f, 10.0f));
 
 	registry->RegisterVariable(std::make_shared<WeatherVariables::Float4Variable>(
 		"Volumetric Albedo",
