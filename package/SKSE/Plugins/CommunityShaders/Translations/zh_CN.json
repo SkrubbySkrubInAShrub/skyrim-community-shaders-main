@@ -818,7 +818,6 @@
     "feature.inverse_square_lighting.key_feature_3": "不修改任何现有光照",
     "feature.inverse_square_lighting.key_feature_4": "需要使用开启了平方反比衰减的模组光源。",
     "feature.inverse_square_lighting.key_feature_5": "与Light Placer完全集成",
-    "feature.inverse_square_lighting.key_feature_6": "内置光照编辑器，方便模组作者实时预览光照变化",
     "feature.inverse_square_lighting.name": "平方反比光照",
     "feature.key_features": "主要特性：",
     "feature.light_editor.active_shadow_lights": "活跃阴影光源：%u",

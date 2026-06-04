@@ -819,7 +819,6 @@
     "feature.inverse_square_lighting.key_feature_3": "Does not modify any existing lighting",
     "feature.inverse_square_lighting.key_feature_4": "Requires the use of mods with lights enabled for inverse square falloff.",
     "feature.inverse_square_lighting.key_feature_5": "Full integration with Light Placer",
-    "feature.inverse_square_lighting.key_feature_6": "Built in Light Editor for mod authors to preview lighting changes in real-time",
     "feature.inverse_square_lighting.name": "Inverse Square Lighting",
     "feature.key_features": "Key features:",
     "feature.light_editor.active_shadow_lights": "Active Shadow Lights: %u",
