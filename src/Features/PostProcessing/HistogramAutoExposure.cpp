@@ -266,6 +266,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	};
 
 	context->CSSetConstantBuffers(1, 1, &cb);
+	globals::profiler->BeginPass("PostProcessing::HistogramAutoExposure");
 	state->BeginPerfEvent("Histogram Auto Exposure");
 
 	const bool histogramReadbackActive =
@@ -332,6 +333,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	// The adaptation result is stored in adaptationSB and will be consumed
 	// by the Composite pass which applies exposure before color grading.
 	state->EndPerfEvent();
+	globals::profiler->EndPass();
 
 	// Readback histogram and adaptation data when the histogram panel is open.
 	// histogramStagingBuffer was copied before CS_Average cleared the GPU histogram.

@@ -885,6 +885,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	if (recompileFlag)
 		ClearShaderCache();
 
+	globals::profiler->BeginPass("PostProcessing::ColorGrading");
 	state->BeginPerfEvent("Color Grading and Tonemapping");
 
 	auto& pp = globals::features::postProcessing;
@@ -1007,6 +1008,7 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	}
 
 	inout_tex = { texColor->resource.get(), texColor->srv.get() };
+	globals::profiler->EndPass();
 
 	const bool curveReadbackActive =
 		Menu::GetSingleton()->IsEnabled &&

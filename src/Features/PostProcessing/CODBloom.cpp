@@ -209,6 +209,7 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 
 	// Threshold
 	{
+		globals::profiler->BeginPass("PostProcessing::CODBloom::Threshold");
 		srvs.at(0) = inout_tex.srv;
 		uavs.at(0) = texBloomMipUAVs[0].get();
 
@@ -216,9 +217,11 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(thresholdCS.get(), nullptr, 0);
 		context->Dispatch(((texBloom->desc.Width - 1) >> 5) + 1, ((texBloom->desc.Height - 1) >> 5) + 1, 1);
+		globals::profiler->EndPass();
 	}
 
 	// Downsample
+	globals::profiler->BeginPass("PostProcessing::CODBloom::Downsample");
 	context->CSSetShader(downsampleFirstMipCS.get(), nullptr, 0);
 	for (int i = 0; i < s_BloomMips - 1; i++) {
 		resetViews();
@@ -236,8 +239,10 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 		uint mipHeight = texBloom->desc.Height >> (i + 1);
 		context->Dispatch(((mipWidth - 1) >> 5) + 1, ((mipHeight - 1) >> 5) + 1, 1);
 	}
+	globals::profiler->EndPass();
 
 	// upsample
+	globals::profiler->BeginPass("PostProcessing::CODBloom::Upsample");
 	context->CSSetShader(upsampleCS.get(), nullptr, 0);
 	for (int i = s_BloomMips - 2; i >= 1; i--) {
 		resetViews();
@@ -275,6 +280,7 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 
 		context->Dispatch(((texBloom->desc.Width - 1) >> 5) + 1, ((texBloom->desc.Height - 1) >> 5) + 1, 1);
 	}
+	globals::profiler->EndPass();
 
 	// cleanup
 	resetViews();
