@@ -80,10 +80,6 @@ namespace ExtendedMaterials
 		textureDims /= 2.0;
 #	endif
 
-#	if defined(VR)
-		textureDims /= 2.0;
-#	endif
-
 		float2 texCoordsPerSize = coords * textureDims;
 
 		float2 dxSize = ddx(texCoordsPerSize);
@@ -97,9 +93,7 @@ namespace ExtendedMaterials
 		mipLevel++;
 #	endif
 
-#	if defined(VR)
-		mipLevel++;
-#	endif
+
 
 		return floor(mipLevel);
 	}
