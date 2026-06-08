@@ -25,10 +25,18 @@
 		hasPOM = false;
 #endif
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
+		float invViewLen = rsqrt(max(dot(viewDirTS, viewDirTS), 1e-6));
+		float ndotv = saturate(viewDirTS.z * invViewLen);  // 1 = looking "down", 0 = grazing
+
+		// UV stride along the height slab. Meshes keep the flatten hack for warping/swim reduction;
+		// terrain must use xy/z or grazing rays barely move in UV while depth bounds advance
+		// (step count cannot fix that — features get stepped over regardless).
 #if defined(LANDSCAPE)
-		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3 + params[0].FlattenAmount;  // Fix for objects at extreme viewing angles
+		float parallaxZ = max(abs(viewDirTS.z), 0.0625);
+		float2 parallaxDir = viewDirTS.xy / parallaxZ;
 #else
 		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3 + params.FlattenAmount;  // Fix for objects at extreme viewing angles
+		float2 parallaxDir = viewDirTS.xy;
 #endif
 
 #if defined(LANDSCAPE)
@@ -82,27 +90,16 @@
 #endif
 
 		{
-			// Step count scales with height scale *and* viewing angle.
-			// Keep it extremely cheap: use TS normal (0,0,1) so N·V is just Vz after renormalization.
 			const float baseMaxSteps = 8;
 			const uint minSteps = 4;
-			const uint maxStepsCap = 64;  // headroom for grazing; only true grazing rays reach it
+#if defined(LANDSCAPE)
+			const uint maxStepsCap = 128;
+#else
+			const uint maxStepsCap = 64;
+#endif
 
-			float invViewLen = rsqrt(max(dot(viewDirTS, viewDirTS), 1e-6));
-			float ndotv = saturate(viewDirTS.z * invViewLen);          // 1 = looking "down", 0 = grazing
-
-			// A grazing ray's path length through the height slab grows as 1/cos = 1/ndotv, so the
-			// step count must too or the per-step UV stride overshoots a texel and the march steps
-			// OVER thin/tall features (stair-step / swim / flattening artifacts). The old quadratic
-			// curve capped the boost at 2x (~16 steps at grazing) which badly under-sampled it.
-			// 0.5x looking straight down -> up to 8x near the horizon; clamp at ndotv 0.0625 (~86.4°)
-			// bounds cost. baseMaxSteps(8) * 8 == maxStepsCap(64), so grazing rays fill the budget.
 			float angleStepMul = clamp(0.5 * rcp(max(ndotv, 0.0625)), 0.5, 8.0);
 
-			// Distance LOD: parallax displacement is sub-texel once the surface is minified, so
-			// ramp step + secant counts down with mip. Bit-identical near camera (mip <= 1 -> scale 1).
-			// Ramp only (no hard switch) keeps the transition pop-free; runtime [loop]s so no extra
-			// compiled code / FXC cost.
 #if defined(LANDSCAPE)
 			float parallaxLODMip = mipLevels[0];
 #else
@@ -110,17 +107,31 @@
 #endif
 			float distStepScale = lerp(0.35, 1.0, saturate((4.0 - parallaxLODMip) * (1.0 / 3.0)));
 
+#if defined(LANDSCAPE)
+			// Size the march from UV span in texels — the only reliable metric once xy/z is restored.
+			float2 texDim;
+			TexColorSampler.GetDimensions(texDim.x, texDim.y);
+			float uvMarchSpan = dot(abs(parallaxDir), maxHeight + minHeight);
+			float texelsPerStep = lerp(4.0, 1.5, saturate((0.4 - ndotv) * (1.0 / 0.4)));
+			uint numSteps = max(minSteps, (uint)(uvMarchSpan * max(texDim.x, texDim.y) * rcp(texelsPerStep) * distStepScale + 0.5));
+			numSteps = max(numSteps, (uint)(scale * baseMaxSteps * angleStepMul * distStepScale));
+			numSteps = min(numSteps, maxStepsCap);
+			// 4-wide coarse stride skips narrow peaks; single-step near camera + grazing only.
+			bool useDenseMarch = (ndotv < 0.45) && (distStepScale > 0.8);
+			if (!useDenseMarch)
+				numSteps = (numSteps + 2) & ~3;
+#else
 			uint numSteps = max(minSteps, (uint)(scale * baseMaxSteps * angleStepMul * distStepScale));
 			numSteps = min(numSteps, maxStepsCap);
 			numSteps = (numSteps + 2) & ~3;
+#endif
 
-			// 5 secant iterations near camera, down to ~3 at distance (matches step ramp).
 			uint secantIters = (uint)(lerp(2.0, 5.0, distStepScale) + 0.5);
 
-			float stepSize = rcp(numSteps);
+			float stepSize = rcp((float)numSteps);
 
-			float2 offsetPerStep = viewDirTS.xy * float2(maxHeight, maxHeight) * stepSize.xx;
-			float2 prevOffset = viewDirTS.xy * float2(minHeight, minHeight) + coords.xy;
+			float2 offsetPerStep = parallaxDir * maxHeight * stepSize;
+			float2 prevOffset = parallaxDir * minHeight + coords.xy;
 
 			float prevBound = 1.0;
 			float prevHeight = 1.0;
@@ -129,6 +140,33 @@
 			float2 pt2 = 0;
 			bool intersectionFound = false;
 
+#if defined(LANDSCAPE)
+			if (useDenseMarch)
+			{
+				[loop] while (numSteps > 0)
+				{
+					float2 currentOffset = prevOffset - offsetPerStep;
+					float currentBound = prevBound - stepSize;
+
+					float currHeight = GetTerrainHeight(noise, input, currentOffset, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
+
+					[branch] if (currHeight >= currentBound)
+					{
+						intersectionFound = true;
+						pt1 = float2(currentBound, currHeight);
+						pt2 = float2(prevBound, prevHeight);
+						prevOffset = currentOffset;
+						break;
+					}
+
+					prevOffset = currentOffset;
+					prevBound = currentBound;
+					prevHeight = currHeight;
+					numSteps--;
+				}
+			}
+			else
+#endif
 			[loop] while (numSteps > 0)
 			{
 				float4 currentOffset[2];
@@ -152,7 +190,6 @@
 				[branch] if (any(testResult))
 				{
 					intersectionFound = true;
-					// Priority matches former [flatten] chain: x overwrites y overwrites z overwrites w.
 					float2 outOffset;
 					[branch] if (testResult.x)
 					{
@@ -205,7 +242,7 @@
 					float denominator = fNear - fFar;
 					float r = abs(denominator) > EPSILON_DIVISION ? saturate(fNear / denominator) : 0.5;
 					float tSecant = lerp(tNear, tFar, r);
-					float2 secantCoords = coords.xy + viewDirTS.xy * (((1.0 - tSecant) * -maxHeight) + minHeight);
+					float2 secantCoords = coords.xy + parallaxDir * (((1.0 - tSecant) * -maxHeight) + minHeight);
 
 					float hSecant = 0.0;
 #if defined(LANDSCAPE)
@@ -240,7 +277,7 @@
 #if defined(VR_STEREO_OPT)
 			hasPOM = true;
 #endif
-			return viewDirTS.xy * offset + coords.xy;
+			return parallaxDir * offset + coords.xy;
 		}
 	}
 

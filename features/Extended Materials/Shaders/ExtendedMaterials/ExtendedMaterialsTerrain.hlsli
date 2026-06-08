@@ -31,6 +31,16 @@
 #	define HEIGHT_MULT 8
 
 	// [loop] on fixed-6: less compile/optimizer blow-up than [unroll] here (tiny runtime cost).
+	float TerrainWeightedHeightSum(float heights[6], float weights[6])
+	{
+		float totalHeight = 0;
+		[loop] for (int i = 0; i < 6; i++)
+		{
+			totalHeight += heights[i] * weights[i];
+		}
+		return totalHeight;
+	}
+
 	void ProcessTerrainHeightWeights(float heightBlend, float4 w1, float2 w2, float heights[6], inout float weights[6], out float totalHeight)
 	{
 		weights[0] = w1.x;
@@ -40,13 +50,7 @@
 		weights[4] = w2.x;
 		weights[5] = w2.y;
 
-		totalHeight = 0;
-		[loop] for (int i = 0; i < 6; i++)
-		{
-			totalHeight += heights[i] * weights[i];
-		}
-
-		if (heightBlend <= 1.0) {
+		[branch] if (heightBlend <= 1.0) {
 			float wsum = 0;
 			[loop] for (int j = 0; j < 6; j++)
 			{
@@ -54,9 +58,11 @@
 			}
 
 			float invwsum = rcp(wsum);
+			totalHeight = 0;
 			[loop] for (int k = 0; k < 6; k++)
 			{
 				weights[k] *= invwsum;
+				totalHeight += heights[k] * weights[k];
 			}
 			return;
 		}
@@ -81,9 +87,11 @@
 		}
 
 		float invwsum = rcp(wsum);
+		totalHeight = 0;
 		[loop] for (int l = 0; l < 6; l++)
 		{
 			weights[l] *= invwsum;
+			totalHeight += heights[l] * weights[l];
 		}
 	}
 
@@ -91,6 +99,13 @@
 	float4 FinishTerrainHeightQuadBlend(float heightBlend, float4 w1, float2 w2,
 		float qh0[6], float qh1[6], float qh2[6], float qh3[6], out float weights[6])
 	{
+		// heightBlend <= 1: weights depend only on w1/w2 (not per-tap heights) — one normalize + four dots.
+		[branch] if (heightBlend <= 1.0) {
+			float t3 = 0.0;
+			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh3, weights, t3);
+			return float4(TerrainWeightedHeightSum(qh0, weights), TerrainWeightedHeightSum(qh1, weights), TerrainWeightedHeightSum(qh2, weights), t3);
+		}
+
 		float wTmp[6];
 		float t0 = 0.0, t1 = 0.0, t2 = 0.0, t3 = 0.0;
 		ProcessTerrainHeightWeights(heightBlend, w1, w2, qh0, wTmp, t0);
