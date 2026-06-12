@@ -24,6 +24,8 @@ struct StochasticOffsets
 	float2 offset2;
 	float2 offset3;
 	float3 weights;
+	float w1Contrast;
+	float w2Contrast;
 };
 #		endif
 #	endif

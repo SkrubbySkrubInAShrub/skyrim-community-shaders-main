@@ -18,10 +18,11 @@
 	// is deliberately branchless (this wrapper is inlined 24+ times across the unrolled ray-march/secant/
 	// soft-shadow paths, where duplicated control flow is what explodes FXC compile time). Offset is
 	// ignored when TERRAIN_VARIATION is unset (plain SampleLevel path).
-	inline float4 TerrainParallaxTexSample(Texture2D tex, float2 uv, float mipLevel, StochasticOffsets sharedOffset)
+	inline float4 TerrainParallaxTexSample(Texture2D tex, float2 uv, float mipLevel, StochasticOffsets sharedOffset, uint layerIndex)
 	{
 #	if defined(TERRAIN_VARIATION)
-		return StochasticEffectParallax(tex, SampTerrainParallaxSampler, uv, mipLevel, sharedOffset);
+		return StochasticEffectParallax(tex, SampTerrainParallaxSampler, uv, mipLevel, sharedOffset,
+			g_terrainParallaxSecondSampleFade[layerIndex], g_terrainParallaxHeightInfluence[layerIndex]);
 #	else
 		return tex.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel);
 #	endif
@@ -121,14 +122,14 @@
 #define EM_PBR_DISP_LAYER_SCALAR(N, TILEFLAG, TEX, WGT) \
 		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01) \
 		{ \
-			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, coords, mipLevels[N], sharedOffset).x, params[N]); \
+			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, coords, mipLevels[N], sharedOffset, N).x, params[N]); \
 		}
 
 #define EM_PBR_DISP_LAYER_QUAD(N, TILEFLAG, TEX, WGT) \
 		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01) \
 		{ \
 			[loop] for (uint k = 0; k < 4; k++) \
-				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, uvs[k], mipLevels[N], sharedOffset).x, params[N]); \
+				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, uvs[k], mipLevels[N], sharedOffset, N).x, params[N]); \
 		}
 
 #define EM_PBR_DISP_FOREACH(M) \
@@ -184,22 +185,22 @@
 		if ((WGT) > 0.01) { \
 			[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0) \
 			{ \
-				heights[N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, coords, mipLevels[N], sharedOffset).x, params[N]); \
+				heights[N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, coords, mipLevels[N], sharedOffset, N).x, params[N]); \
 			} \
 			else \
 			{ \
-				heights[N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, coords, mipLevels[N], sharedOffset).w, params[N]); \
+				heights[N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, coords, mipLevels[N], sharedOffset, N).w, params[N]); \
 			} \
 		}
 
 #define EM_LEGACY_LAYER345_SCALAR(N, THFLAG, THSAMPLER, COLSAMPLER, WPRIMARY, WELSE) \
 		[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0 && (WPRIMARY) > 0.01) \
 		{ \
-			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, coords, mipLevels[N], sharedOffset).x, params[N]); \
+			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, coords, mipLevels[N], sharedOffset, N).x, params[N]); \
 		} \
 		else if ((WELSE) > 0.01) \
 		{ \
-			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, coords, mipLevels[N], sharedOffset).w, params[N]); \
+			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, coords, mipLevels[N], sharedOffset, N).w, params[N]); \
 		}
 
 #define EM_LEGACY_LAYER012_QUAD(N, THFLAG, THSAMPLER, COLSAMPLER, WGT) \
@@ -207,12 +208,12 @@
 			[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0) \
 			{ \
 				[loop] for (uint k = 0; k < 4; k++) \
-					h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset).x, params[N]); \
+					h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).x, params[N]); \
 			} \
 			else \
 			{ \
 				[loop] for (uint k = 0; k < 4; k++) \
-					h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset).w, params[N]); \
+					h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).w, params[N]); \
 			} \
 		}
 
@@ -220,12 +221,12 @@
 		[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0 && (WPRIMARY) > 0.01) \
 		{ \
 			[loop] for (uint k = 0; k < 4; k++) \
-				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset).x, params[N]); \
+				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).x, params[N]); \
 		} \
 		else if ((WELSE) > 0.01) \
 		{ \
 			[loop] for (uint k = 0; k < 4; k++) \
-				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset).w, params[N]); \
+				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).w, params[N]); \
 		}
 
 	float GetTerrainHeight(float screenNoise, PS_INPUT input, float2 coords, float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
@@ -282,7 +283,7 @@
 	static const uint TERRAIN_DISPLACEMENT_MASK = (1u << 6u) | (1u << 7u) | (1u << 8u) | (1u << 9u) | (1u << 10u) | (1u << 11u);
 #	endif
 #	define TERRAIN_HEIGHT_AT(COORDS, MIP, QUALITY, WEIGHTS) \
-		GetTerrainHeight(noise, input, COORDS, MIP, params, SharedData::extendedMaterialSettings.EnableHeightBlending ? 1.0 : 0.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, WEIGHTS)
+		GetTerrainHeight(noise, input, COORDS, MIP, params, 0.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, WEIGHTS)
 
 	inline bool TerrainHasSignificantBlend(float4 w1, float2 w2)
 	{

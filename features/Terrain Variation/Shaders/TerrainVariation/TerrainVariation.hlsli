@@ -32,7 +32,27 @@ struct StochasticOffsets
 	float2 offset2;
 	float2 offset3;
 	float3 weights;
+	// Contrast on the two highest barycentric weights — same for every layer on a pixel.
+	float w1Contrast;
+	float w2Contrast;
 };
+
+// Per-pixel landscape UV gradients. Set once in Lighting.hlsl before the six-way blend so
+// StochasticEffect does not duplicate ddx/ddy per layer (mip still uses each tex's dimensions).
+struct TerrainGradients
+{
+	float2 gradDx;
+	float2 gradDy;
+};
+
+static TerrainGradients g_terrainStochasticGrad;
+// Per-tile values computed once before the six-way blend / parallax march (FXC: keeps GetDimensions
+// and mip/fade math out of every inlined StochasticEffect / StochasticEffectParallax copy).
+static float g_terrainStochasticMips[6];
+static float g_terrainStochasticSecondSampleFade[6];
+static float g_terrainStochasticHeightInfluence[6];
+static float g_terrainParallaxSecondSampleFade[6];
+static float g_terrainParallaxHeightInfluence[6];
 
 // Triangle corner for barycentric sort: pack cell id + weight so each swap updates both.
 struct StochasticCorner
@@ -56,6 +76,25 @@ inline float2 hashLOD(float2 p)
 }
 
 // --------------------- COMPUTE FUNCTIONS --------------------- //
+inline float StochasticHeightFadeFromMip(float mipLevel)
+{
+	return saturate((mipLevel - HEIGHT_BLEND_FADE_MIP_START) / HEIGHT_BLEND_FADE_MIP_RANGE);
+}
+
+inline float StochasticContrastWeight(float weight)
+{
+	float w = saturate(weight);
+	float w2 = w * w;
+	float w4 = w2 * w2;
+	return w4 * w4;
+}
+
+inline float StochasticHeightBlendInfluence(float mipLevel)
+{
+	float heightFade = StochasticHeightFadeFromMip(mipLevel);
+	return HEIGHT_INFLUENCE * (1.0 - heightFade);
+}
+
 inline StochasticOffsets ZeroStochasticOffsets()
 {
 	StochasticOffsets o;
@@ -63,7 +102,45 @@ inline StochasticOffsets ZeroStochasticOffsets()
 	o.offset2 = 0;
 	o.offset3 = 0;
 	o.weights = 0;
+	o.w1Contrast = 0;
+	o.w2Contrast = 0;
 	return o;
+}
+
+inline TerrainGradients ComputeTerrainGradients(float2 uv)
+{
+	TerrainGradients g;
+	g.gradDx = ddx(uv);
+	g.gradDy = ddy(uv);
+	return g;
+}
+
+inline float StochasticMipFromGradients(TerrainGradients g, float2 texDim, float extraLandMipBias)
+{
+	float2 dxT = g.gradDx * texDim;
+	float2 dyT = g.gradDy * texDim;
+	return max(0.5 * log2(max(dot(dxT, dxT), dot(dyT, dyT))), 0.0) + SharedData::MipBias + extraLandMipBias;
+}
+
+inline float StochasticSecondSampleFade(float mipLevel)
+{
+	return saturate((TV_SINGLE_SAMPLE_MIP_START - mipLevel) * TV_SINGLE_SAMPLE_FADE_RCP);
+}
+
+inline void InitTerrainStochasticMip(uint tile, Texture2D tex, float extraLandMipBias)
+{
+	float2 texDim;
+	tex.GetDimensions(texDim.x, texDim.y);
+	float mipLevel = StochasticMipFromGradients(g_terrainStochasticGrad, texDim, extraLandMipBias);
+	g_terrainStochasticMips[tile] = mipLevel;
+	g_terrainStochasticSecondSampleFade[tile] = StochasticSecondSampleFade(mipLevel);
+	g_terrainStochasticHeightInfluence[tile] = StochasticHeightBlendInfluence(mipLevel);
+}
+
+inline void InitTerrainParallaxStochasticFade(uint tile, float mipLevel)
+{
+	g_terrainParallaxSecondSampleFade[tile] = StochasticSecondSampleFade(mipLevel);
+	g_terrainParallaxHeightInfluence[tile] = StochasticHeightBlendInfluence(mipLevel);
 }
 
 inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
@@ -112,6 +189,8 @@ inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 	o.offset2 = hash2D2D(c1.cell);
 	o.offset3 = 0;
 	o.weights = float3(c0.w, c1.w, c2.w);
+	o.w1Contrast = StochasticContrastWeight(c0.w);
+	o.w2Contrast = StochasticContrastWeight(c1.w);
 	return o;
 }
 
@@ -128,6 +207,8 @@ inline StochasticOffsets ComputeStochasticOffsetsLOD(float2 landscapeUV)
 	o.offset2 = h2 * 0.08 * lodOn;
 	o.offset3 = 0;
 	o.weights = float3(0.65, 0.35, 0.0) * lodOn;
+	o.w1Contrast = StochasticContrastWeight(o.weights.x);
+	o.w2Contrast = StochasticContrastWeight(o.weights.y);
 	return o;
 }
 
@@ -138,36 +219,12 @@ inline float2 StochasticSampleLODJitter(float rnd)
 	return float2(rnd - 0.5, frac(rnd * STOCHASTIC_LOD_PHI) - 0.5);
 }
 
-inline float StochasticHeightFadeFromMip(float mipLevel)
-{
-	return saturate((mipLevel - HEIGHT_BLEND_FADE_MIP_START) / HEIGHT_BLEND_FADE_MIP_RANGE);
-}
-
-// Contrast sharpening on barycentric weights.
-inline float StochasticContrastWeight(float weight)
-{
-	float w = saturate(weight);
-	float w2 = w * w;
-	float w4 = w2 * w2;
-	return w4 * w4;
-}
-
-// Shared height-vs-stochastic weighting for diffuse + parallax (single IR body vs duplicating below).
-inline float StochasticHeightBlendInfluence(float mipLevel)
-{
-	float heightFade = StochasticHeightFadeFromMip(mipLevel);
-	return HEIGHT_INFLUENCE * (1.0 - heightFade);
-}
-
 // secondSampleScale fades the second tap's contribution to zero near the single-sample cutoff so the
 // branch boundary is continuous (no pop). At scale 0 the result is exactly s1.
-inline float4 StochasticBlendTwoSamples(float mipLevel, float4 s1, float4 s2, float3 weights, float blendFactor1, float blendFactor2, float secondSampleScale)
+inline float4 StochasticBlendTwoSamples(float4 s1, float4 s2, float w1Contrast, float w2Contrast, float heightInfluence, float blendFactor1, float blendFactor2, float secondSampleScale)
 {
-	float w1 = StochasticContrastWeight(weights.x);
-	float w2 = StochasticContrastWeight(weights.y) * secondSampleScale;
-	float hi = StochasticHeightBlendInfluence(mipLevel);
-	w1 *= (1.0 + hi * blendFactor1);
-	w2 *= (1.0 + hi * blendFactor2);
+	float w1 = w1Contrast * (1.0 + heightInfluence * blendFactor1);
+	float w2 = w2Contrast * secondSampleScale * (1.0 + heightInfluence * blendFactor2);
 	float denom = max(w1 + w2, 1e-8);
 	return lerp(s2, s1, w1 / denom);
 }
@@ -188,27 +245,16 @@ inline float4 StochasticSampleLOD(float2 jitter, Texture2D tex, SamplerState sam
 // filtering stays consistent and anisotropy is preserved; the second tap fades out with distance.
 // Sorting in ComputeStochasticOffsets guarantees offset1/offset2 are the two
 // highest-weight barycentric vertices, so dropping offset3 loses minimal quality.
-inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float extraLandMipBias)
+inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float secondSampleFade, float heightInfluence)
 {
-	// One gradient pair, reused for the mip estimate and both taps (no separate CalculateLevelOfDetail op).
-	float2 dUVdx = ddx(uv);
-	float2 dUVdy = ddy(uv);
-
-	float2 texDim;
-	tex.GetDimensions(texDim.x, texDim.y);
-	float2 dxT = dUVdx * texDim;
-	float2 dyT = dUVdy * texDim;
-	float mipLevel = max(0.5 * log2(max(dot(dxT, dxT), dot(dyT, dyT))), 0.0) + SharedData::MipBias + extraLandMipBias;
-
-	float secondSampleFade = saturate((TV_SINGLE_SAMPLE_MIP_START - mipLevel) * TV_SINGLE_SAMPLE_FADE_RCP);
-
-	float4 s1 = tex.SampleGrad(samp, uv + offsets.offset1, dUVdx, dUVdy);
-	float4 s2 = tex.SampleGrad(samp, uv + offsets.offset2, dUVdx, dUVdy);
+	TerrainGradients g = g_terrainStochasticGrad;
+	float4 s1 = tex.SampleGrad(samp, uv + offsets.offset1, g.gradDx, g.gradDy);
+	float4 s2 = tex.SampleGrad(samp, uv + offsets.offset2, g.gradDx, g.gradDy);
 
 	float h1 = lerp(dot(s1.rgb, LUMINANCE_WEIGHTS), s1.a, step(0.001, s1.a));
 	float h2 = lerp(dot(s2.rgb, LUMINANCE_WEIGHTS), s2.a, step(0.001, s2.a));
 
-	return StochasticBlendTwoSamples(mipLevel, s1, s2, offsets.weights, h1, h2, secondSampleFade);
+	return StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, heightInfluence, h1, h2, secondSampleFade);
 }
 
 // 2-sample parallax/height sampling. MUST use the same dual-tap stochastic blend (same offsets/weights)
@@ -217,17 +263,16 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 // Deliberately BRANCHLESS: this is inlined dozens of times across the unrolled ray-march / secant /
 // soft-shadow paths, and it's the duplicated control flow (not the second fetch) that explodes FXC
 // compile time. The second tap fades with distance via secondSampleScale, mirroring StochasticEffect.
-inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets)
+inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets, float secondSampleFade, float heightInfluence)
 {
-	float secondSampleFade = saturate((TV_SINGLE_SAMPLE_MIP_START - mipLevel) * TV_SINGLE_SAMPLE_FADE_RCP);
 	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
 	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
-	return StochasticBlendTwoSamples(mipLevel, s1, s2, offsets.weights, s1.a, s2.a, secondSampleFade);
+	return StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, heightInfluence, s1.a, s2.a, secondSampleFade);
 }
 
-inline float4 SampleTerrain(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float extraLandMipBias)
+inline float4 SampleTerrain(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, uint tileIndex)
 {
-	return StochasticEffect(tex, samp, uv, offsets, extraLandMipBias);
+	return StochasticEffect(tex, samp, uv, offsets, g_terrainStochasticSecondSampleFade[tileIndex], g_terrainStochasticHeightInfluence[tileIndex]);
 }
 
 #endif  // TERRAIN_VARIATION_HLSLI

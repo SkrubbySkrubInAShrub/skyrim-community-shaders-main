@@ -40,9 +40,11 @@
 #endif
 
 #if defined(LANDSCAPE)
-		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? 1.0 : 0.0;
-		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
-		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
+		// Ray-march displacement always uses vertex weights + linear height combine (blendFactor 0).
+		// Height-biased layer weights for albedo/normal are computed once at the hit UV when enabled.
+		float4 w1 = input.LandBlendWeights1;
+		float2 w2 = input.LandBlendWeights2.xy;
+		const float marchHeightBlendFactor = 0.0;
 #	if defined(TRUE_PBR)
 		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
 		float scalercp = rcp(max(scale, 1e-4));
@@ -148,7 +150,7 @@
 					float2 currentOffset = prevOffset - offsetPerStep;
 					float currentBound = prevBound - stepSize;
 
-					float currHeight = GetTerrainHeight(noise, input, currentOffset, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
+					float currHeight = GetTerrainHeight(noise, input, currentOffset, mipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
 
 					[branch] if (currHeight >= currentBound)
 					{
@@ -176,7 +178,7 @@
 
 				float4 currHeight;
 #if defined(LANDSCAPE)
-				currHeight = GetTerrainHeightQuadRayMarch(noise, input, currentOffset[0].xy, currentOffset[0].zw, currentOffset[1].xy, currentOffset[1].zw, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
+				currHeight = GetTerrainHeightQuadRayMarch(noise, input, currentOffset[0].xy, currentOffset[0].zw, currentOffset[1].xy, currentOffset[1].zw, mipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
 #else
 				currHeight.x = tex.SampleLevel(texSampler, currentOffset[0].xy, mipLevel)[channel];
 				currHeight.y = tex.SampleLevel(texSampler, currentOffset[0].zw, mipLevel)[channel];
@@ -246,7 +248,7 @@
 
 					float hSecant = 0.0;
 #if defined(LANDSCAPE)
-					hSecant = GetTerrainHeight(noise, input, secantCoords, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
+					hSecant = GetTerrainHeight(noise, input, secantCoords, mipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
 #else
 					hSecant = tex.SampleLevel(texSampler, secantCoords, mipLevel)[channel];
 					hSecant = AdjustDisplacementNormalized(hSecant, params);
@@ -274,10 +276,17 @@
 
 			float offset = (1.0 - parallaxAmount) * -maxHeight + minHeight;
 			pixelOffset = saturate(parallaxAmount);
+			float2 finalCoords = parallaxDir * offset + coords.xy;
+#if defined(LANDSCAPE)
+			if (SharedData::extendedMaterialSettings.EnableHeightBlending) {
+				float unusedHeight;
+				unusedHeight = GetTerrainHeight(noise, input, finalCoords, mipLevels, params, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, weights);
+			}
+#endif
 #if defined(VR_STEREO_OPT)
 			hasPOM = true;
 #endif
-			return parallaxDir * offset + coords.xy;
+			return finalCoords;
 		}
 	}
 
