@@ -43,6 +43,7 @@
 
 	void ProcessTerrainHeightWeights(float heightBlend, float4 w1, float2 w2, float heights[6], inout float weights[6], out float totalHeight)
 	{
+		totalHeight = 0.0;
 		weights[0] = w1.x;
 		weights[1] = w1.y;
 		weights[2] = w1.z;
@@ -50,7 +51,7 @@
 		weights[4] = w2.x;
 		weights[5] = w2.y;
 
-		[branch] if (heightBlend <= 1.0) {
+		if (heightBlend <= 1.0) {
 			float wsum = 0;
 			[loop] for (int j = 0; j < 6; j++)
 			{
@@ -58,40 +59,37 @@
 			}
 
 			float invwsum = rcp(wsum);
-			totalHeight = 0;
 			[loop] for (int k = 0; k < 6; k++)
 			{
 				weights[k] *= invwsum;
 				totalHeight += heights[k] * weights[k];
 			}
-			return;
-		}
+		} else {
+			// pow(base, k) == exp2(k * log2(base)); base is loop-invariant here, so hoist its
+			// log2 out of the 6-tap loop (FXC keeps it inside the pow intrinsic otherwise).
+			float logHeightBlend = log2(max(abs(heightBlend), 0.0001));
+			[loop] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
+			{
+				weights[hbIdx] *= exp2((HEIGHT_MULT * heights[hbIdx]) * logHeightBlend);
+			}
 
-		// pow(base, k) == exp2(k * log2(base)); base is loop-invariant here, so hoist its
-		// log2 out of the 6-tap loop (FXC keeps it inside the pow intrinsic otherwise).
-		float logHeightBlend = log2(max(abs(heightBlend), 0.0001));
-		[loop] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
-		{
-			weights[hbIdx] *= exp2((HEIGHT_MULT * heights[hbIdx]) * logHeightBlend);
-		}
+			[loop] for (int j = 0; j < 6; j++)
+			{
+				weights[j] = min(100, pow(abs(weights[j]), max(abs(heightBlend), 0.0001)));
+			}
 
-		[loop] for (int j = 0; j < 6; j++)
-		{
-			weights[j] = min(100, pow(abs(weights[j]), max(abs(heightBlend), 0.0001)));
-		}
+			float wsum = 0;
+			[loop] for (int k = 0; k < 6; k++)
+			{
+				wsum += weights[k];
+			}
 
-		float wsum = 0;
-		[loop] for (int k = 0; k < 6; k++)
-		{
-			wsum += weights[k];
-		}
-
-		float invwsum = rcp(wsum);
-		totalHeight = 0;
-		[loop] for (int l = 0; l < 6; l++)
-		{
-			weights[l] *= invwsum;
-			totalHeight += heights[l] * weights[l];
+			float invwsum = rcp(wsum);
+			[loop] for (int l = 0; l < 6; l++)
+			{
+				weights[l] *= invwsum;
+				totalHeight += heights[l] * weights[l];
+			}
 		}
 	}
 
@@ -99,20 +97,22 @@
 	float4 FinishTerrainHeightQuadBlend(float heightBlend, float4 w1, float2 w2,
 		float qh0[6], float qh1[6], float qh2[6], float qh3[6], out float weights[6])
 	{
+		float4 result = 0.0;
 		// heightBlend <= 1: weights depend only on w1/w2 (not per-tap heights) — one normalize + four dots.
-		[branch] if (heightBlend <= 1.0) {
+		if (heightBlend <= 1.0) {
 			float t3 = 0.0;
 			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh3, weights, t3);
-			return float4(TerrainWeightedHeightSum(qh0, weights), TerrainWeightedHeightSum(qh1, weights), TerrainWeightedHeightSum(qh2, weights), t3);
+			result = float4(TerrainWeightedHeightSum(qh0, weights), TerrainWeightedHeightSum(qh1, weights), TerrainWeightedHeightSum(qh2, weights), t3);
+		} else {
+			float wTmp[6];
+			float t0 = 0.0, t1 = 0.0, t2 = 0.0, t3 = 0.0;
+			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh0, wTmp, t0);
+			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh1, wTmp, t1);
+			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh2, wTmp, t2);
+			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh3, weights, t3);
+			result = float4(t0, t1, t2, t3);
 		}
-
-		float wTmp[6];
-		float t0 = 0.0, t1 = 0.0, t2 = 0.0, t3 = 0.0;
-		ProcessTerrainHeightWeights(heightBlend, w1, w2, qh0, wTmp, t0);
-		ProcessTerrainHeightWeights(heightBlend, w1, w2, qh1, wTmp, t1);
-		ProcessTerrainHeightWeights(heightBlend, w1, w2, qh2, wTmp, t2);
-		ProcessTerrainHeightWeights(heightBlend, w1, w2, qh3, weights, t3);
-		return float4(t0, t1, t2, t3);
+		return result;
 	}
 
 #	if defined(TRUE_PBR)
