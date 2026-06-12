@@ -821,7 +821,7 @@ void PhysicalSky::Reset()
 	}
 
 	// resolution
-	float2 res = globals::state->screenSize;
+	float2 res{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
@@ -1085,7 +1085,8 @@ void PhysicalSky::AccumShadow()
 	auto& terrainShadows = globals::features::terrainShadows;
 	auto& cloudShadows = globals::features::cloudShadows;
 
-	float2 size = Util::ConvertToDynamic(state->screenSize);
+	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
+	float2 size = Util::ConvertToDynamic(screenSize);
 	uint resolution[2] = { (uint)size.x, (uint)size.y };
 	if (settings.halfResApShadow) {
 		resolution[0] = std::max(1u, resolution[0] / 2u);
@@ -1143,18 +1144,12 @@ void PhysicalSky::ModifySky()
 
 	auto samplers = std::array{ sampTr.get(), sampSv.get() };
 	context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
-
-	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
-	PSSamplerModifiedBits |= (1 << 3);
 }
 
 void PhysicalSky::RestoreSamplers()
 {
 	auto context = globals::d3d::context;
 	context->PSSetSamplers(3, 2, originalPSSamplers);
-
-	GET_INSTANCE_MEMBER(PSSamplerModifiedBits, globals::game::shadowState);
-	PSSamplerModifiedBits &= ~(1 << 3);
 }
 
 void PhysicalSky::Hooks::BSSkyShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)

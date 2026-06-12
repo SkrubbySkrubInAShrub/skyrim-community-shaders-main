@@ -2,8 +2,6 @@
 
 struct PseudoSunBounce : Feature
 {
-	virtual bool SupportsVR() override { return true; };
-
 	virtual inline std::string GetName() override { return "Pseudo Sun Bounce"; }
 	virtual inline std::string GetDisplayName() override { return T("feature.pseudo_sun_bounce.name", "Pseudo Sun Bounce"); }
 	virtual inline std::string GetShortName() override { return "PseudoSunBounce"; }
