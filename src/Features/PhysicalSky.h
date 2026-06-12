@@ -31,7 +31,6 @@ struct PhysicalSky final : public Feature
 	}
 
 	// Functionality
-	bool inline SupportsVR() override { return true; }
 	inline std::string_view GetShaderDefineName() override { return "PHYSICAL_SKY"; }
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
 
@@ -318,6 +317,7 @@ struct PhysicalSky final : public Feature
 	};
 
 	eastl::unique_ptr<ConstantBuffer> volCubeHistoryCb = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
 	bool volCubeHistoryValid = false;
 	bool volMainHistoryValid = false;
 	uint32_t volHistoryWidth = 0;
@@ -329,6 +329,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemapHistory = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> sampTileable = nullptr;
 

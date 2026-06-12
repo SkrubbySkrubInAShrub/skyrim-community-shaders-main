@@ -18,8 +18,6 @@
  */
 struct ScreenSpaceReflections : Feature
 {
-	bool inline SupportsVR() override { return true; }
-
 	virtual inline std::string GetName() override { return "Screen Space Reflections"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_reflections.name", "Screen Space Reflections"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceReflections"; }
@@ -30,11 +28,7 @@ struct ScreenSpaceReflections : Feature
 		std::string desc = T(
 			"feature.screen_space_reflections.description",
 			"Hierarchical screen-space specular reflections. Uses a Hi-Z depth pyramid for fast ray marching and GGX importance sampling for physically based rough reflections, denoised by NVIDIA REBLUR.");
-		if (REL::Module::IsVR()) {
-			desc += T(
-				"feature.screen_space_reflections.vr_warning",
-				"\n\nWarning: In VR, this feature may have visual artifacts and can have a significant performance impact due to the nature of screen space effects.");
-		}
+
 		return std::make_pair(
 			desc,
 			std::vector<std::string>{
