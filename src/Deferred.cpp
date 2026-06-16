@@ -381,6 +381,7 @@ void Deferred::DeferredPasses()
 			physSky.loaded && physSky.texVolTr ? physSky.texVolTr->srv.get() : nullptr,                     // t16 PhysicalSky Volumetric Transmittance
 			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,                   // t17 PhysicalSky Volumetric Luminance
 			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,       // t18 PhysicalSky Shadow Volume
+			masks2.SRV,                                                                                     // t19 Masks2Texture
 		};
 		ID3D11ShaderResourceView* physSkyMsLut = physSky.loaded && physSky.texMsLut ? physSky.texMsLut->srv.get() : nullptr;  // t20 PhysicalSky Multiscatter LUT
 
