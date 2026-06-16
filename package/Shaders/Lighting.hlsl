@@ -1830,7 +1830,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		skinWetnessSample = TexSkinWetnessSampler.Sample(SampColorSampler, uv);
 		if ((skinWetnessSample.y == 0 && skinWetnessSample.z == 0) || (skinWetnessSample.x == skinWetnessSample.y && skinWetnessSample.y == skinWetnessSample.z && skinWetnessSample.w >= 0.99f)) {
 			skinWetMask = skinWetnessSample.x;
-			skinWetnessNormal.xyz = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.0001, uv) * 0.5 + 0.5;
+			skinWetnessNormal.xyz = CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.0001, uv) * 0.5 + 0.5;
 		} else {
 			skinWetnessNormal.xyz = skinWetnessSample.xyz;
 			skinWetMask = skinWetnessSample.w;
@@ -2027,7 +2027,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float2 detailUV = input.TexCoord0.xy * SharedData::skinData.skinDetailParams.x * SharedData::skinData.skinDetailParams.y;
 #		endif  // FACEGEN
 #		if defined(MODELSPACENORMALS)
-		const float3x3 tbnTr = Skin::ReconstructTBN(input.WorldPosition.xyz, worldNormal, screenUV);
+		const float3x3 tbnTr = ReconstructTBN(input.WorldPosition.xyz, worldNormal, screenUV);
 		const float3x3 tbn = transpose(tbnTr);
 		const float3 tangentNormal = mul(tbnTr, worldNormal.xyz);
 #		else
@@ -2036,17 +2036,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 detailNormal = float3(Skin::TexSkinDetailNormal.SampleBias(SampNormalSampler, detailUV, SharedData::MipBias - 1.0f).xy, 0.5f);
 		skinAO *= Skin::TexSkinDetailNormal.Sample(SampNormalSampler, detailUV).w;
 		detailNormal = (detailNormal * 2.0 - 1.0) * SharedData::skinData.skinDetailParams.z;
-		float3 combinedTangentNormal = normalize(float3(Skin::ReorientNormal(detailNormal, tangentNormal).xy, tangentNormal.z));
+		float3 combinedTangentNormal = normalize(float3(ReorientNormal(detailNormal, tangentNormal).xy, tangentNormal.z));
 		float3 combinedNormal = normalize(mul(tbn, combinedTangentNormal));
 		if (SharedData::skinData.skinDetailParams.w > 0.0f)
 			worldNormal.xyz = combinedNormal;
 #		if defined(WETNESS_EFFECTS)
 		if (skinWetness > 0.0f) {
-			float3 wetNormal = Skin::CalculateNormalFromHeight(skinWetness, SharedData::skinData.wetParams.w * 0.0005, uv);
+			float3 wetNormal = CalculateNormalFromHeight(skinWetness, SharedData::skinData.wetParams.w * 0.0005, uv);
 			if (hasSkinWetness) {
-				// float3 wetMaskNormal = Skin::CalculateNormalFromHeight(skinWetMask, SharedData::skinData.wetParams.w * 0.00005, uv);
 				float3 wetMaskNormal = (skinWetnessNormal.xyz * 2.0 - 1.0);
-				wetNormal = Skin::ReorientNormal(wetMaskNormal, wetNormal);
+				wetNormal = ReorientNormal(wetMaskNormal, wetNormal);
 			}
 			if (SharedData::skinData.skinParams2.y > 1.0f) {
 				wetNormal = lerp(wetNormal, tangentNormal, saturate(SharedData::skinData.skinParams2.y - 1.0f));

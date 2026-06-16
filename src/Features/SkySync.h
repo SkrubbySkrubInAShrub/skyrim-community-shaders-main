@@ -4,6 +4,7 @@
 
 struct PhysicalSky;
 
+/** @brief Synchronizes volumetric lighting and shadow direction with actual sun and moon positions. */
 struct SkySync : Feature
 {
 private:
@@ -18,6 +19,7 @@ public:
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kSky; }
 
+	/** @brief Returns a description and list of key features for the UI summary. */
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
 		return { T("feature.sky_sync.description", "Synchronizes volumetric lighting and shadows with the actual sun and moon positions in the sky."),
@@ -46,6 +48,7 @@ public:
 
 	Settings settings;
 
+	/** @brief Draws the ImGui settings panel for Sky Sync configuration. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
@@ -54,9 +57,15 @@ public:
 
 	virtual bool IsCore() const override { return true; }
 
+	/**
+	 * @brief Dims sunlight color when the sun is below the horizon during sky color updates.
+	 * @param sky The sky object whose directional light color may be modified.
+	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
 
+	/** @brief Installs rendering hooks and detects conflicting mods after plugin load. */
 	virtual void PostPostLoad() override;
+	/** @brief Checks for conflicting ESP files after game data is loaded. */
 	virtual void DataLoaded() override;
 
 	struct Sky_Update
@@ -108,7 +117,7 @@ private:
 		float fadeTimer = 0.0f;
 		bool transitioning = false;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration, float fadeAdvance);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color);
 		static void ClampDirection(RE::NiPoint3& dir);
 		void Reset();
@@ -119,6 +128,7 @@ private:
 	static constexpr float SouthernSunAngle = 90.0f - 35.0f;
 	static constexpr float NorthernSunAngle = 90.0f + 35.0f;
 	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
+	static constexpr float SecondsPerGameHour = 3600.0f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 
@@ -126,6 +136,7 @@ private:
 	RE::TESObjectCELL* currentCell = nullptr;
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
+	float lastGameHour = -1.0f;
 
 	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
