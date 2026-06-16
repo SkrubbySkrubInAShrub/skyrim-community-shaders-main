@@ -5,6 +5,7 @@
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
 #include "I18n/I18n.h"
+#include "IBL.h"
 #include "NRD.h"
 #include "Skylighting.h"
 #include "State.h"
@@ -433,6 +434,8 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "DYNAMIC_CUBEMAPS", "" });
 		if (globals::features::skylighting.loaded)
 			info.defines.push_back({ "SKYLIGHTING", "" });
+		if (globals::features::ibl.loaded)
+			info.defines.push_back({ "IBL", "" });
 	}
 
 	for (auto& info : shaderInfos) {
