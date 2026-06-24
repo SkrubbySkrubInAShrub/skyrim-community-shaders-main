@@ -22,6 +22,7 @@
 #include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/PseudoSunBounce.h"
+#include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpacePointLightShadows.h"
@@ -97,6 +98,7 @@ namespace globals
 		Upscaling upscaling{};
 		HDRDisplay hdrDisplay{};
 		RenderDoc renderDoc{};
+		RemoteControl remoteControl{};
 		ScreenshotFeature screenshotFeature{};
 		CSEditor csEditor{};
 		ExponentialHeightFog exponentialHeightFog{};
