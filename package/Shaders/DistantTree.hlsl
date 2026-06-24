@@ -155,6 +155,15 @@ const static float DepthOffsets[16] = {
 
 #	include "Common/ShadowSampling.hlsli"
 
+#	if defined(SNOW_COVER)
+#		undef SNOW
+#		undef PROJECTED_UV
+#		undef SPARKLE
+#		define BASIC_SNOW_COVER
+#		define SampColorSampler SampDiffuse
+#		include "SnowCover/SnowCover.hlsli"
+#	endif
+
 #	if defined(EXP_HEIGHT_FOG)
 void ApplyReflectionExponentialHeightFog(inout float3 color, float3 positionWS, float4 screenPosition)
 {
@@ -231,6 +240,19 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
+
+#		if defined(SNOW_COVER)
+	if (SharedData::snowCoverSettings.EnableSnowCover) {
+		float skylight = 0.15;
+		if (SharedData::snowCoverSettings.EnableExpensiveFoliage) {
+			float rx;
+			float ry;
+			TexDiffuse.GetDimensions(rx, ry);
+			skylight = 1 - TexDiffuse.Sample(SampDiffuse, input.TexCoord.xy - float2(0, 2. / ry)).a;
+		}
+		SnowCover::ApplySnowFoliage(baseColor.xyz, normal, input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, skylight, length(mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz));
+	}
+#		endif
 
 	float3 directionalAmbientColor = max(0, Color::Ambient(SharedData::GetAmbient(normal)));
 #			if defined(IBL)
