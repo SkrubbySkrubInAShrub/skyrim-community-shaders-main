@@ -108,7 +108,7 @@ public:
 	std::array<ID3D11ShaderResourceView*, 7> views;
 
 	std::string status;
-	const char* last_worldspace = nullptr;
+	std::string last_worldspace;  // owned copy + content comparison; a raw editorID pointer can dangle/rehash
 	std::filesystem::path map_tex;
 	std::filesystem::path main_tex;
 	std::filesystem::path alt_tex;

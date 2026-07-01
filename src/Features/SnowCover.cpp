@@ -303,7 +303,7 @@ const char* GetWorldspace()
 
 void SnowCover::SaveConfig()
 {
-	if (last_worldspace == nullptr)
+	if (last_worldspace.empty())
 		return;
 	json config = {
 		{ "AffectGrassTint", wsettings.AffectGrassTint },
