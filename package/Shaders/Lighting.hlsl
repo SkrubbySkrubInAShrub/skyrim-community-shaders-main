@@ -984,8 +984,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	else
 	float mipLevel = 0;
 #	endif  // LANDSCAPE
-#	if defined(SNOW_COVER)
-	// Snow Cover: default sh0 to 0.5 so disp (sh0 - 0.5) is 0 wherever no height map gets sampled.
+#	if defined(SNOW_COVER) && !defined(LANDSCAPE)
+	// Snow Cover: default sh0 to 0.5 on non-landscape so disp (sh0 - 0.5) is 0 when no height map is sampled.
+	// Landscape stays 0: GetTerrainHeight output is already centered (see ScaleDisplacement).
 	float sh0 = 0.5;
 #	else
 	float sh0 = 0;
@@ -2554,14 +2555,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (glintParameters.y < 0.01)
 			material.GlintLogMicrofacetDensity = 1;  // disables glint where there shouldn't be any
 #			if defined(LANDSCAPE)
-		float disp = sh0 - 0.5;  // centered so the mean snow line matches LOD terrain (disp 0)
+		float disp = sh0;  // GetTerrainHeight is already (raw - 0.5) * HeightScale — re-centering would bias snow off nearby terrain
 #			elif defined(EMAT)
 		float disp = (sh0 - 0.5) * displacementParams.HeightScale;
 #			else
 		float disp = (sh0 - 0.5);
 #			endif
 #		elif defined(LANDSCAPE) && defined(EMAT)
-		float disp = sh0 - 0.5;  // centered so the mean snow line matches LOD terrain (disp 0)
+		float disp = sh0;  // GetTerrainHeight is already (raw - 0.5) * HeightScale — re-centering would bias snow off nearby terrain
 #		elif defined(EMAT)
 		float disp = (sh0 - 0.5);
 #		else
