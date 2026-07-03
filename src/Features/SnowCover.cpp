@@ -38,8 +38,8 @@ void SnowCover::DrawSettings()
 	ImGui::Text("Saved config will be applied when you enter the worldspace.");
 
 	if (ImGui::TreeNodeEx("Worldspace Config", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text(fmt::format("Current worldspace/cell: {}", last_worldspace).c_str());
-		ImGui::Text(fmt::format("Config status: {}", status).c_str());
+		ImGui::Text("Current worldspace/cell: %s", last_worldspace.c_str());
+		ImGui::Text("Config status: %s", status.c_str());
 
 		ImGui::SameLine();
 		if (ImGui::Button("Reload")) {
@@ -115,31 +115,31 @@ void SnowCover::DrawSettings()
 			}
 
 			if (ImGui::TreeNodeEx("Snow Map")) {
-				ImGui::InputText("Map texture", mapbuf, 128);
+				ImGui::InputText("Map texture", mapbuf, sizeof(mapbuf));
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Path to the map texture relative to Data folder. Interpreted as grayscale.");
 				}
 				ImGui::InputFloat("Min X", &mapMin.x, 0.0f, 10.0f);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("");
+					ImGui::Text("World X coordinate mapped to the left edge of the map texture.");
 				}
 				ImGui::InputFloat("Min Y", &mapMin.y, 0.0f, 10.0f);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("");
+					ImGui::Text("World Y coordinate mapped to the top edge of the map texture.");
 				}
 				ImGui::InputFloat("Max X", &mapMax.x, 0.0f, 10.0f);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("");
+					ImGui::Text("World X coordinate mapped to the right edge of the map texture.");
 				}
 				ImGui::InputFloat("Max Y", &mapMax.y, 0.0f, 10.0f);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("");
+					ImGui::Text("World Y coordinate mapped to the bottom edge of the map texture.");
 				}
 
 				map_tex = std::filesystem::path(mapbuf);
 				ImGui::SliderFloat("Snow Map Z Scale", &wsettings.mapZscale, 0.1f, 10000.0f);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text("");
+					ImGui::Text("Vertical range in game units covered by the map's black-to-white altitude offsets.");
 				}
 				ImGui::TreePop();
 			}
@@ -156,12 +156,12 @@ void SnowCover::DrawSettings()
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("The angle snow is fully visible at. 0 = horizontal, 1 = vertical.");
 				}
-				ImGui::InputText("Main texture", tbuf, 128);
+				ImGui::InputText("Main texture", tbuf, sizeof(tbuf));
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Path to the main texture relative to Data folder, without '.dds'. Needs to be a PBR texture with a diffuse, _n, and _rmaos.");
 				}
 				main_tex = std::string(tbuf);
-				ImGui::InputText("Alt texture", altbuf, 128);
+				ImGui::InputText("Alt texture", altbuf, sizeof(altbuf));
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text("Optional path to the alternative texture relative to Data folder, without '.dds'. Needs to be a PBR texture with a diffuse, _n, and _rmaos.");
 				}
@@ -206,11 +206,11 @@ void SnowCover::DrawSettings()
 	}
 
 	if (ImGui::TreeNodeEx("Debug Info")) {
-		ImGui::Text(fmt::format("Month: {}", perFrame.Month).c_str());
-		ImGui::Text(fmt::format("TimeSnowing: {}", perFrame.TimeSnowing).c_str());
-		ImGui::Text(fmt::format("SnowingDensity: {}", perFrame.SnowingDensity).c_str());
+		ImGui::Text("Month: %f", perFrame.Month);
+		ImGui::Text("TimeSnowing: %f", perFrame.TimeSnowing);
+		ImGui::Text("SnowingDensity: %f", perFrame.SnowingDensity);
 		if (debug_text != nullptr)
-			ImGui::Text(fmt::format("Debug text: {}", debug_text).c_str());
+			ImGui::Text("Debug text: %s", debug_text);
 
 		ImGui::TreePop();
 	}
@@ -219,15 +219,10 @@ void SnowCover::DrawSettings()
 	ImGui::Spacing();
 }
 
-//void SnowCover::Draw(const RE::BSShader*, const uint32_t){}
-
 SnowCover::PerFrame SnowCover::GetCommonBufferData()
 {
 	Reload();
 
-	static float delta = 0;                       // size_t for precision
-	if (!RE::UI::GetSingleton()->GameIsPaused())  // from lightlimitfix
-		delta = RE::GetSecondsSinceLastFrame();   // BSTimer::delta is always 0 for some reason
 	bool snowing = false;
 	bool raining = false;
 	if (wsettings.EnableSnowCover) {
@@ -288,7 +283,7 @@ void SnowCover::SetupResources()
 
 const char* GetWorldspace()
 {
-	auto curr_worldspace = "none";
+	const char* curr_worldspace = nullptr;
 	auto tes = RE::TES::GetSingleton();
 	if (tes) {
 		auto worldspace = tes->GetRuntimeData2().worldSpace;
@@ -298,7 +293,8 @@ const char* GetWorldspace()
 			curr_worldspace = worldspace->GetFormEditorID();
 		}
 	}
-	return curr_worldspace;
+	// GetFormEditorID can return null or "" (e.g. without po3 Tweaks); both would break the config path.
+	return (curr_worldspace && curr_worldspace[0]) ? curr_worldspace : "none";
 }
 
 void SnowCover::SaveConfig()
@@ -354,6 +350,8 @@ void SnowCover::SaveConfig()
 	} catch (const std::system_error& e) {
 		logger::error("[Snow Cover] Error saving file: {}", e.what());
 	}
+	// Clear so Reload doesn't early-return; this applies newly typed texture paths immediately.
+	last_worldspace.clear();
 	Reload();
 }
 
@@ -421,76 +419,56 @@ void SnowCover::Reload()
 		wsettings.MainSpec = config["MainSpec"];
 		wsettings.AltSpec = config["AltSpec"];
 		main_tex = std::filesystem::path(config["MainTexture"].get<std::string>());
-		//std::wstring tname = strtowstr(main_tex);
-		copyString(main_tex.generic_string().c_str(), tbuf, 256);
+		copyString(main_tex.generic_string(), tbuf, sizeof(tbuf));
 		auto device = globals::d3d::device;
 		auto context = globals::d3d::context;
-		if (views[0])
-			views[0]->Release();
-		if (views[1])
-			views[1]->Release();
-		if (views[2])
-			views[2]->Release();
 		auto data_path = Util::PathHelpers::GetDataPath();
-		HRESULT hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / main_tex).replace_extension(".dds").native().c_str(), nullptr, &views.at(0));
-		if (hr != S_OK) {
-			logger::warn("Snow Cover: Error loading {}.dds texture: {}", main_tex.generic_string(), hr);
-			DirectX::CreateDDSTextureFromFile(device, context, (Util::PathHelpers::GetShadersPath() / "SnowCover" / "default" / "main.dds").native().c_str(), nullptr, &views.at(0));
-		}
-		hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / main_tex).concat("_n.dds").native().c_str(), nullptr, &views.at(1));
-		if (hr != S_OK) {
-			logger::warn("Snow Cover: Error loading {}_n.dds texture: {}", main_tex.generic_string(), hr);
-			DirectX::CreateDDSTextureFromFile(device, context, (Util::PathHelpers::GetShadersPath() / "SnowCover" / "default" / "main_n.dds").native().c_str(), nullptr, &views.at(1));
-		}
-		hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / main_tex).concat("_rmaos.dds").native().c_str(), nullptr, &views.at(2));
-		if (hr != S_OK) {
-			logger::warn("Snow Cover: Error loading {}_rmaos.dds texture: {}", main_tex.generic_string(), hr);
-			DirectX::CreateDDSTextureFromFile(device, context, (Util::PathHelpers::GetShadersPath() / "SnowCover"  / "default" / "main_rmaos.dds").native().c_str(), nullptr, &views.at(2));
-		}
+		auto default_path = Util::PathHelpers::GetShadersPath() / "SnowCover" / "default";
+		// Returns null on failure; com_ptr assignment releases the previous view, so failed loads never leave dangling pointers.
+		auto loadDDS = [&](const std::filesystem::path& file) {
+			winrt::com_ptr<ID3D11ShaderResourceView> srv;
+			HRESULT hr = DirectX::CreateDDSTextureFromFile(device, context, file.c_str(), nullptr, srv.put());
+			if (FAILED(hr))
+				logger::warn("Snow Cover: Error loading {} texture: {:#x}", file.generic_string(), static_cast<uint32_t>(hr));
+			return srv;
+		};
+
+		views[0] = loadDDS((data_path / main_tex).replace_extension(".dds"));
+		if (!views[0])
+			views[0] = loadDDS(default_path / "main.dds");
+		views[1] = loadDDS((data_path / main_tex).concat("_n.dds"));
+		if (!views[1])
+			views[1] = loadDDS(default_path / "main_n.dds");
+		views[2] = loadDDS((data_path / main_tex).concat("_rmaos.dds"));
+		if (!views[2])
+			views[2] = loadDDS(default_path / "main_rmaos.dds");
+
+		views[3] = nullptr;
+		views[4] = nullptr;
+		views[5] = nullptr;
 		if (config.contains("AltTexture") && config["AltTexture"] != "") {
-			if (views[3])
-				views[3]->Release();
-			if (views[4])
-				views[4]->Release();
-			if (views[5])
-				views[5]->Release();
 			alt_tex = std::filesystem::path(config["AltTexture"].get<std::string>());
-			copyString(alt_tex.generic_string().c_str(), altbuf, 256);
-			hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / alt_tex).replace_extension(".dds").native().c_str(), nullptr, &views.at(3));
-			if (hr != S_OK) {
-				logger::warn("Snow Cover: Error loading {}.dds texture: {}", alt_tex.generic_string(), hr);
-				views[3] = views[0];
-			}
-			hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / alt_tex).concat("_n.dds").native().c_str(), nullptr, &views.at(4));
-			if (hr != S_OK) {
-				logger::warn("Snow Cover: Error loading {}_n.dds texture: {}", alt_tex.generic_string(), hr);
-				views[4] = views[1];
-			}
-			hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / alt_tex).concat("_rmaos.dds").native().c_str(), nullptr, &views.at(5));
-			if (hr != S_OK) {
-				logger::warn("Snow Cover: Error loading {}_rmaos.dds texture: {}", alt_tex.generic_string(), hr);
-				views[5] = views[2];
-			}
-
+			copyString(alt_tex.generic_string(), altbuf, sizeof(altbuf));
+			views[3] = loadDDS((data_path / alt_tex).replace_extension(".dds"));
+			views[4] = loadDDS((data_path / alt_tex).concat("_n.dds"));
+			views[5] = loadDDS((data_path / alt_tex).concat("_rmaos.dds"));
 		} else {
-			views[0]->AddRef();
+			alt_tex.clear();
+			altbuf[0] = '\0';
+		}
+		// Missing or failed alt textures fall back to the main set (com_ptr copy owns its own reference).
+		if (!views[3])
 			views[3] = views[0];
-			views[1]->AddRef();
+		if (!views[4])
 			views[4] = views[1];
-			views[2]->AddRef();
+		if (!views[5])
 			views[5] = views[2];
-		}
 
-		if (views[6])
-			views[6]->Release();
 		map_tex = std::filesystem::path(config["MapTexture"].get<std::string>());
-		//std::wstring mname = strtowstr(map_tex);
-		copyString(map_tex.generic_string().c_str(), mapbuf, 256);
-		hr = DirectX::CreateDDSTextureFromFile(device, context, (data_path / map_tex).concat(".dds").native().c_str(), nullptr, &views.at(6));
-		if (hr != S_OK) {
-			logger::warn("Snow Cover: Error loading {}.dds texture: {}", map_tex.generic_string(), hr);
-			DirectX::CreateDDSTextureFromFile(device, context, (data_path / "textures" / "gray.dds").native().c_str(), nullptr, &views.at(6));
-		}
+		copyString(map_tex.generic_string(), mapbuf, sizeof(mapbuf));
+		views[6] = loadDDS((data_path / map_tex).concat(".dds"));
+		if (!views[6])
+			views[6] = loadDDS(data_path / "textures" / "gray.dds");
 		wsettings.EnableSnowCover = true;
 	} catch (const nlohmann::json::parse_error& e) {
 		logger::error("[Snow Cover] failed to parse {} : {}", path.generic_string(), e.what());
@@ -514,9 +492,11 @@ void SnowCover::Reload()
 
 void SnowCover::Prepass()
 {
-	if (globals::features::snowCover.wsettings.EnableSnowCover) {
-		auto context = globals::d3d::context;
-		context->PSSetShaderResources(38, (uint)views.size(), views.data());
+	if (wsettings.EnableSnowCover) {
+		ID3D11ShaderResourceView* srvs[std::tuple_size_v<decltype(views)>]{};
+		for (size_t i = 0; i < views.size(); ++i)
+			srvs[i] = views[i].get();
+		globals::d3d::context->PSSetShaderResources(FIRST_SRV_SLOT, (uint)views.size(), srvs);
 	}
 }
 
@@ -552,19 +532,19 @@ void SnowCover::BSLightingShader_Setup(RE::BSRenderPass* a_pass)
 	auto state = globals::state;
 	auto userData = a_pass->geometry->GetUserData();
 	auto name = a_pass->geometry->name.c_str();
-	if ((a_pass->geometry->HasAnimation() || (userData && ((userData->GetObjectReference() && userData->GetObjectReference()->IsBoundAnimObject()) || userData->CanBeMoved()))) && !whitelist.contains(FormIdParser::fnv_hash(name))) {
-		{
-			if (settings.AffectHavok && userData && userData->CanBeMoved()) {
-				RE::NiPoint3 vel;
-				userData->GetLinearVelocity(vel);
-				if (vel.SqrLength() < 10000.0f)
-					state->permutationData.ExtraShaderDescriptor &= ~(uint)State::ExtraShaderDescriptors::NoSnow;
-				else
-					state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::NoSnow;
-			} else
+	// Hash once per pass; fnv_hash dereferences unguarded and BSFixedString::c_str() can be null.
+	const uint64_t nameHash = name ? FormIdParser::fnv_hash(name) : 0;
+	if ((a_pass->geometry->HasAnimation() || (userData && ((userData->GetObjectReference() && userData->GetObjectReference()->IsBoundAnimObject()) || userData->CanBeMoved()))) && !(name && whitelist.contains(nameHash))) {
+		if (settings.AffectHavok && userData && userData->CanBeMoved()) {
+			RE::NiPoint3 vel;
+			userData->GetLinearVelocity(vel);
+			if (vel.SqrLength() < 10000.0f)
+				state->permutationData.ExtraShaderDescriptor &= ~(uint)State::ExtraShaderDescriptors::NoSnow;
+			else
 				state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::NoSnow;
-		}
-	} else if (blacklist.contains(FormIdParser::fnv_hash(name))) {
+		} else
+			state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::NoSnow;
+	} else if (name && blacklist.contains(nameHash)) {
 		state->permutationData.ExtraShaderDescriptor |= (uint)State::ExtraShaderDescriptors::NoSnow;
 	} else {
 		state->permutationData.ExtraShaderDescriptor &= ~(uint)State::ExtraShaderDescriptors::NoSnow;

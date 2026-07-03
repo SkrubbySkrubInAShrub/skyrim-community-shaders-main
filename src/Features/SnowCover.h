@@ -29,14 +29,9 @@ private:
 	static constexpr float DEFAULT_WINTER_HEIGHT_OFFSET = -20000.0f;        // how high snow is in winter (in game units)
 	static constexpr uint DEFAULT_PEAK_SUMMER_MONTH = 6;
 	static constexpr uint DEFAULT_PEAK_WINTER_MONTH = 0;
+	static constexpr uint32_t FIRST_SRV_SLOT = 38;  // t38-t44, see SnowCover.hlsli
 
 public:
-	static SnowCover* GetSingleton()
-	{
-		static SnowCover singleton;
-		return &singleton;
-	}
-
 	virtual inline std::string GetName() { return "Snow Cover"; }
 	virtual inline std::string GetShortName() { return "SnowCover"; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLandscapeAndTextures; }
@@ -105,7 +100,7 @@ public:
 
 	PerFrame GetCommonBufferData();
 
-	std::array<ID3D11ShaderResourceView*, 7> views;
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 7> views;
 
 	std::string status;
 	std::string last_worldspace;  // owned copy + content comparison; a raw editorID pointer can dangle/rehash
@@ -136,6 +131,9 @@ public:
 	{
 		float maxMonth = static_cast<float>(std::max(MaxSummerMonth, MaxWinterMonth));
 		float minMonth = static_cast<float>(std::min(MaxSummerMonth, MaxWinterMonth));
+		// Equal months make the seasonal cycle degenerate (division by zero below); use a constant midpoint snow line.
+		if (maxMonth == minMonth)
+			return -0.5f * (SummerHeightOffset + WinterHeightOffset);
 		float summerToWinter;
 		auto month = (maxMonth + minMonth) / 2.0f;  // fallback value if calendar not exist
 		if (auto calendar = RE::Calendar::GetSingleton()) {
@@ -164,8 +162,6 @@ public:
 	virtual void Prepass() override;
 
 	virtual void DrawSettings();
-
-	//virtual void Draw(const RE::BSShader* shader, const uint32_t descriptor);
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
