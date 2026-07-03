@@ -89,7 +89,7 @@ namespace SnowCover
 		weatherMult = clamp((weatherMult) * max(SharedData::snowCoverSettings.minAngle, worldNormal.z), -1, 1);
 		// the amount of snow based on season and weather
 		float env_mult = saturate(max((GetEnvironmentalMultiplier(p) + disp*5), weatherMult)) - waterDist;
-#		if !defined(LANDSCAPE) && !defined(LOD)
+#		if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE)
 		// removes pure white lod object billboard trees (ultra billboards) that have no special flags and are not marked as lod
 		float distMult = 1 - smoothstep(4096+2048,9192, viewDist)*0.5;
 #		else
