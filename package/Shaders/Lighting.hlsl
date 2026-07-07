@@ -2580,11 +2580,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		snowFactor = SnowCover::ApplySnow(material, snowNormal, disp, adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight, length(viewPosition.xyz), uv - uvOriginal);
 #		endif
 		if (snowFactor > 0) {
-			float3 sd = FrameBuffer::ViewToWorld(-float3(ddx_fine(snowFactor), ddy_fine(snowFactor), 0), false);
 #		if defined(MODELSPACENORMALS) && !defined(SKINNED)
+			float3 sd = FrameBuffer::ViewToWorld(-float3(ddx_fine(snowFactor), ddy_fine(snowFactor), 0), false);
 			worldNormal = normalize(lerp(worldNormal, snowNormal, snowFactor * 0.75) + sd);
 #		else
-			worldNormal = normalize(lerp(worldNormal, normalize(mul(tbn, snowNormal)), snowFactor * 0.75) + sd);
+			worldNormal = normalize(lerp(worldNormal, normalize(mul(tbn, snowNormal)), snowFactor * 0.75));
 #		endif
 		}
 #		if defined(LODLANDNOISE)
