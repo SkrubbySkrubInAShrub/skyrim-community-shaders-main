@@ -97,6 +97,15 @@ public:
 		uint LightsVisualisationMode;
 		float pad0[2];
 		uint ClusterSize[4];
+		// Contact shadows -- mirror of SharedData::LightLimitFixSettings; keep layouts in sync.
+		uint EnableContactShadows;
+		uint ContactShadowMaxSteps;
+		float ContactShadowMaxDistance;
+		float ContactShadowStride;
+		float ContactShadowThickness;
+		float ContactShadowDepthFade;
+		float ContactShadowMinIntensity;
+		uint pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -148,6 +157,11 @@ public:
 	virtual void SetupResources() override;
 
 	virtual void RestoreDefaultSettings() override;
+
+	/** @brief Deserializes contact-shadow settings from the feature JSON section. */
+	virtual void LoadSettings(json& o_json) override;
+	/** @brief Serializes contact-shadow settings into the feature JSON section. */
+	virtual void SaveSettings(json& o_json) override;
 
 	/** @brief Draws the ImGui settings UI for light limit fix configuration and debug visualization. */
 	virtual void DrawSettings() override;
@@ -203,6 +217,15 @@ public:
 	{
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
+
+		// Point-light contact shadows (raymarched screen-space); tuning matches the UI sliders.
+		bool EnableContactShadows = false;
+		uint ContactShadowMaxSteps = 4;
+		float ContactShadowMaxDistance = 1024.0f;
+		float ContactShadowStride = 2.0f;
+		float ContactShadowThickness = 0.20f;
+		float ContactShadowDepthFade = 0.05f;
+		float ContactShadowMinIntensity = 0.25f;
 	};
 
 	uint clusterSize[3] = { 16 };
