@@ -137,6 +137,15 @@ public:
 		uint LightsVisualisationMode;
 		float pad0[2];
 		uint ClusterSize[4];
+		// Contact shadows -- mirror of SharedData::LightLimitFixSettings; keep layouts in sync.
+		uint EnableContactShadows;
+		uint ContactShadowMaxSteps;
+		float ContactShadowMaxDistance;
+		float ContactShadowStride;
+		float ContactShadowThickness;
+		float ContactShadowDepthFade;
+		float ContactShadowMinIntensity;
+		uint pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -247,6 +256,15 @@ public:
 		bool EnableParticleLightsCulling = true;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
+
+		// Point-light contact shadows (raymarched screen-space); tuning matches the UI sliders.
+		bool EnableContactShadows = false;
+		uint ContactShadowMaxSteps = 4;
+		float ContactShadowMaxDistance = 1024.0f;
+		float ContactShadowStride = 2.0f;
+		float ContactShadowThickness = 0.20f;
+		float ContactShadowDepthFade = 0.05f;
+		float ContactShadowMinIntensity = 0.25f;
 	};
 
 	uint clusterSize[3] = { 16 };

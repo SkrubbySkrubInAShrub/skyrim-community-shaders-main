@@ -2306,6 +2306,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
 	}
 
+#		if defined(DEFERRED)
+	// Contact-shadow step count: ramps from MaxSteps at the camera to 0 at MaxDistance.
+	// Shared by every clustered light at this pixel, so hoisted out of the loop.
+	uint contactShadowSteps = 0;
+	[branch] if (SharedData::lightLimitFixSettings.EnableContactShadows)
+	{
+		contactShadowSteps = round(SharedData::lightLimitFixSettings.ContactShadowMaxSteps *
+								   (1.0 - saturate(viewPosition.z / SharedData::lightLimitFixSettings.ContactShadowMaxDistance)));
+	}
+#		endif
+
 	[loop] for (uint lightIndex = 0; lightIndex < totalLightCount; lightIndex++)
 	{
 		LightLimitFix::Light light;
@@ -2348,6 +2359,41 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 normalizedLightDirection = normalize(lightDirection);
 		float lightAngle = dot(worldNormal.xyz, normalizedLightDirection.xyz);
 
+		float contactShadow = 1.0;
+
+#			if defined(DEFERRED)
+		// contactShadowSteps == 0 means feature off or pixel past MaxDistance -- skip the gate math.
+		[branch] if (contactShadowSteps > 0)
+		{
+			// Strict lights always raymarch; clustered lights gate on normalized falloff vs
+			// MinIntensity (re-derived on the ISL path since GetAttenuation isn't [0,1]-normalized).
+			const bool isClusteredLight = lightIndex >= LightLimitFix::NumStrictLights;
+			bool passesIntensityGate = !isClusteredLight;
+			if (isClusteredLight) {
+#				if defined(ISL)
+				float falloffFactor = saturate(lightDist * light.invRadius);
+				passesIntensityGate = (1.0 - falloffFactor * falloffFactor) >
+				                      SharedData::lightLimitFixSettings.ContactShadowMinIntensity;
+#				else
+				passesIntensityGate = intensityMultiplier >
+				                      SharedData::lightLimitFixSettings.ContactShadowMinIntensity;
+#				endif
+			}
+
+			[branch] if (
+				!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
+				shadowComponent != 0.0 &&
+				lightAngle > 0.0 &&
+				passesIntensityGate)
+			{
+				// positionWS is camera-relative; transform to view space for the ray direction.
+				float3 lightPositionVS = mul(FrameBuffer::CameraView, float4(light.positionWS.xyz, 1)).xyz;
+				float3 normalizedLightDirectionVS = normalize(lightPositionVS - viewPosition.xyz);
+				contactShadow = LightLimitFix::ContactShadows(viewPosition, screenNoise, normalizedLightDirectionVS, contactShadowSteps);
+			}
+		}
+#			endif
+
 		float3 refractedLightDirection = normalizedLightDirection;
 #			if defined(TRUE_PBR) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
@@ -2364,7 +2410,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			SharedData::extendedMaterialSettings.EnableShadows &&
 			!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
 			lightAngle > 0.0 &&
-			shadowComponent != 0.0)
+			shadowComponent != 0.0 &&
+			contactShadow != 0.0)
 		{
 			float3 lightDirectionTS = normalize(mul(refractedLightDirection, tbn).xyz);
 #				if defined(PARALLAX)
@@ -2385,7 +2432,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		DirectContext pointLightContext;
 		DirectLightingOutput pointLightOutput;
-		float pointLightShadow = lightShadow * parallaxShadow;
+		float pointLightShadow = lightShadow * parallaxShadow * contactShadow;
 #			if defined(TRUE_PBR)
 		pointLightContext = CreateDirectLightingContext(worldNormal.xyz, coatWorldNormal, vertexNormal.xyz, refractedViewDirection, viewDirection, refractedLightDirection, normalizedLightDirection, lightColor, pointLightShadow, pointLightShadow);
 #			else

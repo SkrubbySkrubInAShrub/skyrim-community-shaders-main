@@ -80,6 +80,15 @@ namespace SharedData
 		uint LightsVisualisationMode;
 		float2 pad0;
 		uint4 ClusterSize;
+		// Point-light contact shadows (see LightLimitFix::ContactShadows).
+		uint EnableContactShadows;
+		uint ContactShadowMaxSteps;
+		float ContactShadowMaxDistance;
+		float ContactShadowStride;
+		float ContactShadowThickness;
+		float ContactShadowDepthFade;
+		float ContactShadowMinIntensity;
+		uint pad1;
 	};
 
 	struct WetnessEffectsSettings

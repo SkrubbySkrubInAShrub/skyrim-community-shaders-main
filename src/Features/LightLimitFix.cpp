@@ -18,9 +18,24 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableParticleLights,
 	EnableParticleLightsCulling,
 	EnableLightsVisualisation,
-	LightsVisualisationMode)
+	LightsVisualisationMode,
+	EnableContactShadows,
+	ContactShadowMaxSteps,
+	ContactShadowMaxDistance,
+	ContactShadowStride,
+	ContactShadowThickness,
+	ContactShadowDepthFade,
+	ContactShadowMinIntensity)
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 128;
+
+// NaN-safe clamp guarding against non-finite values from malformed JSON.
+static float SanitizeFloat(float value, float lo, float hi)
+{
+	if (!std::isfinite(value))
+		return lo;
+	return std::clamp(value, lo, hi);
+}
 
 void LightLimitFix::DrawSettings()
 {
@@ -36,6 +51,58 @@ void LightLimitFix::DrawSettings()
 		ImGui::TreePop();
 	}
 
+	///////////////////////////////
+	ImGui::SeparatorText(T(TKEY("contact_shadows_header"), "Contact Shadows"));
+
+	ImGui::Checkbox(T(TKEY("enable_contact_shadows"), "Enable Contact Shadows"), &settings.EnableContactShadows);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("enable_contact_shadows_tooltip"), "All point lights (strict and clustered, except simple lights) cast short screen-space shadows. Performance impact."));
+	}
+
+	if (settings.EnableContactShadows && ImGui::TreeNode(T(TKEY("contact_shadow_tuning"), "Contact Shadow Tuning"))) {
+		// SliderScalar with ImGuiDataType_U32 rather than a (int*) cast: the cast
+		// violates strict aliasing and could misinterpret a transient negative value.
+		constexpr uint32_t kMinSteps = 1, kMaxSteps = 16;
+		ImGui::SliderScalar(T(TKEY("contact_shadow_max_steps"), "Max Steps"), ImGuiDataType_U32, &settings.ContactShadowMaxSteps,
+			&kMinSteps, &kMaxSteps, "%u", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("contact_shadow_max_steps_tooltip"), "Raymarch steps at zero depth. Higher = longer / more accurate contact shadows, linearly more cost."));
+		}
+
+		ImGui::SliderFloat(T(TKEY("contact_shadow_max_distance"), "Max Distance"), &settings.ContactShadowMaxDistance, 64.0f, 4096.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("contact_shadow_max_distance_tooltip"), "View-space depth at which contact shadows fade to zero steps. Avoids paying for shadows on distant surfaces where they don't read."));
+		}
+
+		ImGui::SliderFloat(T(TKEY("contact_shadow_stride"), "Stride"), &settings.ContactShadowStride, 0.5f, 8.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("contact_shadow_stride_tooltip"), "Per-step march length in view-space units at near depth (auto-scales linearly past ~100 units so far surfaces don't undersample). Larger = longer screen-space reach with coarser detail."));
+		}
+
+		ImGui::SliderFloat(T(TKEY("contact_shadow_thickness"), "Thickness"), &settings.ContactShadowThickness, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("contact_shadow_thickness_tooltip"), "Depth-delta multiplier for shadow onset. Larger = darker contact at occluder edges."));
+		}
+
+		ImGui::SliderFloat(T(TKEY("contact_shadow_depth_fade"), "Depth Fade"), &settings.ContactShadowDepthFade, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("contact_shadow_depth_fade_tooltip"), "Depth-delta multiplier for shadow falloff. Larger = shadows truncate sooner behind thick occluders."));
+		}
+
+		ImGui::SliderFloat(T(TKEY("contact_shadow_min_intensity"), "Min Light Intensity"), &settings.ContactShadowMinIntensity, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s",
+				T(TKEY("contact_shadow_min_intensity_tooltip"),
+					"Skip contact shadows for CLUSTERED lights whose normalized distance falloff "
+					"`1 - (lightDist/radius)^2` at the pixel is below this threshold. "
+					"Strict lights are always raymarched regardless of this threshold. "
+					"Higher = larger perf win, may drop subtle shadows from weak lights at their reach edge."));
+		}
+
+		ImGui::TreePop();
+	}
+
+	///////////////////////////////
 	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
 
 	if (ImGui::TreeNode(T(TKEY("light_limit_vis"), "Light Limit Visualization"))) {
@@ -83,6 +150,15 @@ LightLimitFix::PerFrame LightLimitFix::GetCommonBufferData()
 	perFrame.EnableLightsVisualisation = settings.EnableLightsVisualisation;
 	perFrame.LightsVisualisationMode = settings.LightsVisualisationMode;
 	std::copy(clusterSize, clusterSize + 3, perFrame.ClusterSize);
+
+	perFrame.EnableContactShadows = settings.EnableContactShadows;
+	perFrame.ContactShadowMaxSteps = std::clamp<uint32_t>(settings.ContactShadowMaxSteps, 1u, 16u);
+	perFrame.ContactShadowMaxDistance = SanitizeFloat(settings.ContactShadowMaxDistance, 64.0f, 4096.0f);
+	perFrame.ContactShadowStride = SanitizeFloat(settings.ContactShadowStride, 0.5f, 8.0f);
+	perFrame.ContactShadowThickness = SanitizeFloat(settings.ContactShadowThickness, 0.0f, 1.0f);
+	perFrame.ContactShadowDepthFade = SanitizeFloat(settings.ContactShadowDepthFade, 0.0f, 1.0f);
+	perFrame.ContactShadowMinIntensity = SanitizeFloat(settings.ContactShadowMinIntensity, 0.0f, 1.0f);
+
 	return perFrame;
 }
 
