@@ -85,7 +85,7 @@ public:
 		uint EffectNormalization;
 		float EffectNormalizationMult;
 		float MinEffectMult;
-		float pad1[2];
+		float2 pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
