@@ -59,20 +59,43 @@ public:
 		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
-		uint DisableInInteriors = 1;
-		float pad1 = 0.0f;
+		bool DisableInInteriors = true;
+		bool DisableInWorldMap = true;
+		bool DisableInLoadingScreen = true;
 		uint EffectNormalization = 0;
 		float EffectNormalizationMult = 5.0f;
 		float MinEffectMult = 1.0f;
-		float pad;
+		float pad[2];
 	} settings;
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+
+	struct alignas(16) PerFrame
+	{
+		uint EnableIBL;
+		uint PreserveFogLuminance;
+		uint UseStaticIBL;
+		float DALCAmount;
+		float EnvIBLScale;
+		float SkyIBLScale;
+		float EnvIBLSaturation;
+		float SkyIBLSaturation;
+		float FogAmount;
+		uint DALCMode;
+		float pad0;
+		uint EffectNormalization;
+		float EffectNormalizationMult;
+		float MinEffectMult;
+		float pad1[2];
+	};
+	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
-	/** @brief Returns settings data for the GPU constant buffer, with IBL disabled in interiors if configured. */
-	Settings GetCommonBufferData() const;
+	/** @brief Builds the GPU constant-buffer data, forcing EnableIBL off when IsDisabledForCurrentScene(). */
+	PerFrame GetCommonBufferData() const;
+	/** @brief Returns true when IBL should be suppressed in the current scene per the DisableIn* toggles (loading screens, world map, interiors). */
+	bool IsDisabledForCurrentScene() const;
 	/** @brief Returns the diffuse IBL spherical harmonics compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 };
