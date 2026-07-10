@@ -2,6 +2,7 @@
 #define __SHARED_DATA_DEPENDENCY_HLSL__
 
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
 namespace SharedData
@@ -29,8 +30,8 @@ namespace SharedData
 		bool HasDirectionalShadows;
 		bool InMapMenu;           // If the world/local map is open (note that the renderer is still deferred here)
 		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
-		float MipBias;            // Offset to mip level for TAA sharpness
-		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
+		float MipBias;             // Offset to mip level for TAA sharpness
+		float DefaultWaterHeight;  // Worldspace water plane, camera-relative Z; -FLT_MAX outside exteriors
 		float3 pad0;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
@@ -456,6 +457,10 @@ namespace SharedData
 		float SnowingDensity;
 		float SeasonalAltitude;
 
+		float2 WaterMapOrigin;
+		float WaterMapInvExtent;
+		float WaterMapEnabled;  // 0 = do not sample
+
 		uint EnableExpensiveFoliage;
 		float SnowHeightOffset;
 		uint2 pad;
@@ -554,7 +559,7 @@ namespace SharedData
 	}
 
 	// Returns water data for the tile containing worldPosition (camera-relative XY).
-	float4 GetWaterData(float3 worldPosition)
+	float4 GetWaterData(float3 worldPosition, float noTileHeight)
 	{
 		float2 cellF = (((worldPosition.xy + FrameBuffer::CameraPosAdjust.xy)) / 4096.0) + 64.0;  // always positive
 		int2 cellInt;
@@ -567,12 +572,17 @@ namespace SharedData
 
 		uint waterTile = (uint)clamp(cellInt.x + (cellInt.y * 5), 0, 24);  // remap xy to 0-24
 
-		float4 waterData = float4(1.0, 1.0, 1.0, -2147483648);
+		float4 waterData = float4(1.0, 1.0, 1.0, noTileHeight);
 
 		[flatten] if (cellInt.x < 5 && cellInt.x >= 0 && cellInt.y < 5 && cellInt.y >= 0)
 			waterData = WaterData[waterTile];
 
 		return waterData;
+	}
+
+	float4 GetWaterData(float3 worldPosition)
+	{
+		return GetWaterData(worldPosition, WATER_HEIGHT_NO_TILE);
 	}
 
 	float3 GetAmbient(float3 normal)

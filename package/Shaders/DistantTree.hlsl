@@ -251,7 +251,7 @@ PS_OUTPUT main(PS_INPUT input)
 			skylight = 1 - TexDiffuse.Sample(SampDiffuse, input.TexCoord.xy - float2(0, 2. / ry)).a;
 		}
 		float viewDist = length(viewPosition);
-		// Billboards are vertical quads, so the raw geometric normal has z == 0 and the angle mask zeroes all snow.
+		// Billboards are vertical quads: the raw geometric normal has z == 0 and would zero all snow.
 		float3 snowNormal = normalize(normal + float3(0, 0, 0.5));
 		SnowCover::ApplySnowFoliage(baseColor.xyz, snowNormal, input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, skylight, viewDist, SnowCover::GetObjectFade(viewDist));
 	}

@@ -34,7 +34,13 @@ private:
 	static constexpr float DEFAULT_WINTER_HEIGHT_OFFSET = -20000.0f;        // how high snow is in winter (in game units)
 	static constexpr uint DEFAULT_PEAK_SUMMER_MONTH = 6;
 	static constexpr uint DEFAULT_PEAK_WINTER_MONTH = 0;
-	static constexpr uint32_t FIRST_SRV_SLOT = 38;  // t38-t44, see SnowCover.hlsli
+	static constexpr uint32_t FIRST_SRV_SLOT = 38;      // t38-t44, see SnowCover.hlsli
+	static constexpr uint32_t WATER_MAP_SRV_SLOT = 46;  // t45 is ScreenSpaceShadows
+	static constexpr uint32_t WATER_MAP_RES = 512;
+	static constexpr float WATER_MAP_EXTENT = 5.0f * 4096.0f;  // the 5x5 loaded cell grid
+	static constexpr float WATER_MAP_UNMAPPED = -1e30f;
+	static constexpr float WATER_MAP_FLAT_NORMAL_Z = 0.5f;
+	static constexpr uint32_t WATER_MAP_REFRESH_TICKS = 360;  // UpdateSharedData runs several times a frame
 
 public:
 	virtual inline std::string GetName() { return "Snow Cover"; }
@@ -49,7 +55,7 @@ public:
 		uint EnableExpensiveFoliage = 1;
 		float SnowHeightOffset = 0.0f;
 		uint AffectHavok = 0;
-		uint pad;
+		uint EnableWaterHeightMap = 1;
 	};
 	static_assert(sizeof(UserSettings) % 16 == 0);
 
@@ -92,7 +98,7 @@ public:
 		uint pad[2];
 	};
 	static_assert(sizeof(WorldSettings) % 16 == 0);
-	// Mirrors SharedData.hlsli's SnowCoverSettings tail; a drift here silently corrupts every struct after it.
+	// Mirrors SharedData.hlsli's SnowCoverSettings; drift corrupts every struct after it.
 	static_assert(sizeof(WorldSettings) == 144);
 
 	struct alignas(16) PerFrame
@@ -102,10 +108,15 @@ public:
 		float SnowingDensity;
 		float SeasonalAltitude;
 
+		float2 WaterMapOrigin;
+		float WaterMapInvExtent;
+		float WaterMapEnabled;  // 0 = do not sample
+
 		UserSettings settings;
 		WorldSettings wsettings;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
+	static_assert(sizeof(PerFrame) == 192);
 
 	UserSettings settings;
 	WorldSettings wsettings;
@@ -114,6 +125,16 @@ public:
 	PerFrame GetCommonBufferData();
 
 	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 7> views;
+
+	std::unique_ptr<Texture2D> waterHeightMap;
+	std::vector<float> waterHeightCPU;
+	int32_t waterMapCellX = 0;
+	int32_t waterMapCellY = 0;
+	uint32_t waterMapObjectCount = 0;
+	uint32_t waterMapAge = 0;
+	bool waterMapValid = false;
+
+	void UpdateWaterHeightMap();
 
 	std::string status;
 	std::string last_worldspace;  // owned copy + content comparison; a raw editorID pointer can dangle/rehash

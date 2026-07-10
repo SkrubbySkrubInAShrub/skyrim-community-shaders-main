@@ -11,7 +11,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowCover::UserSettings,
 	EnableExpensiveFoliage,
 	AffectHavok,
-	SnowHeightOffset)
+	SnowHeightOffset,
+	EnableWaterHeightMap)
 
 void copyString(const std::string& input, char* dst, size_t dst_size)
 {
@@ -24,6 +25,12 @@ void SnowCover::DrawSettings()
 	ImGui::Checkbox("Enable Nicer Foliage", (bool*)&settings.EnableExpensiveFoliage);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("Uses one more texture sample to put snow on edges of tree lods and grass.");
+	}
+	ImGui::Checkbox("Water Height Map", (bool*)&settings.EnableWaterHeightMap);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Keeps snow off riverbeds, creek beds and pond bottoms.\n"
+			"The game reports only one water height per cell, which misses placed water like rivers and streams.");
 	}
 	ImGui::Checkbox("Snow on Mobile Objects", (bool*)&settings.AffectHavok);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -91,8 +98,7 @@ void SnowCover::DrawSettings()
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
 						"Camera distance at which weather-driven snow starts fading out.\n"
-						"Loaded cells only reach about 10000 units, so a value below that puts the fade\n"
-						"on the terrain LOD rings and the snow front will crawl along with the camera.\n"
+						"Keep it above ~10000 or the fade lands on the terrain LOD and the snow front crawls with the camera.\n"
 						"Seasonal and altitude snow is never distance-faded.");
 				}
 				ImGui::SliderFloat("Weather Fade End", &wsettings.WeatherFadeEnd, 0.0f, 300000.0f, "%.0f");
@@ -111,9 +117,7 @@ void SnowCover::DrawSettings()
 				if (auto _tt = Util::HoverTooltipWrapper()) {
 					ImGui::Text(
 						"How much snow is removed from statics and trees beyond the object fade range.\n"
-						"0 keeps snow at full strength at any distance. Raise it if DynDOLOD ultra-tree\n"
-						"billboards look like white slabs. Tree LOD billboards use the same falloff as the\n"
-						"full meshes they replace, so this cannot cause a pop at the LOD switch.");
+						"0 keeps snow at full strength at any distance. Raise it if DynDOLOD ultra-tree billboards look too white.");
 				}
 				ImGui::TreePop();
 			}
@@ -250,6 +254,101 @@ void SnowCover::DrawSettings()
 	ImGui::Spacing();
 }
 
+// SharedData::WaterData holds one height per cell and so cannot see placed water refs (rivers, creeks).
+void SnowCover::UpdateWaterHeightMap()
+{
+	if (!waterHeightMap || !settings.EnableWaterHeightMap || !wsettings.EnableSnowCover || Util::IsInterior()) {
+		waterMapValid = false;
+		return;
+	}
+
+	auto waterSystem = RE::TESWaterSystem::GetSingleton();
+	const uint32_t objectCount = waterSystem ? waterSystem->waterObjects.size() : 0;
+
+	const auto eye = Util::GetEyePosition();
+	int32_t cellX = 0;
+	int32_t cellY = 0;
+	Util::WorldToCell(eye, cellX, cellY);
+
+	const bool stale = !waterMapValid || cellX != waterMapCellX || cellY != waterMapCellY || objectCount != waterMapObjectCount;
+	if (!stale && ++waterMapAge < WATER_MAP_REFRESH_TICKS)
+		return;
+	waterMapAge = 0;
+
+	// Snapped to the cell grid, not the camera, so the map does not shimmer as the player walks.
+	const float originX = static_cast<float>(cellX - 2) * 4096.0f;
+	const float originY = static_cast<float>(cellY - 2) * 4096.0f;
+	constexpr float texelSize = WATER_MAP_EXTENT / static_cast<float>(WATER_MAP_RES);
+
+	std::fill(waterHeightCPU.begin(), waterHeightCPU.end(), WATER_MAP_UNMAPPED);
+
+	if (waterSystem) {
+		for (const auto& waterObject : waterSystem->waterObjects) {
+			if (!waterObject)
+				continue;
+			const auto& plane = waterObject->plane;
+			const bool planeUsable = std::abs(plane.normal.z) > WATER_MAP_FLAT_NORMAL_Z;
+
+			for (const auto& bound : waterObject->multiBounds) {
+				if (!bound)
+					continue;
+
+				const auto center = bound->center;
+				const auto size = bound->size;  // half extents
+				const float minX = center.x - size.x, maxX = center.x + size.x;
+				const float minY = center.y - size.y, maxY = center.y + size.y;
+				const float minZ = center.z - size.z, maxZ = center.z + size.z;
+
+				if (maxX < originX || minX > originX + WATER_MAP_EXTENT || maxY < originY || minY > originY + WATER_MAP_EXTENT)
+					continue;
+
+				const int32_t x0 = std::clamp(static_cast<int32_t>(std::floor((minX - originX) / texelSize)), 0, static_cast<int32_t>(WATER_MAP_RES) - 1);
+				const int32_t x1 = std::clamp(static_cast<int32_t>(std::floor((maxX - originX) / texelSize)), 0, static_cast<int32_t>(WATER_MAP_RES) - 1);
+				const int32_t y0 = std::clamp(static_cast<int32_t>(std::floor((minY - originY) / texelSize)), 0, static_cast<int32_t>(WATER_MAP_RES) - 1);
+				const int32_t y1 = std::clamp(static_cast<int32_t>(std::floor((maxY - originY) / texelSize)), 0, static_cast<int32_t>(WATER_MAP_RES) - 1);
+
+				for (int32_t y = y0; y <= y1; ++y) {
+					const float worldY = originY + (static_cast<float>(y) + 0.5f) * texelSize;
+					if (worldY < minY || worldY > maxY)
+						continue;
+					for (int32_t x = x0; x <= x1; ++x) {
+						const float worldX = originX + (static_cast<float>(x) + 0.5f) * texelSize;
+						if (worldX < minX || worldX > maxX)
+							continue;
+
+						// The clamp keeps a degenerate plane from escaping its own bound.
+						float height = center.z;
+						if (planeUsable) {
+							const float solved = (plane.constant - plane.normal.x * worldX - plane.normal.y * worldY) / plane.normal.z;
+							if (std::isfinite(solved))
+								height = std::clamp(solved, minZ, maxZ);
+						}
+
+						float& texel = waterHeightCPU[static_cast<size_t>(y) * WATER_MAP_RES + static_cast<size_t>(x)];
+						texel = std::max(texel, height);
+					}
+				}
+			}
+		}
+	}
+
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	auto context = globals::d3d::context;
+	if (FAILED(context->Map(waterHeightMap->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+		waterMapValid = false;
+		return;
+	}
+	auto* dst = static_cast<uint8_t*>(mapped.pData);
+	for (uint32_t row = 0; row < WATER_MAP_RES; ++row)
+		memcpy(dst + static_cast<size_t>(row) * mapped.RowPitch, &waterHeightCPU[static_cast<size_t>(row) * WATER_MAP_RES], WATER_MAP_RES * sizeof(float));
+	context->Unmap(waterHeightMap->resource.get(), 0);
+
+	waterMapCellX = cellX;
+	waterMapCellY = cellY;
+	waterMapObjectCount = objectCount;
+	waterMapValid = true;
+}
+
 SnowCover::PerFrame SnowCover::GetCommonBufferData()
 {
 	Reload();
@@ -299,6 +398,14 @@ SnowCover::PerFrame SnowCover::GetCommonBufferData()
 	perFrame.SnowingDensity = snowingDensity;
 	perFrame.TimeSnowing = timeSnowing;
 	perFrame.SeasonalAltitude = GetSeasonalAltitude();
+
+	UpdateWaterHeightMap();
+	perFrame.WaterMapOrigin = waterMapValid ?
+	                              float2(static_cast<float>(waterMapCellX - 2) * 4096.0f, static_cast<float>(waterMapCellY - 2) * 4096.0f) :
+	                              float2(0.0f, 0.0f);
+	perFrame.WaterMapInvExtent = 1.0f / WATER_MAP_EXTENT;
+	perFrame.WaterMapEnabled = waterMapValid ? 1.0f : 0.0f;
+
 	perFrame.settings = settings;
 	perFrame.wsettings = wsettings;
 
@@ -310,6 +417,27 @@ void SnowCover::SetupResources()
 	Reload();
 	if (auto calendar = RE::Calendar::GetSingleton())
 		lastHour = calendar->GetHour();
+
+	waterHeightCPU.assign(static_cast<size_t>(WATER_MAP_RES) * WATER_MAP_RES, WATER_MAP_UNMAPPED);
+
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = WATER_MAP_RES;
+	desc.Height = WATER_MAP_RES;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R32_FLOAT;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DYNAMIC;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+	waterHeightMap = std::make_unique<Texture2D>(desc, "SnowCover::WaterHeightMap");
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = desc.Format;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MipLevels = 1;
+	waterHeightMap->CreateSRV(srvDesc);
 }
 
 const char* GetWorldspace()
@@ -539,6 +667,9 @@ void SnowCover::Prepass()
 		for (size_t i = 0; i < views.size(); ++i)
 			srvs[i] = views[i].get();
 		globals::d3d::context->PSSetShaderResources(FIRST_SRV_SLOT, (uint)views.size(), srvs);
+
+		ID3D11ShaderResourceView* waterMapSrv = waterHeightMap ? waterHeightMap->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(WATER_MAP_SRV_SLOT, 1, &waterMapSrv);
 	}
 }
 

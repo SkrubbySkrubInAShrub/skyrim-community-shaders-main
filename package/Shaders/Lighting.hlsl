@@ -2544,6 +2544,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 adjustedWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 
+	float snowWaterHeight = SharedData::GetWaterData(input.WorldPosition.xyz, SharedData::DefaultWaterHeight).w;
+	float snowWaterDist = min(input.WorldPosition.z - snowWaterHeight,
+		adjustedWorldPos.z - SnowCover::SampleWaterHeightMap(adjustedWorldPos.xy));
+
 	float snowFactor = 0;
 	// Exclusion is via NoSnow (C++ hook, animation-aware); don't also test Skinned, as static props can carry it without real skinning.
 	if (SharedData::snowCoverSettings.EnableSnowCover
@@ -2575,9 +2579,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			SnowCover::ApplyFoliageColor(material.BaseColor, SnowCover::GetEnvironmentalMultiplier(adjustedWorldPos));
 #		endif
 #		if defined(TRUE_PBR)
-		snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, snowFactor, disp, adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight, length(viewPosition.xyz), uv - uvOriginal);
+		snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, snowFactor, disp, adjustedWorldPos, snowOcclusion, snowWaterDist, length(viewPosition.xyz), uv - uvOriginal);
 #		else
-		snowFactor = SnowCover::ApplySnow(material, snowNormal, disp, adjustedWorldPos, snowOcclusion, input.WorldPosition.z - waterHeight, length(viewPosition.xyz), uv - uvOriginal);
+		snowFactor = SnowCover::ApplySnow(material, snowNormal, disp, adjustedWorldPos, snowOcclusion, snowWaterDist, length(viewPosition.xyz), uv - uvOriginal);
 #		endif
 		if (snowFactor > 0) {
 #		if defined(MODELSPACENORMALS) && !defined(SKINNED)

@@ -488,9 +488,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				snowOcclusion = max(snowOcclusion, 1 - TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy - float2(0, 1. / ry), SharedData::MipBias).a);
 			}
 		}
-		snowOcclusion *= saturate(input.WorldPosition.z - SharedData::GetWaterData(input.WorldPosition.xyz).w);
-		// Grass never reaches the object LOD switch, so it takes no object falloff.
-		SnowCover::ApplySnowFoliage(baseColor.xyz, float3(input.TexCoord.xy, normal.z * 0.5 + 0.5), input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, snowOcclusion, length(viewPosition.xyz), 1.0);
+		float3 snowWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
+		snowOcclusion *= saturate(min(input.WorldPosition.z - SharedData::GetWaterData(input.WorldPosition.xyz).w,
+			snowWorldPos.z - SnowCover::SampleWaterHeightMap(snowWorldPos.xy)));
+		SnowCover::ApplySnowFoliage(baseColor.xyz, float3(input.TexCoord.xy, normal.z * 0.5 + 0.5), snowWorldPos, snowOcclusion, length(viewPosition.xyz), 1.0);
 	}
 #		endif
 

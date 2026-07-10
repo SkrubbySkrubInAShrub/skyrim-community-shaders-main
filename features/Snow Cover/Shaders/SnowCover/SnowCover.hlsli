@@ -14,6 +14,22 @@ namespace SnowCover
 	Texture2D<float3> IceNormal : register(t42);
 	Texture2D<float4> IceRmaos : register(t43);
 	Texture2D<float> SnowMap : register(t44);
+	Texture2D<float> WaterHeightMap : register(t46);
+
+	float SampleWaterHeightMap(float2 posWS)
+	{
+		if (SharedData::snowCoverSettings.WaterMapEnabled == 0)
+			return WATER_HEIGHT_UNMAPPED;
+
+		float2 uv = (posWS - SharedData::snowCoverSettings.WaterMapOrigin) * SharedData::snowCoverSettings.WaterMapInvExtent;
+		if (any(uv < 0) || any(uv > 1))
+			return WATER_HEIGHT_UNMAPPED;
+
+		uint width, height;
+		WaterHeightMap.GetDimensions(width, height);
+		int2 texel = clamp(int2(uv * float2(width, height)), int2(0, 0), int2(width - 1, height - 1));
+		return WaterHeightMap.Load(int3(texel, 0));
+	}
 
 	// https://blog.selfshadow.com/publications/blending-in-detail/
 	// for when s = (0,0,1)
@@ -29,7 +45,6 @@ namespace SnowCover
 
 
 
-	// Weakens snow on statics/trees with distance, so ultra billboards do not read as white slabs.
 	float GetObjectFade(float viewDist)
 	{
 		float start = SharedData::snowCoverSettings.ObjectFadeStart;
@@ -37,7 +52,6 @@ namespace SnowCover
 		return 1 - smoothstep(start, end, viewDist) * SharedData::snowCoverSettings.ObjectFadeAmount;
 	}
 
-	// Must reach past the terrain LOD rings (loaded cells end ~10k) or the snow front crawls with the camera.
 	float GetWeatherRange(float3 p, float viewDist)
 	{
 		float start = SharedData::snowCoverSettings.WeatherFadeStart;
@@ -72,7 +86,6 @@ namespace SnowCover
 		color = Color::HSVtoRGB(hsv);
 	}
 
-	// distMult lets callers match ApplySnowBase's object falloff so trees keep their snow across the LOD switch.
 	void ApplySnowFoliage(inout float3 color, float3 worldNormal, float3 p, float skylight, float viewDist, float distMult)
 	{
 		float env_mult = GetEnvironmentalMultiplier(p);

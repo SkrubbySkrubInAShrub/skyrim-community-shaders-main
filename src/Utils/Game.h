@@ -7,6 +7,8 @@ namespace Util
 	void StoreTransform3x4NoScale(DirectX::XMFLOAT3X4& Dest, const RE::NiTransform& Source);
 
 	float4 TryGetWaterData(float offsetX, float offsetY);
+	// Worldspace water plane, camera-relative Z; -FLT_MAX outside exteriors.
+	float TryGetDefaultWaterHeight();
 	float4 GetCameraData();
 	bool GetTemporal();
 	// Toggle the ISTemporalAA scene-resolve flag (companion to GetTemporal).

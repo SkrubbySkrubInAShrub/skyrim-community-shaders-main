@@ -29,6 +29,21 @@ namespace Util
 		Dest.m[2][3] = Source.translate.z;
 	}
 
+	// Fallback past the 5x5 WaterData grid (all terrain LOD), where no per-cell water height exists.
+	float TryGetDefaultWaterHeight()
+	{
+		if (globals::game::shadowState && !IsInterior()) {
+			if (auto tes = RE::TES::GetSingleton()) {
+				if (auto worldSpace = tes->GetRuntimeData2().worldSpace) {
+					const float height = worldSpace->GetDefaultWaterHeight();
+					if (std::isfinite(height))
+						return height - GetEyePosition().z;
+				}
+			}
+		}
+		return -FLT_MAX;
+	}
+
 	float4 TryGetWaterData(float offsetX, float offsetY)
 	{
 		if (globals::game::shadowState) {
@@ -142,7 +157,7 @@ namespace Util
 	{
 		static float& cameraFOVDeg = (*(float*)(REL::RelocationID(513786, 388785).address()));  // FOV degrees
 		float hFOVRad = cameraFOVDeg * (3.14159265359f / 180.0f);
-		float unitHalfWidth = tan(hFOVRad / 2);                                                                // This is same as camera frustum RL
+		float unitHalfWidth = tan(hFOVRad / 2);                                                                                                         // This is same as camera frustum RL
 		float unitHalfHeight = unitHalfWidth / ((float)globals::game::graphicsState->screenWidth / (float)globals::game::graphicsState->screenHeight);  // frustum TB
 		float vFOVRad = 2.0f * atan(unitHalfHeight);
 		return vFOVRad;
