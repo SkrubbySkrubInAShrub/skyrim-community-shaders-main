@@ -2578,6 +2578,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (SharedData::snowCoverSettings.AffectTreeTint)
 			SnowCover::ApplyFoliageColor(material.BaseColor, SnowCover::GetEnvironmentalMultiplier(adjustedWorldPos));
 #		endif
+#		if defined(LODLANDSCAPE) || defined(LODLANDNOISE)
+		snowNormal = normalize(lerp(snowNormal, float3(0, 0, 1), 0.5));
+#		endif
 #		if defined(TRUE_PBR)
 		snowFactor = SnowCover::ApplySnowPBR(material, snowNormal, snowFactor, disp, adjustedWorldPos, snowOcclusion, snowWaterDist, length(viewPosition.xyz), uv - uvOriginal);
 #		else
