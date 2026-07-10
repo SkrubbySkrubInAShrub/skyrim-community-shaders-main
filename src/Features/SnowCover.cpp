@@ -3,9 +3,12 @@
 #include "Util.h"
 #include "Utils/FileSystem.h"
 #include <DDSTextureLoader.h>
+#include <RE/B/BSEffectShaderProperty.h>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <string.h>
+#include <string_view>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowCover::UserSettings,
@@ -279,7 +282,36 @@ void SnowCover::DrawSettings()
 	ImGui::Spacing();
 }
 
-// Mirrors the FIRE bucket of Effect.hlsl's ADDBLEND branch: additive draws that are not soft glows.
+// Allocation-free case-insensitive substring test; needle must already be lowercase.
+static bool ContainsCI(const char* haystack, std::string_view needle)
+{
+	if (!haystack)
+		return false;
+	for (const char* h = haystack; *h; ++h) {
+		size_t i = 0;
+		for (; i < needle.size() && h[i] && std::tolower(static_cast<unsigned char>(h[i])) == needle[i]; ++i) {}
+		if (i == needle.size())
+			return true;
+	}
+	return false;
+}
+
+// Fire billboards name their texture (fxfire, fxflames, torch...); catches soft campfires the flag split drops.
+static bool IsFireEffect(RE::BSEffectShaderProperty* a_prop)
+{
+	auto material = a_prop->GetMaterial();
+	if (!material)
+		return false;
+	static constexpr std::string_view keywords[] = { "fire", "flame", "torch", "ember", "candle" };
+	for (auto keyword : keywords) {
+		if (ContainsCI(material->sourceTexturePath.c_str(), keyword) ||
+			ContainsCI(material->greyscaleTexturePath.c_str(), keyword))
+			return true;
+	}
+	return false;
+}
+
+// Recognises additive flame draws: fire-named textures, or Effect11's FIRE bucket (additive, not a soft glow).
 void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass)
 {
 	if (!settings.EnableFireMelt || !wsettings.EnableSnowCover)
@@ -296,10 +328,12 @@ void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass)
 		alphaProperty->GetDestBlendMode() != RE::NiAlphaProperty::AlphaFunction::kOne)
 		return;
 
-	const bool soft = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSoftEffect);
-	const bool grayscale = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor);
-	if (soft && !grayscale)
-		return;
+	if (!IsFireEffect(static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty))) {
+		const bool soft = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSoftEffect);
+		const bool grayscale = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor);
+		if (soft && !grayscale)
+			return;
+	}
 
 	if (!globals::game::shadowState)
 		return;
@@ -325,7 +359,7 @@ void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass)
 		}
 	}
 	if (fireSources.size() < MAX_FIRE_SOURCES)
-		fireSources.push_back({ center, meltRadius, fireTick });
+		fireSources.push_back({ center, meltRadius, 0.0f, fireTick });
 }
 
 // SharedData::WaterData holds one height per cell and so cannot see placed water refs (rivers, creeks).
@@ -490,9 +524,12 @@ SnowCover::PerFrame SnowCover::GetCommonBufferData()
 			for (const auto& source : fireSources) {
 				if (count >= MAX_FIRE_SOURCES)
 					break;
+				const float effectiveRadius = source.radius * source.strength;
+				if (effectiveRadius < 1.0f)
+					continue;
 				if (source.position.GetSquaredDistance(eye) > maxDistance * maxDistance)
 					continue;
-				perFrame.FireSources[count++] = float4(source.position.x, source.position.y, source.position.z, source.radius);
+				perFrame.FireSources[count++] = float4(source.position.x, source.position.y, source.position.z, effectiveRadius);
 			}
 			perFrame.FireCount = count;
 		}
@@ -767,10 +804,18 @@ void SnowCover::Prepass()
 
 void SnowCover::Reset()
 {
+	// Frame-rate independent ease; clamp guards against loading-screen delta spikes snapping the melt.
+	const float dt = std::clamp(RE::GetSecondsSinceLastFrame(), 0.0f, 0.1f);
 	std::lock_guard lock{ fireSourcesMutex };
 	++fireTick;
+	for (auto& source : fireSources) {
+		const bool seen = fireTick - source.lastSeenTick <= FIRE_SEEN_GRACE_TICKS;
+		const float target = seen ? 1.0f : 0.0f;
+		const float step = (seen ? FIRE_FADE_IN_RATE : FIRE_FADE_OUT_RATE) * dt;
+		source.strength = source.strength < target ? std::min(target, source.strength + step) : std::max(target, source.strength - step);
+	}
 	std::erase_if(fireSources, [this](const FireSource& source) {
-		return fireTick - source.lastSeenTick > FIRE_TTL_TICKS;
+		return source.strength <= 0.0f && fireTick - source.lastSeenTick > FIRE_SEEN_GRACE_TICKS;
 	});
 }
 

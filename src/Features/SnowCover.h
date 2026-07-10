@@ -43,7 +43,9 @@ private:
 	static constexpr uint32_t WATER_MAP_REFRESH_TICKS = 360;  // UpdateSharedData runs several times a frame
 
 	static constexpr uint32_t MAX_FIRE_SOURCES = 16;
-	static constexpr uint32_t FIRE_TTL_TICKS = 30;          // outlive the frames where a fire is culled
+	static constexpr uint32_t FIRE_SEEN_GRACE_TICKS = 4;    // tolerate a few culled frames before fading out
+	static constexpr float FIRE_FADE_IN_RATE = 1.6f;        // melt strength gained per second while lit
+	static constexpr float FIRE_FADE_OUT_RATE = 0.6f;       // melt strength lost per second once gone
 	static constexpr float FIRE_MERGE_DISTANCE = 96.0f;     // one fire emits many draws
 	static constexpr float FIRE_MAX_BOUND_RADIUS = 512.0f;  // larger additive draws are not flames
 	static constexpr float FIRE_MAX_MELT_RADIUS = 1024.0f;
@@ -154,7 +156,8 @@ public:
 	struct FireSource
 	{
 		RE::NiPoint3 position;
-		float radius;
+		float radius;         // full melt radius while lit
+		float strength = 0.0f;  // eased 0..1 so melt grows in and recedes out smoothly
 		uint32_t lastSeenTick;
 	};
 	std::vector<FireSource> fireSources;
