@@ -1,14 +1,12 @@
 #include "SnowCover.h"
 
+#include "ShaderCache.h"
 #include "Util.h"
 #include "Utils/FileSystem.h"
 #include <DDSTextureLoader.h>
-#include <RE/B/BSEffectShaderProperty.h>
-#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <string.h>
-#include <string_view>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowCover::UserSettings,
@@ -282,37 +280,9 @@ void SnowCover::DrawSettings()
 	ImGui::Spacing();
 }
 
-// Allocation-free case-insensitive substring test; needle must already be lowercase.
-static bool ContainsCI(const char* haystack, std::string_view needle)
-{
-	if (!haystack)
-		return false;
-	for (const char* h = haystack; *h; ++h) {
-		size_t i = 0;
-		for (; i < needle.size() && h[i] && std::tolower(static_cast<unsigned char>(h[i])) == needle[i]; ++i) {}
-		if (i == needle.size())
-			return true;
-	}
-	return false;
-}
-
-// Fire billboards name their texture (fxfire, fxflames, torch...); catches soft campfires the flag split drops.
-static bool IsFireEffect(RE::BSEffectShaderProperty* a_prop)
-{
-	auto material = a_prop->GetMaterial();
-	if (!material)
-		return false;
-	static constexpr std::string_view keywords[] = { "fire", "flame", "torch", "ember", "candle" };
-	for (auto keyword : keywords) {
-		if (ContainsCI(material->sourceTexturePath.c_str(), keyword) ||
-			ContainsCI(material->greyscaleTexturePath.c_str(), keyword))
-			return true;
-	}
-	return false;
-}
-
-// Recognises additive flame draws: fire-named textures, or Effect11's FIRE bucket (additive, not a soft glow).
-void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass)
+// Exactly Effect.hlsl's ENB split: within the additive branch a draw is FIRE unless it is a soft, non-grayscale glow.
+// SOFT/GRAYSCALE_TO_COLOR live in the effect technique descriptor (a_technique), not the property flags, which diverge.
+void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_technique)
 {
 	if (!settings.EnableFireMelt || !wsettings.EnableSnowCover)
 		return;
@@ -321,19 +291,12 @@ void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass)
 	if (a_pass->shaderProperty->GetRTTI() != globals::rtti::BSEffectShaderPropertyRTTI.get())
 		return;
 
-	auto alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
-	if (!alphaProperty || !alphaProperty->GetAlphaBlending())
+	using EffectFlags = SIE::ShaderCache::EffectShaderFlags;
+	const bool addBlend = a_technique & static_cast<uint32_t>(EffectFlags::AddBlend);
+	const bool soft = a_technique & static_cast<uint32_t>(EffectFlags::Soft);
+	const bool grayscale = a_technique & static_cast<uint32_t>(EffectFlags::GrayscaleToColor);
+	if (!addBlend || (soft && !grayscale))
 		return;
-	if (alphaProperty->GetSrcBlendMode() != RE::NiAlphaProperty::AlphaFunction::kSrcAlpha ||
-		alphaProperty->GetDestBlendMode() != RE::NiAlphaProperty::AlphaFunction::kOne)
-		return;
-
-	if (!IsFireEffect(static_cast<RE::BSEffectShaderProperty*>(a_pass->shaderProperty))) {
-		const bool soft = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSoftEffect);
-		const bool grayscale = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor);
-		if (soft && !grayscale)
-			return;
-	}
 
 	if (!globals::game::shadowState)
 		return;

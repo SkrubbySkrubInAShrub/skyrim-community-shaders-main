@@ -164,7 +164,7 @@ public:
 	std::mutex fireSourcesMutex;
 	uint32_t fireTick = 0;
 
-	void CheckFireSource(RE::BSRenderPass* a_pass);
+	void CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_technique);
 
 	std::string status;
 	std::string last_worldspace;  // owned copy + content comparison; a raw editorID pointer can dangle/rehash
