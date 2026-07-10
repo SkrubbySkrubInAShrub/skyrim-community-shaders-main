@@ -86,6 +86,37 @@ void SnowCover::DrawSettings()
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("How gradual the snow transition is.");
 			}
+			if (ImGui::TreeNodeEx("Distance")) {
+				ImGui::SliderFloat("Weather Fade Start", &wsettings.WeatherFadeStart, 0.0f, 200000.0f, "%.0f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						"Camera distance at which weather-driven snow starts fading out.\n"
+						"Loaded cells only reach about 10000 units, so a value below that puts the fade\n"
+						"on the terrain LOD rings and the snow front will crawl along with the camera.\n"
+						"Seasonal and altitude snow is never distance-faded.");
+				}
+				ImGui::SliderFloat("Weather Fade End", &wsettings.WeatherFadeEnd, 0.0f, 300000.0f, "%.0f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Camera distance at which weather-driven snow is gone entirely.");
+				}
+				ImGui::SliderFloat("Object Fade Start", &wsettings.ObjectFadeStart, 0.0f, 40000.0f, "%.0f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Camera distance at which snow on statics and trees starts weakening.");
+				}
+				ImGui::SliderFloat("Object Fade End", &wsettings.ObjectFadeEnd, 0.0f, 40000.0f, "%.0f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("Camera distance at which the object falloff is complete.");
+				}
+				ImGui::SliderFloat("Object Fade Amount", &wsettings.ObjectFadeAmount, 0.0f, 1.0f, "%.2f");
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text(
+						"How much snow is removed from statics and trees beyond the object fade range.\n"
+						"0 keeps snow at full strength at any distance. Raise it if DynDOLOD ultra-tree\n"
+						"billboards look like white slabs. Tree LOD billboards use the same falloff as the\n"
+						"full meshes they replace, so this cannot cause a pop at the LOD switch.");
+				}
+				ImGui::TreePop();
+			}
 			if (ImGui::TreeNodeEx("Weather and Seasons")) {
 				ImGui::SliderInt("Maximum Summer Month", (int*)&MaxSummerMonth, 0, 11);
 				if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -313,6 +344,11 @@ void SnowCover::SaveConfig()
 		{ "MapTexture", map_tex.c_str() },
 		{ "MapZscale", wsettings.mapZscale },
 		{ "BlendSmoothness", wsettings.BlendSmoothness },
+		{ "WeatherFadeStart", wsettings.WeatherFadeStart },
+		{ "WeatherFadeEnd", wsettings.WeatherFadeEnd },
+		{ "ObjectFadeStart", wsettings.ObjectFadeStart },
+		{ "ObjectFadeEnd", wsettings.ObjectFadeEnd },
+		{ "ObjectFadeAmount", wsettings.ObjectFadeAmount },
 		{ "ScreenSpaceScale", wsettings.ScreenSpaceScale },
 		{ "LogMicrofacetDensity", wsettings.LogMicrofacetDensity },
 		{ "MicrofacetRoughness", wsettings.MicrofacetRoughness },
@@ -404,6 +440,12 @@ void SnowCover::Reload()
 		wsettings.mapOffset = -mapMin * wsettings.mapScale;
 		wsettings.mapZscale = config["MapZscale"];
 		wsettings.BlendSmoothness = config["BlendSmoothness"];
+		// Distance keys post-date the shipped configs; fall back to defaults so older files still load.
+		wsettings.WeatherFadeStart = config.value("WeatherFadeStart", DEFAULT_WEATHER_FADE_START);
+		wsettings.WeatherFadeEnd = config.value("WeatherFadeEnd", DEFAULT_WEATHER_FADE_END);
+		wsettings.ObjectFadeStart = config.value("ObjectFadeStart", DEFAULT_OBJECT_FADE_START);
+		wsettings.ObjectFadeEnd = config.value("ObjectFadeEnd", DEFAULT_OBJECT_FADE_END);
+		wsettings.ObjectFadeAmount = config.value("ObjectFadeAmount", DEFAULT_OBJECT_FADE_AMOUNT);
 		wsettings.ScreenSpaceScale = config["ScreenSpaceScale"];
 		wsettings.LogMicrofacetDensity = config["LogMicrofacetDensity"];
 		wsettings.MicrofacetRoughness = config["MicrofacetRoughness"];

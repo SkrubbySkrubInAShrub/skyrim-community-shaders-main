@@ -23,6 +23,11 @@ private:
 	static constexpr float DEFAULT_GLINT_3 = .15f;
 	static constexpr float DEFAULT_GLINT_4 = 2.f;
 	static constexpr float DEFAULT_BLEND_SMOOTHNESS = 5000.0f;              // range in game units in which the snow transition gradually happens
+	static constexpr float DEFAULT_WEATHER_FADE_START = 60000.0f;           // weather snow stays at full strength past the terrain LOD rings
+	static constexpr float DEFAULT_WEATHER_FADE_END = 150000.0f;            // ...and dissolves out around the fog horizon
+	static constexpr float DEFAULT_OBJECT_FADE_START = 6144.0f;             // where snow on statics and trees starts weakening
+	static constexpr float DEFAULT_OBJECT_FADE_END = 9192.0f;               // where that falloff is complete
+	static constexpr float DEFAULT_OBJECT_FADE_AMOUNT = 0.5f;               // fraction of snow removed past the falloff; 0 disables it
 	static constexpr float2 DEFAULT_MAP_MIN = float2(-233472.0, 208896.0);  // one corner of skyrim map (where cells end)
 	static constexpr float2 DEFAULT_MAP_MAX = float2(253952.0, -176128.0);  // other corner of skyrim map
 	static constexpr float DEFAULT_SUMMER_HEIGHT_OFFSET = 20000.0f;         // how high snow is in summer (in game units)
@@ -78,9 +83,17 @@ public:
 		float4 AltTint = float4(1.0f, 1.0f, 1.0f, 1.0f);
 
 		float BlendSmoothness = DEFAULT_BLEND_SMOOTHNESS;
-		uint pad[3];
+		float WeatherFadeStart = DEFAULT_WEATHER_FADE_START;
+		float WeatherFadeEnd = DEFAULT_WEATHER_FADE_END;
+		float ObjectFadeStart = DEFAULT_OBJECT_FADE_START;
+
+		float ObjectFadeEnd = DEFAULT_OBJECT_FADE_END;
+		float ObjectFadeAmount = DEFAULT_OBJECT_FADE_AMOUNT;
+		uint pad[2];
 	};
 	static_assert(sizeof(WorldSettings) % 16 == 0);
+	// Mirrors SharedData.hlsli's SnowCoverSettings tail; a drift here silently corrupts every struct after it.
+	static_assert(sizeof(WorldSettings) == 144);
 
 	struct alignas(16) PerFrame
 	{

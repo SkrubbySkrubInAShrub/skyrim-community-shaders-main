@@ -483,7 +483,13 @@ namespace SharedData
 		float4 AltTint;
 
 		float BlendSmoothness;
-		uint3 pad2;
+		float WeatherFadeStart;
+		float WeatherFadeEnd;
+		float ObjectFadeStart;
+
+		float ObjectFadeEnd;
+		float ObjectFadeAmount;
+		uint2 pad2;
 	};
 
 	cbuffer FeatureData : register(b6)

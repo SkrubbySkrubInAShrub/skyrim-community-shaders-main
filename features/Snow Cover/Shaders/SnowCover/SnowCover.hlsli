@@ -29,6 +29,23 @@ namespace SnowCover
 
 
 
+	// Weakens snow on statics/trees with distance, so ultra billboards do not read as white slabs.
+	float GetObjectFade(float viewDist)
+	{
+		float start = SharedData::snowCoverSettings.ObjectFadeStart;
+		float end = max(start + 1.0, SharedData::snowCoverSettings.ObjectFadeEnd);
+		return 1 - smoothstep(start, end, viewDist) * SharedData::snowCoverSettings.ObjectFadeAmount;
+	}
+
+	// Must reach past the terrain LOD rings (loaded cells end ~10k) or the snow front crawls with the camera.
+	float GetWeatherRange(float3 p, float viewDist)
+	{
+		float start = SharedData::snowCoverSettings.WeatherFadeStart;
+		float wobble = 1000 * sin(p.z * 0.001 + cos(p.x * p.y * 0.001));
+		float end = max(start + 1.0, SharedData::snowCoverSettings.WeatherFadeEnd + wobble);
+		return 1 - smoothstep(start, end, viewDist);
+	}
+
 	float GetHeightMult(float3 p)
 	{
 		float2 scale = SharedData::snowCoverSettings.mapScale;
@@ -55,13 +72,13 @@ namespace SnowCover
 		color = Color::HSVtoRGB(hsv);
 	}
 
-	void ApplySnowFoliage(inout float3 color, float3 worldNormal, float3 p, float skylight, float viewDist)
+	// distMult lets callers match ApplySnowBase's object falloff so trees keep their snow across the LOD switch.
+	void ApplySnowFoliage(inout float3 color, float3 worldNormal, float3 p, float skylight, float viewDist, float distMult)
 	{
 		float env_mult = GetEnvironmentalMultiplier(p);
-		float distMult = 1 - smoothstep(10000, 30000, viewDist);
-		float weatherMult = distMult * SharedData::snowCoverSettings.TimeSnowing * max(500, SharedData::snowCoverSettings.SnowingDensity) / 500;
+		float weatherMult = GetWeatherRange(p, viewDist) * SharedData::snowCoverSettings.TimeSnowing * max(500, SharedData::snowCoverSettings.SnowingDensity) / 500;
 		float mult = SharedData::snowCoverSettings.MainTint.a * saturate(env_mult);
-		mult = skylight * saturate(mult + weatherMult) * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
+		mult = distMult * skylight * saturate(mult + weatherMult) * smoothstep(SharedData::snowCoverSettings.minAngle, SharedData::snowCoverSettings.maxAngle, worldNormal.z);
 #	if defined(GRASS)
 		if (SharedData::snowCoverSettings.AffectGrassTint) {
 #	else
@@ -82,16 +99,13 @@ namespace SnowCover
 	{
 		// the range in which water level affects snow
 		waterDist = smoothstep(-64, 8, -waterDist - disp);
-		// distance from the camera in which weather has effect, this extends far beyond where lod starts
-		float weatherRange = 1 - smoothstep(20000, 40000 + 1000 * sin(p.z * 0.001 + cos(p.x * p.y * 0.001)), viewDist);
 		// the amount of snow based on weather, TimeSnowing transitions smoothly between -1 in rain and 1 when snowing
-		float weatherMult = weatherRange * pow(SharedData::snowCoverSettings.TimeSnowing, 3) * max(500, SharedData::snowCoverSettings.SnowingDensity) / 500;
+		float weatherMult = GetWeatherRange(p, viewDist) * pow(SharedData::snowCoverSettings.TimeSnowing, 3) * max(500, SharedData::snowCoverSettings.SnowingDensity) / 500;
 		weatherMult = clamp((weatherMult) * max(SharedData::snowCoverSettings.minAngle, worldNormal.z), -1, 1);
 		// the amount of snow based on season and weather
 		float env_mult = saturate(max((GetEnvironmentalMultiplier(p) + disp*5), weatherMult)) - waterDist;
 #		if !defined(LANDSCAPE) && !defined(LOD) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
-		// removes pure white lod object billboard trees (ultra billboards) that have no special flags and are not marked as lod
-		float distMult = 1 - smoothstep(4096+2048,9192, viewDist)*0.5;
+		float distMult = GetObjectFade(viewDist);
 #		else
 		float distMult = 1;
 #		endif
