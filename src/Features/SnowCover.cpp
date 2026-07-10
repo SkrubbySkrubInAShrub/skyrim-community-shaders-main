@@ -318,8 +318,18 @@ void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_descriptor)
 			return;
 		}
 	}
-	if (fireSources.size() < MAX_FIRE_SOURCES)
+	if (fireSources.size() < MAX_FIRE_SOURCES) {
 		fireSources.push_back({ center, meltRadius, 0.0f, fireTick });
+	} else {
+		// Slow refill keeps dead sources around for ~50s; evict the weakest fading one so live fires still melt.
+		auto victim = fireSources.end();
+		for (auto it = fireSources.begin(); it != fireSources.end(); ++it) {
+			if (fireTick - it->lastSeenTick > FIRE_SEEN_GRACE_TICKS && (victim == fireSources.end() || it->strength < victim->strength))
+				victim = it;
+		}
+		if (victim != fireSources.end())
+			*victim = { center, meltRadius, 0.0f, fireTick };
+	}
 }
 
 // SharedData::WaterData holds one height per cell and so cannot see placed water refs (rivers, creeks).

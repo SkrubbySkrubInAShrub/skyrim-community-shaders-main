@@ -45,7 +45,7 @@ private:
 	static constexpr uint32_t MAX_FIRE_SOURCES = 16;
 	static constexpr uint32_t FIRE_SEEN_GRACE_TICKS = 4;    // tolerate a few culled frames before fading out
 	static constexpr float FIRE_FADE_IN_RATE = 1.6f;        // melt strength gained per second while lit
-	static constexpr float FIRE_FADE_OUT_RATE = 0.6f;       // melt strength lost per second once gone
+	static constexpr float FIRE_FADE_OUT_RATE = 0.02f;      // melt strength lost per second once gone; snow re-covers over ~50s
 	static constexpr float FIRE_MERGE_DISTANCE = 96.0f;     // one fire emits many draws
 	static constexpr float FIRE_MAX_BOUND_RADIUS = 512.0f;  // larger additive draws are not flames
 	static constexpr float FIRE_MAX_MELT_RADIUS = 1024.0f;
