@@ -465,6 +465,11 @@ namespace SharedData
 		float SnowHeightOffset;
 		uint2 pad;
 
+		uint EnableFireMelt;
+		float FireRadiusScale;
+		float FireInnerScale;
+		float FireMaxDistance;
+
 		uint EnableSnowCover;
 		uint AffectGrassTint;
 		uint AffectTreeTint;
@@ -495,6 +500,10 @@ namespace SharedData
 		float ObjectFadeEnd;
 		float ObjectFadeAmount;
 		uint2 pad2;
+
+		uint FireCount;
+		uint3 firePad;
+		float4 FireSources[16];  // xyz = world position, w = melt radius
 	};
 
 	cbuffer FeatureData : register(b6)

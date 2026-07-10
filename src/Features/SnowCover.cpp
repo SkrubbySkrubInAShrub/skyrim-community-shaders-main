@@ -12,7 +12,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableExpensiveFoliage,
 	AffectHavok,
 	SnowHeightOffset,
-	EnableWaterHeightMap)
+	EnableWaterHeightMap,
+	EnableFireMelt,
+	FireRadiusScale,
+	FireInnerScale,
+	FireMaxDistance)
 
 void copyString(const std::string& input, char* dst, size_t dst_size)
 {
@@ -31,6 +35,27 @@ void SnowCover::DrawSettings()
 		ImGui::Text(
 			"Keeps snow off riverbeds, creek beds and pond bottoms.\n"
 			"The game reports only one water height per cell, which misses placed water like rivers and streams.");
+	}
+	ImGui::Checkbox("Melt Snow Near Fire", (bool*)&settings.EnableFireMelt);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text(
+			"Clears snow around campfires, torches and braziers.\n"
+			"Fires are recognised the same way Effect11 does it: additive draws that are not soft glows.");
+	}
+	if (settings.EnableFireMelt) {
+		ImGui::SliderFloat("Fire Melt Radius", &settings.FireRadiusScale, 0.5f, 8.0f, "%.1fx");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Melt radius as a multiple of the flame's bounding radius.");
+		}
+		ImGui::SliderFloat("Fire Melt Softness", &settings.FireInnerScale, 0.0f, 0.9f, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Fraction of the radius that is fully clear. Lower values give a softer edge.");
+		}
+		ImGui::SliderFloat("Fire Melt Max Distance", &settings.FireMaxDistance, 1024.0f, 40000.0f, "%.0f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("Fires beyond this camera distance are ignored. At most 16 fires are tracked.");
+		}
+		ImGui::Text("Tracked fires: %u", perFrame.FireCount);
 	}
 	ImGui::Checkbox("Snow on Mobile Objects", (bool*)&settings.AffectHavok);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -254,6 +279,55 @@ void SnowCover::DrawSettings()
 	ImGui::Spacing();
 }
 
+// Mirrors the FIRE bucket of Effect.hlsl's ADDBLEND branch: additive draws that are not soft glows.
+void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass)
+{
+	if (!settings.EnableFireMelt || !wsettings.EnableSnowCover)
+		return;
+	if (!a_pass || !a_pass->geometry || !a_pass->shaderProperty)
+		return;
+	if (a_pass->shaderProperty->GetRTTI() != globals::rtti::BSEffectShaderPropertyRTTI.get())
+		return;
+
+	auto alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+	if (!alphaProperty || !alphaProperty->GetAlphaBlending())
+		return;
+	if (alphaProperty->GetSrcBlendMode() != RE::NiAlphaProperty::AlphaFunction::kSrcAlpha ||
+		alphaProperty->GetDestBlendMode() != RE::NiAlphaProperty::AlphaFunction::kOne)
+		return;
+
+	const bool soft = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSoftEffect);
+	const bool grayscale = a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kGrayscaleToPaletteColor);
+	if (soft && !grayscale)
+		return;
+
+	if (!globals::game::shadowState)
+		return;
+
+	// Copy before locking: an AV under the caller's SEH guard would skip the lock_guard destructor.
+	const RE::NiPoint3 center = a_pass->geometry->worldBound.center;
+	const float boundRadius = a_pass->geometry->worldBound.radius;
+	if (!(boundRadius > 0.0f) || boundRadius > FIRE_MAX_BOUND_RADIUS)
+		return;
+
+	const float maxDistance = std::max(1.0f, settings.FireMaxDistance);
+	if (center.GetSquaredDistance(Util::GetEyePosition()) > maxDistance * maxDistance)
+		return;
+
+	const float meltRadius = std::min(boundRadius * settings.FireRadiusScale, FIRE_MAX_MELT_RADIUS);
+
+	std::lock_guard lock{ fireSourcesMutex };
+	for (auto& source : fireSources) {
+		if (center.GetSquaredDistance(source.position) <= FIRE_MERGE_DISTANCE * FIRE_MERGE_DISTANCE) {
+			source.radius = std::max(source.radius, meltRadius);
+			source.lastSeenTick = fireTick;
+			return;
+		}
+	}
+	if (fireSources.size() < MAX_FIRE_SOURCES)
+		fireSources.push_back({ center, meltRadius, fireTick });
+}
+
 // SharedData::WaterData holds one height per cell and so cannot see placed water refs (rivers, creeks).
 void SnowCover::UpdateWaterHeightMap()
 {
@@ -405,6 +479,24 @@ SnowCover::PerFrame SnowCover::GetCommonBufferData()
 	                              float2(0.0f, 0.0f);
 	perFrame.WaterMapInvExtent = 1.0f / WATER_MAP_EXTENT;
 	perFrame.WaterMapEnabled = waterMapValid ? 1.0f : 0.0f;
+
+	perFrame.FireCount = 0;
+	if (settings.EnableFireMelt && globals::game::shadowState) {
+		std::lock_guard lock{ fireSourcesMutex };
+		if (!fireSources.empty()) {
+			const auto eye = Util::GetEyePosition();
+			const float maxDistance = std::max(1.0f, settings.FireMaxDistance);
+			uint count = 0;
+			for (const auto& source : fireSources) {
+				if (count >= MAX_FIRE_SOURCES)
+					break;
+				if (source.position.GetSquaredDistance(eye) > maxDistance * maxDistance)
+					continue;
+				perFrame.FireSources[count++] = float4(source.position.x, source.position.y, source.position.z, source.radius);
+			}
+			perFrame.FireCount = count;
+		}
+	}
 
 	perFrame.settings = settings;
 	perFrame.wsettings = wsettings;
@@ -675,6 +767,11 @@ void SnowCover::Prepass()
 
 void SnowCover::Reset()
 {
+	std::lock_guard lock{ fireSourcesMutex };
+	++fireTick;
+	std::erase_if(fireSources, [this](const FireSource& source) {
+		return fireTick - source.lastSeenTick > FIRE_TTL_TICKS;
+	});
 }
 
 void SnowCover::LoadSettings(json& o_json)

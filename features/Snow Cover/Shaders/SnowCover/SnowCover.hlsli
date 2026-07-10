@@ -60,6 +60,22 @@ namespace SnowCover
 		return 1 - smoothstep(start, end, viewDist);
 	}
 
+	// Fire sources come from Effect11's FIRE classification of additive draws, one frame behind.
+	float GetFireAttenuation(float3 p)
+	{
+		if (SharedData::snowCoverSettings.EnableFireMelt == 0)
+			return 1.0;
+
+		float atten = 1.0;
+		uint count = min(SharedData::snowCoverSettings.FireCount, 16u);
+		for (uint i = 0; i < count; ++i) {
+			float4 fire = SharedData::snowCoverSettings.FireSources[i];
+			float inner = fire.w * SharedData::snowCoverSettings.FireInnerScale;
+			atten = min(atten, smoothstep(inner, max(inner + 1.0, fire.w), distance(p, fire.xyz)));
+		}
+		return atten;
+	}
+
 	float GetHeightMult(float3 p)
 	{
 		float2 scale = SharedData::snowCoverSettings.mapScale;
@@ -101,6 +117,9 @@ namespace SnowCover
 		}
 		if (mult < 0.01)
 			return;
+		mult *= GetFireAttenuation(p);
+		if (mult < 0.01)
+			return;
 		float2 uv = frac(SharedData::snowCoverSettings.UVScale * (p.xy + worldNormal.xy) / 100);
 		float3 diffuse = Color::TrueLinearToGamma(SnowAlbedo.Sample(SampColorSampler, uv).rgb) * SharedData::snowCoverSettings.MainTint.rgb * Color::PBRLightingScale;
 
@@ -126,6 +145,11 @@ namespace SnowCover
 		if (mult <= 0){
 			alt = false;
 			return mult;
+		}
+		mult *= GetFireAttenuation(p);
+		if (mult <= 0){
+			alt = false;
+			return 0;
 		}
 		float main_mult = (1 - abs(worldNormal.z - SharedData::snowCoverSettings.peakMainAngle)) + min(0, weatherMult) * SharedData::snowCoverSettings.minAngle;
 		float alt_mult = (1 - abs(worldNormal.z - SharedData::snowCoverSettings.peakAltAngle)) + sin(p.z * 0.01 + cos(p.x * p.y * 0.01) * 0.025) * 0.05;

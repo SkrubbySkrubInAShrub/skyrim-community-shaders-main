@@ -42,6 +42,12 @@ private:
 	static constexpr float WATER_MAP_FLAT_NORMAL_Z = 0.5f;
 	static constexpr uint32_t WATER_MAP_REFRESH_TICKS = 360;  // UpdateSharedData runs several times a frame
 
+	static constexpr uint32_t MAX_FIRE_SOURCES = 16;
+	static constexpr uint32_t FIRE_TTL_TICKS = 30;          // outlive the frames where a fire is culled
+	static constexpr float FIRE_MERGE_DISTANCE = 96.0f;     // one fire emits many draws
+	static constexpr float FIRE_MAX_BOUND_RADIUS = 512.0f;  // larger additive draws are not flames
+	static constexpr float FIRE_MAX_MELT_RADIUS = 1024.0f;
+
 public:
 	virtual inline std::string GetName() { return "Snow Cover"; }
 	virtual inline std::string GetShortName() { return "SnowCover"; }
@@ -56,6 +62,11 @@ public:
 		float SnowHeightOffset = 0.0f;
 		uint AffectHavok = 0;
 		uint EnableWaterHeightMap = 1;
+
+		uint EnableFireMelt = 1;
+		float FireRadiusScale = 3.0f;
+		float FireInnerScale = 0.35f;
+		float FireMaxDistance = 12288.0f;
 	};
 	static_assert(sizeof(UserSettings) % 16 == 0);
 
@@ -114,9 +125,13 @@ public:
 
 		UserSettings settings;
 		WorldSettings wsettings;
+
+		uint FireCount;
+		uint firePad[3];
+		float4 FireSources[MAX_FIRE_SOURCES];  // xyz = world position, w = melt radius
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
-	static_assert(sizeof(PerFrame) == 192);
+	static_assert(sizeof(PerFrame) == 480);
 
 	UserSettings settings;
 	WorldSettings wsettings;
@@ -135,6 +150,18 @@ public:
 	bool waterMapValid = false;
 
 	void UpdateWaterHeightMap();
+
+	struct FireSource
+	{
+		RE::NiPoint3 position;
+		float radius;
+		uint32_t lastSeenTick;
+	};
+	std::vector<FireSource> fireSources;
+	std::mutex fireSourcesMutex;
+	uint32_t fireTick = 0;
+
+	void CheckFireSource(RE::BSRenderPass* a_pass);
 
 	std::string status;
 	std::string last_worldspace;  // owned copy + content comparison; a raw editorID pointer can dangle/rehash
