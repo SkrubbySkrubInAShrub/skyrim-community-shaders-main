@@ -280,9 +280,7 @@ void SnowCover::DrawSettings()
 	ImGui::Spacing();
 }
 
-// Exactly Effect.hlsl's ENB split: within the additive branch a draw is FIRE unless it is a soft, non-grayscale glow.
-// SOFT/GRAYSCALE_TO_COLOR live in the effect technique descriptor (a_technique), not the property flags, which diverge.
-void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_technique)
+void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_descriptor)
 {
 	if (!settings.EnableFireMelt || !wsettings.EnableSnowCover)
 		return;
@@ -292,16 +290,15 @@ void SnowCover::CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_technique)
 		return;
 
 	using EffectFlags = SIE::ShaderCache::EffectShaderFlags;
-	const bool addBlend = a_technique & static_cast<uint32_t>(EffectFlags::AddBlend);
-	const bool soft = a_technique & static_cast<uint32_t>(EffectFlags::Soft);
-	const bool grayscale = a_technique & static_cast<uint32_t>(EffectFlags::GrayscaleToColor);
+	const bool addBlend = a_descriptor & static_cast<uint32_t>(EffectFlags::AddBlend);
+	const bool soft = a_descriptor & static_cast<uint32_t>(EffectFlags::Soft);
+	const bool grayscale = a_descriptor & static_cast<uint32_t>(EffectFlags::GrayscaleToColor);
 	if (!addBlend || (soft && !grayscale))
 		return;
 
 	if (!globals::game::shadowState)
 		return;
 
-	// Copy before locking: an AV under the caller's SEH guard would skip the lock_guard destructor.
 	const RE::NiPoint3 center = a_pass->geometry->worldBound.center;
 	const float boundRadius = a_pass->geometry->worldBound.radius;
 	if (!(boundRadius > 0.0f) || boundRadius > FIRE_MAX_BOUND_RADIUS)
@@ -802,6 +799,12 @@ void SnowCover::Hooks::BSLightingShader_SetupGeometry::thunk(RE::BSShader* This,
 	if (globals::features::snowCover.wsettings.EnableSnowCover) {
 		globals::features::snowCover.BSLightingShader_Setup(Pass);
 	}
+	func(This, Pass, RenderFlags);
+}
+
+void SnowCover::Hooks::BSEffectShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	globals::features::snowCover.CheckFireSource(Pass, globals::state->currentPixelDescriptor);
 	func(This, Pass, RenderFlags);
 }
 

@@ -164,7 +164,7 @@ public:
 	std::mutex fireSourcesMutex;
 	uint32_t fireTick = 0;
 
-	void CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_technique);
+	void CheckFireSource(RE::BSRenderPass* a_pass, uint32_t a_descriptor);
 
 	std::string status;
 	std::string last_worldspace;  // owned copy + content comparison; a raw editorID pointer can dangle/rehash
@@ -246,9 +246,16 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSEffectShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
+			stl::write_vfunc<0x6, BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 			logger::info("[SnowCover] Installed hooks");
 		}
 	};
