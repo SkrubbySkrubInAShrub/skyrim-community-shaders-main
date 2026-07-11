@@ -19,7 +19,6 @@ struct NRD;
 struct PhysicalSky;
 struct ScreenSpaceGI;
 struct ScreenSpaceReflections;
-struct ScreenSpacePointLightShadows;
 struct ScreenSpaceShadows;
 struct Skylighting;
 struct TerrainVariation;
@@ -114,7 +113,6 @@ namespace globals
 		extern PhysicalSky physicalSky;
 		extern ScreenSpaceGI screenSpaceGI;
 		extern ScreenSpaceReflections screenSpaceReflections;
-		extern ScreenSpacePointLightShadows screenSpacePointLightShadows;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
 		extern TerrainVariation terrainVariation;

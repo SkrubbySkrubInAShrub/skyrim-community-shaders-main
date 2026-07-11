@@ -26,7 +26,6 @@
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
-#include "Features/ScreenSpacePointLightShadows.h"
 #include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
@@ -242,7 +241,6 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::nrd,
 		&globals::features::screenSpaceGI,
 		&globals::features::screenSpaceReflections,
-		&globals::features::screenSpacePointLightShadows,
 		&globals::features::skylighting,
 		&globals::features::skySync,
 		&globals::features::terrainBlending,

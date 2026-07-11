@@ -354,18 +354,6 @@ namespace SharedData
 		float4 wetParams;
 	};
 
-	struct SSPLSSettings
-	{
-		uint Enable;
-		float Strength;
-		uint StepLimit;
-		float RayLength;
-		float CompareToleranceScale;
-		float MaxDistance;
-		uint EnableSoftShadows;
-		float SoftShadowScale;
-	};
-
 	struct VanillaFresnelSettings
 	{
 		uint Enable;
@@ -538,7 +526,6 @@ namespace SharedData
 		SSRSettings ssrSettings;
 		PostProcessingSettings postProcessingSettings;
 		SkinData skinData;
-		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
 		PhysSkyData physSkyData;
 		PseudoSunBounceSettings pseudoSunBounceSettings;
