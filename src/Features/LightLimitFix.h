@@ -258,13 +258,13 @@ public:
 		uint LightsVisualisationMode = 0;
 
 		// Point-light contact shadows (raymarched screen-space); tuning matches the UI sliders.
-		bool EnableContactShadows = false;
+		bool EnableContactShadows = true;
 		uint ContactShadowMaxSteps = 4;
-		float ContactShadowMaxDistance = 1024.0f;
-		float ContactShadowStride = 2.0f;
+		float ContactShadowMaxDistance = 2048.0f;
+		float ContactShadowStride = 0.5f;
 		float ContactShadowThickness = 0.20f;
 		float ContactShadowDepthFade = 0.05f;
-		float ContactShadowMinIntensity = 0.25f;
+		float ContactShadowMinIntensity = 0.5f;
 	};
 
 	uint clusterSize[3] = { 16 };
