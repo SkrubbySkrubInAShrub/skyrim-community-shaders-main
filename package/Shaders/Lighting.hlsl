@@ -995,8 +995,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(LANDSCAPE)
-	float mipLevels[6];
 #		if defined(EMAT)
+	float mipLevels[6];
 	float terrainShadowMipLevels[6];
 #			if defined(TERRAIN_VARIATION)
 	StochasticOffsets sharedOffset = ComputeStochasticOffsets(input.TexCoord0.zw);
@@ -1210,9 +1210,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		[loop] for (uint terrainMipIndex = 0; terrainMipIndex < 6; terrainMipIndex++)
 		{
 			terrainShadowMipLevels[terrainMipIndex] = min(mipLevels[terrainMipIndex], ExtendedMaterials::TerrainParallaxShadowMaxMipLevel);
-#			if defined(TERRAIN_VARIATION)
-			InitTerrainParallaxStochasticFade(terrainMipIndex, mipLevels[terrainMipIndex]);
-#			endif
 		}
 
 		displacementParams[1] = displacementParams[0];
@@ -1249,9 +1246,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			hasCachedDirectionalTerrainParallaxShadow = hasCachedTerrainShadowBaseHeight;
 		}
 	}
-#		else
-	// Initialize mip levels for non-EMAT case
-	mipLevels[0] = mipLevels[1] = mipLevels[2] = mipLevels[3] = mipLevels[4] = mipLevels[5] = 0.0;
 #		endif  // EMAT
 #	endif      // LANDSCAPE
 
@@ -1293,12 +1287,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float landDistanceTexMipBias = 0.0;
 #		if defined(TERRAIN_VARIATION)
 	g_terrainStochasticGrad = ComputeTerrainGradients(uv);
-	InitTerrainStochasticMip(0, TexColorSampler, landDistanceTexMipBias);
-	InitTerrainStochasticMip(1, TexLandColor2Sampler, landDistanceTexMipBias);
-	InitTerrainStochasticMip(2, TexLandColor3Sampler, landDistanceTexMipBias);
-	InitTerrainStochasticMip(3, TexLandColor4Sampler, landDistanceTexMipBias);
-	InitTerrainStochasticMip(4, TexLandColor5Sampler, landDistanceTexMipBias);
-	InitTerrainStochasticMip(5, TexLandColor6Sampler, landDistanceTexMipBias);
 #		endif
 #		if !defined(TERRAIN_VARIATION)
 #			define SampleTerrain(TEX, SAMP, UV, OFFSET, EXTRA_BIAS) TEX.SampleBias(SAMP, UV, SharedData::MipBias + EXTRA_BIAS)

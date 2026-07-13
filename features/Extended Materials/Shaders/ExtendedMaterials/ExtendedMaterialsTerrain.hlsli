@@ -23,8 +23,7 @@
 	inline float4 TerrainParallaxTexSample(Texture2D tex, float2 uv, float mipLevel, StochasticOffsets sharedOffset, uint layerIndex)
 	{
 #	if defined(TERRAIN_VARIATION)
-		return StochasticEffectParallax(tex, SampTerrainParallaxSampler, uv, mipLevel, sharedOffset,
-			g_terrainParallaxSecondSampleFade[layerIndex], g_terrainParallaxHeightInfluence[layerIndex]);
+		return StochasticEffectParallax(tex, SampTerrainParallaxSampler, uv, mipLevel, sharedOffset);
 #	else
 		return tex.SampleLevel(SampTerrainParallaxSampler, uv, mipLevel);
 #	endif
@@ -32,6 +31,34 @@
 
 #	define HEIGHT_POWER 2
 #	define HEIGHT_MULT 8
+
+	/**
+	 * @brief Relative per-layer gate for height sampling: layers whose weight x HeightScale falls
+	 *        below this fraction of the dominant layer's cannot move the blended height perceptibly
+	 *        (their linear-blend contribution is bounded by this fraction of the max displacement),
+	 *        so their fetches are skipped. Vertex blend weights vary smoothly, so a layer fades
+	 *        through sub-threshold contribution before being gated — no popping.
+	 */
+	static const float TERRAIN_LAYER_GATE_EPS = 0.02;
+
+	/** @brief Max of weight x HeightScale across the six layers for the given weights. */
+	inline float TerrainMaxWeightedHeightScaleW(float4 w1, float2 w2, DisplacementParams params[6])
+	{
+		return max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z,
+																						  max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
+	}
+
+	/**
+	 * @brief Gate threshold for one height evaluation.
+	 * @details Only linear blends (heightBlend <= 1: ray march, secant, shadows) are gated. The
+	 *          height-sharpened weight pass (heightBlend > 1) keeps every layer: sharpening can
+	 *          legitimately boost a small linear weight, so a gated-out height there could skew
+	 *          the final albedo blend weights.
+	 */
+	inline float TerrainLayerGateThreshold(float heightBlend, float4 w1, float2 w2, DisplacementParams params[6])
+	{
+		return heightBlend <= 1.0 ? TERRAIN_LAYER_GATE_EPS * TerrainMaxWeightedHeightScaleW(w1, w2, params) : 0.0;
+	}
 
 	/** @brief Dot product of per-layer heights and weights. */
 	float TerrainWeightedHeightSum(float heights[6], float weights[6])
@@ -126,13 +153,13 @@
 
 /** @note Pass full scoped PBR::TerrainFlags values; FXC will not expand macros inside `::`. */
 #define EM_PBR_DISP_LAYER_SCALAR(N, TILEFLAG, TEX, WGT) \
-		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01) \
+		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01 && (WGT)*params[N].HeightScale >= layerGateThreshold) \
 		{ \
 			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, coords, mipLevels[N], sharedOffset, N).x, params[N]); \
 		}
 
 #define EM_PBR_DISP_LAYER_QUAD(N, TILEFLAG, TEX, WGT) \
-		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01) \
+		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01 && (WGT)*params[N].HeightScale >= layerGateThreshold) \
 		{ \
 			[loop] for (uint k = 0; k < 4; k++) \
 				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(TEX, uvs[k], mipLevels[N], sharedOffset, N).x, params[N]); \
@@ -152,6 +179,7 @@
 		out float weights[6])
 	{
 		float heightBlend = 1 + blendFactor * HEIGHT_POWER;
+		float layerGateThreshold = TerrainLayerGateThreshold(heightBlend, w1, w2, params);
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
 
 		EM_PBR_DISP_FOREACH(EM_PBR_DISP_LAYER_SCALAR)
@@ -169,6 +197,7 @@
 		out float weights[6])
 	{
 		float heightBlend = 1 + blendFactor * HEIGHT_POWER;
+		float layerGateThreshold = TerrainLayerGateThreshold(heightBlend, w1, w2, params);
 		float2 uvs[4] = { u0, u1, u2, u3 };
 		float h4[4][6];
 		[loop] for (uint qi = 0; qi < 4; qi++)
@@ -186,8 +215,8 @@
 
 #	else
 
-#define EM_LEGACY_LAYER012_SCALAR(N, THFLAG, THSAMPLER, COLSAMPLER, WGT) \
-		if ((WGT) > 0.01) { \
+#define EM_LEGACY_LAYER_SCALAR(N, THFLAG, THSAMPLER, COLSAMPLER, WGT) \
+		if ((WGT) > 0.01 && (WGT)*params[N].HeightScale >= layerGateThreshold) { \
 			[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0) \
 			{ \
 				heights[N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, coords, mipLevels[N], sharedOffset, N).x, params[N]); \
@@ -198,18 +227,8 @@
 			} \
 		}
 
-#define EM_LEGACY_LAYER345_SCALAR(N, THFLAG, THSAMPLER, COLSAMPLER, WPRIMARY, WELSE) \
-		[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0 && (WPRIMARY) > 0.01) \
-		{ \
-			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, coords, mipLevels[N], sharedOffset, N).x, params[N]); \
-		} \
-		else if ((WELSE) > 0.01) \
-		{ \
-			heights[N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, coords, mipLevels[N], sharedOffset, N).w, params[N]); \
-		}
-
-#define EM_LEGACY_LAYER012_QUAD(N, THFLAG, THSAMPLER, COLSAMPLER, WGT) \
-		if ((WGT) > 0.01) { \
+#define EM_LEGACY_LAYER_QUAD(N, THFLAG, THSAMPLER, COLSAMPLER, WGT) \
+		if ((WGT) > 0.01 && (WGT)*params[N].HeightScale >= layerGateThreshold) { \
 			[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0) \
 			{ \
 				[loop] for (uint k = 0; k < 4; k++) \
@@ -222,17 +241,13 @@
 			} \
 		}
 
-#define EM_LEGACY_LAYER345_QUAD(N, THFLAG, THSAMPLER, COLSAMPLER, WPRIMARY, WELSE) \
-		[branch] if ((Permutation::ExtraFeatureDescriptor & (THFLAG)) != 0 && (WPRIMARY) > 0.01) \
-		{ \
-			[loop] for (uint k = 0; k < 4; k++) \
-				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(THSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).x, params[N]); \
-		} \
-		else if ((WELSE) > 0.01) \
-		{ \
-			[loop] for (uint k = 0; k < 4; k++) \
-				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).w, params[N]); \
-		}
+#define EM_LEGACY_FOREACH(M) \
+		M(0, Permutation::ExtraFeatureFlags::THLand0HasDisplacement, TexLandTHDisp0Sampler, TexColorSampler, w1.x) \
+		M(1, Permutation::ExtraFeatureFlags::THLand1HasDisplacement, TexLandTHDisp1Sampler, TexLandColor2Sampler, w1.y) \
+		M(2, Permutation::ExtraFeatureFlags::THLand2HasDisplacement, TexLandTHDisp2Sampler, TexLandColor3Sampler, w1.z) \
+		M(3, Permutation::ExtraFeatureFlags::THLand3HasDisplacement, TexLandTHDisp3Sampler, TexLandColor4Sampler, w1.w) \
+		M(4, Permutation::ExtraFeatureFlags::THLand4HasDisplacement, TexLandTHDisp4Sampler, TexLandColor5Sampler, w2.x) \
+		M(5, Permutation::ExtraFeatureFlags::THLand5HasDisplacement, TexLandTHDisp5Sampler, TexLandColor6Sampler, w2.y)
 
 	/** @brief Weighted terrain height at coords (legacy TH / color-alpha displacement). */
 	float GetTerrainHeight(float screenNoise, PS_INPUT input, float2 coords, float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
@@ -240,14 +255,10 @@
 		out float weights[6])
 	{
 		float heightBlend = 1 + blendFactor * HEIGHT_POWER;
+		float layerGateThreshold = TerrainLayerGateThreshold(heightBlend, w1, w2, params);
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
 
-		EM_LEGACY_LAYER012_SCALAR(0, Permutation::ExtraFeatureFlags::THLand0HasDisplacement, TexLandTHDisp0Sampler, TexColorSampler, w1.x)
-		EM_LEGACY_LAYER012_SCALAR(1, Permutation::ExtraFeatureFlags::THLand1HasDisplacement, TexLandTHDisp1Sampler, TexLandColor2Sampler, w1.y)
-		EM_LEGACY_LAYER012_SCALAR(2, Permutation::ExtraFeatureFlags::THLand2HasDisplacement, TexLandTHDisp2Sampler, TexLandColor3Sampler, w1.z)
-		EM_LEGACY_LAYER345_SCALAR(3, Permutation::ExtraFeatureFlags::THLand3HasDisplacement, TexLandTHDisp3Sampler, TexLandColor4Sampler, w1.w, w1.w)
-		EM_LEGACY_LAYER345_SCALAR(4, Permutation::ExtraFeatureFlags::THLand4HasDisplacement, TexLandTHDisp4Sampler, TexLandColor5Sampler, w2.x, w2.x)
-		EM_LEGACY_LAYER345_SCALAR(5, Permutation::ExtraFeatureFlags::THLand5HasDisplacement, TexLandTHDisp5Sampler, TexLandColor6Sampler, w2.y, w2.y)
+		EM_LEGACY_FOREACH(EM_LEGACY_LAYER_SCALAR)
 
 		float total = 0.0;
 		ProcessTerrainHeightWeights(heightBlend, w1, w2, heights, weights, total);
@@ -262,26 +273,21 @@
 		out float weights[6])
 	{
 		float heightBlend = 1 + blendFactor * HEIGHT_POWER;
+		float layerGateThreshold = TerrainLayerGateThreshold(heightBlend, w1, w2, params);
 		float2 uvs[4] = { u0, u1, u2, u3 };
 		float h4[4][6];
 		[loop] for (uint qi = 0; qi < 4; qi++)
 			[loop] for (uint lj = 0; lj < 6; lj++)
 				h4[qi][lj] = 0;
 
-		EM_LEGACY_LAYER012_QUAD(0, Permutation::ExtraFeatureFlags::THLand0HasDisplacement, TexLandTHDisp0Sampler, TexColorSampler, w1.x)
-		EM_LEGACY_LAYER012_QUAD(1, Permutation::ExtraFeatureFlags::THLand1HasDisplacement, TexLandTHDisp1Sampler, TexLandColor2Sampler, w1.y)
-		EM_LEGACY_LAYER012_QUAD(2, Permutation::ExtraFeatureFlags::THLand2HasDisplacement, TexLandTHDisp2Sampler, TexLandColor3Sampler, w1.z)
-		EM_LEGACY_LAYER345_QUAD(3, Permutation::ExtraFeatureFlags::THLand3HasDisplacement, TexLandTHDisp3Sampler, TexLandColor4Sampler, w1.w, w1.w)
-		EM_LEGACY_LAYER345_QUAD(4, Permutation::ExtraFeatureFlags::THLand4HasDisplacement, TexLandTHDisp4Sampler, TexLandColor5Sampler, w2.x, w2.x)
-		EM_LEGACY_LAYER345_QUAD(5, Permutation::ExtraFeatureFlags::THLand5HasDisplacement, TexLandTHDisp5Sampler, TexLandColor6Sampler, w2.y, w2.y)
+		EM_LEGACY_FOREACH(EM_LEGACY_LAYER_QUAD)
 
 		return FinishTerrainHeightQuadBlend(heightBlend, w1, w2, h4[0], h4[1], h4[2], h4[3], weights);
 	}
 
-#undef EM_LEGACY_LAYER012_SCALAR
-#undef EM_LEGACY_LAYER345_SCALAR
-#undef EM_LEGACY_LAYER012_QUAD
-#undef EM_LEGACY_LAYER345_QUAD
+#undef EM_LEGACY_LAYER_SCALAR
+#undef EM_LEGACY_LAYER_QUAD
+#undef EM_LEGACY_FOREACH
 
 #	endif
 #	if defined(TRUE_PBR)
@@ -310,8 +316,7 @@
 	/** @brief Max height scale weighted by current land blend weights. */
 	inline float TerrainMaxWeightedHeightScale(PS_INPUT input, DisplacementParams params[6])
 	{
-		return max(params[0].HeightScale * input.LandBlendWeights1.x, max(params[1].HeightScale * input.LandBlendWeights1.y, max(params[2].HeightScale * input.LandBlendWeights1.z,
-																																 max(params[3].HeightScale * input.LandBlendWeights1.w, max(params[4].HeightScale * input.LandBlendWeights2.x, params[5].HeightScale * input.LandBlendWeights2.y)))));
+		return TerrainMaxWeightedHeightScaleW(input.LandBlendWeights1, input.LandBlendWeights2.xy, params);
 	}
 
 	/** @brief Tap count for directional terrain parallax soft shadows. */
@@ -338,11 +343,17 @@
 		return true;
 	}
 
-	/** @brief Soft shadow multiplier along light L for terrain parallax. */
+	/**
+	 * @brief Soft shadow multiplier along light L for terrain parallax (point lights).
+	 * @details Tap count is capped at 2, matching @ref TerrainDirectionalShadowTapCount; each
+	 *          terrain tap is a full six-layer height blend, so extra taps are disproportionately
+	 *          expensive. The 4/tapCount normalization already compensates intensity for the
+	 *          reduced count (same scheme the quality tiers use).
+	 */
 	float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset)
 	{
 		if (quality > 0.0) {
-			uint tapCount = ParallaxShadowTapCount(quality);
+			uint tapCount = min(ParallaxShadowTapCount(quality), 2u);
 			float shadowStrength = ShadowIntensity * (4.0 / tapCount);
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 			float2 rayDir = L.xy * 0.1;
@@ -396,14 +407,6 @@
 		}
 
 		return 1.0 - saturate(shadowAccum * shadowStrength);
-	}
-
-	/** @brief Convenience: base height + soft shadow for terrain parallax. */
-	float EvaluateTerrainParallaxShadowMultiplier(PS_INPUT input, float2 coords, float mipLevels[6], float3 lightDirection, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, out float sh0)
-	{
-		if (!ComputeTerrainParallaxShadowBaseHeight(input, coords, mipLevels, quality, noise, params, sharedOffset, sh0))
-			return 1.0;
-		return GetParallaxSoftShadowMultiplierTerrain(input, coords, mipLevels, lightDirection, sh0, quality, noise, params, sharedOffset);
 	}
 
 #	undef TERRAIN_HEIGHT_AT
