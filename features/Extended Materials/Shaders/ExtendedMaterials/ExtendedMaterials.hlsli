@@ -1,19 +1,19 @@
-// https://github.com/tgjones/slimshader-cpp/blob/master/src/Shaders/Sdk/Direct3D11/DetailTessellation11/POM.hlsl
-// https://github.com/alandtse/SSEShaderTools/blob/main/shaders_vr/ParallaxEffect.h
-// https://github.com/marselas/Zombie-Direct3D-Samples/blob/5f53dc2d6f7deb32eb2e5e438d6b6644430fe9ee/Direct3D/ParallaxOcclusionMapping/ParallaxOcclusionMapping.fx
-// http://www.diva-portal.org/smash/get/diva2:831762/FULLTEXT01.pdf
-// https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
-
-// Extended Materials: split for faster compiles on non-landscape Lighting permutations.
-// Lighting.hlsl includes this header only when EMAT is defined; LANDSCAPE further gates terrain-only code.
-// - Terrain helpers: ExtendedMaterialsTerrain.hlsli (EMAT implied; included only when LANDSCAPE)
-// - Parallax core: ExtendedMaterialsParallaxCore.hlsli (GetParallaxCoords + mesh soft shadows)
+/**
+ * @file ExtendedMaterials.hlsli
+ * @brief Parallax / complex-material entry (included when EMAT is defined).
+ * @details Landscape path pulls @ref ExtendedMaterialsTerrain.hlsli; core POM is
+ *          @ref ExtendedMaterialsParallaxCore.hlsli.
+ * @see https://github.com/tgjones/slimshader-cpp/blob/master/src/Shaders/Sdk/Direct3D11/DetailTessellation11/POM.hlsl
+ * @see https://github.com/alandtse/SSEShaderTools/blob/main/shaders_vr/ParallaxEffect.h
+ * @see https://github.com/marselas/Zombie-Direct3D-Samples/blob/5f53dc2d6f7deb32eb2e5e438d6b6644430fe9ee/Direct3D/ParallaxOcclusionMapping/ParallaxOcclusionMapping.fx
+ * @see http://www.diva-portal.org/smash/get/diva2:831762/FULLTEXT01.pdf
+ * @see https://bartwronski.files.wordpress.com/2014/03/ac4_gdc.pdf
+ */
 
 #ifndef EXTENDED_MATERIALS_HLSLI
 #define EXTENDED_MATERIALS_HLSLI
 
-// Terrain variation: optional feature pack — include only when macro + headers ship together.
-// When absent, stub `StochasticOffsets` so EMAT terrain APIs stay unified (offsets ignored on SampleLevel path).
+/** @brief Include Terrain Variation when present; otherwise stub StochasticOffsets for unified APIs. */
 #	if defined(LANDSCAPE)
 #		if defined(TERRAIN_VARIATION)
 #			include "TerrainVariation/TerrainVariation.hlsli"

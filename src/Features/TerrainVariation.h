@@ -13,10 +13,12 @@ public:
 	virtual inline std::string GetShortName() override { return "TerrainVariation"; }
 	virtual inline std::string GetFeatureModLink() override { return MakeNexusModURL(MOD_ID); }
 	virtual inline std::string_view GetShaderDefineName() override { return "TERRAIN_VARIATION"; }
-	/** @brief Returns true only for Lighting shader type. */
+	/**
+	 * @brief Returns true for Lighting shaders when the feature is loaded.
+	 * @details LOD tiling remains gated by @c enableLODTerrainTilingFix.
+	 */
 	virtual inline bool HasShaderDefine(RE::BSShader::Type shaderType) override
 	{
-		// Always compile the TERRAIN_VARIATION path when the feature is loaded; LOD terrain variation remains configurable via enableLODTerrainTilingFix.
 		return loaded && shaderType == RE::BSShader::Type::Lighting;
 	}
 	virtual bool IsCore() const override { return false; };

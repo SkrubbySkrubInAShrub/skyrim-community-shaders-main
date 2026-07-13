@@ -1250,7 +1250,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float4 glintParameters = 0;
 
-#	if defined(SNOW)  // Earlier snow definition for Terrain Variation rework.
+#	if defined(SNOW)
 #		if !defined(TRUE_PBR)
 	float landSnowMask = 0.0;
 #			if defined(LANDSCAPE)

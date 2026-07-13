@@ -1,8 +1,17 @@
+/**
+ * @file ExtendedMaterialsParallaxCore.hlsli
+ * @brief POM ray march / secant refine (included inside namespace ExtendedMaterials).
+ */
+
 #ifndef EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
 #define EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
 
-// Body included inside `namespace ExtendedMaterials` from ExtendedMaterials.hlsli.
-
+/**
+ * @brief Parallax-occlusion UV offset.
+ * @param pixelOffset Normalized hit depth along the height slab [0,1].
+ * @param weights [LANDSCAPE] Updated layer weights when height blending is enabled.
+ * @return Displaced texture coordinates.
+ */
 #if defined(LANDSCAPE)
 	float2 GetParallaxCoords(PS_INPUT input, float2 coords, float mipLevels[6], float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[6],
 		StochasticOffsets sharedOffset,
@@ -26,22 +35,17 @@
 #endif
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
 		float invViewLen = rsqrt(max(dot(viewDirTS, viewDirTS), 1e-6));
-		float ndotv = saturate(viewDirTS.z * invViewLen);  // 1 = looking "down", 0 = grazing
+		float ndotv = saturate(viewDirTS.z * invViewLen);
 
-		// UV stride along the height slab. Meshes keep the flatten hack for warping/swim reduction;
-		// terrain must use xy/z or grazing rays barely move in UV while depth bounds advance
-		// (step count cannot fix that — features get stepped over regardless).
 #if defined(LANDSCAPE)
 		float parallaxZ = max(abs(viewDirTS.z), 0.0625);
 		float2 parallaxDir = viewDirTS.xy / parallaxZ;
 #else
-		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3 + params.FlattenAmount;  // Fix for objects at extreme viewing angles
+		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3 + params.FlattenAmount;
 		float2 parallaxDir = viewDirTS.xy;
 #endif
 
 #if defined(LANDSCAPE)
-		// Ray-march displacement always uses vertex weights + linear height combine (blendFactor 0).
-		// Height-biased layer weights for albedo/normal are computed once at the hit UV when enabled.
 		float4 w1 = input.LandBlendWeights1;
 		float2 w2 = input.LandBlendWeights2.xy;
 		const float marchHeightBlendFactor = 0.0;
@@ -82,7 +86,6 @@
 #endif
 
 #if defined(LANDSCAPE)
-		// Default out weights for static analysis; ray-march / secant paths overwrite.
 		weights[0] = input.LandBlendWeights1.x;
 		weights[1] = input.LandBlendWeights1.y;
 		weights[2] = input.LandBlendWeights1.z;
@@ -110,7 +113,6 @@
 			float distStepScale = lerp(0.35, 1.0, saturate((4.0 - parallaxLODMip) * (1.0 / 3.0)));
 
 #if defined(LANDSCAPE)
-			// Size the march from UV span in texels — the only reliable metric once xy/z is restored.
 			float2 texDim;
 			TexColorSampler.GetDimensions(texDim.x, texDim.y);
 			float uvMarchSpan = dot(abs(parallaxDir), maxHeight + minHeight);
@@ -118,7 +120,6 @@
 			uint numSteps = max(minSteps, (uint)(uvMarchSpan * max(texDim.x, texDim.y) * rcp(texelsPerStep) * distStepScale + 0.5));
 			numSteps = max(numSteps, (uint)(scale * baseMaxSteps * angleStepMul * distStepScale));
 			numSteps = min(numSteps, maxStepsCap);
-			// 4-wide coarse stride skips narrow peaks; single-step near camera + grazing only.
 			bool useDenseMarch = (ndotv < 0.45) && (distStepScale > 0.8);
 			if (!useDenseMarch)
 				numSteps = (numSteps + 2) & ~3;
@@ -230,8 +231,6 @@
 			float parallaxAmount = 0.0;
 			[branch] if (intersectionFound)
 			{
-				// Refine coarse hit interval with secant iterations:
-				// f(t) = sampledHeight(t) - t, t in [0,1] where t is ray depth bound.
 				float tNear = pt1.x;
 				float hNear = pt1.y;
 				float fNear = hNear - tNear;
@@ -291,8 +290,10 @@
 	}
 
 #	if !defined(LANDSCAPE)
-	// https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
-	// Cheap method of creating shadows using height for a given light source
+	/**
+	 * @brief Approximate soft shadow from a height map along light L.
+	 * @see https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
+	 */
 	float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params)
 	{
 		[branch] if (quality > 0.0)
