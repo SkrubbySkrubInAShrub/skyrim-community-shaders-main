@@ -227,23 +227,25 @@ inline float4 StochasticSampleLOD(float2 jitter, Texture2D tex, SamplerState sam
 /**
  * @brief Two-tap SampleGrad stochastic sampling for near terrain albedo/normals.
  * @details Uses @ref g_terrainStochasticGrad for both taps. When the 2nd tap was collapsed
- *          (w2Contrast == 0, see @ref ComputeStochasticOffsets) the 2nd fetch is skipped entirely;
- *          the branch is per-pixel-uniform across a hash cell interior, so divergence is low.
+ *          (w2Contrast == 0, see @ref ComputeStochasticOffsets) the 2nd fetch and blend are
+ *          skipped; the branch is per-pixel-uniform across a hash cell interior, so divergence is low.
  */
 inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets)
 {
 	TerrainGradients g = g_terrainStochasticGrad;
 	float4 s1 = tex.SampleGrad(samp, uv + offsets.offset1, g.gradDx, g.gradDy);
+	float4 result;
 
 	[branch] if (offsets.w2Contrast <= 0.0)
-		return s1;
+		result = s1;
+	else {
+		float4 s2 = tex.SampleGrad(samp, uv + offsets.offset2, g.gradDx, g.gradDy);
+		float h1 = lerp(dot(s1.rgb, LUMINANCE_WEIGHTS), s1.a, step(0.001, s1.a));
+		float h2 = lerp(dot(s2.rgb, LUMINANCE_WEIGHTS), s2.a, step(0.001, s2.a));
+		result = StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, h1, h2);
+	}
 
-	float4 s2 = tex.SampleGrad(samp, uv + offsets.offset2, g.gradDx, g.gradDy);
-
-	float h1 = lerp(dot(s1.rgb, LUMINANCE_WEIGHTS), s1.a, step(0.001, s1.a));
-	float h2 = lerp(dot(s2.rgb, LUMINANCE_WEIGHTS), s2.a, step(0.001, s2.a));
-
-	return StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, h1, h2);
+	return result;
 }
 
 /**
