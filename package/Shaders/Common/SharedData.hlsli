@@ -455,7 +455,7 @@ namespace SharedData
 
 		float2 WaterMapOrigin;
 		float WaterMapInvExtent;
-		float WaterMapEnabled;  // 0 = do not sample
+		float WaterMapMode;  // WATER_MAP_MODE_*
 
 		uint EnableExpensiveFoliage;
 		float SnowHeightOffset;

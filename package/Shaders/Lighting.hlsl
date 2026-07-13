@@ -2063,8 +2063,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 adjustedWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 
 	float snowWaterHeight = SharedData::GetWaterData(input.WorldPosition.xyz, SharedData::DefaultWaterHeight).w;
-	float snowWaterDist = min(input.WorldPosition.z - snowWaterHeight,
-		adjustedWorldPos.z - SnowCover::SampleWaterHeightMap(adjustedWorldPos.xy));
+	float snowWaterDist = SnowCover::GetWaterDistance(adjustedWorldPos, input.WorldPosition.z, snowWaterHeight);
 
 	float snowFactor = 0;
 	// Exclusion is via NoSnow (C++ hook, animation-aware); don't also test Skinned, as static props can carry it without real skinning.

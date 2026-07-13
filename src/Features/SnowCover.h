@@ -42,6 +42,15 @@ private:
 	static constexpr float WATER_MAP_FLAT_NORMAL_Z = 0.5f;
 	static constexpr uint32_t WATER_MAP_REFRESH_TICKS = 360;  // UpdateSharedData runs several times a frame
 
+	static constexpr float WATER_MAP_MODE_OFF = 0.0f;
+	static constexpr float WATER_MAP_MODE_PARTIAL = 1.0f;
+	static constexpr float WATER_MAP_MODE_AUTHORITATIVE = 2.0f;
+	static constexpr uint32_t WATER_MAX_VERTEX_STRIDE = 64;
+	static constexpr uint32_t WATER_VERTEX_PROBE_COUNT = 8;
+	static constexpr float WATER_BOUND_TOLERANCE = 1.5f;
+	static constexpr float WATER_TRIANGLE_MIN_AREA = 1.0f;
+	static constexpr float WATER_TRIANGLE_EDGE_TOLERANCE = 1e-4f;
+
 	static constexpr uint32_t MAX_FIRE_SOURCES = 16;
 	static constexpr uint32_t FIRE_SEEN_GRACE_TICKS = 4;    // tolerate a few culled frames before fading out
 	static constexpr float FIRE_FADE_IN_RATE = 1.6f;        // melt strength gained per second while lit
@@ -123,7 +132,7 @@ public:
 
 		float2 WaterMapOrigin;
 		float WaterMapInvExtent;
-		float WaterMapEnabled;  // 0 = do not sample
+		float WaterMapMode;  // WATER_MAP_MODE_*
 
 		UserSettings settings;
 		WorldSettings wsettings;
@@ -150,8 +159,12 @@ public:
 	uint32_t waterMapObjectCount = 0;
 	uint32_t waterMapAge = 0;
 	bool waterMapValid = false;
+	bool waterMapComplete = false;
 
 	void UpdateWaterHeightMap();
+	bool RasterizeWaterSurface(RE::TESWaterObject* a_waterObject, float a_originX, float a_originY, float a_texelSize);
+	bool RasterizeWaterBounds(RE::TESWaterObject* a_waterObject, float a_originX, float a_originY, float a_texelSize);
+	void RasterizeWaterTriangle(const RE::NiPoint3& a_v0, const RE::NiPoint3& a_v1, const RE::NiPoint3& a_v2, float a_originX, float a_originY, float a_texelSize);
 
 	struct FireSource
 	{

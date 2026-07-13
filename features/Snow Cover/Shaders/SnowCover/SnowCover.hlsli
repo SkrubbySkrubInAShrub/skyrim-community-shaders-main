@@ -16,19 +16,37 @@ namespace SnowCover
 	Texture2D<float> SnowMap : register(t44);
 	Texture2D<float> WaterHeightMap : register(t46);
 
-	float SampleWaterHeightMap(float2 posWS)
+	bool SampleWaterHeightMap(float2 posWS, out float waterHeight)
 	{
-		if (SharedData::snowCoverSettings.WaterMapEnabled == 0)
-			return WATER_HEIGHT_UNMAPPED;
+		waterHeight = WATER_HEIGHT_UNMAPPED;
+
+		if (SharedData::snowCoverSettings.WaterMapMode == WATER_MAP_MODE_OFF)
+			return false;
 
 		float2 uv = (posWS - SharedData::snowCoverSettings.WaterMapOrigin) * SharedData::snowCoverSettings.WaterMapInvExtent;
 		if (any(uv < 0) || any(uv > 1))
-			return WATER_HEIGHT_UNMAPPED;
+			return false;
 
 		uint width, height;
 		WaterHeightMap.GetDimensions(width, height);
 		int2 texel = clamp(int2(uv * float2(width, height)), int2(0, 0), int2(width - 1, height - 1));
-		return WaterHeightMap.Load(int3(texel, 0));
+		waterHeight = WaterHeightMap.Load(int3(texel, 0));
+		return true;
+	}
+
+	float GetWaterDistance(float3 posWS, float posZCameraRelative, float cellWaterHeightCameraRelative)
+	{
+		float cellDist = posZCameraRelative - cellWaterHeightCameraRelative;
+
+		float waterHeight;
+		if (!SampleWaterHeightMap(posWS.xy, waterHeight))
+			return cellDist;
+
+		float mapDist = waterHeight > WATER_HEIGHT_UNMAPPED_SENTINEL ? posWS.z - waterHeight : WATER_DISTANCE_DRY;
+		if (SharedData::snowCoverSettings.WaterMapMode == WATER_MAP_MODE_AUTHORITATIVE)
+			return mapDist;
+
+		return min(cellDist, mapDist);
 	}
 
 	// https://blog.selfshadow.com/publications/blending-in-detail/
