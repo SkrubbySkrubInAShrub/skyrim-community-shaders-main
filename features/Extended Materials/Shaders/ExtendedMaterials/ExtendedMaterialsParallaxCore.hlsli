@@ -33,9 +33,9 @@
 #if defined(VR_STEREO_OPT)
 		hasPOM = false;
 #endif
+		// viewDirTS is already unit length; its z is the view-vs-surface cosine directly.
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
-		float invViewLen = rsqrt(max(dot(viewDirTS, viewDirTS), 1e-6));
-		float ndotv = saturate(viewDirTS.z * invViewLen);
+		float ndotv = saturate(viewDirTS.z);
 
 #if defined(LANDSCAPE)
 		float parallaxZ = max(abs(viewDirTS.z), 0.0625);
@@ -49,10 +49,18 @@
 		float4 w1 = input.LandBlendWeights1;
 		float2 w2 = input.LandBlendWeights2.xy;
 		const float marchHeightBlendFactor = 0.0;
+
+		// Default out weights; ray-march / secant paths overwrite when height blending is enabled.
+		weights[0] = w1.x;
+		weights[1] = w1.y;
+		weights[2] = w1.z;
+		weights[3] = w1.w;
+		weights[4] = w2.x;
+		weights[5] = w2.y;
+
 #	if defined(TRUE_PBR)
-		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
-		float scalercp = rcp(max(scale, 1e-4));
-		float terrainHeightNormMul = scalercp;
+		float scale = TerrainMaxWeightedHeightScaleW(w1, w2, params);
+		float terrainHeightNormMul = rcp(max(scale, 1e-4));
 		float maxHeight = 0.1 * scale;
 #	else
 		float scale = 1;
@@ -65,33 +73,11 @@
 #endif
 		float minHeight = maxHeight * 0.5;
 
-#if defined(LANDSCAPE)
-#	if defined(TRUE_PBR)
-		if (scale <= 0.001) {
-			weights[0] = input.LandBlendWeights1.x;
-			weights[1] = input.LandBlendWeights1.y;
-			weights[2] = input.LandBlendWeights1.z;
-			weights[3] = input.LandBlendWeights1.w;
-			weights[4] = input.LandBlendWeights2.x;
-			weights[5] = input.LandBlendWeights2.y;
-			pixelOffset = 0.0;
-			return coords;
-		}
-#	endif
-#else
+#if !defined(LANDSCAPE) || defined(TRUE_PBR)
 		if (scale <= 0.001) {
 			pixelOffset = 0.0;
 			return coords;
 		}
-#endif
-
-#if defined(LANDSCAPE)
-		weights[0] = input.LandBlendWeights1.x;
-		weights[1] = input.LandBlendWeights1.y;
-		weights[2] = input.LandBlendWeights1.z;
-		weights[3] = input.LandBlendWeights1.w;
-		weights[4] = input.LandBlendWeights2.x;
-		weights[5] = input.LandBlendWeights2.y;
 #endif
 
 		{

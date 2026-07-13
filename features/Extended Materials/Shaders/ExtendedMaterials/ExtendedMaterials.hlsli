@@ -22,10 +22,9 @@ struct StochasticOffsets
 {
 	float2 offset1;
 	float2 offset2;
-	float2 offset3;
-	float3 weights;
 	float w1Contrast;
 	float w2Contrast;
+	float lodBlendWeight;
 };
 #		endif
 #	endif
@@ -94,8 +93,6 @@ namespace ExtendedMaterials
 #	if !defined(PARALLAX) && !defined(TRUE_PBR)
 		mipLevel++;
 #	endif
-
-
 
 		return floor(mipLevel);
 	}
