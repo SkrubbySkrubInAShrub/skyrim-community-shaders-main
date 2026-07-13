@@ -135,7 +135,7 @@ inline void InitTerrainParallaxStochasticFade(uint tile, float mipLevel)
  *          sampled and symmetrically exchange roles at equal weight -- but suppressing w2 alone
  *          (never w1) breaks that symmetry and re-introduces a pop. The two tie lines cross only
  *          at the triangle centroids (hexagon corners, where all 3 barycentric weights -> 1/3),
- *          so @c dominanceGap gates the fade off whenever c0/c1 are close, keeping every other
+ *          so @c dominanceGuard gates the fade off whenever c0/c1 are close, keeping every other
  *          point on the c1/c2 median fixed while leaving the (unfixable in exactly 2 taps) corner
  *          points to fall back to the original, still-safe c0/c1-symmetric behavior. The guard
  *          band (@ref DOMINANCE_GUARD_WIDTH) is intentionally much narrower than the rank-swap
@@ -189,11 +189,9 @@ inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 	o.offset3 = 0;
 	o.weights = float3(c0.w, c1.w, c2.w);
 	o.w1Contrast = StochasticContrastWeight(c0.w);
-	float dominanceGap = c0.w - c1.w;
-	float safeToSuppress = smoothstep(0.0, DOMINANCE_GUARD_WIDTH, dominanceGap);
 	float rankFade = smoothstep(0.0, TAP_SWAP_FADE_WIDTH, c1.w - c2.w);
-	float rankConfidence = lerp(1.0, rankFade, safeToSuppress);
-	o.w2Contrast = StochasticContrastWeight(c1.w) * rankConfidence;
+	float dominanceGuard = smoothstep(0.0, DOMINANCE_GUARD_WIDTH, c0.w - c1.w);
+	o.w2Contrast = StochasticContrastWeight(c1.w) * lerp(1.0, rankFade, dominanceGuard);
 	return o;
 }
 
