@@ -1,8 +1,12 @@
+/**
+ * @file ExtendedMaterialsTerrain.hlsli
+ * @brief Landscape height sampling / height blending (inside namespace ExtendedMaterials, LANDSCAPE only).
+ */
+
 #ifndef EXTENDED_MATERIALS_TERRAIN_HLSLI
 #define EXTENDED_MATERIALS_TERRAIN_HLSLI
 
-// Included only for LANDSCAPE Lighting permutations; parent ExtendedMaterials.hlsli is EMAT-only (see Lighting.hlsl).
-
+	/** @brief Fills per-layer mip levels for terrain parallax. */
 	void InitializeTerrainMipLevels(float2 coords, out float mipLevels[6])
 	{
 		mipLevels[0] = GetMipLevel(coords, TexColorSampler);
@@ -13,11 +17,9 @@
 		mipLevels[5] = GetMipLevel(coords, TexLandColor6Sampler);
 	}
 
-	// Parallax/height sampling: dual-tap stochastic blend, matching the albedo/normal path so the
-	// displaced height field stays aligned with the de-tiled surface being shaded. StochasticEffectParallax
-	// is deliberately branchless (this wrapper is inlined 24+ times across the unrolled ray-march/secant/
-	// soft-shadow paths, where duplicated control flow is what explodes FXC compile time). Offset is
-	// ignored when TERRAIN_VARIATION is unset (plain SampleLevel path).
+	/**
+	 * @brief Samples a terrain height/displacement texel (stochastic when TERRAIN_VARIATION is set).
+	 */
 	inline float4 TerrainParallaxTexSample(Texture2D tex, float2 uv, float mipLevel, StochasticOffsets sharedOffset, uint layerIndex)
 	{
 #	if defined(TERRAIN_VARIATION)
@@ -31,7 +33,7 @@
 #	define HEIGHT_POWER 2
 #	define HEIGHT_MULT 8
 
-	// [loop] on fixed-6: less compile/optimizer blow-up than [unroll] here (tiny runtime cost).
+	/** @brief Dot product of per-layer heights and weights. */
 	float TerrainWeightedHeightSum(float heights[6], float weights[6])
 	{
 		float totalHeight = 0;
@@ -42,6 +44,10 @@
 		return totalHeight;
 	}
 
+	/**
+	 * @brief Normalizes or height-sharpens landscape blend weights and returns weighted height.
+	 * @param heightBlend 1 = linear weights; >1 applies height power blending.
+	 */
 	void ProcessTerrainHeightWeights(float heightBlend, float4 w1, float2 w2, float heights[6], inout float weights[6], out float totalHeight)
 	{
 		totalHeight = 0.0;
@@ -66,8 +72,6 @@
 				totalHeight += heights[k] * weights[k];
 			}
 		} else {
-			// pow(base, k) == exp2(k * log2(base)); base is loop-invariant here, so hoist its
-			// log2 out of the 6-tap loop (FXC keeps it inside the pow intrinsic otherwise).
 			float logHeightBlend = log2(max(abs(heightBlend), 0.0001));
 			[loop] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
 			{
@@ -94,12 +98,14 @@
 		}
 	}
 
-	// Blend four per-tap height vectors like four sequential GetTerrainHeight calls; weights output matches tap 3 (last UV).
+	/**
+	 * @brief Blends four height vectors like four @ref GetTerrainHeight calls.
+	 * @param weights Output weights from the last UV (tap 3).
+	 */
 	float4 FinishTerrainHeightQuadBlend(float heightBlend, float4 w1, float2 w2,
 		float qh0[6], float qh1[6], float qh2[6], float qh3[6], out float weights[6])
 	{
 		float4 result = 0.0;
-		// heightBlend <= 1: weights depend only on w1/w2 (not per-tap heights) — one normalize + four dots.
 		if (heightBlend <= 1.0) {
 			float t3 = 0.0;
 			ProcessTerrainHeightWeights(heightBlend, w1, w2, qh3, weights, t3);
@@ -118,7 +124,7 @@
 
 #	if defined(TRUE_PBR)
 
-// FXC does not substitute macro args inside `::EnumParam`; pass full scoped flags as TILEFLAG.
+/** @note Pass full scoped PBR::TerrainFlags values; FXC will not expand macros inside `::`. */
 #define EM_PBR_DISP_LAYER_SCALAR(N, TILEFLAG, TEX, WGT) \
 		[branch] if ((PBRFlags & (TILEFLAG)) != 0 && (WGT) > 0.01) \
 		{ \
@@ -140,6 +146,7 @@
 		M(4, PBR::TerrainFlags::LandTile4HasDisplacement, TexLandDisplacement4Sampler, w2.x) \
 		M(5, PBR::TerrainFlags::LandTile5HasDisplacement, TexLandDisplacement5Sampler, w2.y)
 
+	/** @brief Weighted terrain height at coords (PBR displacement maps). */
 	float GetTerrainHeight(float screenNoise, PS_INPUT input, float2 coords, float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
 		StochasticOffsets sharedOffset,
 		out float weights[6])
@@ -154,9 +161,7 @@
 		return total;
 	}
 
-	// Ray-march coarse step: one branch tree per layer; inner [loop] fans out four UVs. Kept as a runtime
-	// [loop] (not [unroll]) so FXC compiles one sampler body per layer instead of four -> large compile-time
-	// cut for the TERRAIN_VARIATION dual-tap path. Result is value-identical (independent per-UV iterations).
+	/** @brief Four-UV height sample for coarse ray-march steps (same result as four GetTerrainHeight calls). */
 	float4 GetTerrainHeightQuadRayMarch(float screenNoise, PS_INPUT input,
 		float2 u0, float2 u1, float2 u2, float2 u3,
 		float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
@@ -229,6 +234,7 @@
 				h4[k][N] = ScaleDisplacement(TerrainParallaxTexSample(COLSAMPLER, uvs[k], mipLevels[N], sharedOffset, N).w, params[N]); \
 		}
 
+	/** @brief Weighted terrain height at coords (legacy TH / color-alpha displacement). */
 	float GetTerrainHeight(float screenNoise, PS_INPUT input, float2 coords, float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
 		StochasticOffsets sharedOffset,
 		out float weights[6])
@@ -248,8 +254,7 @@
 		return total;
 	}
 
-	// Legacy TH/color paths: same branching as GetTerrainHeight; [loop] fans out four UVs per branch
-	// (runtime loop keeps FXC from inlining four sampler copies per layer).
+	/** @brief Four-UV height sample for coarse ray-march steps (legacy TH/color path). */
 	float4 GetTerrainHeightQuadRayMarch(float screenNoise, PS_INPUT input,
 		float2 u0, float2 u1, float2 u2, float2 u3,
 		float mipLevels[6], DisplacementParams params[6], float blendFactor, float4 w1, float2 w2,
@@ -285,32 +290,33 @@
 #	define TERRAIN_HEIGHT_AT(COORDS, MIP, QUALITY, WEIGHTS) \
 		GetTerrainHeight(noise, input, COORDS, MIP, params, 0.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, WEIGHTS)
 
+	/** @brief True when any landscape blend weight is significant. */
 	inline bool TerrainHasSignificantBlend(float4 w1, float2 w2)
 	{
 		return (w1.x + w1.y + w1.z + w1.w + w2.x + w2.y) > 0.01;
 	}
 
+	/** @brief True when any landscape layer has displacement available. */
 	inline bool TerrainHasAnyDisplacement()
 	{
 #	if defined(TRUE_PBR)
 		return (PBRFlags & TERRAIN_DISPLACEMENT_MASK) != 0;
 #	else
-		// Some distant landscape permutations can lose THLandHasDisplacement even though
-		// legacy terrain parallax still uses alpha-based displacement.
 		return SharedData::extendedMaterialSettings.EnableTerrainParallax ||
 		       (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement) != 0;
 #	endif
 	}
 
+	/** @brief Max height scale weighted by current land blend weights. */
 	inline float TerrainMaxWeightedHeightScale(PS_INPUT input, DisplacementParams params[6])
 	{
 		return max(params[0].HeightScale * input.LandBlendWeights1.x, max(params[1].HeightScale * input.LandBlendWeights1.y, max(params[2].HeightScale * input.LandBlendWeights1.z,
 																																 max(params[3].HeightScale * input.LandBlendWeights1.w, max(params[4].HeightScale * input.LandBlendWeights2.x, params[5].HeightScale * input.LandBlendWeights2.y)))));
 	}
 
+	/** @brief Tap count for directional terrain parallax soft shadows. */
 	inline uint TerrainDirectionalShadowTapCount(float quality)
 	{
-		// Directional terrain shadows are capped to reduce cost.
 		if (quality > 0.7)
 			return 2;
 		if (quality > 0.0)
@@ -318,6 +324,7 @@
 		return 0;
 	}
 
+	/** @brief Samples base height for terrain parallax shadows; returns false if skipped. */
 	bool ComputeTerrainParallaxShadowBaseHeight(PS_INPUT input, float2 coords, float mipLevels[6], float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, out float sh0)
 	{
 		sh0 = 0.0;
@@ -331,6 +338,7 @@
 		return true;
 	}
 
+	/** @brief Soft shadow multiplier along light L for terrain parallax. */
 	float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset)
 	{
 		if (quality > 0.0) {
@@ -347,12 +355,6 @@
 			rayDir *= scale;
 			shadowScaleInv = rcp(scale);
 #	endif
-			// Accumulate per-tap occlusion in a scalar. A float4 is NOT a natively addressable
-			// l-value, so sh[i] = ... force-unrolls the [loop] (X3531) — the opposite of the goal.
-			// multipliers[i] == rcp((i+1)+noise); tapCount already matches the q>0.25/0.5/0.75
-			// ladder, so the same taps run. Sum matches the old
-			// dot(max(0, sh-sh0)*shadowScaleInv, shadowStrength) up to FP associativity.
-			// FXC now inlines ONE GetTerrainHeight body instead of up to four.
 			float shadowAccum = 0.0;
 			[loop] for (uint i = 0; i < tapCount; i++)
 			{
@@ -364,6 +366,7 @@
 		return 1.0;
 	}
 
+	/** @brief Directional-light terrain parallax soft shadow. */
 	float EvaluateTerrainDirectionalParallaxShadowMultiplier(PS_INPUT input, float2 coords, float mipLevels[6], float3 lightDirection, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, float sh0)
 	{
 		uint tapCount = TerrainDirectionalShadowTapCount(quality);
@@ -385,8 +388,6 @@
 		shadowScaleInv = rcp(scale);
 #	endif
 
-		// Scalar accumulate: float4 sh[i] l-value would force-unroll the [loop] (X3531).
-		// multipliers[i] == rcp((i+1)+noise); one inlined GetTerrainHeight body instead of two.
 		float shadowAccum = 0.0;
 		[loop] for (uint i = 0; i < tapCount; i++)
 		{
@@ -397,6 +398,7 @@
 		return 1.0 - saturate(shadowAccum * shadowStrength);
 	}
 
+	/** @brief Convenience: base height + soft shadow for terrain parallax. */
 	float EvaluateTerrainParallaxShadowMultiplier(PS_INPUT input, float2 coords, float mipLevels[6], float3 lightDirection, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, out float sh0)
 	{
 		if (!ComputeTerrainParallaxShadowBaseHeight(input, coords, mipLevels, quality, noise, params, sharedOffset, sh0))

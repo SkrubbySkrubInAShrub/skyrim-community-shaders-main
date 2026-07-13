@@ -203,10 +203,11 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	/** @brief Terrain Variation feature settings. */
 	struct TerrainVariationSettings
 	{
-		uint enableLODTerrainTilingFix;  // 1 = apply variation to LOD terrain, 0 = near terrain only (variation always applies near terrain when TERRAIN_VARIATION is defined).
-		uint3 pad;                       // Unused; mirrors TerrainVariation::Settings padding in the native plugin.
+		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
+		uint3 pad;
 	};
 
 	struct IBLSettings

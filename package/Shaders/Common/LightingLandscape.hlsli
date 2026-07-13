@@ -1,11 +1,12 @@
+/**
+ * @file LightingLandscape.hlsli
+ * @brief Landscape layer helpers and six-way blend macros for Lighting.hlsl.
+ * @details PBR tile bits must match @c PBR::TerrainFlags in PBRMath.hlsli.
+ *          Texture registers cannot be indexed by loop variable; use the X-macros.
+ */
+
 #ifndef __LIGHTING_LANDSCAPE_HLSLI__
 #define __LIGHTING_LANDSCAPE_HLSLI__
-
-// Shared terrain layer indexing for TRUE_PBR (PBRFlags terrain bits) and non-PBR displacement
-// (Permutation::ExtraFeatureDescriptor TH land bits). HLSL cannot index texture registers by loop
-// variable; use LANDSCAPE_*_LAYER_FOREACH (X-macros) for per-layer texture bodies.
-//
-// PBR terrain bit layout must stay aligned with PBR::TerrainFlags in PBRMath.hlsli.
 
 #if defined(LANDSCAPE)
 
@@ -16,21 +17,23 @@
 namespace LandscapeLayers
 {
 #	if defined(TRUE_PBR)
-	// Tiles 0..5: PBR, displacement, glint packed contiguously (see PBRMath.hlsli).
+	/** @brief True if tile uses full PBR material. */
 	inline bool PbrTileUsesFullPBR(uint tileIndex)
 	{
 		return (PBRFlags & (1u << tileIndex)) != 0;
 	}
+	/** @brief True if tile has a displacement map. */
 	inline bool PbrTileHasDisplacement(uint tileIndex)
 	{
 		return (PBRFlags & (1u << (tileIndex + 6u))) != 0;
 	}
+	/** @brief True if tile has glint. */
 	inline bool PbrTileHasGlint(uint tileIndex)
 	{
 		return (PBRFlags & (1u << (tileIndex + 12u))) != 0;
 	}
 #	else
-	// Matches Permutation::ExtraFeatureFlags::THLand0HasDisplacement .. THLand5HasDisplacement
+	/** @brief True if TH land tile has displacement. */
 	inline bool ThTileHasDisplacement(uint tileIndex)
 	{
 		return (Permutation::ExtraFeatureDescriptor & (1u << tileIndex)) != 0;
@@ -38,7 +41,7 @@ namespace LandscapeLayers
 #	endif
 }
 
-// tileIndex, displacementTexture, diffuseOrAlphaHeightTexture (mip dims / non-PBR height)
+/** @brief X-macro args: tileIndex, displacementTexture, diffuseOrAlphaHeightTexture. */
 #	if defined(TRUE_PBR)
 #		define LANDSCAPE_PBR_LAYER_FOREACH(X)                      \
 			X(0, TexLandDisplacement0Sampler, TexColorSampler)      \
@@ -57,11 +60,7 @@ namespace LandscapeLayers
 			X(5, TexLandTHDisp5Sampler, TexLandColor6Sampler)
 #	endif
 
-// ---------------------------------------------------------------------------
-// Lighting.hlsl: six-way landscape diffuse / normal / RMAOS blend.
-// Requires: SampleTerrain, input, uv, sharedOffset, landDistanceTexMipBias, glossiness, blendedRGB, blendedAlpha,
-// blendedNormalRGB, blendedNormalAlpha, glintParameters, Color::*, GetLandSnowMaskValue (non-PBR path).
-// ---------------------------------------------------------------------------
+/** @brief Per-layer landscape diffuse/normal(/RMAOS) blend body used by Lighting.hlsl. */
 #	if defined(TERRAIN_VARIATION)
 #		define LANDSCAPE_SAMPLE_ARG(TILE) TILE
 #	else
