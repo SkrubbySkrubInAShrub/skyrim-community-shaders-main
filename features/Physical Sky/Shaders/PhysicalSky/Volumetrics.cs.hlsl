@@ -1,3 +1,10 @@
+// Community Shaders
+// Authors: Profjack, Jiaye
+//
+// References:
+// HanPi Volume Cloud © AshenOneArt
+// https://github.com/AshenOneArt/HPVolumeCloud
+
 #define PHYSICAL_SKY_VOLUMETRICS
 #ifndef COMPUTESHADER
 #	define COMPUTESHADER
@@ -62,24 +69,104 @@ struct VolumetricCloudData
 
 	float cloudBottom;
 	float cloudThickness;
-	float2 ndfFreq;
-	float noiseFreq;
+	float2 weatherCenter;
+	float weatherWorldSize;
+	float highCloudEnabled;
+	float2 noiseWindOffset;
+	float3 noiseScale;
+	float detailNoiseScale;
 	float3 noiseOffset;
-	float power;
-	float3 cloudScatter;
-	float3 cloudAbsorption;
-	float averageDensity;
-	float msMult;
-	float msTransmittancePower;
-	float msHeightPower;
-	float ambientMult;
-	float densityErosionWeak;
-	float densityErosionStrong;
-	float noiseMipBiasWeak;
-	float noiseMipBiasStrong;
-	float hhfMinBlend;
-	float hhfProfileThreshold;
-	float2 _pad3;
+	float baseNoiseWindSpeed;
+	float detailNoiseWindSpeed;
+	float detailNoiseVerticalWindSpeed;
+	float billowyLow;
+	float billowyHigh;
+	float wispyLow;
+	float wispyHigh;
+	float detailStrengthCu;
+	float detailStrengthTcu;
+	float detailStrengthCb;
+	float densityThreshold;
+	float densityMultiplier;
+	float densityMultiplierCu;
+	float densityMultiplierTcu;
+	float densityMultiplierCb;
+	float bottomSmoothHeight;
+	float bottomSmoothPow;
+	float wispyEdgeWidth;
+	float wispyReach;
+	float wispyTopHeight;
+	float wispyTopHardness;
+	float coverageCoverIntensity;
+	float coverageCoverContrast;
+	float coverageHeightIntensity;
+	float coverageHeightContrast;
+	float coverTopStrength;
+	float coverTopMax;
+	float coverTopCurvePow;
+	float2 scCellScale;
+	float scWorleyStrength;
+	float scHeightScale;
+	float scDetailStrength;
+	float scCellThickPow;
+	float scCellThickStrength;
+	float scCellNoiseStrength;
+	float scCoverageIntensity;
+	float scCoverageContrast;
+	float2 highCellScale;
+	float highCellWindSpeed;
+	float2 highCellWarpScale;
+	float highCellWarpStrength;
+	float highCellThickStrength;
+	float highAsCellThickStrength;
+	float highCellThickPow;
+	float highCloudBottom;
+	float highCloudTop;
+	float highBottomCoverageScale;
+	float highHeightCurvePow;
+	float highDensityThreshold;
+	float highDensitySoftness;
+	float highCloudSoftness;
+	float2 highWispScale;
+	float highWispStrength;
+	float highHorizonDistanceStart;
+	float highHorizonDistanceEnd;
+	float highDensityMultiplier;
+	float highDensitySoftAIntensity;
+	float highDensitySoftAContrast;
+	float highDensityModAIntensity;
+	float highDensityModAContrast;
+	float3 scatterTint;
+	float forwardEccentricity;
+	float backwardEccentricity;
+	float ambientTopMultiplier;
+	float ambientBottomMultiplier;
+	float aoUpwardScale;
+	float msAttenuation;
+	float msContribution;
+	float msEccentricity;
+	float scatterSourceODScale;
+	float scatterSourceCurvePow;
+	float powderIntensity;
+	uint lightSteps;
+	uint primaryStepMultiplier;
+	float phiFwdIntensity;
+	float phiFwdDepthPow;
+	float phiFwdDepthBias;
+	float phiFwdBoundaryConfidence;
+	float phiFwdMSBuildScale;
+	float phiFwdCompress;
+	float highForwardEccentricity;
+	float highBackwardEccentricity;
+	float highAmbientTopMultiplier;
+	float highAmbientBottomMultiplier;
+	float highSkyBlendStrength;
+	float highMSAttenuation;
+	float highMSContribution;
+	float highMSEccentricity;
+	float highLightAbsorption;
+	float highViewAbsorption;
+	float highCoverAbsorptionStrength;
 
 	float2 lowFrameDim;
 	float2 rcpLowFrameDim;
@@ -92,23 +179,23 @@ CloudLayer GetCloudLayer(VolumetricCloudData info)
 	CloudLayer cloud;
 	cloud.bottom = info.cloudBottom;
 	cloud.thickness = info.cloudThickness;
-	cloud.ndf_freq = info.ndfFreq;
-	cloud.noise_scale_or_freq = info.noiseFreq;
+	cloud.ndf_freq = 1.0 / max(info.weatherWorldSize.xx, 1.0);
+	cloud.noise_scale_or_freq = 1.0;
 	cloud.noise_offset_or_speed = info.noiseOffset;
-	cloud.power = info.power;
-	cloud.scatter = info.cloudScatter;
-	cloud.absorption = info.cloudAbsorption;
-	cloud.average_density = info.averageDensity;
-	cloud.ms_mult = info.msMult;
-	cloud.ms_transmittance_power = info.msTransmittancePower;
-	cloud.ms_height_power = info.msHeightPower;
-	cloud.ambient_mult = info.ambientMult;
-	cloud.density_erosion_weak = info.densityErosionWeak;
-	cloud.density_erosion_strong = info.densityErosionStrong;
-	cloud.noise_mip_bias_weak = info.noiseMipBiasWeak;
-	cloud.noise_mip_bias_strong = info.noiseMipBiasStrong;
-	cloud.hhf_min_blend = info.hhfMinBlend;
-	cloud.hhf_profile_threshold = info.hhfProfileThreshold;
+	cloud.power = 1.0;
+	cloud.scatter = info.scatterTint * info.densityMultiplier;
+	cloud.absorption = max(0.01, (1.0 - info.scatterTint * 0.25) * info.densityMultiplier);
+	cloud.average_density = info.densityMultiplier;
+	cloud.ms_mult = 1.0;
+	cloud.ms_transmittance_power = 0.5;
+	cloud.ms_height_power = 0.7;
+	cloud.ambient_mult = info.ambientTopMultiplier;
+	cloud.density_erosion_weak = 0.35;
+	cloud.density_erosion_strong = 0.18;
+	cloud.noise_mip_bias_weak = 0.0;
+	cloud.noise_mip_bias_strong = 0.0;
+	cloud.hhf_min_blend = 1.0;
+	cloud.hhf_profile_threshold = 0.1;
 	cloud._pad0 = 0;
 	cloud.low_frame_dim = info.lowFrameDim;
 	cloud.rcp_low_frame_dim = info.rcpLowFrameDim;
@@ -124,13 +211,18 @@ Texture3D<float4> TexAerialPerspective : register(t3);
 
 Texture2D<float> TexDepth : register(t4);
 
-Texture3D<unorm float4> TexNubisNoise : register(t5);
-Texture2DArray<unorm float> TexCloudNDF : register(t6);
-Texture2D<unorm float> TexCloudTopLUT : register(t7);
-Texture2D<unorm float> TexCloudBottomLUT : register(t8);
+Texture3D<unorm float4> TexHpBaseNoise : register(t5);
+Texture3D<unorm float4> TexHpDetailNoise : register(t6);
+Texture2D<float4> TexHpLowWeather : register(t7);
+Texture2D<float4> TexHpHighWeather : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
-Texture2D<sh2> TexCloudAmbientSH : register(t11);
+Texture2D<float4> TexHpProfile : register(t11);
+Texture2D<float4> TexHpScCell : register(t12);
+Texture2D<float4> TexHpHighCell : register(t13);
+Texture2D<float4> TexHpHighWarp : register(t14);
+Texture2D<float4> TexHpHighWisp : register(t15);
+Texture2D<sh2> TexCloudAmbientSH : register(t16);
 
 Texture2DArray<float4> TexDirectShadows : register(t20);
 struct DirectionalShadowLightData
@@ -393,34 +485,23 @@ void advanceRay(inout RayMarchInfo ray, float dist, float jitter)
 	ray.pos = ray.start_pos + ray.ray_dist * ray.ray_dir;
 }
 
-float NarrowRayJitter(float jitter)
-{
-	return 0.5 + (jitter - 0.5) * 0.5;
-}
-
-float3 NarrowSignedJitter(float3 jitter)
-{
-	return (jitter * 2.0 - 1.0) * 0.5;
-}
-
 float2 NubisRayJitter(uint2 pixelCoord, uint frameIndex)
 {
 	const float jitter_x = frac(float(pixelCoord.x) * 0.1031000018);
 	const float jitter_y = frac(float(pixelCoord.y) * 0.1031000018);
 	const float jitter_frame = frac(float(frameIndex) * 0.1031000018);
-	const float jitter_sum = jitter_x + jitter_y;
 
-	const float near_dot = dot(float3(jitter_x, jitter_y, jitter_frame), float3(jitter_frame + 31.3199997, jitter_y + 31.3199997, jitter_x + 31.3199997));
+	const float near_dot = dot(float3(jitter_x, jitter_y, jitter_frame), float3(jitter_y + 31.3199997, jitter_frame + 31.3199997, jitter_x + 31.3199997));
 	const float far_dot = dot(float3(jitter_x, jitter_y, jitter_x), float3(jitter_y + 19.1900005, jitter_x + 19.1900005, jitter_x + 19.1900005));
 
 	return float2(
-		frac((jitter_sum + near_dot * 2.0) * (near_dot + jitter_frame)),
-		frac((jitter_sum + far_dot * 2.0) * (far_dot + jitter_x)));
+		frac((jitter_x + jitter_y + 2.0 * jitter_frame + near_dot * 4.0) * (jitter_frame + jitter_x + near_dot * 2.0)),
+		frac((jitter_x + jitter_y + far_dot * 2.0) * (far_dot + jitter_x)));
 }
 
 float SelectNubisRayJitter(float rayDistance, float2 jitter)
 {
-	return rayDistance < 0.25 / 1.428e-5f ? jitter.x : jitter.y;
+	return jitter.x;
 }
 
 float NubisVerticalStep(float rayDistance)
@@ -436,8 +517,59 @@ float StabilizeVerticalProfileDensity(float dimensionProfile, float noiseComposi
 
 float sampleCoverage2D(float3 pos, CloudLayer cloud)
 {
-	const float2 uv = pos.xy * cloud.ndf_freq;
-	return TexCloudNDF.SampleLevel(TileableSampler, float3(uv, 2), 0);
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float2 uv = (pos.xy - info.weatherCenter) / max(info.weatherWorldSize, 1.0) + 0.5;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+	return TexHpLowWeather.SampleLevel(TransmittanceSampler, uv, 0).r;
+}
+
+float HPPositivePow(float x, float p)
+{
+	return pow(max(x, 0.0), p);
+}
+
+float HPDensityRemap(float x, float a, float b, float c, float d)
+{
+	return (((x - a) / max(b - a, 1e-5)) * (d - c)) + c;
+}
+
+float2 HPWeatherUV(float2 worldXY, VolumetricCloudData info)
+{
+	return (worldXY - info.weatherCenter) / max(info.weatherWorldSize, 1.0) + 0.5;
+}
+
+float HPLowTypeValue(float cloudType, float cu, float tcu, float cb)
+{
+	return cloudType < 0.5 ? lerp(cu, tcu, cloudType * 2.0) : lerp(tcu, cb, (cloudType - 0.5) * 2.0);
+}
+
+float HPEvaluateTopHeightProxy(float2 worldXY)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	float2 uv = HPWeatherUV(worldXY, info);
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+	float4 weather = TexHpLowWeather.SampleLevel(TransmittanceSampler, uv, 0);
+	float coverageHeight = saturate(HPPositivePow(weather.r, max(info.coverageHeightContrast, 0.001)) * info.coverageHeightIntensity);
+	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength);
+	return saturate(coverageHeight * topScale / max(info.coverTopMax, 1.0));
+}
+
+float HPEvaluateBoundaryLight(float3 pos, float3 sunDir)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	float sampleStep = clamp(info.weatherWorldSize * 0.001, 25.0, 200.0);
+	float hL = HPEvaluateTopHeightProxy(pos.xy - float2(sampleStep, 0.0));
+	float hR = HPEvaluateTopHeightProxy(pos.xy + float2(sampleStep, 0.0));
+	float hD = HPEvaluateTopHeightProxy(pos.xy - float2(0.0, sampleStep));
+	float hU = HPEvaluateTopHeightProxy(pos.xy + float2(0.0, sampleStep));
+	float dHdx = (hR - hL) * info.cloudThickness / max(2.0 * sampleStep, 1.0);
+	float dHdy = (hU - hD) * info.cloudThickness / max(2.0 * sampleStep, 1.0);
+	float3 topNormal = normalize(float3(-dHdx, -dHdy, 1.0));
+	float wrap = 0.5;
+	float lit = saturate((dot(topNormal, sunDir) + wrap) / (1.0 + wrap));
+	return lerp(1.0, lit, saturate(info.phiFwdBoundaryConfidence));
 }
 
 struct NDFInfo
@@ -459,9 +591,7 @@ void initNDFInfo(out NDFInfo ndf)
 	ndf.dimension_profile = ndf.coverage = ndf.height_fraction = ndf.cloud_type = ndf.bottom_type = ndf.top_value = ndf.bottom_value = ndf.lut_value = 0;
 }
 
-NDFInfo sampleNDF(
-	float3 pos, CloudLayer cloud,
-	Texture2DArray<unorm float> tex_ndf, Texture2D<unorm float> tex_top, Texture2D<unorm float> tex_bottom)
+NDFInfo sampleNDF(float3 pos, CloudLayer cloud)
 {
 	NDFInfo ndf;
 	initNDFInfo(ndf);
@@ -472,27 +602,27 @@ NDFInfo sampleNDF(
 		return ndf;
 
 	ndf.in_layer = true;
+	const float2 uv = HPWeatherUV(pos.xy, info);
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return ndf;
 
-	const float2 uv = pos.xy * cloud.ndf_freq;
-
-	ndf.coverage = tex_ndf.SampleLevel(TileableSampler, float3(uv, 2), 0);
+	float4 weather = TexHpLowWeather.SampleLevel(TransmittanceSampler, uv, 0);
+	ndf.coverage = weather.r;
 	if (ndf.coverage < 1e-8)
 		return ndf;
 
-	const float min_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 0), 0));
-	const float max_h = lerp(cloud.bottom, cloud.bottom + cloud.thickness, tex_ndf.SampleLevel(TileableSampler, float3(uv, 1), 0));
-
-	ndf.height_fraction = (planet_z - min_h) / max(max_h - min_h, 1e-5);
+	ndf.height_fraction = saturate((planet_z - cloud.bottom) / max(cloud.thickness, 1e-5));
 
 	if (ndf.height_fraction < 0 || ndf.height_fraction > 1)
 		return ndf;
 
-	ndf.cloud_type = tex_ndf.SampleLevel(TileableSampler, float3(uv, 3), 0);
-	ndf.bottom_type = tex_ndf.SampleLevel(TileableSampler, float3(uv, 4), 0);
-
-	ndf.top_value = tex_top.SampleLevel(TransmittanceSampler, float2(ndf.cloud_type, 1 - ndf.height_fraction), 0);
-	ndf.bottom_value = tex_bottom.SampleLevel(TransmittanceSampler, float2(ndf.bottom_type, 1 - ndf.height_fraction), 0);
-	ndf.lut_value = ndf.top_value * ndf.bottom_value;
+	ndf.cloud_type = weather.g;
+	ndf.bottom_type = saturate(weather.b);
+	float radialDist = saturate(length(uv - 0.5) * 2.0);
+	float3 profiles = TexHpProfile.SampleLevel(TransmittanceSampler, float2(ndf.height_fraction, radialDist), 0).rgb;
+	ndf.top_value = HPLowTypeValue(ndf.cloud_type, profiles.r, profiles.g, profiles.b);
+	ndf.bottom_value = lerp(1.0, profiles.r, weather.b);
+	ndf.lut_value = ndf.top_value;
 
 	ndf.dimension_profile = ndf.coverage * ndf.lut_value;
 
@@ -503,43 +633,56 @@ float sampleCloudDensity(
 	float3 pos, float eye_dist, CloudLayer cloud, float mip_level, bool is_expensive,
 	out NDFInfo ndf)
 {
-	// sample NDF
-	ndf = sampleNDF(pos, cloud, TexCloudNDF, TexCloudTopLUT, TexCloudBottomLUT);
+	ndf = sampleNDF(pos, cloud);
 	if (ndf.dimension_profile < 1e-8)
 		return 0;
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float2 weatherUV = HPWeatherUV(pos.xy, info);
+	float4 weather = TexHpLowWeather.SampleLevel(TransmittanceSampler, weatherUV, 0);
+	float coverageRaw = weather.r;
+	float cloudType = weather.g;
+	float scMask = weather.b;
+	float coverage = saturate(HPPositivePow(coverageRaw, max(info.coverageCoverContrast, 0.001)) * info.coverageCoverIntensity);
+	float coverageHeight = saturate(HPPositivePow(coverageRaw, max(info.coverageHeightContrast, 0.001)) * info.coverageHeightIntensity);
+	float scStr = info.scWorleyStrength * scMask;
+	float scCell = saturate(TexHpScCell.SampleLevel(TransmittanceSampler, weatherUV * info.scCellScale, 0).r * info.scCellNoiseStrength);
+	float scCoverage = saturate(HPPositivePow(coverageRaw, max(info.scCoverageContrast, 0.001)) * info.scCoverageIntensity);
+	coverage = lerp(coverage, scCoverage * scCell, scStr);
+	if (coverage < 0.001)
+		return 0.0;
 
-	// sample noise
-	float noise_mip = mip_level + lerp(cloud.noise_mip_bias_weak, cloud.noise_mip_bias_strong, saturate(ndf.dimension_profile));
-	float4 noise = TexNubisNoise.SampleLevel(TileableSampler, (pos + cloud.noise_offset_or_speed) * cloud.noise_scale_or_freq, noise_mip);
-	// Define wispy noise
-	float wispy_noise = lerp(noise.r, noise.g, ndf.dimension_profile);
-	// Define billowy noise
-	float billowy_type_gradient = pow(ndf.dimension_profile, 0.25);
-	float billowy_noise = lerp(noise.b * 0.3, noise.a * 0.3, billowy_type_gradient);
-	// Define Noise composite - blend to wispy as the density scale decreases.
-	float noise_composite = lerp(wispy_noise, billowy_noise, ndf.bottom_value);
-
-	// Upres
-	float hhf_fraction;
-	bool close_range = eye_dist < 0.15 / 1.428e-5f;
-	if (close_range) {
-		float hhf_noise = saturate(lerp(1.0 - pow(abs(abs(noise.g * 2.0 - 1.0) * 2.0 - 1.0), 4.0), pow(abs(abs(noise.a * 2.0 - 1.0) * 2.0 - 1.0), 2.0), ndf.bottom_value));
-
-		hhf_fraction = (eye_dist - 0.05 / 1.428e-5f) / (0.15 / 1.428e-5f - 0.05 / 1.428e-5f);
-		float profile_edge_suppression = saturate((ndf.dimension_profile - cloud.hhf_profile_threshold) / max(1.0 - cloud.hhf_profile_threshold, 1e-5));
-		float hhf_noise_distance_range_blender = lerp(1.0, lerp(cloud.hhf_min_blend, 1.0, hhf_fraction), profile_edge_suppression);
-		noise_composite = lerp(hhf_noise, noise_composite, hhf_noise_distance_range_blender);
+	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength);
+	float heightForLut = ndf.height_fraction / (1.0 + (topScale - 1.0) * ndf.height_fraction);
+	float localHeight = lerp(heightForLut, saturate(ndf.height_fraction / max(info.scHeightScale, 0.01)), scStr);
+	float radialDist = saturate(length(weatherUV - 0.5) * 2.0);
+	float3 profiles = TexHpProfile.SampleLevel(TransmittanceSampler, float2(localHeight, radialDist), 0).rgb;
+	float heightGradient = lerp(HPLowTypeValue(cloudType, profiles.r, profiles.g, profiles.b), profiles.r, scStr);
+	float3 windOffset = float3(info.noiseWindOffset.x, info.noiseWindOffset.y, 0.0) * info.baseNoiseWindSpeed;
+	float4 baseNoise = TexHpBaseNoise.SampleLevel(TileableSampler, pos * info.noiseScale + info.noiseOffset + windOffset, max(mip_level, 0.0));
+	float baseShape = pow(abs(baseNoise.r), 0.6);
+	float bottomNoiseFade = info.bottomSmoothHeight > 0.0 ? HPPositivePow(saturate(localHeight / info.bottomSmoothHeight), max(info.bottomSmoothPow, 0.01)) : 1.0;
+	baseShape = lerp(1.0, baseShape, bottomNoiseFade);
+	float billowy = 0.0;
+	float wispy = 0.0;
+	if (is_expensive) {
+		float3 detailWind = float3(info.noiseWindOffset.x, info.noiseWindOffset.y, SharedData::FrameCountAlwaysActive * info.detailNoiseVerticalWindSpeed) * info.detailNoiseWindSpeed;
+		float4 d = TexHpDetailNoise.SampleLevel(TileableSampler, float3(pos.x, pos.y, -pos.z) * info.detailNoiseScale + info.noiseOffset * 0.5 + detailWind, 0);
+		billowy = (d.b * info.billowyLow + d.a * info.billowyHigh) * bottomNoiseFade;
+		wispy = (d.r * info.wispyLow + d.g * info.wispyHigh) * bottomNoiseFade;
 	}
-
-	float density = StabilizeVerticalProfileDensity(ndf.dimension_profile, noise_composite, cloud);
-
-	// Sharpen result
-	density = pow(density, cloud.power);
-	if (close_range) {
-		density = pow(density, lerp(0.5, 1.0, hhf_fraction)) * lerp(0.666, 1.0, hhf_fraction);
-	}
-
-	return saturate(density);
+	float detailStrength = lerp(HPLowTypeValue(cloudType, info.detailStrengthCu, info.detailStrengthTcu, info.detailStrengthCb), info.scDetailStrength, scStr);
+	float threshold = (1.0 - coverage) + info.densityThreshold;
+	float erodedBillowy = saturate(HPDensityRemap(baseShape, billowy * detailStrength, 1.0, 0.0, 1.0)) * heightGradient;
+	float erodedWispy = saturate(HPDensityRemap(baseShape, wispy * detailStrength, 1.0, 0.0, 1.0)) * heightGradient;
+	float densityBillowy = saturate(HPDensityRemap(erodedBillowy, threshold, threshold + 0.08, 0.0, 1.0));
+	float densityWispy = saturate(HPDensityRemap(erodedWispy, threshold - info.wispyReach, threshold - info.wispyReach + 0.08, 0.0, 1.0));
+	float wispyT = saturate((ndf.height_fraction - info.wispyTopHeight) / max(1.0 - info.wispyTopHeight, 0.001));
+	densityWispy *= HPPositivePow(1.0 - wispyT, max(info.wispyTopHardness * 10.0, 0.01));
+	float scCellShaped = HPPositivePow(max(scCell, 0.001), max(info.scCellThickPow, 0.01));
+	float heightClip = lerp(1.0, lerp(1.0, scCellShaped, info.scCellThickStrength), scStr);
+	float density = lerp(densityWispy, densityBillowy, smoothstep(0.0, info.wispyEdgeWidth, densityBillowy)) * heightClip;
+	density *= HPLowTypeValue(cloudType, info.densityMultiplierCu, info.densityMultiplierTcu, info.densityMultiplierCb);
+	return max(0.0, density * info.densityMultiplier);
 }
 
 // sample sun transmittance / shadowing
@@ -590,20 +733,31 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, uint jitte
 
 	// cloud self-shadowing
 	{
-		const static uint visibility_step = 6;
-		const static float visibility_stride = 0.05 / 1.428e-5f;
-		const float3 jitter = NarrowSignedJitter(Random::R3Modified(jitter_frame, seed / 4294967295.f));
+		uint visibility_step = max(info.lightSteps, 1u);
+		const static float cone_ratio = 2.0;
+		const static float cone_min_step = 5.0;
+		const static float cone_max_distance = 6000.0;
+		const float3 jitter = Random::R3Modified(jitter_frame, seed / 4294967295.f);
 
 		float cloud_density = 0;
+		float cover_dist = cone_max_distance;
+		float step_width = max(cover_dist * (cone_ratio - 1.0) / max(pow(cone_ratio, (float)visibility_step) - 1.0, 1e-4), cone_min_step);
+		float cum_dist = 0.0;
 
 		for (uint i = 0; i < visibility_step; i++) {
-			float3 vis_pos = pos + sun_dir * visibility_stride * (i + 1) + jitter * visibility_stride * (i + 1) / visibility_step;
+			float width = min(step_width, cover_dist - cum_dist);
+			if (width <= 0.0)
+				break;
+			float dist = cum_dist + width * 0.5;
+			float3 vis_pos = pos + sun_dir * dist + jitter * width * 0.25;
 			NDFInfo _;
-			cloud_density += sampleCloudDensity(vis_pos, 1e8, cloud, i * 0.5, true, _) * visibility_stride;
+			cloud_density += sampleCloudDensity(vis_pos, 1e8, cloud, i * 0.5, true, _) * width;
+			cum_dist += width;
+			step_width *= cone_ratio;
 		}
 
 		// long range
-		float3 vis_pos = pos + sun_dir * visibility_stride * visibility_step;
+		float3 vis_pos = pos + sun_dir * cum_dist;
 		float3 pos_sample_shadow_uvw = GetShadowVolumeSampleUvw(vis_pos, sun_dir, info, cloud);
 		if (all(pos_sample_shadow_uvw.xyz > 0))
 			cloud_density += TexShadowVolume.SampleLevel(TransmittanceSampler, pos_sample_shadow_uvw.xyz, 0);
@@ -622,6 +776,49 @@ float3 sampleSunTransmittance(float3 pos, float3 sun_dir, uint3 seed, uint jitte
 	return shadow;
 }
 
+float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	normalizedHeight = 0.0;
+	if (info.highCloudEnabled <= 0.0)
+		return 0.0;
+	float planetZ = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
+	if (planetZ < info.cloudBottom || planetZ > info.cloudBottom + info.cloudThickness)
+		return 0.0;
+	normalizedHeight = saturate((planetZ - info.cloudBottom) / max(info.cloudThickness, 1.0));
+	float2 uv = HPWeatherUV(pos.xy, info);
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+	float4 hiWeather = TexHpHighWeather.SampleLevel(TransmittanceSampler, uv, 0);
+	float hiCoverage = hiWeather.r;
+	float hiType = hiWeather.g;
+	if (hiCoverage < 0.001)
+		return 0.0;
+	float2 hiWindUV = info.noiseWindOffset / max(info.weatherWorldSize, 1.0);
+	float2 cellUV = uv * info.highCellScale + hiWindUV * info.highCellWindSpeed;
+	float2 warpUV = uv * info.highCellWarpScale + hiWindUV * info.highCellWindSpeed * 0.5;
+	float2 warp = (TexHpHighWarp.SampleLevel(TransmittanceSampler, warpUV, 0).rg * 2.0 - 1.0) * info.highCellWarpStrength;
+	float hiCell = saturate(TexHpHighCell.SampleLevel(TransmittanceSampler, cellUV + warp, 0).r);
+	float hiCellShaped = HPPositivePow(max(hiCell, 0.001), max(info.highCellThickPow, 0.01));
+	float hiCellThick = lerp(info.highAsCellThickStrength, info.highCellThickStrength, hiType);
+	float hiCoverForHeight = HPPositivePow(hiCoverage, max(info.highHeightCurvePow, 0.01));
+	float hiDrivenTop = lerp(info.highCloudBottom, info.highCloudTop, hiCoverForHeight);
+	float hiTop = info.highCloudBottom + (hiDrivenTop - info.highCloudBottom) * lerp(1.0, hiCellShaped, hiCellThick * 0.5);
+	float hiBottom = info.highCloudBottom - (info.highCloudTop - info.highCloudBottom) * info.highBottomCoverageScale * hiCoverForHeight;
+	float distXY = length((pos - FrameBuffer::CameraPosAdjust.xyz).xy);
+	float horizonT = smoothstep(info.highHorizonDistanceStart, max(info.highHorizonDistanceStart + 1.0, info.highHorizonDistanceEnd), distXY);
+	hiTop -= horizonT * hiBottom;
+	hiBottom -= horizonT * hiBottom;
+	float band = smoothstep(hiBottom - info.highCloudSoftness, hiBottom + info.highCloudSoftness, normalizedHeight) * (1.0 - smoothstep(hiTop - info.highCloudSoftness, hiTop + info.highCloudSoftness, normalizedHeight));
+	float wisp = TexHpHighWisp.SampleLevel(TransmittanceSampler, uv * info.highWispScale + hiWindUV * info.highCellWindSpeed, 0).r;
+	wisp = saturate(wisp * wisp);
+	float soft = info.highDensitySoftness * (1.0 - HPPositivePow(saturate(hiWeather.a), max(info.highDensitySoftAContrast, 0.01)));
+	float density = saturate(HPDensityRemap(hiCoverage, info.highDensityThreshold, info.highDensityThreshold + max(soft, 0.001), 0.0, 1.0));
+	density = (density * lerp(1.0, hiCellShaped, hiCellThick) - wisp * info.highWispStrength * hiType) * band;
+	density *= 1.0 - saturate(info.highDensityModAIntensity * (1.0 - HPPositivePow(saturate(hiWeather.a), max(info.highDensityModAContrast, 0.01))));
+	return max(0.0, density * info.highDensityMultiplier);
+}
+
 struct VolumetricCloudResult
 {
 	float3 transmittance;
@@ -632,7 +829,7 @@ struct VolumetricCloudResult
 	float weighted_depth;
 };
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float jitter, uint jitter_frame, float ap_shadow, bool skip_below_cloud_bottom)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, uint3 seed, float2 jitter, uint jitter_frame, float ap_shadow, bool skip_below_cloud_bottom)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
@@ -648,6 +845,18 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	ray.ray_dir = ray_dir;
 	const float max_march_dist = is_sky ? info.rayMarchRange : min(info.rayMarchRange, solid_dist);
 	snapMarch(ray, bottom, ceil, max_march_dist);
+
+	[branch] if (!is_sky && ray.march_dist <= 0.0)
+	{
+		VolumetricCloudResult result;
+		result.transmittance = 1.0;
+		result.lum = 0.0;
+		result.cloud_depth = solid_dist;
+		result.reject_depth = solid_dist;
+		result.scatter_weight = 0.0;
+		result.weighted_depth = 0.0;
+		return result;
+	}
 
 	float skipped_ap_dist = 0.0;
 	if (skip_below_cloud_bottom) {
@@ -673,11 +882,12 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	float scatter_weight = 0.0;
 	float weighted_depth = 0.0;
 
-	float stride = 0.003 / 1.428e-5f;
-	const float coarse_stride = stride * 6.0;
+	const float base_stride = 500;
+	float stride = base_stride;
+	const float coarse_stride = 4 * base_stride;
 
-	advanceRay(ray, stride, jitter);
-	[loop] for (; ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, jitter))
+	advanceRay(ray, stride, SelectNubisRayJitter(ray.start_dist + ray.segment_dist, jitter));
+	[loop] for (; ray.step < info.cloudMaxStep && ray.ray_dist < ray.march_dist; advanceRay(ray, stride, SelectNubisRayJitter(ray.start_dist + ray.segment_dist, jitter)))
 	{
 		float coverage_2d = sampleCoverage2D(ray.pos, cloud);
 
@@ -689,7 +899,9 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 		}
 		else
 		{
-			const float dt = ray.segment_dist - ray.last_segment_dist;
+			const float segment_end_dist = min(ray.segment_dist, ray.march_dist);
+			const float dt = segment_end_dist - ray.last_segment_dist;
+			[branch] if (dt <= 0.0) break;
 
 			NDFInfo ndf;
 			float cloud_density = sampleCloudDensity(ray.pos, ray.start_dist + ray.ray_dist, cloud, (ray.start_dist + ray.ray_dist) * 1.428e-5f, true, ndf);
@@ -709,19 +921,29 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				sum_shadowing_weights += dt;
 				mean_shadowing += sun_transmittance * dt;
 
-				// multiscatter
-				float3 ms_volume = saturate((ndf.dimension_profile - 0.1) / (1.0 - 0.1)) * pow(ndf.coverage * ndf.cloud_type, 0.25);
-				ms_volume *= pow(cloud_transmittance, cloud.ms_transmittance_power);
-				ms_volume *= pow(saturate(ndf.height_fraction), cloud.ms_height_power);
-				ms_volume *= cloud.ms_mult;
-				in_scatter += (sun_transmittance / max(1e-8, cloud_transmittance)) * cloud_scatter * cloud_secondary_phase * ms_volume * info.dirlightColor;
+				// HP multiscatter and phi_fwd diffuse field
+				float3 ms_lum = 0.0;
+				[unroll] for (uint octave = 0; octave < 3; ++octave)
+				{
+					float att = pow(info.msAttenuation, octave);
+					float con = pow(info.msContribution, octave);
+					ms_lum += exp(-max(0.0, -log(max(cloud_transmittance, 1e-5))) * att) * con;
+				}
+				in_scatter += ms_lum * cloud_scatter * cloud_secondary_phase * info.dirlightColor * sun_transmittance;
+				float boundary = HPEvaluateBoundaryLight(ray.pos, info.dirlightDir);
+				float bottomConfidence = info.phiFwdDepthPow > 0.0 ? 1.0 - exp(-max(ndf.height_fraction + info.phiFwdDepthBias, 0.0) / max(info.bottomSmoothHeight, 0.001) * info.phiFwdDepthPow) : 1.0;
+				float phiBuild = 1.0 - exp(-cloud_density * dt * max(info.phiFwdMSBuildScale, 0.0));
+				float phiScalar = info.phiFwdIntensity * boundary * bottomConfidence * phiBuild * (1.0 - dot(cloud_transmittance, float3(0.2126, 0.7152, 0.0722)));
+				phiScalar = info.phiFwdCompress > 0.0 ? (1.0 - exp(-phiScalar * info.phiFwdCompress)) / info.phiFwdCompress : phiScalar;
+				in_scatter += phiScalar * info.dirlightColor;
 
 				// ambient
 				float3 ambient = SampleCloudAmbientSkyView(ray.ray_dir);
 				float profile_indirect = sqrt(1.0 - saturate(ndf.dimension_profile));
 				float vertical_transmittance = dot(TexTransmittance.SampleLevel(TransmittanceSampler, TrLutUvPlanet(ray.pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir), 0).rgb, float3(0.2126, 0.7152, 0.0722));
-				float vertical_indirect = exp(vertical_transmittance);
-				in_scatter += cloud_scatter * profile_indirect * vertical_indirect * cloud.ambient_mult * ambient;
+				float upwardAO = exp(-max(0.0, -log(max(dot(cloud_transmittance, float3(0.2126, 0.7152, 0.0722)), 1e-5))) * max(info.dirlightDir.z, 0.05) * info.aoUpwardScale);
+				float vertical_indirect = exp(vertical_transmittance) * upwardAO;
+				in_scatter += cloud_scatter * profile_indirect * vertical_indirect * info.ambientTopMultiplier * ambient;
 
 				const float3 sample_transmittance = exp(-dt * extinction);
 				const float3 scatter_factor = (1 - sample_transmittance) / max(extinction, 1e-8);
@@ -733,9 +955,11 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			}
 
 			// stride
-			const bool empty_layer_sample = ndf.in_layer && ndf.dimension_profile <= 1e-8;
+			const bool cloud_density_sample = cloud_density > 0.003;
+			const bool empty_layer_sample = ndf.in_layer && !cloud_density_sample;
 			float rcp_step = (empty_layer_sample ? zero_density_stride_mult : 1.0) / (float)info.cloudMaxStep;
 			float march_prop = saturate((ray.start_dist + ray.segment_dist) / info.rayMarchRange);
+
 			stride = (pow(sqrt(march_prop) + rcp_step, 2) - march_prop) * info.rayMarchRange;
 
 			const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
@@ -744,6 +968,40 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			weighted_depth += step_opacity * dt * (ray.start_dist + ray.ray_dist);
 			ap_dist += tr * dt;
 			[branch] if (tr < 1e-3) break;
+		}
+	}
+
+	if (info.highCloudEnabled > 0.0) {
+		uint hiSteps = max(info.cloudMaxStep / 2u, 4u);
+		float hiStep = ray.march_dist / (float)hiSteps;
+		float hiDist = SelectNubisRayJitter(ray.start_dist, jitter) * hiStep;
+		[loop] for (uint hi = 0; hi < hiSteps && hiDist < ray.march_dist; ++hi, hiDist += hiStep)
+		{
+			float hiAbsDist = ray.start_dist + hiDist;
+			float3 hiPos = ray.start_pos + hiDist * ray.ray_dir;
+			float hiNormH;
+			float hiDensity = EvaluateHighCloudDensity(hiPos, hiNormH);
+			if (hiDensity <= 0.001)
+				continue;
+			float3 hiExtinction = hiDensity * info.highViewAbsorption * info.scatterTint;
+			float3 hiTransmittance = exp(-hiExtinction * hiStep);
+			float hiCos = dot(ray.ray_dir, info.dirlightDir);
+			float hiPhase = Phase::HG(hiCos, info.highForwardEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity);
+			float3 hiCloudTr;
+			float3 hiSun = sampleSunTransmittance(hiPos, info.dirlightDir, seed + hi + 163u, jitter_frame, hiCloudTr);
+			float3 hiAmbient = SampleCloudAmbientSkyView(ray.ray_dir) * lerp(info.highAmbientBottomMultiplier, info.highAmbientTopMultiplier, hiNormH);
+			float3 hiSkyBlend = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(ray.ray_dir), 0).rgb;
+			float3 hiLum = hiSun * info.dirlightColor * hiPhase + hiAmbient;
+			hiLum = lerp(hiLum, hiSkyBlend, smoothstep(0.0, 1.0, hiNormH) * info.highSkyBlendStrength);
+			float3 hiIntegral = hiLum * (1.0 - hiTransmittance) / max(hiExtinction, 1e-8);
+			ray.lum += hiIntegral * ray.transmittance;
+			ray.transmittance *= hiTransmittance;
+			const float tr = max(ray.transmittance.x, max(ray.transmittance.y, ray.transmittance.z));
+			float stepOpacity = saturate(1.0 - tr);
+			scatter_weight += stepOpacity * hiStep;
+			weighted_depth += stepOpacity * hiStep * hiAbsDist;
+			if (tr < 1e-3)
+				break;
 		}
 	}
 
@@ -775,6 +1033,45 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	return result;
 }
 
+float ReconstructSolidDist(uint2 full_px_coords, VolumetricCloudData info, out bool is_sky)
+{
+	const float depth = TexDepth[full_px_coords.xy];
+	is_sky = depth > 1 - 1e-6;
+	if (is_sky)
+		return info.rayMarchRange;
+
+	const float2 texture_uv = (full_px_coords + 0.5) * info.rcpFrameDim;
+	const float2 logic_uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(texture_uv);
+
+	float4 pos_world = float4(2 * float2(logic_uv.x, -logic_uv.y + 1) - 1, depth, 1);
+	pos_world = mul(FrameBuffer::CameraViewProjInverse, pos_world);
+	pos_world.xyz = pos_world.xyz / pos_world.w;
+	return length(pos_world.xyz);
+}
+
+float ConservativeTileSolidDist(uint2 low_px_coords, VolumetricCloudData info, out bool is_sky)
+{
+	is_sky = false;
+	float solid_dist = 0.0;
+
+	const uint2 tile_origin = low_px_coords * 4u;
+	const uint2 frame_dim = uint2(info.frameDim);
+
+	[unroll] for (uint y = 0u; y < 4u; y++)
+	{
+		[unroll] for (uint x = 0u; x < 4u; x++)
+		{
+			bool sample_is_sky;
+			const uint2 full_px_coords = min(tile_origin + uint2(x, y), frame_dim - 1u);
+			const float sample_solid_dist = ReconstructSolidDist(full_px_coords, info, sample_is_sky);
+			is_sky = is_sky || sample_is_sky;
+			solid_dist = max(solid_dist, sample_solid_dist);
+		}
+	}
+
+	return is_sky ? info.rayMarchRange : solid_dist;
+}
+
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 
@@ -788,7 +1085,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const uint2 full_px_coords = full_resolution ? px_coords : min(px_coords * 4u + phase_offset, uint2(info.frameDim) - 1u);
 
 	const uint3 seed = Random::pcg3d(uint3(full_px_coords.xy, full_px_coords.x ^ 0xf874));
-	const float3 rnd = Random::R3Modified(frame_subpixel, seed / 4294967295.f);
+	const float2 ray_jitter = NubisRayJitter(full_px_coords, SharedData::FrameCountAlwaysActive);
 
 	///////////// get start and end
 	const float depth = TexDepth[full_px_coords.xy];
@@ -805,8 +1102,13 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = pos_world.xyz / solid_dist;
 
+	bool cloud_is_sky = is_sky;
+	float cloud_solid_dist = solid_dist;
+	if (!full_resolution)
+		cloud_solid_dist = ConservativeTileSolidDist(px_coords, info, cloud_is_sky);
+
 	const float ap_shadow = SampleFilteredApShadow(full_px_coords);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, seed, NarrowRayJitter(rnd.z), frame_subpixel, ap_shadow, true);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, cloud_solid_dist, cloud_is_sky, seed, ray_jitter, SharedData::FrameCountAlwaysActive, ap_shadow, true);
 
 	RWTexTr[px_coords] = float4(result.transmittance, CloudAlphaFromTransmittance(result.transmittance));
 	RWTexLum[px_coords] = result.lum;
@@ -856,11 +1158,11 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 		return;
 
 	const uint3 seed = Random::pcg3d(uint3(tid.xy, tid.z * 0x9e37u + tid.x ^ 0xf874u));
-	const float3 rnd = Random::R3Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
+	const float2 ray_jitter = NubisRayJitter(tid.xy + uint2(tid.z * dims.x, tid.z * dims.y), SharedData::FrameCountAlwaysActive);
 
 	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, NarrowRayJitter(rnd.z), SharedData::FrameCountAlwaysActive, 0.0, false);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, seed, ray_jitter, SharedData::FrameCountAlwaysActive, 0.0, false);
 
 	RWTexCubeTr[tid] = result.transmittance;
 	RWTexCubeLum[tid] = result.lum;
