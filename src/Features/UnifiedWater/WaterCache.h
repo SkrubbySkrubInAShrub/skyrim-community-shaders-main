@@ -1,4 +1,6 @@
 ﻿#pragma once
+#include <mutex>
+
 #include <BS_thread_pool.hpp>
 
 /** @brief Manages cached water placement instructions for all worldspaces and LOD levels. */
@@ -186,8 +188,13 @@ private:
 
 	std::atomic<std::shared_ptr<const CacheMap>> cacheMap{ std::make_shared<CacheMap>() };
 
+	// Guards currentCache/currentWorldSpace against concurrent terrain-streaming and cache-reload threads.
+	std::mutex currentCacheMutex;
 	std::shared_ptr<RuntimeCache> currentCache;
 	std::string currentWorldSpace;
+
+	/** @brief Same as SetCurrentWorldSpace, but assumes currentCacheMutex is already held. */
+	bool SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace);
 
 	bool LoadCaches();
 
