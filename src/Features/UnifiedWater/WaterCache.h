@@ -6,6 +6,9 @@
 /** @brief Manages cached water placement instructions for all worldspaces and LOD levels. */
 class WaterCache
 {
+private:
+	struct RuntimeCache;
+
 public:
 	/** @brief Describes a single water tile placement with position, size, and water form data. */
 	struct Instruction
@@ -22,6 +25,13 @@ public:
 		int32_t y{};
 		uint32_t size{};
 		float waterHeight{};
+	};
+
+	/** @brief Instruction list for a LOD chunk, plus the runtime cache instance backing it so the caller can keep it alive. */
+	struct InstructionResult
+	{
+		std::shared_ptr<RuntimeCache> cache;
+		std::vector<Instruction>* instructions = nullptr;
 	};
 
 	/** @brief Thread-safe snapshot of asynchronous cache build progress. */
@@ -47,9 +57,9 @@ public:
 	 * @param lodLevel The LOD level (0 = closest).
 	 * @param x The chunk X coordinate.
 	 * @param y The chunk Y coordinate.
-	 * @return Pointer to the instruction list, or nullptr if unavailable.
+	 * @return Result with a null instructions pointer if unavailable; otherwise the cache keeps the instructions alive for as long as the result is held.
 	 */
-	std::vector<Instruction>* GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, uint32_t x, uint32_t y);
+	InstructionResult GetInstructions(const RE::TESWorldSpace* worldSpace, uint32_t lodLevel, uint32_t x, uint32_t y);
 
 	/** @brief Generates precache height data for Tamriel using extended data sets. */
 	static void GenerateTamrielPrecache();

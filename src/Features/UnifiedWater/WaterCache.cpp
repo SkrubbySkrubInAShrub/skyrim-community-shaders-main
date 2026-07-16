@@ -78,16 +78,20 @@ bool WaterCache::SetCurrentWorldSpaceLocked(const RE::TESWorldSpace* worldSpace)
 	return true;
 }
 
-std::vector<WaterCache::Instruction>* WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
+WaterCache::InstructionResult WaterCache::GetInstructions(const RE::TESWorldSpace* worldSpace, const uint32_t lodLevel, const uint32_t x, const uint32_t y)
 {
 	std::scoped_lock lock(currentCacheMutex);
 
 	if (!SetCurrentWorldSpaceLocked(worldSpace)) {
 		logger::error("[Unified Water] [Cache] Failed to set current cache to {} while getting instructions", worldSpace->GetFormEditorID());
-		return nullptr;
+		return {};
 	}
 
-	return currentCache->GetInstructions(lodLevel, x, y);
+	// Held alongside the pointer so a concurrent LoadCaches can't free it mid-use.
+	InstructionResult result;
+	result.cache = currentCache;
+	result.instructions = currentCache->GetInstructions(lodLevel, x, y);
+	return result;
 }
 
 std::vector<WaterCache::Instruction>* WaterCache::RuntimeCache::GetInstructions(const int32_t lodLevel, const int32_t x, const int32_t y)
@@ -238,6 +242,10 @@ bool WaterCache::LoadCaches()
 			if (const auto snap = std::atomic_load_explicit(&cacheMap, std::memory_order_acquire)) {
 				if (const auto it = snap->find(currentWorldSpace); it != snap->end()) {
 					currentCache = it->second;
+				} else {
+					// Dropped from the reloaded map - clear so a name match can't fast-return stale.
+					currentCache.reset();
+					currentWorldSpace.clear();
 				}
 			}
 		}
