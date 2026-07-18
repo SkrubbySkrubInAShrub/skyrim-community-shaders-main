@@ -430,8 +430,8 @@ namespace SharedData
 		// VOLUMETRIC CLOUDS
 		uint enableVolumetricClouds;
 		float shadowVolumeRange;
-		float volCloudBottom;  //
-		float volCloudThickness;
+		float lowestCloudAltitude;  //
+		float highestCloudAltitude;
 		float3 volCloudScatter;
 		float volCloudAverageDensity;  //
 		float3 volCloudAbsorption;

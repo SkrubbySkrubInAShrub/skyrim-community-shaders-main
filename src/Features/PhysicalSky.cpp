@@ -51,8 +51,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpLowCloudSettings,
-	bottom,
-	thickness,
 	noiseScale,
 	noiseOffset,
 	detailNoiseScale,
@@ -164,6 +162,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLayer,
+	lowestAltitude,
+	highestAltitude,
 	low,
 	stratocumulus,
 	high,
@@ -216,6 +216,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayMarchRange,
 	shadowVolumeRange,
 	cloudMaxStep,
+	cloudMap,
 	cloudLayer)
 
 namespace
@@ -639,6 +640,7 @@ void PhysicalSky::SettingsClouds()
 
 void PhysicalSky::SettingsVolumetricClouds()
 {
+	auto& layer = settings.cloudLayer;
 	auto& low = settings.cloudLayer.low;
 	auto& sc = settings.cloudLayer.stratocumulus;
 	auto& high = settings.cloudLayer.high;
@@ -657,8 +659,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
 	{
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_altitude"), "Bottom Altitude"), &low.bottom, 0.f, 8.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("cloud_altitude_range"), "Altitude Range"), &low.thickness, 0.05f, 6.f, "%.2f km");
+		layer.lowestAltitude = std::clamp(layer.lowestAltitude, 0.0f, 12.0f);
+		layer.highestAltitude = std::clamp(layer.highestAltitude, layer.lowestAltitude + 0.05f, 16.0f);
+		ImGui::SliderFloat(T(TKEY("lowest_cloud_altitude"), "Lowest Cloud Altitude"), &layer.lowestAltitude, 0.f, layer.highestAltitude - 0.05f, "%.2f km");
+		ImGui::SliderFloat(T(TKEY("highest_cloud_altitude"), "Highest Cloud Altitude"), &layer.highestAltitude, layer.lowestAltitude + 0.05f, 16.f, "%.2f km");
 	}
 
 	ImGui::SeparatorText(T(TKEY("composition"), "Low Clouds"));
@@ -735,7 +739,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
 	{
-		ndfManager.DrawNdfSettings(ndfSettings, ndfTexManager);
+		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
 			LoadCloudTextures();
 		if (baseShapeNoiseSrv && detailErosionNoiseSrv)
@@ -1048,8 +1052,8 @@ void PhysicalSky::Reset()
 		.silverLiningSpread = settings.silverLiningSpread,
 		.enableVolumetricClouds = settings.enableVolumetricClouds ? 1u : 0u,
 		.shadowVolumeRange = settings.shadowVolumeRange / Util::Units::GAME_UNIT_TO_KM,
-		.volCloudBottom = settings.cloudLayer.low.bottom / Util::Units::GAME_UNIT_TO_KM,
-		.volCloudThickness = settings.cloudLayer.low.thickness / Util::Units::GAME_UNIT_TO_KM,
+		.lowestCloudAltitude = settings.cloudLayer.lowestAltitude / Util::Units::GAME_UNIT_TO_KM,
+		.highestCloudAltitude = settings.cloudLayer.highestAltitude / Util::Units::GAME_UNIT_TO_KM,
 		.volCloudScatter = settings.cloudLayer.lighting.scatterTint * settings.cloudLayer.low.densityMultiplier * Util::Units::GAME_UNIT_TO_KM,
 		.volCloudAverageDensity = settings.cloudLayer.low.densityMultiplier,
 		.volCloudAbsorption = (float3(1.f) - settings.cloudLayer.lighting.scatterTint * 0.25f) * settings.cloudLayer.low.densityMultiplier * Util::Units::GAME_UNIT_TO_KM,
@@ -1104,7 +1108,7 @@ void PhysicalSky::Prepass()
 		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
-			ndfManager.UpdateNdf(ndfSettings);
+			ndfManager.UpdateNdf(settings.cloudMap);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
 
