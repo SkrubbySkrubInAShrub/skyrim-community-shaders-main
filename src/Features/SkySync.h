@@ -156,10 +156,10 @@ private:
 	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
+	std::optional<std::array<RE::NiColor, 3>> lightColors = {};
 	bool sunSetting = false;
 	bool sunRising = false;
 	bool sunBelowHorizon = false;
-	std::optional<std::array<RE::NiColor, 3>> lightColors = {};
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);
