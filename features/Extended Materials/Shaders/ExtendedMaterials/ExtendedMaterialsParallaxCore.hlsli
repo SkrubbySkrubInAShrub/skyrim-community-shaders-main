@@ -12,7 +12,7 @@
  *          steps of four, then refines the hit with binary search and secant.
  *          Landscape uses a softened view-Z denominator (with FlattenAmount) to
  *          limit silhouette swim, sizes the step count from UV span in texels,
- *          and marches on a coarser mip than the refine / height-blend samples.
+ *          and samples height on a coarse march mip for march / contact / secant.
  * @param pixelOffset Hit depth along the height slab in [0,1].
  * @param weights [LANDSCAPE] Layer weights after optional height blending.
  * @return Displaced texture coordinates.
@@ -29,26 +29,22 @@
 		pixelOffset = 0.0;
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
 		float ndotv = saturate(viewDirTS.z);
-
+	
 #if defined(LANDSCAPE)
-		/** Softened view-Z (meshes use the same form); FlattenAmount from parallax warping. */
+		/** Softened view-Z with FlattenAmount; abs + floor limit silhouette stretch. */
 		float parallaxZ = max(abs(viewDirTS.z) * 0.7 + 0.3 + params[0].FlattenAmount, 0.0625);
 		float2 parallaxDir = viewDirTS.xy / parallaxZ;
 #else
-		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3 + params.FlattenAmount;
-		float2 parallaxDir = viewDirTS.xy;
+		/** Same soft denom as landscape; abs avoids negative-TS-Z blowups on curved meshes. */
+		float parallaxZ = max(abs(viewDirTS.z) * 0.7 + 0.3 + params.FlattenAmount, 0.0625);
+		float2 parallaxDir = viewDirTS.xy / parallaxZ;
 #endif
 
 #if defined(LANDSCAPE)
-		/**
-		 * When height blending is enabled, smoothstep land weights and fade that
-		 * soften with distance. Parallax UV itself is not distance-faded.
-		 */
 		float viewDist = length(input.WorldPosition.xyz);
-		float nearBlendToFar = smoothstep(1024.0, 2048.0, viewDist);
-		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1.0 - nearBlendToFar)) : 0.0;
-		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0.0, 1.0, input.LandBlendWeights1), blendFactor);
-		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0.0, 1.0, input.LandBlendWeights2.xy), blendFactor);
+		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? 1.0 : 0.0;
+		float4 w1 = input.LandBlendWeights1;
+		float2 w2 = input.LandBlendWeights2.xy;
 		const float marchHeightBlendFactor = 0.0;
 
 		weights[0] = w1.x;
@@ -142,10 +138,15 @@
 			float stepSize = rcp((float)numSteps);
 
 			float2 offsetPerStep = parallaxDir * maxHeight * stepSize;
-			/** Tiny ray-start ditherto break residual step bands. Does not worsen visual fidelity, entirely removes visible steps. */
+#if defined(LANDSCAPE)
+			/** Full-step ray-start dither breaks residual step bands on terrain. */
 			float rayDither = saturate(noise);
 			float2 prevOffset = parallaxDir * minHeight + coords.xy - offsetPerStep * rayDither;
 			float prevBound = 1.0 - rayDither * stepSize;
+#else
+			float2 prevOffset = parallaxDir * minHeight + coords.xy;
+			float prevBound = 1.0;
+#endif
 			float prevHeight = 1.0;
 
 			float2 pt1 = 0;
@@ -227,9 +228,9 @@
 					float2 midCoords = coords.xy + parallaxDir * (((1.0 - tMid) * -maxHeight) + minHeight);
 					float hMid = 0.0;
 #if defined(LANDSCAPE)
-					hMid = GetTerrainHeight(noise, input, midCoords, mipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
+					hMid = GetTerrainHeight(noise, input, midCoords, marchMipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
 #else
-					hMid = tex.SampleLevel(texSampler, midCoords, mipLevel)[channel];
+					hMid = tex.SampleLevel(texSampler, midCoords, marchMipLevel)[channel];
 					hMid = AdjustDisplacementNormalized(hMid, params);
 #endif
 					float fMid = hMid - tMid;
@@ -257,9 +258,9 @@
 
 					float hSecant = 0.0;
 #if defined(LANDSCAPE)
-					hSecant = GetTerrainHeight(noise, input, secantCoords, mipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
+					hSecant = GetTerrainHeight(noise, input, secantCoords, marchMipLevels, params, marchHeightBlendFactor, w1, w2, sharedOffset, weights) * terrainHeightNormMul + 0.5;
 #else
-					hSecant = tex.SampleLevel(texSampler, secantCoords, mipLevel)[channel];
+					hSecant = tex.SampleLevel(texSampler, secantCoords, marchMipLevel)[channel];
 					hSecant = AdjustDisplacementNormalized(hSecant, params);
 #endif
 

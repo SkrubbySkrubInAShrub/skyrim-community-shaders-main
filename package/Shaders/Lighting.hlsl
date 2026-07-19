@@ -1020,15 +1020,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 fdx = ddx(input.WorldPosition.xyz);
 		float3 fdy = ddy(input.WorldPosition.xyz);
 		float fragSize = rcp(length(max(abs(fdx), abs(fdy))));
-		curvature = pow(length(max(abs(ndx), abs(ndy))) * fragSize, 0.5);
-		float3 flatWorldNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-		normalSmoothness = (1 - dot(vertexNormal, flatWorldNormal));
+		float normalDelta = length(max(abs(ndx), abs(ndy))) * fragSize;
+		float3 flatWorldNormal = normalize(-cross(fdx, fdy));
+		normalSmoothness = saturate(1.0 - dot(vertexNormal, flatWorldNormal));
 #			if defined(LANDSCAPE)
-		displacementParams[0].HeightScale = saturate(1 - curvature);
+		curvature = sqrt(normalDelta);
+		displacementParams[0].HeightScale = saturate(1.0 - curvature);
 		displacementParams[0].FlattenAmount = (normalSmoothness + curvature);
 #			else
-		displacementParams.HeightScale = saturate(1 - curvature);
-		displacementParams.FlattenAmount = (normalSmoothness + curvature);
+		/**
+		 * Objects: do not crush HeightScale (that flattens convex faces you are looking at).
+		 * Only add FlattenAmount past the facing hemisphere (grazing > facing) and only if bent.
+		 * Flat walls stay at bend ≈ 0. Flatten tracks UV stretch (÷ facing).
+		 */
+		curvature = normalDelta;
+		float facing = saturate(dot(vertexNormal, viewDirection));
+		float grazing = 1.0 - facing;
+		float bend = saturate(normalSmoothness + curvature);
+		float silhouette = saturate(grazing - facing);
+		displacementParams.FlattenAmount = silhouette * bend * rcp(max(facing, 0.0625));
 #			endif
 	}
 #		endif
@@ -1104,7 +1114,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		PBRParallax = true;
 		[branch] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 		{
-			displacementParams.HeightScale = PBRParams1.y;
+			displacementParams.HeightScale *= PBRParams1.y;
 			displacementParams.DisplacementScale = 0.5;
 			displacementParams.DisplacementOffset = -0.25;
 

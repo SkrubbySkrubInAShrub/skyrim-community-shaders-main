@@ -48,10 +48,10 @@ namespace ExtendedMaterials
 	static const float TerrainParallaxShadowMaxMipLevel = 2.0;
 
 	/**
-	 * @brief Coarse height-map mip used during the POM ray march.
-	 * @details Applies a distance bias and floors the result. Does not affect
-	 *          contact / secant refine or height-blend samples (those use @ref GetMipLevel).
-	 *          Grazing bias is intentionally omitted — it creates discontinuous hits.
+	 * @brief Coarse height-map mip for POM march, contact, and secant.
+	 * @details Applies a distance bias and floors the result. Height-blend weight
+	 *          rewrite still uses @ref GetMipLevel. Grazing bias is omitted —
+	 *          it creates discontinuous hits.
 	 * @param baseMip Floored mip from @ref GetMipLevel (includes MipBias).
 	 * @param viewDist Camera distance; pass 0 to derive a far floor from @p baseMip.
 	 */
