@@ -18,7 +18,7 @@
  * @return Displaced texture coordinates.
  */
 #if defined(LANDSCAPE)
-	float2 GetParallaxCoords(PS_INPUT input, float2 coords, float mipLevels[6], float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[6],
+	float2 GetParallaxCoords(PS_INPUT input, float2 coords, float mipLevels[6], float maxTexDim, float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[6],
 		StochasticOffsets sharedOffset,
 		out float pixelOffset,
 		out float weights[6])
@@ -115,11 +115,9 @@
 			 * Step count from UV travel in texels (and a grazing angle floor),
 			 * so grazing rays do not skip height features between samples.
 			 */
-			float2 texDim;
-			TexColorSampler.GetDimensions(texDim.x, texDim.y);
 			float uvMarchSpan = dot(abs(parallaxDir), maxHeight + minHeight);
 			float texelsPerStep = lerp(3.5, 1.75, saturate(grazing));
-			uint uvSteps = (uint)(uvMarchSpan * max(texDim.x, texDim.y) * rcp(texelsPerStep) * distStepScale + 0.5);
+			uint uvSteps = (uint)(uvMarchSpan * maxTexDim * rcp(texelsPerStep) * distStepScale + 0.5);
 			uint angleSteps = (uint)(lerp((float)minSteps, (float)maxStepsCap, grazing) * distStepScale + 0.5);
 			uint numSteps = max(minSteps, max(uvSteps, angleSteps));
 			numSteps = min(numSteps, maxStepsCap);

@@ -8,10 +8,14 @@
 
 	/**
 	 * @brief Shared mip for all six landscape layers from color-map UV derivatives.
+	 * @param maxTexDim Max of color-map width/height for POM step sizing (one GetDimensions).
 	 */
-	void InitializeTerrainMipLevels(float2 coords, out float mipLevels[6])
+	void InitializeTerrainMipLevels(float2 coords, out float mipLevels[6], out float maxTexDim)
 	{
-		float mip = GetMipLevel(coords, TexColorSampler);
+		float2 textureDims;
+		TexColorSampler.GetDimensions(textureDims.x, textureDims.y);
+		maxTexDim = max(textureDims.x, textureDims.y);
+		float mip = GetMipLevelFromDims(coords, textureDims);
 		[unroll] for (uint i = 0; i < 6; i++)
 			mipLevels[i] = mip;
 	}
@@ -59,7 +63,7 @@
 	float TerrainWeightedHeightSum(float heights[6], float weights[6])
 	{
 		float totalHeight = 0;
-		[loop] for (int i = 0; i < 6; i++)
+		[unroll] for (int i = 0; i < 6; i++)
 		{
 			totalHeight += heights[i] * weights[i];
 		}
@@ -83,12 +87,12 @@
 		weights[5] = w2.y;
 
 		float wsum = 0;
-		[loop] for (int j = 0; j < 6; j++)
+		[unroll] for (int j = 0; j < 6; j++)
 		{
 			wsum += weights[j];
 		}
 		float invwsum = rcp(max(wsum, 1e-6));
-		[loop] for (int k = 0; k < 6; k++)
+		[unroll] for (int k = 0; k < 6; k++)
 		{
 			weights[k] *= invwsum;
 		}
@@ -98,7 +102,7 @@
 		{
 			float hMin = heights[0];
 			float hMax = heights[0];
-			[loop] for (int hi = 1; hi < 6; hi++)
+			[unroll] for (int hi = 1; hi < 6; hi++)
 			{
 				hMin = min(hMin, heights[hi]);
 				hMax = max(hMax, heights[hi]);
@@ -109,29 +113,29 @@
 		[branch] if (sharpen)
 		{
 			float logHeightBlend = log2(max(abs(heightBlend), 0.0001));
-			[loop] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
+			[unroll] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
 			{
 				weights[hbIdx] *= exp2((HEIGHT_MULT * heights[hbIdx]) * logHeightBlend);
 			}
 
-			[loop] for (int j = 0; j < 6; j++)
+			[unroll] for (int j = 0; j < 6; j++)
 			{
 				weights[j] = min(100, pow(abs(weights[j]), max(abs(heightBlend), 0.0001)));
 			}
 
 			wsum = 0;
-			[loop] for (int k = 0; k < 6; k++)
+			[unroll] for (int k = 0; k < 6; k++)
 			{
 				wsum += weights[k];
 			}
 			invwsum = rcp(max(wsum, 1e-6));
-			[loop] for (int l = 0; l < 6; l++)
+			[unroll] for (int l = 0; l < 6; l++)
 			{
 				weights[l] *= invwsum;
 			}
 		}
 
-		[loop] for (int t = 0; t < 6; t++)
+		[unroll] for (int t = 0; t < 6; t++)
 		{
 			totalHeight += heights[t] * weights[t];
 		}

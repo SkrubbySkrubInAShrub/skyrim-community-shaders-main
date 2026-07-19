@@ -44,7 +44,7 @@ namespace ExtendedMaterials
 	static const float ShadowIntensity = 2.0;
 	static const float ParallaxCheapDistance = 1024.0;
 	static const float ParallaxNearShadowQuality = 1.0;
-	static const float ParallaxFarShadowQuality = 0.76;
+	static const float ParallaxFarShadowQuality = 0.5;
 	static const float TerrainParallaxShadowMaxMipLevel = 2.0;
 
 	/**
@@ -100,13 +100,10 @@ namespace ExtendedMaterials
 	}
 
 	/**
-	 * @brief Floored anisotropic mip from UV derivatives, plus SharedData::MipBias.
+	 * @brief Floored anisotropic mip from UV derivatives and known texture size.
 	 */
-	float GetMipLevel(float2 coords, Texture2D<float4> tex)
+	float GetMipLevelFromDims(float2 coords, float2 textureDims)
 	{
-		float2 textureDims;
-		tex.GetDimensions(textureDims.x, textureDims.y);
-
 #	if !defined(PARALLAX) && !defined(TRUE_PBR)
 		textureDims /= 2.0;
 #	endif
@@ -125,6 +122,16 @@ namespace ExtendedMaterials
 #	endif
 
 		return floor(max(mipLevel + SharedData::MipBias, 0));
+	}
+
+	/**
+	 * @brief Floored anisotropic mip from UV derivatives, plus SharedData::MipBias.
+	 */
+	float GetMipLevel(float2 coords, Texture2D<float4> tex)
+	{
+		float2 textureDims;
+		tex.GetDimensions(textureDims.x, textureDims.y);
+		return GetMipLevelFromDims(coords, textureDims);
 	}
 
 #	if defined(LANDSCAPE)
