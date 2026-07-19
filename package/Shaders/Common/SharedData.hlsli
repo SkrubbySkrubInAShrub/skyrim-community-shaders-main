@@ -216,7 +216,8 @@ namespace SharedData
 		uint EffectNormalization;
 		float EffectNormalizationMult;
 		float MinEffectMult;
-		float3 pad;
+		uint SkylightingAffectsEnv;
+		float2 pad0;
 	};
 
 	struct ExtendedTranslucencySettings
