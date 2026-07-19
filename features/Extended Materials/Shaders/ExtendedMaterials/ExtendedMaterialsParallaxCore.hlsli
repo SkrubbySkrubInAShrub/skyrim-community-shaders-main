@@ -1,15 +1,20 @@
 /**
  * @file ExtendedMaterialsParallaxCore.hlsli
- * @brief POM ray march / secant refine (included inside namespace ExtendedMaterials).
+ * @brief Parallax occlusion march and refine (namespace ExtendedMaterials).
  */
 
 #ifndef EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
 #define EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
 
 /**
- * @brief Parallax-occlusion UV offset.
- * @param pixelOffset Normalized hit depth along the height slab [0,1].
- * @param weights [LANDSCAPE] Updated layer weights when height blending is enabled.
+ * @brief Computes parallax-occlusion displaced UVs.
+ * @details Transforms the view into tangent space, marches the height slab in
+ *          steps of four, then refines the hit with binary search and secant.
+ *          Landscape uses a softened view-Z denominator (with FlattenAmount) to
+ *          limit silhouette swim, sizes the step count from UV span in texels,
+ *          and marches on a coarser mip than the refine / height-blend samples.
+ * @param pixelOffset Hit depth along the height slab in [0,1].
+ * @param weights [LANDSCAPE] Layer weights after optional height blending.
  * @return Displaced texture coordinates.
  */
 #if defined(LANDSCAPE)
@@ -22,14 +27,11 @@
 #endif
 	{
 		pixelOffset = 0.0;
-		// viewDirTS is already unit length; its z is the view-vs-surface cosine directly.
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
 		float ndotv = saturate(viewDirTS.z);
 
 #if defined(LANDSCAPE)
-		// Soft denom (same idea as meshes): true xy/z tracks tan(θ) and makes tall silhouettes
-		// bob when the camera pans. FlattenAmount from EnableParallaxWarpingFix feeds in here.
-		// UV-span stepping + contact refine still cover grazing; do not drop back to undersampling.
+		/** Softened view-Z (meshes use the same form); FlattenAmount from parallax warping. */
 		float parallaxZ = max(abs(viewDirTS.z) * 0.7 + 0.3 + params[0].FlattenAmount, 0.0625);
 		float2 parallaxDir = viewDirTS.xy / parallaxZ;
 #else
@@ -38,9 +40,10 @@
 #endif
 
 #if defined(LANDSCAPE)
-		// Dev softens vertex land weights when height blending is on (smoothstep), which reduces
-		// hard triangle borders even when height maps are flat/invalid. Fade the soften with
-		// distance like Dev; do not fade parallax UV itself (full-distance POM).
+		/**
+		 * When height blending is enabled, smoothstep land weights and fade that
+		 * soften with distance. Parallax UV itself is not distance-faded.
+		 */
 		float viewDist = length(input.WorldPosition.xyz);
 		float nearBlendToFar = smoothstep(1024.0, 2048.0, viewDist);
 		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1.0 - nearBlendToFar)) : 0.0;
@@ -48,7 +51,6 @@
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0.0, 1.0, input.LandBlendWeights2.xy), blendFactor);
 		const float marchHeightBlendFactor = 0.0;
 
-		// Default out weights; ray-march / secant paths overwrite when height blending is enabled.
 		weights[0] = w1.x;
 		weights[1] = w1.y;
 		weights[2] = w1.z;
@@ -96,13 +98,11 @@
 			const float baseMaxSteps = 8;
 #endif
 
-			// Quadratic grazing: head-on ~0, only steep angles pay for extra steps.
+			/** Squared grazing factor; near head-on stays cheap. */
 			float grazing = (1.0 - ndotv);
 			grazing *= grazing;
 
 #if defined(LANDSCAPE)
-			// March height mips: +1, strong distance bias, far floor, floor(m).
-			// Contact/secant use unbiased mipLevels (asymmetric — refine stays sharp).
 			float marchMip = ComputeParallaxMarchMip(mipLevels[0], viewDist);
 			float marchMipLevels[6];
 			float parallaxLODMip = mipLevels[0];
@@ -115,8 +115,10 @@
 			float distStepScale = lerp(0.25, 1.0, saturate((3.0 - parallaxLODMip) * (1.0 / 3.0)));
 
 #if defined(LANDSCAPE)
-			// Close grazing UV gaps: size steps so each sample spans a few texels, not a cliff-sized jump.
-			// Bigger depth steps make ovals worse — |parallaxDir| grows as 1/N·V, so we need more steps.
+			/**
+			 * Step count from UV travel in texels (and a grazing angle floor),
+			 * so grazing rays do not skip height features between samples.
+			 */
 			float2 texDim;
 			TexColorSampler.GetDimensions(texDim.x, texDim.y);
 			float uvMarchSpan = dot(abs(parallaxDir), maxHeight + minHeight);
@@ -134,7 +136,6 @@
 			numSteps = (numSteps + 2) & ~3;
 #endif
 
-			// Binary contact refine + secant: continuous hit within the bracket (no dither).
 			uint contactIters = grazing > 0.2 ? 4u : 2u;
 			uint secantIters = grazing > 0.25 ? 2u : 1u;
 
@@ -217,7 +218,7 @@
 				float hFar = pt2.y;
 				float fFar = hFar - tFar;
 
-				// Binary contact refinement: shrink the coarse step bracket before secant.
+				/** Binary search on f(t) = h(t) - t before secant. */
 				[loop] for (uint c = 0; c < contactIters; c++)
 				{
 					float tMid = 0.5 * (tNear + tFar);
@@ -244,6 +245,7 @@
 					}
 				}
 
+				/** Secant iterations on f(t) = h(t) - t. */
 				[loop] for (uint i = 0; i < secantIters; i++)
 				{
 					float denominator = fNear - fFar;
@@ -285,8 +287,6 @@
 #if defined(LANDSCAPE)
 			if (SharedData::extendedMaterialSettings.EnableHeightBlending) {
 				float unusedHeight;
-				// Softened w1/w2 + distance-scaled blendFactor (Dev behaviour). Height sharpening
-				// still runs when maps have real variation; flat maps keep the smoothstep soften.
 				unusedHeight = GetTerrainHeight(noise, input, finalCoords, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights);
 			}
 #endif
@@ -296,7 +296,7 @@
 
 #	if !defined(LANDSCAPE)
 	/**
-	 * @brief Approximate soft shadow from a height map along light L.
+	 * @brief Soft self-shadow from a height map along light direction L.
 	 * @see https://advances.realtimerendering.com/s2006/Tatarchuk-POM.pdf
 	 */
 	float GetParallaxSoftShadowMultiplier(float2 coords, float mipLevel, float3 L, float sh0, Texture2D<float4> tex, SamplerState texSampler, uint channel, float quality, float noise, DisplacementParams params)
