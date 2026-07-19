@@ -368,20 +368,11 @@
 			float shadowStrength = ShadowIntensity * (4.0 / tapCount);
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 			float2 rayDir = L.xy * 0.1;
-			float shadowScaleInv = 1.0;
-
-#	if defined(TRUE_PBR)
-			float scale = TerrainMaxWeightedHeightScale(input, params);
-			if (scale < 0.01)
-				return 1.0;
-			rayDir *= scale;
-			shadowScaleInv = rcp(scale);
-#	endif
 			float shadowAccum = 0.0;
 			[loop] for (uint i = 0; i < tapCount; i++)
 			{
 				float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp((float)(i + 1) + noise), mipLevel, quality, heights);
-				shadowAccum += max(0, shi - sh0) * shadowScaleInv;
+				shadowAccum += max(0, shi - sh0);
 			}
 			return 1.0 - saturate(shadowAccum * shadowStrength);
 		}
@@ -400,21 +391,12 @@
 
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
 		float2 rayDir = lightDirection.xy * 0.1;
-		float shadowScaleInv = 1.0;
-
-#	if defined(TRUE_PBR)
-		float scale = TerrainMaxWeightedHeightScale(input, params);
-		if (scale < 0.01)
-			return 1.0;
-		rayDir *= scale;
-		shadowScaleInv = rcp(scale);
-#	endif
 
 		float shadowAccum = 0.0;
 		[loop] for (uint i = 0; i < tapCount; i++)
 		{
 			float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp((float)(i + 1) + noise), mipLevels, quality, heights);
-			shadowAccum += max(0, shi - sh0) * shadowScaleInv;
+			shadowAccum += max(0, shi - sh0);
 		}
 
 		return 1.0 - saturate(shadowAccum * shadowStrength);

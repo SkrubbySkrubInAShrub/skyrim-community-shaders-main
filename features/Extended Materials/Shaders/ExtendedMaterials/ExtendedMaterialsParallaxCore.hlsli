@@ -92,9 +92,9 @@
 		{
 			const uint minSteps = 4;
 #if defined(LANDSCAPE)
-			const uint maxStepsCap = 64;
+			const uint maxStepsCap = 32;
 #else
-			const uint maxStepsCap = 64;
+			const uint maxStepsCap = 32;
 			const float baseMaxSteps = 8;
 #endif
 
@@ -142,8 +142,10 @@
 			float stepSize = rcp((float)numSteps);
 
 			float2 offsetPerStep = parallaxDir * maxHeight * stepSize;
-			float2 prevOffset = parallaxDir * minHeight + coords.xy;
-			float prevBound = 1.0;
+			/** Tiny ray-start ditherto break residual step bands. Does not worsen visual fidelity, entirely removes visible steps. */
+			float rayDither = saturate(noise);
+			float2 prevOffset = parallaxDir * minHeight + coords.xy - offsetPerStep * rayDither;
+			float prevBound = 1.0 - rayDither * stepSize;
 			float prevHeight = 1.0;
 
 			float2 pt1 = 0;

@@ -26,7 +26,6 @@ struct StochasticOffsets
 	float2 offset2;
 	float w1Contrast;
 	float w2Contrast;
-	float lodBlendWeight;
 };
 #		endif
 #	endif
