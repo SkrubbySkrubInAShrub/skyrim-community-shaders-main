@@ -43,7 +43,25 @@ namespace ExtendedMaterials
 	static const float ParallaxCheapDistance = 1024.0;
 	static const float ParallaxNearShadowQuality = 1.0;
 	static const float ParallaxFarShadowQuality = 0.76;
-	static const float TerrainParallaxShadowMaxMipLevel = 0.5;
+	static const float TerrainParallaxShadowMaxMipLevel = 2.0;
+
+	/**
+	 * @brief Height SampleLevel mip for the POM ray march only (not secant / height-blend).
+	 * @details Distance-only: march +1, strong distance bias, far floor, then floor(m).
+	 *          Never add a grazing term (blurred heights + long UV travel → cliff hit islands).
+	 * @param baseMip From @ref GetMipLevel (already floored + MipBias).
+	 * @param viewDist Camera-relative distance; pass 0 to use a mip-based far-floor proxy.
+	 */
+	inline float ComputeParallaxMarchMip(float baseMip, float viewDist)
+	{
+		float m = baseMip + 1.0;
+		m += min(2.0, baseMip * 0.5);
+		float farFloor = viewDist > 0.0
+			? lerp(0.0, 3.0, saturate((viewDist - 512.0) * rcp(1536.0)))
+			: saturate(baseMip - 1.0);
+		m = max(m, farFloor);
+		return floor(m);
+	}
 
 	inline uint ParallaxShadowTapCount(float quality)
 	{

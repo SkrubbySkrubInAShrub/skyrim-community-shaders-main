@@ -9,12 +9,11 @@
 	/** @brief Fills per-layer mip levels for terrain parallax. */
 	void InitializeTerrainMipLevels(float2 coords, out float mipLevels[6])
 	{
-		mipLevels[0] = GetMipLevel(coords, TexColorSampler);
-		mipLevels[1] = GetMipLevel(coords, TexLandColor2Sampler);
-		mipLevels[2] = GetMipLevel(coords, TexLandColor3Sampler);
-		mipLevels[3] = GetMipLevel(coords, TexLandColor4Sampler);
-		mipLevels[4] = GetMipLevel(coords, TexLandColor5Sampler);
-		mipLevels[5] = GetMipLevel(coords, TexLandColor6Sampler);
+		// Landscape tint layers share UV derivatives; one mip eval is enough for LOD/stepping
+		// and height SampleLevel (same-res tiles are the common case).
+		float mip = GetMipLevel(coords, TexColorSampler);
+		[unroll] for (uint i = 0; i < 6; i++)
+			mipLevels[i] = mip;
 	}
 
 	/**
@@ -85,20 +84,34 @@
 		weights[4] = w2.x;
 		weights[5] = w2.y;
 
-		if (heightBlend <= 1.0) {
-			float wsum = 0;
-			[loop] for (int j = 0; j < 6; j++)
-			{
-				wsum += weights[j];
-			}
+		float wsum = 0;
+		[loop] for (int j = 0; j < 6; j++)
+		{
+			wsum += weights[j];
+		}
+		float invwsum = rcp(max(wsum, 1e-6));
+		[loop] for (int k = 0; k < 6; k++)
+		{
+			weights[k] *= invwsum;
+		}
 
-			float invwsum = rcp(wsum);
-			[loop] for (int k = 0; k < 6; k++)
+		// Height sharpening with no per-layer height variation only applies pow() to vertex
+		// weights, which hardens triangle borders (worse than height-blend off).
+		bool sharpen = heightBlend > 1.0;
+		[branch] if (sharpen)
+		{
+			float hMin = heights[0];
+			float hMax = heights[0];
+			[loop] for (int hi = 1; hi < 6; hi++)
 			{
-				weights[k] *= invwsum;
-				totalHeight += heights[k] * weights[k];
+				hMin = min(hMin, heights[hi]);
+				hMax = max(hMax, heights[hi]);
 			}
-		} else {
+			sharpen = (hMax - hMin) > 1e-3;
+		}
+
+		[branch] if (sharpen)
+		{
 			float logHeightBlend = log2(max(abs(heightBlend), 0.0001));
 			[loop] for (int hbIdx = 0; hbIdx < 6; hbIdx++)
 			{
@@ -110,18 +123,21 @@
 				weights[j] = min(100, pow(abs(weights[j]), max(abs(heightBlend), 0.0001)));
 			}
 
-			float wsum = 0;
+			wsum = 0;
 			[loop] for (int k = 0; k < 6; k++)
 			{
 				wsum += weights[k];
 			}
-
-			float invwsum = rcp(wsum);
+			invwsum = rcp(max(wsum, 1e-6));
 			[loop] for (int l = 0; l < 6; l++)
 			{
 				weights[l] *= invwsum;
-				totalHeight += heights[l] * weights[l];
 			}
+		}
+
+		[loop] for (int t = 0; t < 6; t++)
+		{
+			totalHeight += heights[t] * weights[t];
 		}
 	}
 
@@ -200,8 +216,8 @@
 		float layerGateThreshold = TerrainLayerGateThreshold(heightBlend, w1, w2, params);
 		float2 uvs[4] = { u0, u1, u2, u3 };
 		float h4[4][6];
-		[loop] for (uint qi = 0; qi < 4; qi++)
-			[loop] for (uint lj = 0; lj < 6; lj++)
+		[unroll] for (uint qi = 0; qi < 4; qi++)
+			[unroll] for (uint lj = 0; lj < 6; lj++)
 				h4[qi][lj] = 0;
 
 		EM_PBR_DISP_FOREACH(EM_PBR_DISP_LAYER_QUAD)
@@ -276,8 +292,8 @@
 		float layerGateThreshold = TerrainLayerGateThreshold(heightBlend, w1, w2, params);
 		float2 uvs[4] = { u0, u1, u2, u3 };
 		float h4[4][6];
-		[loop] for (uint qi = 0; qi < 4; qi++)
-			[loop] for (uint lj = 0; lj < 6; lj++)
+		[unroll] for (uint qi = 0; qi < 4; qi++)
+			[unroll] for (uint lj = 0; lj < 6; lj++)
 				h4[qi][lj] = 0;
 
 		EM_LEGACY_FOREACH(EM_LEGACY_LAYER_QUAD)
@@ -322,11 +338,8 @@
 	/** @brief Tap count for directional terrain parallax soft shadows. */
 	inline uint TerrainDirectionalShadowTapCount(float quality)
 	{
-		if (quality > 0.7)
-			return 2;
-		if (quality > 0.0)
-			return 1;
-		return 0;
+		// Each tap is a full six-layer height blend; one tap is enough for the soft estimate.
+		return quality > 0.0 ? 1u : 0u;
 	}
 
 	/** @brief Samples base height for terrain parallax shadows; returns false if skipped. */
@@ -353,7 +366,7 @@
 	float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset)
 	{
 		if (quality > 0.0) {
-			uint tapCount = min(ParallaxShadowTapCount(quality), 2u);
+			uint tapCount = 1u;
 			float shadowStrength = ShadowIntensity * (4.0 / tapCount);
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 			float2 rayDir = L.xy * 0.1;
