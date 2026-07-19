@@ -27,7 +27,10 @@
 		float ndotv = saturate(viewDirTS.z);
 
 #if defined(LANDSCAPE)
-		float parallaxZ = max(abs(viewDirTS.z), 0.0625);
+		// Soft denom (same idea as meshes): true xy/z tracks tan(θ) and makes tall silhouettes
+		// bob when the camera pans. FlattenAmount from EnableParallaxWarpingFix feeds in here.
+		// UV-span stepping + contact refine still cover grazing; do not drop back to undersampling.
+		float parallaxZ = max(abs(viewDirTS.z) * 0.7 + 0.3 + params[0].FlattenAmount, 0.0625);
 		float2 parallaxDir = viewDirTS.xy / parallaxZ;
 #else
 		viewDirTS.xy /= viewDirTS.z * 0.7 + 0.3 + params.FlattenAmount;
