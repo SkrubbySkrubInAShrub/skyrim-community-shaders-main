@@ -277,7 +277,7 @@ namespace SharedData
 
 	struct SSGISettings
 	{
-		float DiffuseMult;
+		uint EnableIL;
 		uint DebugMode;
 		uint pad0;
 		uint pad1;
