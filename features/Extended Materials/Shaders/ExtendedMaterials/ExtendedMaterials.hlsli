@@ -94,7 +94,7 @@ namespace ExtendedMaterials
 		mipLevel++;
 #	endif
 
-		return floor(mipLevel);
+		return floor(max(mipLevel + SharedData::MipBias, 0));
 	}
 
 #	if defined(LANDSCAPE)

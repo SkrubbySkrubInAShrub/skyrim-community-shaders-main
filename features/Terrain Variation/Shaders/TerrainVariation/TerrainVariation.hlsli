@@ -78,12 +78,17 @@ inline float StochasticContrastWeight(float weight)
 	return pow(saturate(weight), STOCHASTIC_WEIGHT_POWER);
 }
 
-/** @brief Computes landscape UV gradients for SampleGrad. */
+/**
+ * @brief Computes landscape UV gradients for SampleGrad.
+ * @details Scales by @c exp2(MipBias) so upscaling's negative bias sharpens mips the same way
+ *          @c SampleBias does on the non-variation path (see Triplanar::SampleStochasticBias).
+ */
 inline TerrainGradients ComputeTerrainGradients(float2 uv)
 {
 	TerrainGradients g;
-	g.gradDx = ddx(uv);
-	g.gradDy = ddy(uv);
+	float biasScale = exp2(SharedData::MipBias);
+	g.gradDx = ddx(uv) * biasScale;
+	g.gradDy = ddy(uv) * biasScale;
 	return g;
 }
 
