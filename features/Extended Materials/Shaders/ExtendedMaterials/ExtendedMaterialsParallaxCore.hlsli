@@ -16,23 +16,12 @@
 	float2 GetParallaxCoords(PS_INPUT input, float2 coords, float mipLevels[6], float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[6],
 		StochasticOffsets sharedOffset,
 		out float pixelOffset,
-#	if defined(VR_STEREO_OPT)
-		out bool hasPOM,
-#	endif
 		out float weights[6])
 #else
-	float2 GetParallaxCoords(float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, float noise, Texture2D<float4> tex, SamplerState texSampler, uint channel, DisplacementParams params, out float pixelOffset
-#	if defined(VR_STEREO_OPT)
-		,
-		out bool hasPOM
-#	endif
-	)
+	float2 GetParallaxCoords(float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, float noise, Texture2D<float4> tex, SamplerState texSampler, uint channel, DisplacementParams params, out float pixelOffset)
 #endif
 	{
 		pixelOffset = 0.0;
-#if defined(VR_STEREO_OPT)
-		hasPOM = false;
-#endif
 		// viewDirTS is already unit length; its z is the view-vs-surface cosine directly.
 		float3 viewDirTS = normalize(mul(tbn, viewDir));
 		float ndotv = saturate(viewDirTS.z);
@@ -267,9 +256,6 @@
 				float unusedHeight;
 				unusedHeight = GetTerrainHeight(noise, input, finalCoords, mipLevels, params, 1.0, input.LandBlendWeights1, input.LandBlendWeights2.xy, sharedOffset, weights);
 			}
-#endif
-#if defined(VR_STEREO_OPT)
-			hasPOM = true;
 #endif
 			return finalCoords;
 		}
