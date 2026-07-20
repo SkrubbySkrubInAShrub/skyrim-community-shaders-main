@@ -766,7 +766,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #				if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 #					if defined(SKYLIGHTING)
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -normal, skylightingDiffuse);
+		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLRadianceWeighted(
+			directionalAmbientColor, -normal, skylightingSH, skylightingFadeOutFactor,
+			rcp(max(vertexAO, 1e-5)));
 #					else
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
 #					endif
@@ -1022,6 +1024,8 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 	float skylightingDiffuse = Skylighting::GetVertexSkylightingDiffuse(positionMSSkylight, normal, vertexAO);
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal);
+	float skylightingFadeOutFactor = Skylighting::GetFadeOutFactor(positionMSSkylight);
 #			endif  // SKYLIGHTING
 
 	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));
@@ -1029,7 +1033,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 #				if defined(SKYLIGHTING)
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(directionalAmbientColor, -normal, skylightingDiffuse);
+		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLRadianceWeighted(
+			directionalAmbientColor, -normal, skylightingSH, skylightingFadeOutFactor,
+			rcp(max(vertexAO, 1e-5)));
 #				else
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
 #				endif
