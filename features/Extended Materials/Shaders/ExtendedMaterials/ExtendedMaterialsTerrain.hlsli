@@ -368,17 +368,12 @@
 	float GetParallaxSoftShadowMultiplierTerrain(PS_INPUT input, float2 coords, float mipLevel[6], float3 L, float sh0, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset)
 	{
 		if (quality > 0.0) {
-			uint tapCount = 1u;
-			float shadowStrength = ShadowIntensity * (4.0 / tapCount);
+			/** Single tap; strength matches the 4/tapCount object-shadow scale. */
+			float shadowStrength = ShadowIntensity * 4.0;
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 			float2 rayDir = L.xy * 0.1;
-			float shadowAccum = 0.0;
-			[loop] for (uint i = 0; i < tapCount; i++)
-			{
-				float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp((float)(i + 1) + noise), mipLevel, quality, heights);
-				shadowAccum += max(0, shi - sh0);
-			}
-			return 1.0 - saturate(shadowAccum * shadowStrength);
+			float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp(1.0 + noise), mipLevel, quality, heights);
+			return 1.0 - saturate(max(0, shi - sh0) * shadowStrength);
 		}
 		return 1.0;
 	}
@@ -386,24 +381,16 @@
 	/** @brief Directional-light terrain parallax soft shadow. */
 	float EvaluateTerrainDirectionalParallaxShadowMultiplier(PS_INPUT input, float2 coords, float mipLevels[6], float3 lightDirection, float quality, float noise, DisplacementParams params[6], StochasticOffsets sharedOffset, float sh0)
 	{
-		uint tapCount = TerrainDirectionalShadowTapCount(quality);
-		if (tapCount == 0)
+		if (TerrainDirectionalShadowTapCount(quality) == 0)
 			return 1.0;
-		float shadowStrength = ShadowIntensity * (2.0 / tapCount);
+		float shadowStrength = ShadowIntensity * 2.0;
 		if (!TerrainHasSignificantBlend(input.LandBlendWeights1, input.LandBlendWeights2.xy))
 			return 1.0;
 
 		float heights[6] = { 0, 0, 0, 0, 0, 0 };
 		float2 rayDir = lightDirection.xy * 0.1;
-
-		float shadowAccum = 0.0;
-		[loop] for (uint i = 0; i < tapCount; i++)
-		{
-			float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp((float)(i + 1) + noise), mipLevels, quality, heights);
-			shadowAccum += max(0, shi - sh0);
-		}
-
-		return 1.0 - saturate(shadowAccum * shadowStrength);
+		float shi = TERRAIN_HEIGHT_AT(coords + rayDir * rcp(1.0 + noise), mipLevels, quality, heights);
+		return 1.0 - saturate(max(0, shi - sh0) * shadowStrength);
 	}
 
 #	undef TERRAIN_HEIGHT_AT

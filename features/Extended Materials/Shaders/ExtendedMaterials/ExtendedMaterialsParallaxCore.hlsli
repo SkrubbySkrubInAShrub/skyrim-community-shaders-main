@@ -68,23 +68,20 @@
 		float maxHeight = 0.1 * scale;
 #endif
 		float minHeight = maxHeight * 0.5;
+		float2 resultCoords = coords;
 
 #if defined(LANDSCAPE) && defined(TRUE_PBR)
-		if (scale <= 0.001) {
+		[branch] if (scale <= 0.001) {
 			pixelOffset = 0.0;
 			if (SharedData::extendedMaterialSettings.EnableHeightBlending) {
-				float unusedHeight;
-				unusedHeight = GetTerrainHeight(noise, input, coords, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights);
+				float unusedHeight = GetTerrainHeight(noise, input, coords, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights);
 			}
-			return coords;
-		}
+		} else
 #elif !defined(LANDSCAPE)
-		if (scale <= 0.001) {
+		[branch] if (scale <= 0.001) {
 			pixelOffset = 0.0;
-			return coords;
-		}
+		} else
 #endif
-
 		{
 			const uint minSteps = 4;
 #if defined(LANDSCAPE)
@@ -287,12 +284,12 @@
 			float2 finalCoords = parallaxDir * offset + coords.xy;
 #if defined(LANDSCAPE)
 			if (SharedData::extendedMaterialSettings.EnableHeightBlending) {
-				float unusedHeight;
-				unusedHeight = GetTerrainHeight(noise, input, finalCoords, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights);
+				float unusedHeight = GetTerrainHeight(noise, input, finalCoords, mipLevels, params, blendFactor, w1, w2, sharedOffset, weights);
 			}
 #endif
-			return finalCoords;
+			resultCoords = finalCoords;
 		}
+		return resultCoords;
 	}
 
 #	if !defined(LANDSCAPE)

@@ -206,10 +206,16 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets)
 {
 	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
+	float4 result;
+
 	[branch] if (offsets.w2Contrast <= 0.0)
-		return s1;
-	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
-	return StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, s1.a, s2.a);
+		result = s1;
+	else {
+		float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+		result = StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, s1.a, s2.a);
+	}
+
+	return result;
 }
 
 #endif  // TERRAIN_VARIATION_HLSLI
