@@ -142,6 +142,10 @@ const static float DepthOffsets[16] = {
 #		include "IBL/IBL.hlsli"
 #	endif
 
+#	if defined(SKYLIGHTING)
+#		include "Skylighting/Skylighting.hlsli"
+#	endif
+
 #	if defined(EXP_HEIGHT_FOG)
 #		define SampColorSampler SampDiffuse
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
@@ -154,6 +158,32 @@ const static float DepthOffsets[16] = {
 #	define LinearSampler SampDiffuse
 
 #	include "Common/ShadowSampling.hlsli"
+
+float3 GetDistantTreeAmbient(float3 positionMS, float3 normal)
+{
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));
+
+#	if defined(SKYLIGHTING)
+	sh2 skylightingSH = Skylighting::Sample(positionMS, normal);
+	float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
+	float envVisibility = Skylighting::EvaluateEnvironmentDiffuse(skylightingSH, normal, fadeOutFactor);
+#	endif
+
+#	if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL) {
+#		if defined(SKYLIGHTING)
+		return ImageBasedLighting::GetDiffuseIBLRadianceWeighted(ambientColor, -normal, skylightingSH, fadeOutFactor);
+#		else
+		return ImageBasedLighting::GetDiffuseIBL(ambientColor, -normal);
+#		endif
+	}
+#	endif
+
+#	if defined(SKYLIGHTING)
+	ambientColor = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientColor) * envVisibility);
+#	endif
+	return ambientColor;
+}
 
 #	if defined(EXP_HEIGHT_FOG)
 void ApplyReflectionExponentialHeightFog(inout float3 color, float3 positionWS, float4 screenPosition)
@@ -232,12 +262,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
 
-	float3 directionalAmbientColor = max(0, Color::Ambient(SharedData::GetAmbient(normal)));
-#			if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
-	}
-#			endif
+	float3 directionalAmbientColor = GetDistantTreeAmbient(input.WorldPosition.xyz, normal);
 	diffuseColor += directionalAmbientColor;
 
 	psout.Diffuse.xyz = diffuseColor * baseColor.xyz;
@@ -290,12 +315,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
 
-	float3 directionalAmbientColor = Color::Ambient(SharedData::GetAmbient(normal));
-#			if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
-	}
-#			endif
+	float3 directionalAmbientColor = GetDistantTreeAmbient(input.WorldPosition.xyz, normal);
 	diffuseColor += directionalAmbientColor;
 
 	float3 color = diffuseColor * baseColor.xyz;
