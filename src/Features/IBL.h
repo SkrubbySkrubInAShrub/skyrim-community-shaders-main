@@ -66,7 +66,7 @@ public:
 		uint EffectNormalization = 0;
 		float EffectNormalizationMult = 5.0f;
 		float MinEffectMult = 1.0f;
-		float pad[2];
+		float pad[5];
 	} settings;
 	STATIC_ASSERT_ALIGNAS_16(Settings);
 
