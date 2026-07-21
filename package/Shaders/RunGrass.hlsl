@@ -496,17 +496,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float roughness = saturate(1.0 - SharedData::grassLightingSettings.Glossiness * 0.01);
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
-	vertexColor /= max(vertexAO, EPSILON_DIVISION);
+	vertexColor /= max(max(max(vertexColor.r, vertexColor.g), vertexColor.b), EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
+	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal);
 	float3 skylightingNormal = normal;
 	skylightingNormal.z = max(0.0, skylightingNormal.z);
 	skylightingNormal = normalize(skylightingNormal);
-	float skylightingFadeOutFactor = Skylighting::GetFadeOutFactor(positionMSSkylight);
-	float skylightingDiffuse = saturate(Skylighting::EvaluateEnvironmentDiffuse(skylightingSH, skylightingNormal, skylightingFadeOutFactor) / max(vertexAO, 1e-5));
+	float skylightingDiffuse = saturate(Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, Skylighting::GetFadeOutFactor(positionMSSkylight)) / max(vertexAO, 1e-5));
 #			endif  // SKYLIGHTING
 
 #			if defined(WETNESS_EFFECTS)
@@ -514,7 +513,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float waterHeight = SharedData::GetWaterData(input.WorldPosition.xyz).w;
 	float3 wetnessWorldPosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 #				if defined(SKYLIGHTING)
-	float wetnessOcclusion = Skylighting::EvaluateSkyDirectionalVisibility(skylightingSH, float3(0, 0, 1), skylightingFadeOutFactor);
+	float wetnessOcclusion = saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1)));
 #				else
 	float wetnessOcclusion = 1.0;
 #				endif
