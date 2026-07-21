@@ -143,8 +143,7 @@ namespace SharedData
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;  // xyz: sampled sky direction, w: sampled cap solid angle
-		float4 OpenSkySH;
+		float4 OcclusionDir;
 
 		float4 PosOffset;   // xyz: cell origin in camera model space
 		uint4 ArrayOrigin;  // xyz: array origin
@@ -217,7 +216,8 @@ namespace SharedData
 		uint EffectNormalization;
 		float EffectNormalizationMult;
 		float MinEffectMult;
-		float3 pad0;
+		uint SkylightingAffectsEnv;
+		float2 pad0;
 	};
 
 	struct ExtendedTranslucencySettings
