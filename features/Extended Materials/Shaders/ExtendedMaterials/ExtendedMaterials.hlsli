@@ -1,7 +1,7 @@
 /**
  * @file ExtendedMaterials.hlsli
- * @brief Parallax / complex-material entry (included when EMAT is defined).
- * @details Landscape path pulls @ref ExtendedMaterialsTerrain.hlsli; core POM is
+ * @brief Extended Materials parallax entry (EMAT).
+ * @details Includes @ref ExtendedMaterialsTerrain.hlsli (LANDSCAPE) and
  *          @ref ExtendedMaterialsParallaxCore.hlsli.
  * @see https://github.com/tgjones/slimshader-cpp/blob/master/src/Shaders/Sdk/Direct3D11/DetailTessellation11/POM.hlsl
  * @see https://github.com/alandtse/SSEShaderTools/blob/main/shaders_vr/ParallaxEffect.h
@@ -13,7 +13,9 @@
 #ifndef EXTENDED_MATERIALS_HLSLI
 #define EXTENDED_MATERIALS_HLSLI
 
-/** @brief Include Terrain Variation when present; otherwise stub StochasticOffsets for unified APIs. */
+/**
+ * @brief Terrain Variation offsets, or a stub when TERRAIN_VARIATION is unset.
+ */
 #	if defined(LANDSCAPE)
 #		if defined(TERRAIN_VARIATION)
 #			include "TerrainVariation/TerrainVariation.hlsli"
@@ -24,17 +26,17 @@ struct StochasticOffsets
 	float2 offset2;
 	float w1Contrast;
 	float w2Contrast;
-	float lodBlendWeight;
 };
 #		endif
 #	endif
 
+/** @brief Per-material displacement / parallax scale parameters. */
 struct DisplacementParams
 {
-	float DisplacementScale;
-	float DisplacementOffset;
-	float HeightScale;
-	float FlattenAmount;
+	float DisplacementScale;   /**< Multiplier around the 0.5 mid-level. */
+	float DisplacementOffset;  /**< Additive offset after scale. */
+	float HeightScale;         /**< Height slab scale for POM / shadows. */
+	float FlattenAmount;       /**< Extra view-ray flatten (parallax warping fix). */
 };
 
 namespace ExtendedMaterials
@@ -42,9 +44,31 @@ namespace ExtendedMaterials
 	static const float ShadowIntensity = 2.0;
 	static const float ParallaxCheapDistance = 1024.0;
 	static const float ParallaxNearShadowQuality = 1.0;
-	static const float ParallaxFarShadowQuality = 0.76;
-	static const float TerrainParallaxShadowMaxMipLevel = 0.5;
+	static const float ParallaxFarShadowQuality = 0.5;
+	static const float TerrainParallaxShadowMaxMipLevel = 2.0;
 
+	/**
+	 * @brief Coarse height-map mip for POM march, contact, and secant.
+	 * @details Applies a distance bias and floors the result. Height-blend weight
+	 *          rewrite still uses @ref GetMipLevel. Grazing bias is omitted —
+	 *          it creates discontinuous hits.
+	 * @param baseMip Floored mip from @ref GetMipLevel (includes MipBias).
+	 * @param viewDist Camera distance; pass 0 to derive a far floor from @p baseMip.
+	 */
+	inline float ComputeParallaxMarchMip(float baseMip, float viewDist)
+	{
+		float m = baseMip + 1.0;
+		m += min(2.0, baseMip * 0.5);
+		float farFloor = viewDist > 0.0
+			? lerp(0.0, 3.0, saturate((viewDist - 512.0) * rcp(1536.0)))
+			: saturate(baseMip - 1.0);
+		m = max(m, farFloor);
+		return floor(m);
+	}
+
+	/**
+	 * @brief Number of soft-shadow height taps for the given quality tier.
+	 */
 	inline uint ParallaxShadowTapCount(float quality)
 	{
 		uint taps = 1;
@@ -57,26 +81,29 @@ namespace ExtendedMaterials
 		return taps;
 	}
 
+	/** @brief Centers displacement around 0.5 and scales by HeightScale. */
 	float ScaleDisplacement(float displacement, DisplacementParams params)
 	{
 		return (displacement - 0.5) * params.HeightScale;
 	}
 
+	/** @brief Applies DisplacementScale / DisplacementOffset in [0,1] height space. */
 	float AdjustDisplacementNormalized(float displacement, DisplacementParams params)
 	{
 		return (displacement - 0.5) * params.DisplacementScale + 0.5 + params.DisplacementOffset;
 	}
 
+	/** @brief Per-component @ref AdjustDisplacementNormalized. */
 	float4 AdjustDisplacementNormalized(float4 displacement, DisplacementParams params)
 	{
 		return float4(AdjustDisplacementNormalized(displacement.x, params), AdjustDisplacementNormalized(displacement.y, params), AdjustDisplacementNormalized(displacement.z, params), AdjustDisplacementNormalized(displacement.w, params));
 	}
 
-	float GetMipLevel(float2 coords, Texture2D<float4> tex)
+	/**
+	 * @brief Floored anisotropic mip from UV derivatives and known texture size.
+	 */
+	float GetMipLevelFromDims(float2 coords, float2 textureDims)
 	{
-		float2 textureDims;
-		tex.GetDimensions(textureDims.x, textureDims.y);
-
 #	if !defined(PARALLAX) && !defined(TRUE_PBR)
 		textureDims /= 2.0;
 #	endif
@@ -94,7 +121,17 @@ namespace ExtendedMaterials
 		mipLevel++;
 #	endif
 
-		return floor(mipLevel);
+		return floor(max(mipLevel + SharedData::MipBias, 0));
+	}
+
+	/**
+	 * @brief Floored anisotropic mip from UV derivatives, plus SharedData::MipBias.
+	 */
+	float GetMipLevel(float2 coords, Texture2D<float4> tex)
+	{
+		float2 textureDims;
+		tex.GetDimensions(textureDims.x, textureDims.y);
+		return GetMipLevelFromDims(coords, textureDims);
 	}
 
 #	if defined(LANDSCAPE)

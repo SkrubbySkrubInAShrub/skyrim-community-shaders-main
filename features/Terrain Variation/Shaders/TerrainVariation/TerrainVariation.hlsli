@@ -17,20 +17,22 @@ static const float HEIGHT_INFLUENCE = 0.3;
 static const float3 LUMINANCE_WEIGHTS = float3(0.2126, 0.7152, 0.0722);
 /** @brief Barycentric contrast for the 2-tap path (milder than classic Heitz ~8). */
 static const float STOCHASTIC_WEIGHT_POWER = 2.0;
-/** @brief Width (in barycentric weight units) of the fade zone used to hide the 2nd/3rd corner rank-swap seam in @ref ComputeStochasticOffsets. */
+/** @brief Fade width for c1/c2 rank-swap seams in @ref ComputeStochasticOffsets. */
 static const float TAP_SWAP_FADE_WIDTH = 0.1;
-/** @brief Width of the guard band around the c0/c1 tie where the rank-swap fade must stay disabled (see @ref ComputeStochasticOffsets); kept narrow so it only shrinks the (mathematically unavoidable) residual at the hexagon corners without weakening the fade elsewhere on the median. */
+/** @brief Narrow guard that disables the rank-swap fade near c0/c1 ties. */
 static const float DOMINANCE_GUARD_WIDTH = 0.02;
-/** @brief w2/w1 contrast ratio below which the 2nd tap contributes exactly zero and its UV collapses onto tap 1 (turns the 2nd fetch into a texture-cache hit). */
+/** @brief w2/w1 ratio below which the 2nd tap collapses onto tap 1. */
 static const float TAP2_COLLAPSE_RATIO_LO = 0.02;
-/** @brief w2/w1 contrast ratio where the collapse fade begins (fade keeps the handoff continuous, so the collapse can never show a seam). */
+/** @brief w2/w1 ratio where the 2nd-tap collapse fade begins. */
 static const float TAP2_COLLAPSE_RATIO_HI = 0.04;
-/** @brief Golden ratio used by @ref StochasticSampleLODJitter. */
+/** @brief Golden ratio for LOD sample jitter. */
 static const float STOCHASTIC_LOD_PHI = 1.618;
+/** @brief LOD two-tap blend weight (callers gate on enableLODTerrainTilingFix). */
+static const float STOCHASTIC_LOD_BLEND = 0.65;
 
 /**
- * @brief Per-pixel stochastic UV offsets and blend weights.
- * @details Kept minimal on purpose: this struct stays live across the whole POM ray march.
+ * @brief Per-pixel stochastic UV offsets and blend weights for near terrain.
+ * @details Lives across the POM ray march; keep fields minimal.
  */
 struct StochasticOffsets
 {
@@ -38,7 +40,6 @@ struct StochasticOffsets
 	float2 offset2;
 	float w1Contrast;
 	float w2Contrast;
-	float lodBlendWeight;  ///< Only used by the LOD terrain path (@ref StochasticSampleLOD).
 };
 
 /** @brief Shared ddx/ddy for landscape UVs (set once before the six-way blend). */
@@ -72,42 +73,26 @@ inline float2 hashLOD(float2 p)
 	return frac(float2(dot(p, float2(1.0, 17.0)), dot(p, float2(1.0, 23.0))));
 }
 
-/** @brief Raises a barycentric weight to @ref STOCHASTIC_WEIGHT_POWER. */
-inline float StochasticContrastWeight(float weight)
-{
-	return pow(saturate(weight), STOCHASTIC_WEIGHT_POWER);
-}
-
-/** @brief Computes landscape UV gradients for SampleGrad. */
+/**
+ * @brief Landscape UV gradients for SampleGrad.
+ * @details Scales by @c exp2(MipBias) to match SampleBias sharpening under upscaling.
+ */
 inline TerrainGradients ComputeTerrainGradients(float2 uv)
 {
 	TerrainGradients g;
-	g.gradDx = ddx(uv);
-	g.gradDy = ddy(uv);
+	float biasScale = exp2(SharedData::MipBias);
+	g.gradDx = ddx(uv) * biasScale;
+	g.gradDy = ddy(uv) * biasScale;
 	return g;
 }
 
 /**
  * @brief Builds 2-tap stochastic offsets from landscape UV (triangular grid).
- * @details Sorts barycentric corners and keeps the two highest weights. The kept second corner
- *          (c1) and discarded third corner (c2) swap identity wherever their weights are equal;
- *          since c1/c2 are unrelated hashed UV offsets, that swap is a discontinuity in *which*
- *          texel is sampled. @ref TAP_SWAP_FADE_WIDTH fades w2Contrast to 0 as (c1.w - c2.w) -> 0
- *          so the ambiguous tap contributes negligible weight right where its identity would pop,
- *          which is what causes visible faceted seams on high-contrast textures otherwise.
- *
- *          That fade must not fire near a c0/c1 tie (the hexagon-cell boundary, where c0 and c1
- *          swap instead): that swap is already continuous on its own because both c0 and c1 are
- *          sampled and symmetrically exchange roles at equal weight -- but suppressing w2 alone
- *          (never w1) breaks that symmetry and re-introduces a pop. The two tie lines cross only
- *          at the triangle centroids (hexagon corners, where all 3 barycentric weights -> 1/3),
- *          so @c dominanceGuard gates the fade off whenever c0/c1 are close, keeping every other
- *          point on the c1/c2 median fixed while leaving the (unfixable in exactly 2 taps) corner
- *          points to fall back to the original, still-safe c0/c1-symmetric behavior. The guard
- *          band (@ref DOMINANCE_GUARD_WIDTH) is intentionally much narrower than the rank-swap
- *          fade band (@ref TAP_SWAP_FADE_WIDTH): only the region where *both* bands overlap (near
- *          each corner) is imperfect, so shrinking the guard band shrinks that residual without
- *          weakening the median fade anywhere else.
+ * @details Keeps the two highest barycentric corners. Fades w2 near c1/c2 ties
+ *          (@ref TAP_SWAP_FADE_WIDTH) so the discarded corner cannot pop identity;
+ *          @ref DOMINANCE_GUARD_WIDTH disables that fade near c0/c1 ties so the
+ *          primary swap stays symmetric. Collapses the 2nd tap when w2/w1 is tiny
+ *          (@ref TAP2_COLLAPSE_RATIO_LO / @ref TAP2_COLLAPSE_RATIO_HI).
  */
 inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 {
@@ -151,55 +136,19 @@ inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)
 
 	StochasticOffsets o;
 	o.offset1 = hash2D2D(c0.cell);
-	o.w1Contrast = StochasticContrastWeight(c0.w);
+	o.w1Contrast = pow(saturate(c0.w), STOCHASTIC_WEIGHT_POWER);
 	float rankFade = smoothstep(0.0, TAP_SWAP_FADE_WIDTH, c1.w - c2.w);
 	float dominanceGuard = smoothstep(0.0, DOMINANCE_GUARD_WIDTH, c0.w - c1.w);
-	float w2Contrast = StochasticContrastWeight(c1.w) * lerp(1.0, rankFade, dominanceGuard);
-
-	// Negligible-tap collapse: fade w2 to exactly 0 once it falls below a small fraction of w1
-	// (deep inside a hash cell, or fully rank-faded on the c1/c2 median). Collapsing the 2nd UV
-	// onto the 1st then turns every downstream 2nd fetch (march/secant/shadows, which stay
-	// branchless) into a same-address texture-cache hit, and lets StochasticEffect skip its 2nd
-	// SampleGrad outright. The smoothstep keeps the handoff continuous, and because this runs at
-	// the single construction site, height and albedo/normal taps collapse identically — the
-	// displaced surface can never desync from the shaded one.
+	float w2Contrast = pow(saturate(c1.w), STOCHASTIC_WEIGHT_POWER) * lerp(1.0, rankFade, dominanceGuard);
 	w2Contrast *= smoothstep(TAP2_COLLAPSE_RATIO_LO, TAP2_COLLAPSE_RATIO_HI, w2Contrast / max(o.w1Contrast, 1e-6));
 	o.w2Contrast = w2Contrast;
 	o.offset2 = w2Contrast > 0.0 ? hash2D2D(c1.cell) : o.offset1;
-	o.lodBlendWeight = 0.0;
 	return o;
-}
-
-/**
- * @brief Builds LOD-terrain stochastic offsets (disabled when LOD tiling fix is off).
- * @details Only consumed by @ref StochasticSampleLOD, which uses offsets + lodBlendWeight.
- */
-inline StochasticOffsets ComputeStochasticOffsetsLOD(float2 landscapeUV)
-{
-	float lodOn = SharedData::terrainVariationSettings.enableLODTerrainTilingFix ? 1.0 : 0.0;
-
-	float2 cellID = floor(landscapeUV * 255437.0);
-	float2 h1 = hashLOD(cellID);
-	float2 h2 = hashLOD(cellID + 127.0);
-
-	StochasticOffsets o;
-	o.offset1 = h1 * 0.08 * lodOn;
-	o.offset2 = h2 * 0.08 * lodOn;
-	o.lodBlendWeight = 0.65 * lodOn;
-	o.w1Contrast = 0.0;
-	o.w2Contrast = 0.0;
-	return o;
-}
-
-/** @brief Low-discrepancy jitter for @ref StochasticSampleLOD. */
-inline float2 StochasticSampleLODJitter(float rnd)
-{
-	return float2(rnd - 0.5, frac(rnd * STOCHASTIC_LOD_PHI) - 0.5);
 }
 
 /**
  * @brief Height-aware blend of two stochastic taps.
- * @details At w2Contrast == 0 (negligible-tap collapse) this returns exactly s1.
+ * @details At w2Contrast == 0 returns exactly s1.
  */
 inline float4 StochasticBlendTwoSamples(float4 s1, float4 s2, float w1Contrast, float w2Contrast, float blendFactor1, float blendFactor2)
 {
@@ -211,24 +160,25 @@ inline float4 StochasticBlendTwoSamples(float4 s1, float4 s2, float w1Contrast, 
 
 /**
  * @brief Two-tap SampleBias LOD terrain sampling.
- * @param jitter From @ref StochasticSampleLODJitter.
+ * @details Call only when enableLODTerrainTilingFix is on; builds cell hashes and jitter internally.
+ * @param rnd Screen noise in [0,1] for low-discrepancy UV jitter.
  */
-inline float4 StochasticSampleLOD(float2 jitter, Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsetsLOD)
+inline float4 StochasticSampleLOD(float rnd, Texture2D tex, SamplerState samp, float2 uv)
 {
-	float lodOn = SharedData::terrainVariationSettings.enableLODTerrainTilingFix ? 1.0 : 0.0;
-	float2 j1 = (offsetsLOD.offset1 + jitter) * 0.01;
-	float2 j2 = (offsetsLOD.offset2 + float2(jitter.y, -jitter.x)) * 0.01;
-	float4 s1 = tex.SampleBias(samp, uv + j1 * lodOn, SharedData::MipBias);
-	float4 s2 = tex.SampleBias(samp, uv + j2 * lodOn, SharedData::MipBias);
-	float blendW = lerp(0.5, offsetsLOD.lodBlendWeight, lodOn);
-	return lerp(s2, s1, blendW);
+	float2 cellID = floor(uv * 255437.0);
+	float2 offset1 = hashLOD(cellID) * 0.08;
+	float2 offset2 = hashLOD(cellID + 127.0) * 0.08;
+	float2 jitter = float2(rnd - 0.5, frac(rnd * STOCHASTIC_LOD_PHI) - 0.5);
+	float2 j1 = (offset1 + jitter) * 0.01;
+	float2 j2 = (offset2 + float2(jitter.y, -jitter.x)) * 0.01;
+	float4 s1 = tex.SampleBias(samp, uv + j1, SharedData::MipBias);
+	float4 s2 = tex.SampleBias(samp, uv + j2, SharedData::MipBias);
+	return lerp(s2, s1, STOCHASTIC_LOD_BLEND);
 }
 
 /**
  * @brief Two-tap SampleGrad stochastic sampling for near terrain albedo/normals.
- * @details Uses @ref g_terrainStochasticGrad for both taps. When the 2nd tap was collapsed
- *          (w2Contrast == 0, see @ref ComputeStochasticOffsets) the 2nd fetch and blend are
- *          skipped; the branch is per-pixel-uniform across a hash cell interior, so divergence is low.
+ * @details Uses @ref g_terrainStochasticGrad. Skips the 2nd fetch when w2Contrast == 0.
  */
 inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets)
 {
@@ -250,26 +200,22 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 
 /**
  * @brief Two-tap SampleLevel stochastic sampling for parallax/height.
- * @details Deliberately BRANCHLESS: inlined 24+ times across the unrolled ray-march/secant/
- *          soft-shadow paths, where duplicated control flow explodes FXC compile time. The
- *          negligible-tap collapse still helps here: offset2 == offset1 makes the 2nd fetch a
- *          same-address texture-cache hit. Must consume the same offsets/weights as
- *          @ref StochasticEffect so height stays aligned with albedo.
+ * @details Skips the 2nd fetch when w2Contrast == 0 (same as @ref StochasticEffect).
+ *          Same offsets as albedo so height stays aligned.
  */
 inline float4 StochasticEffectParallax(Texture2D tex, SamplerState samp, float2 uv, float mipLevel, StochasticOffsets offsets)
 {
 	float4 s1 = tex.SampleLevel(samp, uv + offsets.offset1, mipLevel);
-	float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
-	return StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, s1.a, s2.a);
-}
+	float4 result;
 
-/**
- * @brief Landscape layer sample via @ref StochasticEffect.
- * @param extraBias Unused; keeps the call shape shared with the non-TERRAIN_VARIATION SampleBias macro.
- */
-inline float4 SampleTerrain(Texture2D tex, SamplerState samp, float2 uv, StochasticOffsets offsets, float extraBias)
-{
-	return StochasticEffect(tex, samp, uv, offsets);
+	[branch] if (offsets.w2Contrast <= 0.0)
+		result = s1;
+	else {
+		float4 s2 = tex.SampleLevel(samp, uv + offsets.offset2, mipLevel);
+		result = StochasticBlendTwoSamples(s1, s2, offsets.w1Contrast, offsets.w2Contrast, s1.a, s2.a);
+	}
+
+	return result;
 }
 
 #endif  // TERRAIN_VARIATION_HLSLI
