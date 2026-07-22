@@ -831,7 +831,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED) && !defined(BLOOD)
 	if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.EffectNormalization && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
 		float3 ambientLevel = 0;
-		if (SharedData::iblSettings.DALCMode == 2) {
+		if (SharedData::iblSettings.DALCMode >= 2) {
 			// Mode 2: keep vanilla DALC, add sky IBL overlay
 			ambientLevel = Color::Ambient(max(0, mul(SharedData::DirectionalAmbient, float4(0, 0, 0, 1.0))));
 			ambientLevel += ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0));

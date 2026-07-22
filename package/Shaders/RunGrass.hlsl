@@ -653,7 +653,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 albedo = baseColor.xyz * vertexColor;
 
-	float3 subsurfaceColor = dirLightColor * dirDetailedShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
+	float dirSoftShadow = dirDetailedShadow;
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+	dirSoftShadow = skylightingShadowVisibility;
+#				endif
+
+	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
 
 	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
 	float3 dirSpecularColor = 0;

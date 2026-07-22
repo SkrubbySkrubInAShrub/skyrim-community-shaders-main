@@ -317,6 +317,7 @@ void SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Masser, directions, intensities);
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 
+	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 	// Advance the shadow fade by elapsed game time so the transition stays smooth during
 	// normal play but snaps when time jumps (scrubbing, waiting, fast travel).
 	const float gameHour = sky->currentGameHour;
@@ -331,7 +332,6 @@ void SkySync::Update(const RE::Sky* sky)
 	}
 	lastGameHour = gameHour;
 
-	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 	shadowFader.Update(sky, directions, intensities, lightColors, settings.ShadowTransitionDuration, fadeAdvance);
 }
 void SkySync::SetSunAngle()
@@ -506,11 +506,20 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 	}
 
 	const RE::NiPoint3 targetDir = casterDir(target);
+	auto applyLighting = [&]() {
+		const bool hasCaster = target != Caster::None;
+		const int targetIdx = static_cast<int>(target);
+		const float intensity = hasCaster ? intensities[targetIdx] : 0.0f;
+		std::optional<RE::NiColor> color = std::nullopt;
+		if (colors)
+			color = hasCaster ? (*colors)[targetIdx] : RE::NiColor{ 0.0f, 0.0f, 0.0f };
+		SetLighting(sky, currentDir, intensity, color);
+	};
 
 	if (!transitioning) {
 		currentDir = targetDir;
 		vlIntensityFactor = target == Caster::None ? 0.0f : 1.0f;
-		SetLighting(sky, currentDir, intensities[static_cast<int>(target)], colors ? std::optional<RE::NiColor>((*colors)[static_cast<int>(target)]) : std::nullopt);
+		applyLighting();
 		return;
 	}
 
@@ -531,7 +540,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 
 	// Fade VL out as it settles into the no-caster fallback, otherwise fade with shadow alignment.
 	vlIntensityFactor = target == Caster::None ? 1.0f - t : ComputeVLFactor(currentDir, targetDir);
-	SetLighting(sky, currentDir, intensities[static_cast<int>(target)], colors ? std::optional<RE::NiColor>((*colors)[static_cast<int>(target)]) : std::nullopt);
+	applyLighting();
 }
 
 void SkySync::ShadowFader::LockSunElevation(RE::NiPoint3 dirs[])

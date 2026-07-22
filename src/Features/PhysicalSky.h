@@ -144,8 +144,7 @@ struct PhysicalSky final : public Feature
 		float rayMarchRange = 32.f;     // km
 		float shadowVolumeRange = 8.f;  // km
 		uint32_t cloudMaxStep = 97;
-		bool volCloudFullResolution = false;
-		bool volCloudPostBlur = true;
+		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
 
@@ -203,11 +202,11 @@ struct PhysicalSky final : public Feature
 		float silverLiningMix;  //
 		float silverLiningSpread;
 
-		// VOLUMETRIC CLOUDS (toggle + shadow volume params for getDirlightTransmittance)
+		// VOLUMETRIC CLOUDS (toggle + shadow-cookie parameters for GetDirlightTransmittance)
 		uint enableVolumetricClouds;
 		float shadowVolumeRange;
-		float volCloudBottom;  //
-		float volCloudThickness;
+		float lowestCloudAltitude;  //
+		float highestCloudAltitude;
 		float3 volCloudScatter;  //
 		float volCloudAverageDensity;
 		float3 volCloudAbsorption;  //
@@ -228,107 +227,170 @@ struct PhysicalSky final : public Feature
 	// Volumetric cloud resources
 	constexpr static uint16_t kShadowVolW = 256;
 	constexpr static uint16_t kShadowVolH = 256;
-	constexpr static uint16_t kShadowVolD = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
-	constexpr static uint16_t kNubisSize = 128;
 	constexpr static uint16_t kVolCloudDownsample = 4;
 
 	eastl::unique_ptr<Texture2D> texVolTr = nullptr;      // blurred full-resolution volumetric transmittance result
 	eastl::unique_ptr<Texture2D> texVolLum = nullptr;     // blurred full-resolution volumetric luminance result
-	eastl::unique_ptr<Texture2D> texVolAux = nullptr;     // blurred full-resolution Nubis cloud depth/metadata
-	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;   // 1/4-resolution Nubis raymarch transmittance
-	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;  // 1/4-resolution Nubis raymarch luminance
-	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;  // 1/4-resolution Nubis cloud depth/metadata
+	eastl::unique_ptr<Texture2D> texVolAux = nullptr;     // full-resolution cloud depth/metadata
+	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;   // quarter-resolution trace transmittance
+	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;  // quarter-resolution trace luminance
+	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;  // quarter-resolution trace depth/metadata
 	eastl::unique_ptr<Texture2D> texVolUpscaleTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolUpscaleLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolUpscaleAux = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
-	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;   // low-resolution cubemap transmittance result
-	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;  // low-resolution cubemap luminance result
-	eastl::unique_ptr<Texture2D> texVolCubeTrHistory = nullptr;
-	eastl::unique_ptr<Texture2D> texVolCubeLumHistory = nullptr;
-	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
+	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;         // low-resolution cubemap transmittance result
+	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;        // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture2D> texShadowVolume = nullptr;      // light-space cloud shadow cookie
+	eastl::unique_ptr<Texture2D> texShadowVolumeTemp = nullptr;  // first Gaussian filter target
 
-	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> cloudBottomLutSrv = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> nubisNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> detailErosionNoiseSrv = nullptr;
 
 	TextureManager ndfTexManager{ "Cloud Map" };
-	NdfSettings ndfSettings = CumuliformNdfSettings{};
 	NdfManager ndfManager;
 
 	// Volumetric cloud StructuredBuffer (compute-only)
 	struct VolumetricCloudSB
 	{
-		// Performance
 		float rayMarchRange;
 		float shadowVolumeRange;
 		uint cloudMaxStep;
 		uint fullResolution;
 
-		// Dynamic
 		float2 frameDim;
 		float2 rcpFrameDim;
 		float3 dirlightDir;
 		float _pad1;
-		float3 dirlightColor;
-		float _pad2;
 		float bottomZ;
 		float planetRadius;
-		float atmosThickness;
-		float aerialPerspectiveMaxDist;
+		float2 activeFrameDim;
 
-		// Cloud layer (must match HLSL CloudLayer struct)
-		float cloudBottom;
-		float cloudThickness;
-		float2 ndfFreq;
-		float noiseFreq;
-		float3 noiseOffset;  // offset (computed from speed * time)
-		float power;
-		float3 cloudScatter;
-		float3 cloudAbsorption;
-		float averageDensity;
-		float msMult;
-		float msTransmittancePower;
-		float msHeightPower;
-		float ambientMult;
-		float densityErosionWeak;
-		float densityErosionStrong;
-		float noiseMipBiasWeak;
-		float noiseMipBiasStrong;
-		float hhfMinBlend;
-		float hhfProfileThreshold;
-		float2 _pad3;
+		float lowestCloudAltitude;
+		float highestCloudAltitude;
+		float2 weatherCenter;
+		float weatherWorldSize;
+		float highCloudEnabled;
+		float2 noiseWindOffset;
+		float3 noiseScale;
+		float detailNoiseScale;
+		float3 noiseOffset;
+		float baseNoiseWindSpeed;
+		float detailNoiseWindSpeed;
+		float detailNoiseVerticalWindSpeed;
+		float billowyLow;
+		float billowyHigh;
+		float wispyLow;
+		float wispyHigh;
+		float detailStrengthCu;
+		float detailStrengthTcu;
+		float detailStrengthCb;
+		float densityThreshold;
+		float densityMultiplier;
+		float densityMultiplierCu;
+		float densityMultiplierTcu;
+		float densityMultiplierCb;
+		float bottomSmoothHeight;
+		float bottomSmoothPow;
+		float wispyEdgeWidth;
+		float wispyReach;
+		float wispyTopHeight;
+		float wispyTopHardness;
+		float coverageCoverIntensity;
+		float coverageCoverContrast;
+		float coverageHeightIntensity;
+		float coverageHeightContrast;
+		float coverTopStrength;
+		float coverTopMax;
+		float coverTopCurvePow;
+		float2 scCellScale;
+		float scWorleyStrength;
+		float scHeightScale;
+		float scDetailStrength;
+		float scCellThickPow;
+		float scCellThickStrength;
+		float scCellNoiseStrength;
+		float scCoverageIntensity;
+		float scCoverageContrast;
+		float2 highCellScale;
+		float highCellWindSpeed;
+		float2 highCellWarpScale;
+		float highCellWarpStrength;
+		float highCellThickStrength;
+		float highAsCellThickStrength;
+		float highCellThickPow;
+		float highCloudBottom;
+		float highCloudTop;
+		float highBottomCoverageScale;
+		float highHeightCurvePow;
+		float highDensityThreshold;
+		float highDensitySoftness;
+		float highCloudSoftness;
+		float2 highWispScale;
+		float highWispStrength;
+		float highHorizonDistanceStart;
+		float highHorizonDistanceEnd;
+		float highDensityMultiplier;
+		float highDensitySoftAIntensity;
+		float highDensitySoftAContrast;
+		float highDensityModAIntensity;
+		float highDensityModAContrast;
+		float3 scatterTint;
+		float forwardEccentricity;
+		float backwardEccentricity;
+		float ambientTopMultiplier;
+		float ambientBottomMultiplier;
+		float aoUpwardScale;
+		float msAttenuation;
+		float msContribution;
+		float msEccentricity;
+		float scatterSourceODScale;
+		float scatterSourceCurvePow;
+		float powderIntensity;
+		uint lightSteps;
+		uint _padPrimarySteps;
+		float phiFwdIntensity;
+		float phiFwdDepthPow;
+		float phiFwdDepthBias;
+		float phiFwdBoundaryConfidence;
+		float phiFwdMSBuildScale;
+		float phiFwdCompress;
+		float highForwardEccentricity;
+		float highBackwardEccentricity;
+		float highAmbientTopMultiplier;
+		float highAmbientBottomMultiplier;
+		float highSkyBlendStrength;
+		float highMSAttenuation;
+		float highMSContribution;
+		float highMSEccentricity;
+		float highLightAbsorption;
+		float highViewAbsorption;
+		float highCoverAbsorptionStrength;
 
 		float2 lowFrameDim;
 		float2 rcpLowFrameDim;
 		uint historyValid;
-		uint padding[3];
+		float elapsedTimeSeconds;
+		uint padding[2];
 	};
 
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
-	struct VolumetricCloudCubeHistoryCB
-	{
-		float historyWeight;
-		float3 _pad0;
-	};
-
-	eastl::unique_ptr<ConstantBuffer> volCubeHistoryCb = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
-	bool volCubeHistoryValid = false;
 	bool volMainHistoryValid = false;
 	uint32_t volHistoryWidth = 0;
 	uint32_t volHistoryHeight = 0;
+	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
 
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolResample = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolBlur = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolUpscale = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolShadowFilter = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolCubemapHistory = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> sampTileable = nullptr;

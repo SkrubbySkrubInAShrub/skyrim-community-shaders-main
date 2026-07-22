@@ -1960,15 +1960,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DEFERRED)
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-		, skylightingShadowVisibility
+		,
+		skylightingShadowVisibility
 #			endif
 	);
 #		else
 	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-		, skylightingShadowVisibility
+									  ,
+									  skylightingShadowVisibility
 #			endif
-	) : Skylighting::UNIT_SH;
+									  ) :
+	                              Skylighting::UNIT_SH;
 #		endif
 #	endif
 
@@ -2122,7 +2125,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if !defined(SKYLIGHTING_SHADOW_VIS)
 		dirSoftShadow =
 #		endif
-		ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
+			ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
 #	endif
 
 	float dirDetailedShadow = 1.0;
