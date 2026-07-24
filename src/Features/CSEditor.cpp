@@ -39,6 +39,7 @@ void CSEditor::PostPostLoad()
 void CSEditor::DataLoaded()
 {
 	s_dataAvailable = true;
+	EditorWindow::MenuOpenCloseEventHandler::Register();
 }
 
 bool CSEditor::HasWidgetJsonFiles()
