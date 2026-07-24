@@ -1931,6 +1931,9 @@ void EditorWindow::SetTimeRunningForMenu(bool a_needsRunningTime)
 		// Only re-pause afterwards if the pause is ours; a zero timescale we did not set (stale
 		// save, console, other mod) stays restored so it cannot freeze the game again.
 		wasPausedBeforeMenu = timePaused;
+		// A non-positive snapshot would restore straight back to frozen time.
+		if (savedTimeScale <= 0.0f)
+			savedTimeScale = kVanillaTimeScale;
 		if (timePaused)
 			ResumeTime();
 		else
