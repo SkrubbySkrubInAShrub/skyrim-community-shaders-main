@@ -707,8 +707,6 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 				RE::Console::ExecuteCommand("player.setav speedmult 1000");
 				RE::Console::ExecuteCommand("tgm");
 				RE::Console::ExecuteCommand("tcl");
-				// Tracked pause rather than "set timescale to 0" so the freeze guard can restore
-				// time for the coc below and re-pause it once loading finishes.
 				EditorWindow::GetSingleton()->PauseTime();
 				RE::Console::ExecuteCommand("set gamehour to 12");
 				RE::Console::ExecuteCommand("coc whiterun");
