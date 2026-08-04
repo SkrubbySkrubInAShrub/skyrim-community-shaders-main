@@ -416,6 +416,10 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		for (auto* feature : Feature::GetFeatureList()) {
 			try {
 				const std::string featureName = feature->GetShortName();
+				// Resolved here rather than in Feature::Load so features disabled at boot,
+				// which never reach Load, still report their install state to the UI.
+				std::error_code ec;
+				feature->installed = std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(featureName), ec);
 				if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is disabled by default", featureName);
