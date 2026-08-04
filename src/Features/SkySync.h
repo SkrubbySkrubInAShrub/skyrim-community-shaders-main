@@ -115,13 +115,14 @@ private:
 		Caster target = Caster::Sun;
 		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
+		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
 		float vlIntensityFactor = 1.0f;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		void LockSunElevation(RE::NiPoint3 dirs[]);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
@@ -150,6 +151,8 @@ private:
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float lastGameHour = -1.0f;
+	RE::NiPoint3 previousSunDirection{};
+	bool hasPreviousSunDirection = false;
 
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
@@ -160,7 +163,9 @@ private:
 
 	void DisableOnConflict(std::string_view conflictName);
 
-	void Update(const RE::Sky* sky);
+	void Update(const RE::Sky* sky, bool a_sunDirectionDiscontinuity);
+
+	bool ObserveSunDirection(const RE::Sky* sky) noexcept;
 
 	void SetSunAngle();
 

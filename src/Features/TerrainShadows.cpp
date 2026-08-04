@@ -313,7 +313,7 @@ void TerrainShadows::Precompute()
 	needPrecompute = false;
 }
 
-void TerrainShadows::UpdateShadow()
+void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 {
 	ZoneScoped;
 
@@ -341,6 +341,13 @@ void TerrainShadows::UpdateShadow()
 		return;
 	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");
 
+	const auto worldDirection = sunLight->GetWorldDirection();
+	const float3 currentSunDirection = { worldDirection.x, worldDirection.y, worldDirection.z };
+	if (!hasPreviousLightDirection || Util::HasDirectionalLightDiscontinuity(worldDirection, previousLightDirection))
+		a_refreshImmediately = true;
+	previousLightDirection = worldDirection;
+	hasPreviousLightDirection = true;
+
 	/* ---- UPDATE CB ---- */
 	uint width = texHeightMap->desc.Width;
 	uint height = texHeightMap->desc.Height;
@@ -349,9 +356,10 @@ void TerrainShadows::UpdateShadow()
 	static uint edgePxCoord;
 	static int signDir;
 	static uint maxUpdates;
+	if (a_refreshImmediately)
+		shadowUpdateIdx = 0;
 	if (shadowUpdateIdx == 0) {
-		auto direction = sunLight->GetWorldDirection();
-		float3 dirLightDir = { direction.x, direction.y, direction.z };
+		float3 dirLightDir = currentSunDirection;
 		if (dirLightDir.z > 0)
 			dirLightDir = -dirLightDir;
 
@@ -388,15 +396,10 @@ void TerrainShadows::UpdateShadow()
 		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
-	shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
 	shadowUpdateCBData.PxSize = { 1.f / texHeightMap->desc.Width, 1.f / texHeightMap->desc.Height };
-
 	shadowUpdateCBData.PosRange = { cachedHeightmap->pos0.z, cachedHeightmap->pos1.z };
 	shadowUpdateCBData.ZRange = cachedHeightmap->zRange;
-
-	shadowUpdateCB->Update(shadowUpdateCBData);
-
-	shadowUpdateIdx = (shadowUpdateIdx + 1) % maxUpdates;
+	shadowUpdateCBData.BlendWeight = a_refreshImmediately ? 1.0f : 0.5f;
 
 	/* ---- BACKUP ---- */
 	struct ShaderState
@@ -418,7 +421,13 @@ void TerrainShadows::UpdateShadow()
 	context->CSSetConstantBuffers(0, 1, &newer.buffer);
 	context->CSSetShader(shadowUpdateProgram.get(), nullptr, 0);
 	globals::profiler->BeginPass("TerrainShadows::ShadowUpdate");
-	context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
+	const uint updateCount = a_refreshImmediately ? maxUpdates : 1u;
+	for (uint update = 0; update < updateCount; ++update) {
+		shadowUpdateCBData.StartPxCoord = edgePxCoord + signDir * shadowUpdateIdx * updateLength;
+		shadowUpdateCB->Update(shadowUpdateCBData);
+		context->Dispatch(abs(shadowUpdateCBData.LightPxDir.x) >= abs(shadowUpdateCBData.LightPxDir.y) ? height : width, 1, 1);
+		shadowUpdateIdx = (shadowUpdateIdx + 1) % maxUpdates;
+	}
 	globals::profiler->EndPass();
 
 	/* ---- RESTORE ---- */
@@ -446,10 +455,11 @@ void TerrainShadows::EarlyPrepass()
 	if (!settings.EnableTerrainShadow)
 		return;
 
+	bool refreshImmediately = needPrecompute;
 	if (needPrecompute)
 		Precompute();
 
-	UpdateShadow();
+	UpdateShadow(refreshImmediately);
 
 	if (texShadowHeight) {
 		auto context = globals::d3d::context;
