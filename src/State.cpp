@@ -419,7 +419,11 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				// Resolved here rather than in Feature::Load so features disabled at boot,
 				// which never reach Load, still report their install state to the UI.
 				std::error_code ec;
-				feature->installed = std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(featureName), ec);
+				const bool iniExists = std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(featureName), ec);
+				// exists() reports false on error, so treat an unreadable path as installed rather than letting a probe failure hide the feature.
+				if (ec)
+					logger::warn("Could not determine install state for feature '{}': {}", featureName, ec.message());
+				feature->installed = ec || iniExists;
 				if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is disabled by default", featureName);

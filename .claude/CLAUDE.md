@@ -360,7 +360,7 @@ Unreleased = True
 
 -   Flags: `Alpha`, `Beta`, `Unreleased`. Truthy values are `true`, `1`, `yes`, `on` (case-insensitive). Absent or non-truthy means the flag is off.
 -   `Alpha` takes precedence over `Beta` when both are set.
--   `Unreleased` is **orthogonal to the stage**: it does not participate in stage resolution, has no UI marker of its own, and is unknown to the version audit. It only hides the feature until installed, and is **only ever set or cleared by hand**; no tooling touches it.
+-   `Unreleased` is **orthogonal to the stage**: it does not participate in stage resolution, has no UI marker of its own, and is unknown to the version audit. It only hides the feature until installed, and is **only ever set or cleared by hand**; no tooling modifies it.
 -   The flag line must start the line (after optional whitespace). For `Alpha`/`Beta`, the CMake parser in `CMakeLists.txt` and the Python parser in `tools/feature_version_audit.py` are both line-anchored; **keep these two regexes in sync** so build-time classification and audit enforcement agree. `Unreleased` is parsed by CMake only.
 
 **Build-time baking**: `CMakeLists.txt` collects flagged features into `FEATURE_ALPHA_NAMES` / `FEATURE_BETA_NAMES` / `FEATURE_UNRELEASED_NAMES` in the generated `FeatureVersions.h` (same mechanism as `FEATURE_CORE_NAMES`).
