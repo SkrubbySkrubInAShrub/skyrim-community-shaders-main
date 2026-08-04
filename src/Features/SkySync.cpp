@@ -238,10 +238,11 @@ bool SkySync::ObserveSunDirection(const RE::Sky* sky) noexcept
 	}
 
 	auto direction = sky->sun->root->local.translate;
-	if (direction.Unitize() < FLT_EPSILON) {
+	if (!Util::IsUsableDirection(direction)) {
 		hasPreviousSunDirection = false;
 		return false;
 	}
+	direction.Unitize();
 
 	const bool discontinuity = !hasPreviousSunDirection ||
 	                           Util::HasDirectionalLightDiscontinuity(direction, previousSunDirection);

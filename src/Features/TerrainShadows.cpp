@@ -341,7 +341,13 @@ void TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		return;
 	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");
 
-	const auto worldDirection = sunLight->GetWorldDirection();
+	auto worldDirection = sunLight->GetWorldDirection();
+	if (!Util::IsUsableDirection(worldDirection)) {
+		hasPreviousLightDirection = false;  // never compare against a sample we could not use
+		return;
+	}
+	worldDirection.Unitize();
+
 	const float3 currentSunDirection = { worldDirection.x, worldDirection.y, worldDirection.z };
 	if (!hasPreviousLightDirection || Util::HasDirectionalLightDiscontinuity(worldDirection, previousLightDirection))
 		a_refreshImmediately = true;

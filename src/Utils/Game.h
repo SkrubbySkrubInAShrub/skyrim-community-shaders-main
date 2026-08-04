@@ -8,24 +8,27 @@ namespace Util
 	inline constexpr float DirectionalLightDiscontinuityThreshold = RE::NI_PI / 180.0f;
 
 	/**
+	 * @brief Tests whether a direction can be normalized, i.e. is finite and not degenerate.
+	 */
+	[[nodiscard]] inline bool IsUsableDirection(const RE::NiPoint3& a_direction) noexcept
+	{
+		const float lengthSquared = a_direction.Dot(a_direction);
+		return std::isfinite(lengthSquared) && lengthSquared > FLT_EPSILON * FLT_EPSILON;
+	}
+
+	/**
 	 * @brief Tests whether a directional light jumped between frames, e.g. a wait, sleep or fast travel.
 	 * @return false when either direction is degenerate, so callers treat unusable input as continuous.
 	 */
 	[[nodiscard]] inline bool HasDirectionalLightDiscontinuity(const RE::NiPoint3& a_currentDirection, const RE::NiPoint3& a_previousDirection) noexcept
 	{
-		const auto isFinite = [](const RE::NiPoint3& a_direction) {
-			return std::isfinite(a_direction.x) && std::isfinite(a_direction.y) && std::isfinite(a_direction.z);
-		};
-		if (!isFinite(a_currentDirection) || !isFinite(a_previousDirection))
+		if (!IsUsableDirection(a_currentDirection) || !IsUsableDirection(a_previousDirection))
 			return false;
 
 		auto currentDirection = a_currentDirection;
 		auto previousDirection = a_previousDirection;
-		const float currentLength = currentDirection.Unitize();
-		const float previousLength = previousDirection.Unitize();
-		if (!std::isfinite(currentLength) || !std::isfinite(previousLength) ||
-			currentLength <= FLT_EPSILON || previousLength <= FLT_EPSILON)
-			return false;
+		currentDirection.Unitize();
+		previousDirection.Unitize();
 
 		const auto difference = currentDirection - previousDirection;
 		return difference.Dot(difference) >=
