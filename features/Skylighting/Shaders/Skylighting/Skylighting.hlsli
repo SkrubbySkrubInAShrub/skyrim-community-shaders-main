@@ -53,12 +53,9 @@ namespace Skylighting
 		return MixDiffuse(CosineLobeVisibility(skylightingSH, normal, fadeOutFactor));
 	}
 
-	// How much open sky is above a point, independent of surface orientation. A normal- or reflection-
-	// oriented lobe spends half of itself below the horizon, so it reads any vertical surface as
-	// roughly half occluded even in the wide open.
-	float EvaluateSkyOpenness(sh2 skylightingSH, float fadeOutFactor = 1.0)
+	float EvaluateSkyOpenness(sh2 skylightingSH)
 	{
-		return MixSpecular(CosineLobeVisibility(skylightingSH, float3(0, 0, 1), fadeOutFactor));
+		return MixSpecular(CosineLobeVisibility(skylightingSH, float3(0, 0, 1), 1.0));
 	}
 
 	float EvaluateSpecular(sh2 skylightingSH, sh2 specularLobe, float fadeOutFactor = 1.0)

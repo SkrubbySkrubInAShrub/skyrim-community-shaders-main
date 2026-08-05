@@ -219,8 +219,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
-				// Only a roof should dim the local cubemap, and it already holds the ground in its lower
-				// hemisphere: an R-oriented lobe instead reads any downward reflection as occluded.
 				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSkyOpenness : 1.0;
 				skySpecular *= skylightingSpecular;
 #		endif
