@@ -10,27 +10,14 @@
 #include "Effects11/SettingManager.h"
 #include "Effects11/WeatherManager.h"
 
-#include "../I18n/I18n.h"
 #include "CloudShadows.h"
 #include "Deferred.h"
-#include "Globals.h"
 #include "IBL.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TerrainShadows.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
-#include "Utils/UI.h"
-
-#define I18N_KEY_PREFIX "feature.effects11."
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Effects11::Settings,
-	FixIBLReflectiveAmount,
-	FixCubemapReflectionMode,
-	FixColorPowMetals,
-	FixSkyHemisphereFalloff,
-	FixEnvReflectionSkyOcclusion)
 
 Effects11::PerFrame Effects11::GetCommonBufferData()
 {
@@ -99,64 +86,12 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.ProceduralSunGlowIntensity = settingManager.GetInterpolatedTimeOfDayValue("GlowIntensity", "PROCEDURALSUN");
 
-	data.FixCubemapReflectionMode = settings.FixCubemapReflectionMode;
-	data.FixColorPowMetals = settings.FixColorPowMetals;
-	data.FixSkyHemisphereFalloff = settings.FixSkyHemisphereFalloff;
-	data.FixEnvReflectionSkyOcclusion = settings.FixEnvReflectionSkyOcclusion;
-
 	return data;
 }
 
 void Effects11::DrawSettings()
 {
-	if (ImGui::CollapsingHeader(T(TKEY("lighting_fixes"), "Lighting Fixes"), ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s",
-			T(TKEY("lighting_fixes_tooltip"), "Disable a fix to compare against the previous behaviour."));
-
-		ImGui::Checkbox(T(TKEY("fix_ibl_reflective_amount"), "Fix A: Use ReflectiveAmount for IBL reflections"), &settings.FixIBLReflectiveAmount);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("fix_ibl_reflective_amount_tooltip"), "ENB separates ambient IBL (MultiplicativeAmount) from reflected IBL (ReflectiveAmount). Without this, the ambient amount also scales sky reflections, which darkens PBR metals."));
-		}
-
-		ImGui::Checkbox(T(TKEY("fix_cubemap_reflection_mode"), "Fix B: Match forward reflections to deferred"), &settings.FixCubemapReflectionMode);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("fix_cubemap_reflection_mode_tooltip"), "Dynamic Cubemaps only recognised DALC mode 2, so mode 3 fell through to the ratio path and lost environment reflections in forward passes such as water reflections."));
-		}
-
-		ImGui::Checkbox(T(TKEY("fix_colorpow_metals"), "Fix C: Keep ColorPow off metal reflectance"), &settings.FixColorPowMetals);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("fix_colorpow_metals_tooltip"), "ColorPow is a diffuse albedo curve, but the PBR base color also seeds metal F0. This defers the curve until after the metallic split."));
-		}
-
-		ImGui::Checkbox(T(TKEY("fix_sky_hemisphere_falloff"), "Fix D: Apply sky falloff with Skylighting"), &settings.FixSkyHemisphereFalloff);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("fix_sky_hemisphere_falloff_tooltip"), "The ENB sky hemisphere falloff was only applied on the non-Skylighting path, so it silently vanished when Skylighting was enabled."));
-		}
-
-		ImGui::Checkbox(T(TKEY("fix_env_reflection_sky_occlusion"), "Fix E: Occlude reflections by sky openness"), &settings.FixEnvReflectionSkyOcclusion);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("fix_env_reflection_sky_occlusion_tooltip"), "The ENB bridge forces DALC mode 3, which dims the environment cubemap by Skylighting's specular visibility. That is measured along the reflection vector, so a lobe aimed at the ground reads as occluded even in open sunlight. This measures how much open sky is above the point instead, which is what a roof actually blocks: overhangs still darken fully, while surfaces in the open are left alone whichever way they face. The sky half keeps using specular visibility."));
-		}
-
-		ImGui::Spacing();
-	}
-
 	MenuManager::GetSingleton().RenderImGui();
-}
-
-void Effects11::LoadSettings(json& o_json)
-{
-	settings = o_json;
-}
-
-void Effects11::SaveSettings(json& o_json)
-{
-	o_json = settings;
-}
-
-void Effects11::RestoreDefaultSettings()
-{
-	settings = {};
 }
 
 void Effects11::LoadRaindropTexture()
@@ -957,5 +892,3 @@ void Effects11::DrawVolumetricRays()
 	stateBackup.Restore(context);
 	stateBackup.Release();
 }
-
-#undef I18N_KEY_PREFIX

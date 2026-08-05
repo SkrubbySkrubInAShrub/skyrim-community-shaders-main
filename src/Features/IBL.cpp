@@ -223,8 +223,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.EnvIBLSaturation = settings.EnvIBLSaturation,
 		.SkyIBLSaturation = settings.SkyIBLSaturation,
 		.FogAmount = settings.FogAmount,
-		.DALCMode = settings.DALCMode,
-		.SkyIBLSpecularScale = settings.SkyIBLScale
+		.DALCMode = settings.DALCMode
 	};
 
 	if (globals::features::effects11.loaded) {
@@ -235,10 +234,6 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 				data.EnableIBL = Util::IsInterior() ? 0u : 1u;
 				data.EnvIBLScale = 0.0f;
 				data.SkyIBLScale = settingManager.GetInterpolatedTimeOfDayValue("MultiplicativeAmount", "IMAGEBASEDLIGHTING");
-				// ENB scales ambient IBL and reflected IBL independently; reusing the ambient amount for both darkens metals.
-				data.SkyIBLSpecularScale = enb.settings.FixIBLReflectiveAmount ?
-				                               settingManager.GetInterpolatedTimeOfDayValue("ReflectiveAmount", "IMAGEBASEDLIGHTING") :
-				                               data.SkyIBLScale;
 				data.DALCAmount = 1.0f;
 				data.EnvIBLSaturation = 1.0f;
 				data.SkyIBLSaturation = 1.0f;

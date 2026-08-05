@@ -602,10 +602,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
 
-		// Without this the ENB-bridge fix toggles compile to their forced-on defaults.
-		if (globals::features::effects11.loaded)
-			defines.push_back({ "EFFECTS11", nullptr });
-
 		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
 		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
 		if (globals::features::terrainBlending.loaded)
@@ -632,10 +628,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
-
-		// Without this the ENB-bridge fix toggles compile to their forced-on defaults.
-		if (globals::features::effects11.loaded)
-			defines.push_back({ "EFFECTS11", nullptr });
 
 		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
 		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).

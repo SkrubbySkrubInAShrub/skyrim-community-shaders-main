@@ -195,16 +195,6 @@ namespace Color
 		return ENABLE_LL ? LinearToSkyrimGamma(color) : color;
 	}
 
-	// Removes ENB's albedo curve from a color Diffuse() already curved. No-op unless ENB is active.
-	float3 UncurveDiffuse(float3 color)
-	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return pow(abs(color), rcp(max(SharedData::enbSettings.ColorPow, EPSILON_DIVISION)));
-#	endif
-		return color;
-	}
-
 	float3 Diffuse(float3 color)
 	{
 #	if defined(EFFECTS11)
