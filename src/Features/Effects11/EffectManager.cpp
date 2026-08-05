@@ -226,6 +226,8 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterColorTimeOfDaySetting("ColorFilter", "VOLUMETRICFOG", { 1.0f, 1.0f, 1.0f }, true);
 
 	settingManager.RegisterTimeOfDaySetting("MultiplicativeAmount", "IMAGEBASEDLIGHTING", 0.0f, 0.0f, 10.0f, 0.01f, true);
+	// Defaults to 1.0 so a preset that omits the key leaves reflections unattenuated.
+	settingManager.RegisterTimeOfDaySetting("ReflectiveAmount", "IMAGEBASEDLIGHTING", 1.0f, 0.0f, 10.0f, 0.01f, true);
 
 	settingManager.RegisterTimeOfDaySetting("GlowIntensity", "SUNGLARE", 1.0f, 0.0f, 1000.0f, 0.01f, true);
 

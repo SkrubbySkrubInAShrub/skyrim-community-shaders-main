@@ -199,9 +199,9 @@ namespace SharedData
 		float EnvIBLSaturation;
 		float SkyIBLSaturation;
 		float FogAmount;
-		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
+		uint DALCMode;              // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
+		float SkyIBLSpecularScale;  // Sky reflection scale; tracks SkyIBLScale unless ENB overrides it with its own ReflectiveAmount.
 		float pad0;
-		float pad1;
 	};
 
 	struct ExtendedTranslucencySettings
@@ -283,6 +283,11 @@ namespace SharedData
 
 		float VolumetricRaysDesaturation;
 		float3 VolumetricRaysColorFilter;
+
+		uint FixCubemapReflectionMode;
+		uint FixColorPowMetals;
+		uint FixSkyHemisphereFalloff;
+		uint FixEnvReflectionSkyOcclusion;
 	};
 	struct TerrainBlendingSettings
 	{
@@ -368,6 +373,44 @@ namespace SharedData
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
 	};
+
+	// ENB-bridge lighting fixes. The toggles only exist while Effects11 is loaded; without it the
+	// corrected behaviour is unconditional, since the defects are not specific to the ENB bridge.
+	bool FixCubemapReflectionMode()
+	{
+#if defined(EFFECTS11)
+		return enbSettings.FixCubemapReflectionMode;
+#else
+		return true;
+#endif
+	}
+
+	bool FixColorPowMetals()
+	{
+#if defined(EFFECTS11)
+		return enbSettings.FixColorPowMetals;
+#else
+		return true;
+#endif
+	}
+
+	bool FixSkyHemisphereFalloff()
+	{
+#if defined(EFFECTS11)
+		return enbSettings.FixSkyHemisphereFalloff;
+#else
+		return true;
+#endif
+	}
+
+	bool FixEnvReflectionSkyOcclusion()
+	{
+#if defined(EFFECTS11)
+		return enbSettings.FixEnvReflectionSkyOcclusion;
+#else
+		return true;
+#endif
+	}
 
 	Texture2D<float4> DepthTexture : register(t17);
 

@@ -66,7 +66,23 @@ public:
 
 		float VolumetricRaysDesaturation;
 		float3 VolumetricRaysColorFilter;
+
+		uint FixCubemapReflectionMode;
+		uint FixColorPowMetals;
+		uint FixSkyHemisphereFalloff;
+		uint FixEnvReflectionSkyOcclusion;
 	};
+
+	/// Opt-out toggles for the ENB-bridge lighting corrections, exposed at the top of the ENB
+	/// menu so each can be A/B'd in-game. Disabling one restores the pre-fix behaviour.
+	struct Settings
+	{
+		bool FixIBLReflectiveAmount = true;
+		bool FixCubemapReflectionMode = true;
+		bool FixColorPowMetals = true;
+		bool FixSkyHemisphereFalloff = true;
+		bool FixEnvReflectionSkyOcclusion = true;
+	} settings;
 
 	bool enableEffect = false;
 
@@ -90,6 +106,9 @@ public:
 	PerFrame GetCommonBufferData();
 
 	virtual void DrawSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
+	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void Prepass() override;
 	virtual void ClearShaderCache() override;

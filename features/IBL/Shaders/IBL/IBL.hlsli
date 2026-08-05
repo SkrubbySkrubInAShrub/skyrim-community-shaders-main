@@ -98,6 +98,20 @@ namespace ImageBasedLighting
 	// High-level: compute the full diffuse ambient replacement
 	// ============================================================================
 
+	// ENB fades sky ambient toward the horizon; -z is up in ray space.
+	static const float ENBSkyFalloffSlope = 0.65;
+	static const float ENBSkyFalloffBias = 0.35;
+
+	/// Applies ENB's sky hemisphere falloff to a sky ambient term. No-op unless the ENB effect chain is active.
+	float3 ApplyENBSkyFalloff(float3 linSky, float3 rayDir)
+	{
+#if defined(EFFECTS11)
+		if (SharedData::enbSettings.Enable)
+			return linSky * saturate(-rayDir.z * ENBSkyFalloffSlope + ENBSkyFalloffBias);
+#endif
+		return linSky;
+	}
+
 	/// Compute diffuse IBL ambient (gamma-space) without directional occlusion.
 	float3 GetDiffuseIBL(float3 vanillaDALC, float3 rayDir)
 	{
@@ -109,11 +123,7 @@ namespace ImageBasedLighting
 			linEnv = GetEnvIBLColor(rayDir);
 			linSky = GetSkyIBLColor(rayDir);
 		}
-#if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			linSky *= saturate(-rayDir.z * 0.65 + 0.35);
-#endif
-		return linEnv + linSky;
+		return linEnv + ApplyENBSkyFalloff(linSky, rayDir);
 	}
 
 	/// Compute diffuse IBL ambient with a skylighting visibility factor applied per DALCMode
@@ -131,6 +141,9 @@ namespace ImageBasedLighting
 			linEnv = GetEnvIBLColor(rayDir);
 			linSky = GetSkyIBLColor(rayDir) * visibility;
 		}
+		// The falloff was historically missing here, so it vanished whenever Skylighting was enabled.
+		if (SharedData::FixSkyHemisphereFalloff())
+			linSky = ApplyENBSkyFalloff(linSky, rayDir);
 		return linEnv + linSky;
 	}
 

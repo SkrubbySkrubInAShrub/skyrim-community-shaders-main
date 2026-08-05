@@ -49,8 +49,10 @@ namespace DynamicCubemaps
 		if (!useStaticIBL) {
 #		if defined(SKYLIGHTING)
 		float skylightingSpecular = 0.0;
+		float skylightingSkyOpenness = 1.0;  // Interiors have no sky to occlude, so the env term stays unattenuated.
 		if (!SharedData::InInterior) {
 			skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, SphericalHarmonics::FauxSpecularLobe(N, V, roughness));
+			skylightingSkyOpenness = Skylighting::EvaluateSkyOpenness(skylighting);
 		}
 #		endif
 
@@ -61,19 +63,25 @@ namespace DynamicCubemaps
 			float3 envSpecular = 0.0;
 			float3 skySpecular = 0.0;
 
-			if (SharedData::iblSettings.DALCMode == 2) {
-				// Mode 2: DALC-normalized env scaled by DALCAmount + sky overlay
+			// Mode 3 must take the DALC path here too, matching DeferredCompositeCS.
+			const bool useDALCPath = SharedData::FixCubemapReflectionMode() ? (SharedData::iblSettings.DALCMode >= 2) : (SharedData::iblSettings.DALCMode == 2);
+			if (useDALCPath) {
+				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
 				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
 				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLSpecularScale;
 #			if defined(SKYLIGHTING)
+				// Only a roof should dim the local cubemap, and it already holds the ground in its lower
+				// hemisphere: an R-oriented lobe instead reads any downward reflection as occluded.
+				const float envOcclusion = SharedData::FixEnvReflectionSkyOcclusion() ? skylightingSkyOpenness : skylightingSpecular;
+				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? envOcclusion : 1.0;
 				skySpecular *= skylightingSpecular;
 #			endif
 			} else {
 				// Mode 0/1: IBL ratio-based
 				float3 ratio = ImageBasedLighting::GetIBLRatio();
 				envSpecular = Color::IrradianceToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLSpecularScale;
 #			if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
 #			endif
@@ -159,8 +167,10 @@ namespace DynamicCubemaps
 
 #		if defined(SKYLIGHTING)
 		float skylightingSpecular = 0.0;
+		float skylightingSkyOpenness = 1.0;  // Interiors have no sky to occlude, so the env term stays unattenuated.
 		if (!SharedData::InInterior) {
 			skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, SphericalHarmonics::FauxSpecularLobe(N, V, roughness));
+			skylightingSkyOpenness = Skylighting::EvaluateSkyOpenness(skylighting);
 		}
 #		endif
 
@@ -171,19 +181,25 @@ namespace DynamicCubemaps
 			float3 envSpecular = 0.0;
 			float3 skySpecular = 0.0;
 
-			if (SharedData::iblSettings.DALCMode == 2) {
-				// Mode 2: DALC-normalized env scaled by DALCAmount + sky overlay
+			// Mode 3 must take the DALC path here too, matching DeferredCompositeCS.
+			const bool useDALCPath = SharedData::FixCubemapReflectionMode() ? (SharedData::iblSettings.DALCMode >= 2) : (SharedData::iblSettings.DALCMode == 2);
+			if (useDALCPath) {
+				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
 				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
 				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLSpecularScale;
 #			if defined(SKYLIGHTING)
+				// Only a roof should dim the local cubemap, and it already holds the ground in its lower
+				// hemisphere: an R-oriented lobe instead reads any downward reflection as occluded.
+				const float envOcclusion = SharedData::FixEnvReflectionSkyOcclusion() ? skylightingSkyOpenness : skylightingSpecular;
+				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? envOcclusion : 1.0;
 				skySpecular *= skylightingSpecular;
 #			endif
 			} else {
 				// Mode 0/1: IBL ratio-based
 				float3 ratio = ImageBasedLighting::GetIBLRatio();
 				envSpecular = Color::IrradianceToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLSpecularScale;
 #			if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
 #			endif

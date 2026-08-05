@@ -1729,13 +1729,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
+	// ColorPow is a diffuse albedo curve, but metals take their whole appearance from F0, so undo it there.
+	const bool uncurveF0 = SharedData::FixColorPowMetals();
+
 	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		baseColor.xyz = Color::SrgbToLinear(baseColor.xyz) * pbrVertexColor;
-		material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
-		baseColor.xyz = Color::LinearToSrgb(baseColor.xyz);
+		baseColor.xyz = Color::SrgbToLinear(baseColor.xyz);
+		material.F0 = lerp(rawRMAOS.w, (uncurveF0 ? Color::UncurveDiffuse(baseColor.xyz) : baseColor.xyz) * pbrVertexColor, material.Metallic);
+		baseColor.xyz = Color::LinearToSrgb(baseColor.xyz * pbrVertexColor);
 	} else {
+		material.F0 = lerp(rawRMAOS.w, (uncurveF0 ? Color::UncurveDiffuse(baseColor.xyz) : baseColor.xyz) * pbrVertexColor, material.Metallic);
 		baseColor.xyz *= pbrVertexColor;
-		material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
 	}
 
 	material.GlintScreenSpaceScale = max(1, glintParameters.x);

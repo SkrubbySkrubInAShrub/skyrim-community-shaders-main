@@ -76,7 +76,8 @@ public:
 		float SkyIBLSaturation;
 		float FogAmount;
 		uint DALCMode;
-		float pad0[2];
+		float SkyIBLSpecularScale;  ///< Sky reflection scale; tracks SkyIBLScale unless ENB overrides it with its own ReflectiveAmount.
+		float pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
