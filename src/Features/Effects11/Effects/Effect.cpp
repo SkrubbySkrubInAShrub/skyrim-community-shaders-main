@@ -207,7 +207,8 @@ bool Effect::Apply()
 			logger::info("[EFFECTS11] Effect file not found, skipping: '{}'", GetFilePath().string());
 			return true;
 		}
-		logger::error("[EFFECTS11] Failed to compile '{}'", GetFilePath().string());
+		// The file exists but could not be read or compiled; errors holds the specific reason
+		logger::error("[EFFECTS11] Failed to load '{}': {}", GetFilePath().string(), errors.empty() ? "unknown error" : errors.back());
 		return false;
 	}
 
