@@ -275,9 +275,8 @@ namespace WeatherExtensions
 			if (globals::features::effects11.loaded) {
 				globals::features::effects11.CheckCommonData();
 				if (globals::features::effects11.enableEffect) {
-					// The engine passes Sky's own cube by reference, so overriding in place writes
-					// the scaled result back into Sky and compounds on every call Sky has not
-					// recomputed colors for. Push an overridden copy and leave Sky's cube alone.
+					// The engine passes Sky's own cube by reference, so overriding in place would
+					// compound on every call Sky has not recomputed colors for.
 					Effects11::DirectionalAmbientColors overridden = DirectionalAmbientColors;
 					globals::features::effects11.OverrideAmbientLighting(overridden);
 					func(overridden, AmbientSpecularTint, AmbientSpecularFresnel);
