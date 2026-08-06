@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "State.h"
 
+#include "PresetManager.h"
 #include "SettingManager.h"
 #include "TextureManager.h"
 #include "WeatherManager.h"
@@ -90,6 +91,24 @@ void EffectManager::Initialize()
 
 }
 
+void EffectManager::LogPresetStatus() const
+{
+	auto& presetManager = PresetManager::GetSingleton();
+
+	if (IsPresetLoaded()) {
+		logger::info("[EFFECTS11] Preset loaded from '{}', settings from '{}'",
+			presetManager.GetENBSeriesPath().string(),
+			presetManager.GetENBSeriesIniPath().string());
+		return;
+	}
+
+	// Effects11 stays inert without a preset, so make the reason findable
+	if (!enbEffect.IsFilePresent())
+		logger::warn("[EFFECTS11] No preset in use: '{}' not found", enbEffect.GetFilePath().string());
+	else
+		logger::error("[EFFECTS11] No preset in use: '{}' failed to compile", enbEffect.GetFilePath().string());
+}
+
 void EffectManager::Apply()
 {
 	globals::features::effects11.LoadRaindropTexture();
@@ -107,13 +126,14 @@ void EffectManager::Apply()
 			effect->LoadWeatherData();
 	}
 #endif
+
+	LogPresetStatus();
 }
 
 void EffectManager::Load()
 {
 	Effect* allEffects[] = { &enbBloom, &enbLens, &enbAdaptation, &enbEffect, &enbEffectPostPass };
 	for (auto* effect : allEffects) {
-		effect->lastIniWriteTime = {};
 		effect->Load();
 		effect->UpdateUIVariables();
 	}
