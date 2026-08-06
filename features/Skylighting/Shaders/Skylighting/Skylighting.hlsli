@@ -53,7 +53,7 @@ namespace Skylighting
 		return MixDiffuse(CosineLobeVisibility(skylightingSH, normal, fadeOutFactor));
 	}
 
-	float EvaluateSkyOpenness(sh2 skylightingSH)
+	float EvaluateVisibility(sh2 skylightingSH)
 	{
 		return MixSpecular(CosineLobeVisibility(skylightingSH, float3(0, 0, 1), 1.0));
 	}

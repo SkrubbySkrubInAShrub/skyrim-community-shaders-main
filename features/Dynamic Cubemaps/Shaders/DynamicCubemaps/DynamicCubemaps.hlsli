@@ -48,10 +48,10 @@ namespace DynamicCubemaps
 		if (!useStaticIBL) {
 #		if defined(SKYLIGHTING)
 		float skylightingSpecular = 0.0;
-		float skylightingSkyOpenness = 1.0;
+		float skylightingVisibility = 1.0;
 		if (!SharedData::InInterior) {
 			skylightingSpecular = Skylighting::EvaluateSpecular(skylighting, SphericalHarmonics::FauxSpecularLobe(N, V, roughness));
-			skylightingSkyOpenness = Skylighting::EvaluateSkyOpenness(skylighting);
+			skylightingVisibility = Skylighting::EvaluateVisibility(skylighting);
 		}
 #		endif
 
@@ -68,7 +68,7 @@ namespace DynamicCubemaps
 				envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 				skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 #			if defined(SKYLIGHTING)
-				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSkyOpenness : 1.0;
+				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingVisibility : 1.0;
 				skySpecular *= skylightingSpecular;
 #			endif
 			} else {
