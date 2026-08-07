@@ -230,10 +230,12 @@ void State::Reset()
 		isMainMenuOpen = ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
 		isLoadingMenuOpen = ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
 		isMapMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		isStatsMenuOpen = ui->IsMenuOpen(RE::StatsMenu::MENU_NAME);
 	} else {
 		isMainMenuOpen = false;
 		isLoadingMenuOpen = false;
 		isMapMenuOpen = false;
+		isStatsMenuOpen = false;
 	}
 
 	lastModifiedPixelDescriptor = 0;
