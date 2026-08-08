@@ -2,38 +2,29 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace Util
 {
-	// Chord length between unit directions; approximates one degree for small angles.
-	inline constexpr float DirectionalLightDiscontinuityThreshold = RE::NI_PI / 180.0f;
-
-	/**
-	 * @brief Tests whether a direction can be normalized, i.e. is finite and not degenerate.
-	 */
-	[[nodiscard]] inline bool IsUsableDirection(const RE::NiPoint3& a_direction) noexcept
+	/** @brief Pending celestial synchronization requests consumed by the sky update hook. */
+	struct CelestialTransitionRequest
 	{
-		const float lengthSquared = a_direction.Dot(a_direction);
-		return std::isfinite(lengthSquared) && lengthSquared > FLT_EPSILON * FLT_EPSILON;
-	}
+		bool timeJump = false;
+		bool gameLoad = false;
+	};
 
-	/**
-	 * @brief Tests whether a directional light jumped between frames, e.g. a wait, sleep or fast travel.
-	 * @return false when either direction is degenerate, so callers treat unusable input as continuous.
-	 */
-	[[nodiscard]] inline bool HasDirectionalLightDiscontinuity(const RE::NiPoint3& a_currentDirection, const RE::NiPoint3& a_previousDirection) noexcept
-	{
-		if (!IsUsableDirection(a_currentDirection) || !IsUsableDirection(a_previousDirection))
-			return false;
-
-		auto currentDirection = a_currentDirection;
-		auto previousDirection = a_previousDirection;
-		currentDirection.Unitize();
-		previousDirection.Unitize();
-
-		const auto difference = currentDirection - previousDirection;
-		return difference.Dot(difference) >=
-		       DirectionalLightDiscontinuityThreshold * DirectionalLightDiscontinuityThreshold;
-	}
+	/** @brief Sets whether a sky update hook can synchronize celestial transitions. */
+	void SetCelestialTransitionHandlerAvailable(bool a_available);
+	/** @brief Requests celestial synchronization after an abrupt game-time change. */
+	void RequestTimeJumpTransition();
+	/** @brief Requests celestial synchronization after loading an existing save. */
+	void RequestGameLoadTransition();
+	/** @brief Consumes pending celestial synchronization requests. */
+	[[nodiscard]] CelestialTransitionRequest ConsumeCelestialTransitionRequest();
+	/** @brief Marks a celestial transition ready for dependent rendering updates. */
+	void CompleteCelestialTransition();
+	/** @brief Returns the latest completed celestial-transition generation. */
+	[[nodiscard]] std::uint32_t GetCompletedCelestialTransitionGeneration();
 
 	float4 TryGetWaterData(float offsetX, float offsetY);
 	float4 GetCameraData();
