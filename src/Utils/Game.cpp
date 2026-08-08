@@ -35,6 +35,7 @@ namespace Util
 		if (a_available)
 			return;
 
+		// Bitwise or, not ||: both requests must be drained even when the first one was already pending.
 		const bool hadPendingTransition = timeJumpTransitionRequested.exchange(false, std::memory_order_acq_rel) |
 		                                  gameLoadTransitionRequested.exchange(false, std::memory_order_acq_rel);
 		if (hadPendingTransition)

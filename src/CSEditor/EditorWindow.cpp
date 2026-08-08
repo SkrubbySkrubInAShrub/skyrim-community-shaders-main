@@ -2164,13 +2164,10 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	if (!calendar || !calendar->gameHour)
 		return false;
 	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
-	const bool activated = ImGui::IsItemActivated();
-	const bool active = ImGui::IsItemActive();
-	const bool deactivated = ImGui::IsItemDeactivated();
-	const bool deactivatedAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
-	if (activated)
+	if (ImGui::IsItemActivated())
 		gameHourScrubRefreshIssued = false;
-	if (changed && active) {
+
+	if (changed && ImGui::IsItemActive()) {
 		const double currentTime = ImGui::GetTime();
 		if (!gameHourScrubRefreshIssued || currentTime - lastGameHourScrubRefreshTime >= kGameHourScrubRefreshIntervalSeconds) {
 			Util::RequestTimeJumpTransition();
@@ -2178,10 +2175,10 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 			gameHourScrubRefreshIssued = true;
 		}
 	}
-	if (deactivatedAfterEdit)
+
+	// Always refresh on release so the final value is reflected even if the throttle swallowed it.
+	if (ImGui::IsItemDeactivatedAfterEdit())
 		Util::RequestTimeJumpTransition();
-	if (deactivated)
-		gameHourScrubRefreshIssued = false;
 	return true;
 }
 
