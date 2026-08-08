@@ -127,30 +127,6 @@ namespace
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct VRFastTravelHook
-	{
-		static std::uintptr_t thunk(std::uintptr_t a_player, std::uintptr_t a_destination, bool a_unk)
-		{
-			const auto result = func(a_player, a_destination, a_unk);
-			RequestTimeJumpSynchronization();
-			return result;
-		}
-
-		static void Install()
-		{
-			if (!globals::game::isVR)
-				return;
-
-			const auto result = stl::detour_thunk<VRFastTravelHook>(REL::RelocationID(39373, 40445));
-			if (result == NO_ERROR)
-				logger::info("[Terrain Shadows] Installed VR fast-travel completion hook");
-			else
-				logger::error("[Terrain Shadows] Failed to install VR fast-travel completion hook: {}", result);
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
 	struct PapyrusSetGlobalValueHook
 	{
 		static void thunk(RE::BSScript::IVirtualMachine* a_vm, RE::VMStackID a_stackID, RE::TESGlobal* a_global, float a_value)
@@ -184,7 +160,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void TerrainShadows::PostPostLoad()
 {
 	ConsoleCommandHook::Install();
-	VRFastTravelHook::Install();
 	PapyrusSetGlobalValueHook::Install();
 }
 
