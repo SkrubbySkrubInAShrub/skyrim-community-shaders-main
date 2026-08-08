@@ -103,11 +103,8 @@ namespace
 
 		static void Install()
 		{
-			const auto result = stl::detour_thunk<ConsoleCommandHook>(REL::RelocationID(50157, 51084));
-			if (result == NO_ERROR)
-				logger::info("[Terrain Shadows] Installed console time-change hook");
-			else
-				logger::error("[Terrain Shadows] Failed to install console time-change hook: {}", result);
+			stl::detour_thunk<ConsoleCommandHook>(REL::RelocationID(50157, 51084));
+			logger::info("[Terrain Shadows] Installed console time-change hook");
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -128,11 +125,8 @@ namespace
 
 		static void Install()
 		{
-			const auto result = stl::detour_thunk<PapyrusSetGlobalValueHook>(REL::RelocationID(55352, 55923));
-			if (result == NO_ERROR)
-				logger::info("[Terrain Shadows] Installed Papyrus GameHour change hook");
-			else
-				logger::error("[Terrain Shadows] Failed to install Papyrus GameHour change hook: {}", result);
+			stl::detour_thunk<PapyrusSetGlobalValueHook>(REL::RelocationID(55352, 55923));
+			logger::info("[Terrain Shadows] Installed Papyrus GameHour change hook");
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
