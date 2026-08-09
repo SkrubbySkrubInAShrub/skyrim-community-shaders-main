@@ -288,6 +288,8 @@ bool SkySync::Update(const RE::Sky* sky)
 												 cell->GetRuntimeData().worldSpace != currentCellWorldspace);
 		if (cell)
 			SetSkyRotation(sky, cell);
+		else
+			currentCell = nullptr;  // keep the cache in sync so a cell-less frame doesn't reset every frame
 		if (resetFaderForCellChange)
 			shadowFader.Reset();
 	}
