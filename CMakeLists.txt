@@ -1198,13 +1198,14 @@ else()
         COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_PACKAGE}"
         COMMAND ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${AIO_ARCHIVE_COMMAND}
         COMMENT "Creating AIO archive (full install)"
+        VERBATIM
     )
 endif()
 add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
 
 message("*************************************************************")
 message("Community Shaders configuration complete")
-message("To prepare a ZIP package of AIO, Core, or Features")
+message("To prepare a package of AIO (.7z when 7-Zip is found), Core, or Features")
 message("  Build cmake targets:")
 message("    - Package-Core: Core package")
 message("    - Package-AIO-Manual: AIO package (manual)")
