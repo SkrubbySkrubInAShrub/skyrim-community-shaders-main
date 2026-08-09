@@ -239,12 +239,11 @@ void Profiler::CollectResults()
 		results.push_back(std::move(result));
 	}
 }
-
 void Profiler::RetireStaleTimers()
 {
 	const size_t before = knownTimers.size();
 	std::erase_if(knownTimers, [this](const KnownTimer& known) {
-		return collectedFrames - known.lastSampleFrame > kTimerRetireFrames;
+		return collectedFrames - known.lastSampleFrame >= kTimerRetireFrames;
 	});
 	if (knownTimers.size() != before)
 		RebuildTimerIndex();
