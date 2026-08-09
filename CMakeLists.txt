@@ -1178,15 +1178,26 @@ if(TARGET PREPARE_AIO)
         )
     endif()
 else()
+    # AIO_PACKAGE is named .7z whenever 7-Zip exists, so this branch must honour
+    # SEVENZ_EXECUTABLE too or it emits a deflate zip wearing a .7z extension.
+    if(SEVENZ_EXECUTABLE)
+        set(AIO_ARCHIVE_COMMAND
+            "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_PACKAGE}" *
+        )
+    else()
+        set(AIO_ARCHIVE_COMMAND
+            ${CMAKE_COMMAND} -E tar cfv ${AIO_PACKAGE} --format=zip -- .
+        )
+    endif()
     add_custom_command(
         OUTPUT ${AIO_PACKAGE}
         DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
         COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${AIO_DIR}
-        COMMAND
-            ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
-            ${AIO_PACKAGE} --format=zip -- .
-        COMMENT "Creating AIO zip package (full install)"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_PACKAGE}"
+        COMMAND ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${AIO_ARCHIVE_COMMAND}
+        COMMENT "Creating AIO archive (full install)"
     )
 endif()
 add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
