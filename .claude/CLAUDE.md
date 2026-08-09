@@ -601,6 +601,8 @@ Full details: [Developers wiki — Patch Release Process](https://github.com/com
 
 All user-visible strings must use the translation system. The source of truth for English strings is `package/SKSE/Plugins/CommunityShaders/Translations/en.json`.
 
+**Never translate log messages.** `logger::info/warn/error/debug/critical/trace` (and anything else written to `CommunityShaders.log`) must always use plain English literals — never `T()`, `TKEY()`, or `I18n::GetSingleton()->Format()`, and never interpolate a translated value such as `GetDisplayName()` or `GetDisplayCategory()` into a log line. Logs are diagnostic output read by developers and support volunteers; localizing them makes user-submitted logs unsearchable and unmatched against source strings. Use `GetName()` / `GetShortName()` for feature identifiers in logs.
+
 **API**:
 
 ```cpp
