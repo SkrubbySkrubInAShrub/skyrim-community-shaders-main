@@ -302,7 +302,7 @@ public:
 		return IsMainOrLoadingMenuOpen() ||
 		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
 	}
-	/** @brief Full-screen menus drawing their own art, which must not be graded by post-process effects. */
+	/** @brief Full-screen menus, which have no usable scene depth for screen-space effects. */
 	bool IsFullScreenMenuOpen() const { return IsMainOrLoadingMenuOpen() || isMapMenuOpen || isStatsMenuOpen; }
 	/** @brief Gameplay is paused or suspended behind a menu. Cached menus are kept explicit in case a mod clears kPausesGame. */
 	bool IsPausedOrMenuOpen(RE::UI* ui) const

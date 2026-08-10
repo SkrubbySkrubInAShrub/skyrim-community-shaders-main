@@ -51,7 +51,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.ParticleAmbientInfluence = settingManager.GetInterpolatedTimeOfDayValue("AmbientInfluence", "PARTICLE");
 	data.ParticlePointLightingInfluence = settingManager.GetInterpolatedTimeOfDayValue("PointLightingInfluence", "PARTICLE");
 
-	data.EnableVolumetricRays = enableEffect && settingManager.GetValue<bool>("EnableVolumetricRays", "EFFECT");
+	data.EnableVolumetricRays = enableEffect && !globals::state->IsFullScreenMenuOpen() && settingManager.GetValue<bool>("EnableVolumetricRays", "EFFECT");
 	data.VolumetricRaysIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "VOLUMETRICRAYS");
 	{
 		float density = std::max(0.1f, settingManager.GetInterpolatedTimeOfDayValue("Density", "VOLUMETRICRAYS"));
@@ -472,7 +472,7 @@ void Effects11::CheckCommonData()
 		auto& settingManager = SettingManager::GetSingleton();
 		auto& effectManager = EffectManager::GetSingleton();
 
-		enableEffect = !globals::state->IsFullScreenMenuOpen() && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
+		enableEffect = !globals::state->IsMainOrLoadingMenuOpen() && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
 
 		auto& weatherManager = WeatherManager::GetSingleton();
 
