@@ -381,6 +381,7 @@ Menu::~Menu()
 	uiIcons.water.Release();
 	uiIcons.debug.Release();
 	uiIcons.materials.Release();
+	uiIcons.transparency.Release();
 	uiIcons.postProcessing.Release();
 	uiIcons.freeCamera.Release();
 	uiIcons.playMode.Release();
