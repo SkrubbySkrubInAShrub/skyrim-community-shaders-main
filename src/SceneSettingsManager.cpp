@@ -1019,6 +1019,8 @@ std::filesystem::path SceneSettingsManager::GetUserSettingsFilePath()
 
 std::filesystem::path SceneSettingsManager::GetOverwritesPath(SceneType type)
 {
+	// Location overwrites are keyed by form under GetLocationOverwritesDir(), not by scene type name.
+	assert(IsEntryListSceneType(type));
 	return Util::PathHelpers::GetSceneSettingsPath() / GetSceneTypeName(type);
 }
 
@@ -1027,9 +1029,8 @@ std::filesystem::path SceneSettingsManager::GetWeatherOverwritesDir()
 	return Util::PathHelpers::GetSceneSettingsPath() / "Weather";
 }
 
-std::filesystem::path SceneSettingsManager::GetLocationOverwritesDir(LocationTargetType type)
+std::filesystem::path SceneSettingsManager::GetLocationOverwritesDir()
 {
-	(void)type;
 	return Util::PathHelpers::GetSceneSettingsPath() / "Locations";
 }
 
@@ -1043,9 +1044,9 @@ const char* SceneSettingsManager::GetPeriodName(TimeOfDayPeriod period)
 
 SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetPeriodFromName(const std::string& name)
 {
-	for (int i = 0; i < kPeriodCount; ++i) {
-		if (name == GetPeriodName(static_cast<TimeOfDayPeriod>(i)))
-			return static_cast<TimeOfDayPeriod>(i);
+	for (auto period : kPeriods) {
+		if (name == GetPeriodName(period))
+			return period;
 	}
 	return TimeOfDayPeriod::Count;
 }
@@ -1070,50 +1071,45 @@ float SceneSettingsManager::GetCurrentGameHour()
 	return hour;
 }
 
-void SceneSettingsManager::GetTimeOfDayFactors(float outFactors[kPeriodCount])
+SceneSettingsManager::PeriodLookup SceneSettingsManager::FindPeriodForHour(float hour)
 {
-	for (int i = 0; i < kPeriodCount; ++i)
-		outFactors[i] = 0.0f;
+	for (int index = 0; index < kPeriodCount; ++index) {
+		const float start = kPeriodHours[index][0];
+		const float end = kPeriodHours[index][1];
+		// Night ends past 24, so pre-dawn hours have to be compared against hour + 24.
+		const float periodHour = (end > 24.0f && hour < start) ? hour + 24.0f : hour;
+		if (periodHour >= start && periodHour < end)
+			return { index, periodHour };
+	}
+	return {};
+}
 
-	float hour = GetCurrentGameHour();
-
-	// Normalize to [0, 24) - Night wraps, so also check hour + 24 for pre-dawn hours
-	for (int i = 0; i < kPeriodCount; ++i) {
-		float start = kPeriodHours[i][0];
-		float end = kPeriodHours[i][1];
-		float h = (end > 24.0f && hour < start) ? hour + 24.0f : hour;
-
-		if (h >= start && h < end) {
-			// Inside this period - check if we're in the blend-out zone near the end.
-			float distFromEnd = end - h;
-
-			if (distFromEnd < kTransitionHours) {
-				// Blending out to next period
-				float t = distFromEnd / kTransitionHours;
-				outFactors[i] = t;
-				outFactors[(i + 1) % kPeriodCount] = 1.0f - t;
-			} else {
-				outFactors[i] = 1.0f;
-			}
-			return;
-		}
+std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetTimeOfDayFactors()
+{
+	std::array<float, kPeriodCount> factors{};
+	const auto lookup = FindPeriodForHour(GetCurrentGameHour());
+	if (lookup.index < 0) {
+		factors[static_cast<int>(TimeOfDayPeriod::Day)] = 1.0f;
+		return factors;
 	}
 
-	// Fallback: noon = Day
-	outFactors[static_cast<int>(TimeOfDayPeriod::Day)] = 1.0f;
+	const float hoursToEnd = kPeriodHours[lookup.index][1] - lookup.hour;
+	if (hoursToEnd >= kTransitionHours) {
+		factors[lookup.index] = 1.0f;
+		return factors;
+	}
+
+	// Inside the blend-out zone: cross-fade into the next period.
+	const float weight = hoursToEnd / kTransitionHours;
+	factors[lookup.index] = weight;
+	factors[(lookup.index + 1) % kPeriodCount] = 1.0f - weight;
+	return factors;
 }
 
 SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetCurrentPeriod()
 {
-	float hour = GetCurrentGameHour();
-	for (int i = 0; i < kPeriodCount; ++i) {
-		float start = kPeriodHours[i][0];
-		float end = kPeriodHours[i][1];
-		float h = (end > 24.0f && hour < start) ? hour + 24.0f : hour;
-		if (h >= start && h < end)
-			return static_cast<TimeOfDayPeriod>(i);
-	}
-	return TimeOfDayPeriod::Day;
+	const auto lookup = FindPeriodForHour(GetCurrentGameHour());
+	return lookup.index < 0 ? TimeOfDayPeriod::Day : static_cast<TimeOfDayPeriod>(lookup.index);
 }
 
 // --- Feature Metadata ---
@@ -1219,7 +1215,7 @@ namespace
 		if (!feature)
 			return {};
 
-		SceneSettingsManager::SceneLayerGuard guard(*SceneSettingsManager::GetSingleton());
+		SceneSettingsManager::SceneLayerGuard guard;
 		json featureSettings;
 		feature->SaveSettings(featureSettings);
 		if (!featureSettings.is_object())
@@ -1355,7 +1351,7 @@ json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShor
 	if (!feature)
 		return {};
 
-	SceneLayerGuard guard(*GetSingleton());
+	SceneLayerGuard guard;
 	json value;
 	if (GetCatalogSettingValue(*feature, *setting, value))
 		return value;
@@ -1488,7 +1484,6 @@ static bool GetFeatureSettingValueForValidation(Feature& feature, const std::str
 static bool IsSceneSettingValueAllowed(const json& featureValue,
 	const SceneSettingsCatalog::SettingMetadata& setting, const json& value, bool requireNumeric)
 {
-
 	if (!IsCatalogValueCompatible(setting, featureValue) || !IsCatalogValueCompatible(setting, value))
 		return false;
 
@@ -1889,50 +1884,48 @@ void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
 	ReapplyIfActive();
 }
 
-static std::string GetSceneOverwriteTypeDescription(SceneSettingsManager::SceneType type, SceneSettingsManager::TimeOfDayPeriod period)
+/// Per-period overwrites live in a period subfolder of their scene's directory.
+static std::filesystem::path GetOverwriteDir(const std::filesystem::path& baseDir,
+	SceneSettingsManager::TimeOfDayPeriod period)
 {
-	if (type == SceneSettingsManager::SceneType::InteriorOnly)
-		return "Interior Only";
-	if (period != SceneSettingsManager::TimeOfDayPeriod::Count)
-		return std::format("Time of Day - {}", SceneSettingsManager::GetPeriodName(period));
-	return "Time of Day";
+	return period != SceneSettingsManager::TimeOfDayPeriod::Count ?
+	           baseDir / SceneSettingsManager::GetPeriodName(period) :
+	           baseDir;
 }
 
-static std::string GetWeatherOverwriteTypeDescription(SceneSettingsManager::TimeOfDayPeriod period)
-{
-	if (period != SceneSettingsManager::TimeOfDayPeriod::Count)
-		return std::format("Weather - {}", SceneSettingsManager::GetPeriodName(period));
-	return "Weather";
-}
-
-static std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type, const SceneSettingsManager::SettingEntry& entry)
+/// Discovered entries keep the exact file they came from; authored ones derive it from their period.
+static std::filesystem::path GetOverwriteFilePath(const std::filesystem::path& baseDir,
+	const SceneSettingsManager::SettingEntry& entry)
 {
 	if (!entry.sourcePath.empty())
 		return entry.sourcePath;
+	return GetOverwriteDir(baseDir, entry.period) / entry.sourceFilename;
+}
 
-	auto basePath = SceneSettingsManager::GetOverwritesPath(type);
-	if (type == SceneSettingsManager::SceneType::TimeOfDay && entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
-		return basePath / SceneSettingsManager::GetPeriodName(entry.period) / entry.sourceFilename;
-	return basePath / entry.sourceFilename;
+static std::string GetOverwriteTypeDescription(std::string_view sceneLabel,
+	SceneSettingsManager::TimeOfDayPeriod period)
+{
+	return period != SceneSettingsManager::TimeOfDayPeriod::Count ?
+	           std::format("{} - {}", sceneLabel, SceneSettingsManager::GetPeriodName(period)) :
+	           std::string(sceneLabel);
+}
+
+static std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type,
+	const SceneSettingsManager::SettingEntry& entry)
+{
+	return GetOverwriteFilePath(SceneSettingsManager::GetOverwritesPath(type), entry);
 }
 
 static std::filesystem::path GetWeatherOverwritePath(RE::FormID weatherId, const SceneSettingsManager::SettingEntry& entry)
 {
-	if (!entry.sourcePath.empty())
-		return entry.sourcePath;
-
-	auto basePath = SceneSettingsManager::GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId);
-	if (entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
-		return basePath / SceneSettingsManager::GetPeriodName(entry.period) / entry.sourceFilename;
-	return basePath / entry.sourceFilename;
+	return GetOverwriteFilePath(
+		SceneSettingsManager::GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId), entry);
 }
 
-static std::filesystem::path GetLocationOverwritePath(SceneSettingsManager::LocationTargetType type,
-	std::string_view formKey, const SceneSettingsManager::SettingEntry& entry)
+static std::filesystem::path GetLocationOverwritePath(std::string_view formKey,
+	const SceneSettingsManager::SettingEntry& entry)
 {
-	if (!entry.sourcePath.empty())
-		return entry.sourcePath;
-	return SceneSettingsManager::GetLocationOverwritesDir(type) / formKey / entry.sourceFilename;
+	return GetOverwriteFilePath(SceneSettingsManager::GetLocationOverwritesDir() / formKey, entry);
 }
 
 static bool WriteGroupedOverwriteFile(const std::filesystem::path& path, const std::string& featureShortName,
@@ -2021,30 +2014,36 @@ static bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
 	return WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
 }
 
+/// Groups the selected user entries by target directory and feature, one overwrite file per group.
+static void ExportUserEntriesToOverwrites(const std::vector<SceneSettingsManager::SettingEntry>& entries,
+	const std::vector<size_t>& indices, const std::filesystem::path& baseDir, const std::string& modName,
+	std::string_view sceneLabel, const json& extraMetadata = json::object())
+{
+	const auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
+	if (safeModName.empty())
+		return;
+
+	std::map<std::pair<std::filesystem::path, std::string>, std::vector<const SceneSettingsManager::SettingEntry*>> groupedEntries;
+	for (auto index : indices) {
+		if (index >= entries.size() || entries[index].source != SceneSettingsManager::EntrySource::User)
+			continue;
+		const auto& entry = entries[index];
+		groupedEntries[{ GetOverwriteDir(baseDir, entry.period), entry.featureShortName }].push_back(&entry);
+	}
+
+	for (const auto& [group, grouped] : groupedEntries) {
+		const auto& [directory, featureShortName] = group;
+		WriteGroupedOverwriteFile(directory / std::format("{}_{}.json", safeModName, featureShortName),
+			featureShortName, GetOverwriteTypeDescription(sceneLabel, grouped.front()->period), grouped, extraMetadata);
+	}
+}
+
 void SceneSettingsManager::ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName)
 {
 	if (!IsEntryListSceneType(type))
 		return;
-	auto& vec = GetEntriesMut(type);
-	auto basePath = GetOverwritesPath(type);
-	auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
-	if (safeModName.empty())
-		return;
-
-	std::map<std::pair<std::filesystem::path, std::string>, std::vector<const SettingEntry*>> groupedEntries;
-	for (auto idx : indices) {
-		if (idx >= vec.size() || vec[idx].source != EntrySource::User)
-			continue;
-		auto& e = vec[idx];
-		auto dir = (type == SceneType::TimeOfDay && e.period != TimeOfDayPeriod::Count) ? basePath / GetPeriodName(e.period) : basePath;
-		groupedEntries[{ dir, e.featureShortName }].push_back(&e);
-	}
-
-	for (const auto& [group, grouped] : groupedEntries) {
-		const auto& [dir, featureShortName] = group;
-		auto typeDescription = GetSceneOverwriteTypeDescription(type, grouped.front()->period);
-		WriteGroupedOverwriteFile(dir / std::format("{}_{}.json", safeModName, featureShortName), featureShortName, typeDescription, grouped);
-	}
+	ExportUserEntriesToOverwrites(GetEntriesMut(type), indices, GetOverwritesPath(type), modName,
+		type == SceneType::InteriorOnly ? "Interior Only" : "Time of Day");
 }
 
 void SceneSettingsManager::ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName)
@@ -2052,26 +2051,8 @@ void SceneSettingsManager::ExportWeatherUserSettingsToOverwrites(RE::FormID weat
 	if (!TryEnsureWeatherDataLoaded())
 		return;
 
-	auto& vec = GetWeatherConfigMut(weatherId).entries;
-	auto baseDir = GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId);
-	auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
-	if (safeModName.empty())
-		return;
-
-	std::map<std::pair<std::filesystem::path, std::string>, std::vector<const SettingEntry*>> groupedEntries;
-	for (auto idx : indices) {
-		if (idx >= vec.size() || vec[idx].source != EntrySource::User)
-			continue;
-		auto& e = vec[idx];
-		auto dir = (e.period != TimeOfDayPeriod::Count) ? baseDir / GetPeriodName(e.period) : baseDir;
-		groupedEntries[{ dir, e.featureShortName }].push_back(&e);
-	}
-
-	for (const auto& [group, grouped] : groupedEntries) {
-		const auto& [dir, featureShortName] = group;
-		auto typeDescription = GetWeatherOverwriteTypeDescription(grouped.front()->period);
-		WriteGroupedOverwriteFile(dir / std::format("{}_{}.json", safeModName, featureShortName), featureShortName, typeDescription, grouped);
-	}
+	ExportUserEntriesToOverwrites(GetWeatherConfigMut(weatherId).entries, indices,
+		GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId), modName, "Weather");
 }
 
 void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave)
@@ -2257,15 +2238,17 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 		ResolveAndApply(true);
 }
 
-SceneSettingsManager::SceneLayerGuard::SceneLayerGuard(SceneSettingsManager& manager) :
-	manager(manager)
+SceneSettingsManager::SceneLayerGuard::SceneLayerGuard() :
+	manager(GetSingleton())
 {
-	manager.SuspendSceneLayer();
+	if (manager)
+		manager->SuspendSceneLayer();
 }
 
 SceneSettingsManager::SceneLayerGuard::~SceneLayerGuard()
 {
-	manager.ResumeSceneLayer();
+	if (manager)
+		manager->ResumeSceneLayer();
 }
 
 bool SceneSettingsManager::IsFeaturePaused(const std::string& featureShortName) const
@@ -2342,24 +2325,18 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	const auto locationId = location ? location->GetFormID() : 0;
 	const auto cellId = cell->GetFormID();
 
-	RE::FormID currentWeatherId = 0;
-	RE::FormID previousWeatherId = 0;
-	float weatherLerp = 0.0f;
+	WeatherBlend weather;
 	if (!interior) {
 		TryEnsureWeatherDataLoaded();
-		if (auto* sky = globals::game::sky) {
-			currentWeatherId = sky->currentWeather ? sky->currentWeather->GetFormID() : 0;
-			weatherLerp = std::isfinite(sky->currentWeatherPct) ? std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 0.0f;
-			previousWeatherId = GetEffectivePreviousWeatherId(sky, weatherLerp);
-		}
+		weather = GetWeatherBlend();
 	}
 
 	const bool contextChanged = interior != lastResolvedInterior ||
 	                            locationId != lastResolvedLocationId ||
 	                            cellId != lastResolvedCellId ||
-	                            currentWeatherId != lastResolvedCurrentWeatherId ||
-	                            previousWeatherId != lastResolvedPreviousWeatherId ||
-	                            std::abs(weatherLerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
+	                            weather.currentWeatherId != lastResolvedCurrentWeatherId ||
+	                            weather.previousWeatherId != lastResolvedPreviousWeatherId ||
+	                            std::abs(weather.lerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
 	                            lastResolvedHour < 0.0f || std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold;
 	const auto now = std::chrono::steady_clock::now();
 	const bool applyRetryDue = std::any_of(applyFailures.begin(), applyFailures.end(),
@@ -2375,9 +2352,35 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	lastResolvedLocationId = locationId;
 	lastResolvedCellId = cellId;
 	lastResolvedHour = hour;
-	lastResolvedCurrentWeatherId = currentWeatherId;
-	lastResolvedPreviousWeatherId = previousWeatherId;
-	lastResolvedWeatherLerp = weatherLerp;
+	lastResolvedCurrentWeatherId = weather.currentWeatherId;
+	lastResolvedPreviousWeatherId = weather.previousWeatherId;
+	lastResolvedWeatherLerp = weather.lerp;
+}
+
+SceneSettingsManager::WeatherBlend SceneSettingsManager::GetWeatherBlend() const
+{
+	WeatherBlend blend;
+	auto* sky = globals::game::sky;
+	if (!sky)
+		return blend;
+	blend.currentWeatherId = sky->currentWeather ? sky->currentWeather->GetFormID() : 0;
+	blend.lerp = std::isfinite(sky->currentWeatherPct) ? std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 0.0f;
+	blend.previousWeatherId = GetEffectivePreviousWeatherId(sky, blend.lerp);
+	return blend;
+}
+
+SceneSettingsManager::SettingAddress SceneSettingsManager::GetEntryAddress(const SettingEntry& entry)
+{
+	return { entry.featureShortName, entry.settingPath, entry.settingKey };
+}
+
+bool SceneSettingsManager::IsResolvableEntry(const SettingEntry& entry, SceneType type) const
+{
+	const bool floatsOnly = type == SceneType::TimeOfDay;
+	return IsEntryActive(entry) &&
+	       IsFeatureAllowedForType(type, entry.featureShortName) &&
+	       (!floatsOnly || IsNumericValue(entry.value)) &&
+	       FindAllowedCatalogSetting(entry.featureShortName, entry.settingPath, entry.settingKey, floatsOnly);
 }
 
 bool SceneSettingsManager::HasActiveSceneEntriesCached()
@@ -2385,36 +2388,18 @@ bool SceneSettingsManager::HasActiveSceneEntriesCached()
 	if (!activeEntryCacheDirty)
 		return hasActiveSceneEntries;
 
-	const auto hasActiveEntry = [&](const auto& sourceEntries, SceneType type) {
-		const bool floatsOnly = type == SceneType::TimeOfDay;
-		return std::any_of(sourceEntries.begin(), sourceEntries.end(), [&](const auto& entry) {
-			return IsEntryActive(entry) &&
-			       IsFeatureAllowedForType(type, entry.featureShortName) &&
-			       (!floatsOnly || IsNumericValue(entry.value)) &&
-			       FindAllowedCatalogSetting(
-				       entry.featureShortName, entry.settingPath, entry.settingKey, floatsOnly);
-		});
+	const auto hasResolvable = [&](const std::vector<SettingEntry>& sourceEntries, SceneType type) {
+		return std::any_of(sourceEntries.begin(), sourceEntries.end(),
+			[&](const SettingEntry& entry) { return IsResolvableEntry(entry, type); });
 	};
 
-	hasActiveSceneEntries = false;
-	for (const auto& [type, sourceEntries] : entries) {
-		if (hasActiveEntry(sourceEntries, type)) {
-			hasActiveSceneEntries = true;
-			break;
-		}
-	}
-	if (!hasActiveSceneEntries)
-		for (const auto& [_, config] : weatherSceneConfigs)
-			if (hasActiveEntry(config.entries, SceneType::TimeOfDay)) {
-				hasActiveSceneEntries = true;
-				break;
-			}
-	if (!hasActiveSceneEntries)
-		for (const auto& [_, config] : locationSceneConfigs)
-			if (hasActiveEntry(config.entries, SceneType::Location)) {
-				hasActiveSceneEntries = true;
-				break;
-			}
+	hasActiveSceneEntries =
+		std::any_of(entries.begin(), entries.end(),
+			[&](const auto& item) { return hasResolvable(item.second, item.first); }) ||
+		std::any_of(weatherSceneConfigs.begin(), weatherSceneConfigs.end(),
+			[&](const auto& item) { return hasResolvable(item.second.entries, SceneType::TimeOfDay); }) ||
+		std::any_of(locationSceneConfigs.begin(), locationSceneConfigs.end(),
+			[&](const auto& item) { return hasResolvable(item.second.entries, SceneType::Location); });
 
 	activeEntryCacheDirty = false;
 	return hasActiveSceneEntries;
@@ -2426,15 +2411,10 @@ SceneSettingsManager::ResolvedSettingMap SceneSettingsManager::BuildResolvedSett
 	const bool interior = Util::IsInterior();
 
 	const auto ensureBaselines = [&](const std::vector<SettingEntry>& sourceEntries, SceneType type) {
-		const bool floatsOnly = type == SceneType::TimeOfDay;
 		for (const auto& entry : sourceEntries) {
-			if (!IsEntryActive(entry) || (floatsOnly && !IsNumericValue(entry.value)) ||
-				!IsFeatureAllowedForType(type, entry.featureShortName) ||
-				!FindAllowedCatalogSetting(
-					entry.featureShortName, entry.settingPath, entry.settingKey, floatsOnly))
+			if (!IsResolvableEntry(entry, type))
 				continue;
-			SettingAddress address{ entry.featureShortName, entry.settingPath, entry.settingKey };
-			if (!baselineSettings.contains(address))
+			if (const auto address = GetEntryAddress(entry); !baselineSettings.contains(address))
 				GetBaselineValue(address);
 		}
 	};
@@ -2443,16 +2423,11 @@ SceneSettingsManager::ResolvedSettingMap SceneSettingsManager::BuildResolvedSett
 		ensureBaselines(GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly);
 	} else {
 		ensureBaselines(GetEntries(SceneType::TimeOfDay), SceneType::TimeOfDay);
-		if (auto* sky = globals::game::sky) {
-			const auto weatherLerp = std::isfinite(sky->currentWeatherPct) ?
-			                         std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 0.0f;
-			const auto previousWeatherId = GetEffectivePreviousWeatherId(sky, weatherLerp);
-			for (auto weatherId : { sky->currentWeather ? sky->currentWeather->GetFormID() : 0,
-			     previousWeatherId }) {
-				auto it = weatherSceneConfigs.find(weatherId);
-				if (it != weatherSceneConfigs.end())
-					ensureBaselines(it->second.entries, SceneType::TimeOfDay);
-			}
+		const auto weather = GetWeatherBlend();
+		for (auto weatherId : { weather.currentWeatherId, weather.previousWeatherId }) {
+			auto it = weatherSceneConfigs.find(weatherId);
+			if (it != weatherSceneConfigs.end())
+				ensureBaselines(it->second.entries, SceneType::TimeOfDay);
 		}
 	}
 
@@ -2499,6 +2474,21 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 	}
 	std::erase_if(applyFailures, [&](const auto& item) { return !pendingByFeature.contains(item.first); });
 
+	// Warn once per distinct failure signature, then back off, so a stuck feature cannot spam the log.
+	const auto recordApplyFailure = [&](const std::string& featureShortName, const json& signature,
+									std::chrono::steady_clock::time_point now, std::string_view message) {
+		auto& failure = applyFailures[featureShortName];
+		if (failure.signature != signature) {
+			failure.signature = signature;
+			failure.warningLogged = false;
+		}
+		if (!failure.warningLogged) {
+			logger::warn("[SceneSettings] {}", message);
+			failure.warningLogged = true;
+		}
+		failure.retryAfter = now + kApplyRetryDelay;
+	};
+
 	for (const auto& [featureShortName, pending] : pendingByFeature) {
 		json signature = json::array();
 		for (const auto& update : pending) {
@@ -2520,16 +2510,8 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 
 		auto* feature = Feature::FindFeatureByShortName(featureShortName);
 		if (!feature) {
-			auto& failure = applyFailures[featureShortName];
-			if (failure.signature != signature) {
-				failure.signature = signature;
-				failure.warningLogged = false;
-			}
-			if (!failure.warningLogged) {
-				logger::warn("[SceneSettings] Cannot apply resolved settings, feature {} is not loaded", featureShortName);
-				failure.warningLogged = true;
-			}
-			failure.retryAfter = now + kApplyRetryDelay;
+			recordApplyFailure(featureShortName, signature, now,
+				std::format("Cannot apply resolved settings, feature {} is not loaded", featureShortName));
 			continue;
 		}
 
@@ -2538,16 +2520,8 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 		for (const auto& update : pending)
 			updates.push_back({ update.address.settingPath, update.address.settingKey, update.value });
 		if (!ApplyCatalogSceneSettings(*feature, updates)) {
-			auto& failure = applyFailures[featureShortName];
-			if (failure.signature != signature) {
-				failure.signature = signature;
-				failure.warningLogged = false;
-			}
-			if (!failure.warningLogged) {
-				logger::warn("[SceneSettings] Failed to apply resolved settings for {}", featureShortName);
-				failure.warningLogged = true;
-			}
-			failure.retryAfter = now + kApplyRetryDelay;
+			recordApplyFailure(featureShortName, signature, now,
+				std::format("Failed to apply resolved settings for {}", featureShortName));
 			continue;
 		}
 		applyFailures.erase(featureShortName);
@@ -2623,18 +2597,15 @@ void SceneSettingsManager::RestoreAppliedSettings()
 
 void SceneSettingsManager::ResolveInteriorSettings(ResolvedSettingMap& resolved) const
 {
-	OverlayEntries(resolved, GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly, EntrySource::User);
-	OverlayEntries(resolved, GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly, EntrySource::Overwrite);
+	OverlayAllEntries(resolved, GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly);
 }
 
 void SceneSettingsManager::ResolveTimeOfDaySettings(ResolvedSettingMap& resolved) const
 {
 	std::set<SettingAddress> addresses;
 	for (const auto& entry : GetEntries(SceneType::TimeOfDay))
-		if (IsEntryActive(entry) && IsNumericValue(entry.value) &&
-			IsFeatureAllowedForType(SceneType::TimeOfDay, entry.featureShortName) &&
-			FindAllowedCatalogSetting(entry.featureShortName, entry.settingPath, entry.settingKey, true))
-			addresses.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
+		if (IsResolvableEntry(entry, SceneType::TimeOfDay))
+			addresses.insert(GetEntryAddress(entry));
 
 	for (const auto& address : addresses) {
 		auto baselineIt = baselineSettings.find(address);
@@ -2646,23 +2617,18 @@ void SceneSettingsManager::ResolveTimeOfDaySettings(ResolvedSettingMap& resolved
 
 void SceneSettingsManager::ResolveWeatherSettings(ResolvedSettingMap& resolved) const
 {
-	auto* sky = globals::game::sky;
-	if (!sky || !sky->currentWeather)
+	const auto weather = GetWeatherBlend();
+	if (weather.currentWeatherId == 0)
 		return;
-	const auto weatherLerp = std::isfinite(sky->currentWeatherPct) ?
-	                         std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 0.0f;
-	const auto previousWeatherId = GetEffectivePreviousWeatherId(sky, weatherLerp);
 
 	std::set<SettingAddress> addresses;
-	for (auto weatherId : { sky->currentWeather->GetFormID(), previousWeatherId }) {
+	for (auto weatherId : { weather.currentWeatherId, weather.previousWeatherId }) {
 		auto it = weatherSceneConfigs.find(weatherId);
 		if (it == weatherSceneConfigs.end())
 			continue;
 		for (const auto& entry : it->second.entries)
-			if (IsEntryActive(entry) && IsNumericValue(entry.value) &&
-				IsFeatureAllowedForType(SceneType::TimeOfDay, entry.featureShortName) &&
-				FindAllowedCatalogSetting(entry.featureShortName, entry.settingPath, entry.settingKey, true))
-				addresses.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
+			if (IsResolvableEntry(entry, SceneType::TimeOfDay))
+				addresses.insert(GetEntryAddress(entry));
 	}
 
 	for (const auto& address : addresses) {
@@ -2684,45 +2650,55 @@ void SceneSettingsManager::ResolveLocationSettings(
 		auto it = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
 		if (it == locationSceneConfigs.end())
 			continue;
-		OverlayEntries(resolved, it->second.entries, SceneType::Location, EntrySource::User);
-		OverlayEntries(resolved, it->second.entries, SceneType::Location, EntrySource::Overwrite);
+		OverlayAllEntries(resolved, it->second.entries, SceneType::Location);
 	}
 }
 
 void SceneSettingsManager::OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
-	SceneType type, std::optional<EntrySource> source) const
+	SceneType type, EntrySource source) const
 {
 	for (const auto& entry : sourceEntries) {
-		if (!IsEntryActive(entry) || (source && entry.source != *source) ||
+		if (entry.source != source || !IsEntryActive(entry) ||
 			!IsFeatureAllowedForType(type, entry.featureShortName) ||
 			!FindAllowedCatalogSetting(entry.featureShortName, entry.settingPath, entry.settingKey))
 			continue;
-		SettingAddress address{ entry.featureShortName, entry.settingPath, entry.settingKey };
+		auto address = GetEntryAddress(entry);
 		if (baselineSettings.contains(address))
 			resolved[std::move(address)] = entry.value;
 	}
 }
 
-float SceneSettingsManager::ResolveTimeOfDayFloat(const SettingAddress& address, float baseValue) const
+void SceneSettingsManager::OverlayAllEntries(ResolvedSettingMap& resolved,
+	const std::vector<SettingEntry>& sourceEntries, SceneType type) const
+{
+	// Shipped overwrites are the layer's defaults; the user's own entry for the same address wins.
+	OverlayEntries(resolved, sourceEntries, type, EntrySource::Overwrite);
+	OverlayEntries(resolved, sourceEntries, type, EntrySource::User);
+}
+
+std::array<std::optional<float>, SceneSettingsManager::kPeriodCount> SceneSettingsManager::CollectPeriodValues(
+	const std::vector<SettingEntry>& sourceEntries, const SettingAddress& address) const
 {
 	std::array<std::optional<float>, kPeriodCount> values{};
-	for (auto source : { EntrySource::User, EntrySource::Overwrite }) {
-		for (const auto& entry : GetEntries(SceneType::TimeOfDay)) {
+	for (auto source : { EntrySource::Overwrite, EntrySource::User }) {
+		for (const auto& entry : sourceEntries) {
 			if (entry.source != source || !IsEntryActive(entry) || !IsNumericValue(entry.value) ||
 				entry.period == TimeOfDayPeriod::Count ||
 				!IsSameSetting(entry, address.featureShortName, address.settingPath, address.settingKey))
 				continue;
 			const auto periodIndex = static_cast<int>(entry.period);
-			if (periodIndex >= 0 && periodIndex < kPeriodCount) {
-				const auto value = entry.value.get<float>();
-				if (std::isfinite(value))
-					values[periodIndex] = value;
-			}
+			const auto value = entry.value.get<float>();
+			if (periodIndex >= 0 && periodIndex < kPeriodCount && std::isfinite(value))
+				values[periodIndex] = value;
 		}
 	}
+	return values;
+}
 
-	float factors[kPeriodCount];
-	GetSingleton()->GetTimeOfDayFactors(factors);
+float SceneSettingsManager::ResolveTimeOfDayFloat(const SettingAddress& address, float baseValue) const
+{
+	const auto values = CollectPeriodValues(GetEntries(SceneType::TimeOfDay), address);
+	const auto factors = GetTimeOfDayFactors();
 	float result = 0.0f;
 	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
 		result += factors[periodIndex] * values[periodIndex].value_or(baseValue);
@@ -2731,12 +2707,11 @@ float SceneSettingsManager::ResolveTimeOfDayFloat(const SettingAddress& address,
 
 std::optional<float> SceneSettingsManager::ResolveWeatherFloat(const SettingAddress& address, float baseValue) const
 {
-	auto* sky = globals::game::sky;
-	if (!sky || !sky->currentWeather)
+	const auto weather = GetWeatherBlend();
+	if (weather.currentWeatherId == 0)
 		return std::nullopt;
 
-	float factors[kPeriodCount];
-	GetSingleton()->GetTimeOfDayFactors(factors);
+	const auto factors = GetTimeOfDayFactors();
 	auto baselineIt = baselineSettings.find(address);
 	const float baselineValue = baselineIt != baselineSettings.end() && IsNumericValue(baselineIt->second) ?
 	                                baselineIt->second.get<float>() : baseValue;
@@ -2746,22 +2721,7 @@ std::optional<float> SceneSettingsManager::ResolveWeatherFloat(const SettingAddr
 		if (configIt == weatherSceneConfigs.end())
 			return std::nullopt;
 
-		std::array<std::optional<float>, kPeriodCount> values{};
-		for (auto source : { EntrySource::User, EntrySource::Overwrite }) {
-			for (const auto& entry : configIt->second.entries) {
-				if (entry.source != source || !IsEntryActive(entry) || !IsNumericValue(entry.value) ||
-					entry.period == TimeOfDayPeriod::Count ||
-					!IsSameSetting(entry, address.featureShortName, address.settingPath, address.settingKey))
-					continue;
-				const auto periodIndex = static_cast<int>(entry.period);
-				if (periodIndex >= 0 && periodIndex < kPeriodCount) {
-					const auto value = entry.value.get<float>();
-					if (std::isfinite(value))
-						values[periodIndex] = value;
-				}
-			}
-		}
-
+		const auto values = CollectPeriodValues(configIt->second.entries, address);
 		if (std::none_of(values.begin(), values.end(), [](const auto& value) { return value.has_value(); }))
 			return std::nullopt;
 
@@ -2774,16 +2734,14 @@ std::optional<float> SceneSettingsManager::ResolveWeatherFloat(const SettingAddr
 		return result;
 	};
 
-	const auto currentValue = resolveWeather(sky->currentWeather->GetFormID());
-	const auto weatherLerp = std::isfinite(sky->currentWeatherPct) ? std::clamp(sky->currentWeatherPct, 0.0f, 1.0f) : 0.0f;
-	const auto previousWeatherId = GetEffectivePreviousWeatherId(sky, weatherLerp);
-	const auto previousValue = previousWeatherId != 0 ? resolveWeather(previousWeatherId) : std::nullopt;
+	const auto currentValue = resolveWeather(weather.currentWeatherId);
+	const auto previousValue = weather.previousWeatherId != 0 ? resolveWeather(weather.previousWeatherId) : std::nullopt;
 	if (!currentValue && !previousValue)
 		return std::nullopt;
 
 	const auto from = previousValue.value_or(baseValue);
 	const auto to = currentValue.value_or(baseValue);
-	return from + (to - from) * weatherLerp;
+	return from + (to - from) * weather.lerp;
 }
 
 json SceneSettingsManager::GetBaselineValue(const SettingAddress& address)
@@ -2889,7 +2847,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 		std::set<RE::FormID> weatherIds;
 		for (const auto& [weatherId, _] : weatherSceneConfigs)
 			weatherIds.insert(weatherId);
-		for (const auto& [weatherId, _] : weatherShowTimeOfDay_)
+		for (const auto& [weatherId, _] : weatherShowTimeOfDay)
 			weatherIds.insert(weatherId);
 
 		for (auto weatherId : weatherIds) {
@@ -2899,8 +2857,8 @@ void SceneSettingsManager::SaveAllUserSettings()
 			auto configIt = weatherSceneConfigs.find(weatherId);
 			auto userEntries = configIt != weatherSceneConfigs.end() ?
 			                       UserEntriesToArray(configIt->second.entries, true) : json::array();
-			auto showIt = weatherShowTimeOfDay_.find(weatherId);
-			const bool hasShowPreference = showIt != weatherShowTimeOfDay_.end();
+			auto showIt = weatherShowTimeOfDay.find(weatherId);
+			const bool hasShowPreference = showIt != weatherShowTimeOfDay.end();
 
 			auto rawIt = weatherObj.find(spid);
 			const bool hasRaw = rawIt != weatherObj.end();
@@ -3027,25 +2985,17 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 			logger::warn("[SceneSettings] {} entry {}.{} has invalid period '{}' - skipping", typeName, entry.featureShortName, entry.settingKey, item["period"].get<std::string>());
 			return false;
 		}
-		if (!IsNumericValue(entry.value) || !IsNumericValue(entry.originalValue)) {
-			logger::warn("[SceneSettings] {} entry {} is not a float setting - skipping",
-				typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
-			return false;
-		}
-		if (!std::isfinite(entry.value.get<float>())) {
-			logger::warn("[SceneSettings] {} entry {} has non-finite value - skipping",
-				typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
-			return false;
-		}
 	}
-	if (requireNumericValue && (!IsNumericValue(entry.value) || !IsNumericValue(entry.originalValue) ||
+
+	// Per-period entries always blend as floats, so they carry the same requirement as float-only scenes.
+	const bool requireNumeric = requirePeriod || requireNumericValue;
+	if (requireNumeric && (!IsNumericValue(entry.value) || !IsNumericValue(entry.originalValue) ||
 		!std::isfinite(entry.value.get<float>()))) {
 		logger::warn("[SceneSettings] {} entry {} is not a finite float setting - skipping",
 			typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
 		return false;
 	}
 
-	const bool requireNumeric = requirePeriod || requireNumericValue;
 	if (!ValidateSceneSettingEntry(typeName, entry.featureShortName, entry.settingPath, entry.settingKey,
 			entry.value, requireNumeric, featureSettingsCache) ||
 		!ValidateSceneSettingEntry(typeName, entry.featureShortName, entry.settingPath, entry.settingKey,
@@ -3254,7 +3204,7 @@ void SceneSettingsManager::LoadWeatherUserSettings()
 {
 	for (auto& [_, config] : weatherSceneConfigs)
 		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-	weatherShowTimeOfDay_.clear();
+	weatherShowTimeOfDay.clear();
 	unresolvedWeatherUserSettings = json::object();
 	weatherUserSettingsModified = false;
 	if (!userSettingsDocumentLoaded || !userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object())
@@ -3272,64 +3222,60 @@ void SceneSettingsManager::LoadWeatherUserSettings()
 		FeatureSettingsCache featureSettingsCache;
 		logger::info("[SceneSettings] Weather section found with {} entries", weatherIt->size());
 		for (const auto& [spidKey, weatherData] : weatherIt->items()) {
-				logger::info("[SceneSettings] Processing weather SPID '{}'", spidKey);
-				RE::FormID weatherId = Util::SpidToFormId(spidKey);
-				if (weatherId == 0) {
-					unresolvedWeatherUserSettings[spidKey] = weatherData;
-					logger::warn("[SceneSettings] Weather SPID '{}' could not be resolved - skipping", spidKey);
-					continue;
-				}
-				const auto canonicalSpid = Util::FormIdToSpid(weatherId);
-				logger::info("[SceneSettings] Resolved SPID '{}' to FormID 0x{:X}", spidKey, weatherId);
-				if (!weatherData.is_object()) {
-					unresolvedWeatherUserSettings[spidKey] = weatherData;
-					logger::warn("[SceneSettings] Weather config '{}' is not an object - preserving", spidKey);
-					continue;
-				}
-				auto preservedWeather = weatherData;
+			RE::FormID weatherId = Util::SpidToFormId(spidKey);
+			if (weatherId == 0) {
+				unresolvedWeatherUserSettings[spidKey] = weatherData;
+				logger::warn("[SceneSettings] Weather SPID '{}' could not be resolved - skipping", spidKey);
+				continue;
+			}
+			if (!weatherData.is_object()) {
+				unresolvedWeatherUserSettings[spidKey] = weatherData;
+				logger::warn("[SceneSettings] Weather config '{}' is not an object - preserving", spidKey);
+				continue;
+			}
+			auto preservedWeather = weatherData;
 
-				// Load showTimeOfDay preference
-				if (auto showIt = weatherData.find("showTimeOfDay"); showIt != weatherData.end()) {
-					if (!showIt->is_boolean()) {
-						logger::warn("[SceneSettings] Weather config '{}' showTimeOfDay is not boolean - preserving", spidKey);
-					} else {
-						weatherShowTimeOfDay_[weatherId] = showIt->get<bool>();
-						preservedWeather.erase("showTimeOfDay");
-					}
+			if (auto showIt = weatherData.find("showTimeOfDay"); showIt != weatherData.end()) {
+				if (!showIt->is_boolean()) {
+					logger::warn("[SceneSettings] Weather config '{}' showTimeOfDay is not boolean - preserving", spidKey);
+				} else {
+					weatherShowTimeOfDay[weatherId] = showIt->get<bool>();
+					preservedWeather.erase("showTimeOfDay");
 				}
+			}
 
-				auto entriesIt = weatherData.find("entries");
-				if (entriesIt == weatherData.end()) {
-					unresolvedWeatherUserSettings[spidKey] = std::move(preservedWeather);
-					continue;
-				}
-				if (!entriesIt->is_array()) {
-					unresolvedWeatherUserSettings[spidKey] = preservedWeather;
-					logger::warn("[SceneSettings] Weather config '{}' entries is not an array - preserving", spidKey);
-					continue;
-				}
-				preservedWeather["entries"] = json::array();
-
-				auto& config = GetWeatherConfigMut(weatherId);
-				int loaded = 0;
-				for (const auto& item : *entriesIt) {
-					SettingEntry entry;
-					if (!LoadEntryFromJson(item, entry, true, "Weather", std::nullopt, false,
-							&featureSettingsCache)) {
-						preservedWeather["entries"].push_back(item);
-						continue;
-					}
-					if (HasWeatherEntryForPeriod(weatherId, entry.featureShortName, entry.settingPath,
-							entry.settingKey, entry.period, EntrySource::User)) {
-						preservedWeather["entries"].push_back(item);
-						continue;
-					}
-					config.entries.push_back(std::move(entry));
-					loaded++;
-				}
-				if (loaded > 0)
-					logger::info("[SceneSettings] Loaded {} weather entries for {}", loaded, spidKey);
+			auto entriesIt = weatherData.find("entries");
+			if (entriesIt == weatherData.end()) {
 				unresolvedWeatherUserSettings[spidKey] = std::move(preservedWeather);
+				continue;
+			}
+			if (!entriesIt->is_array()) {
+				unresolvedWeatherUserSettings[spidKey] = preservedWeather;
+				logger::warn("[SceneSettings] Weather config '{}' entries is not an array - preserving", spidKey);
+				continue;
+			}
+			preservedWeather["entries"] = json::array();
+
+			auto& config = GetWeatherConfigMut(weatherId);
+			int loaded = 0;
+			for (const auto& item : *entriesIt) {
+				SettingEntry entry;
+				if (!LoadEntryFromJson(item, entry, true, "Weather", std::nullopt, false,
+						&featureSettingsCache)) {
+					preservedWeather["entries"].push_back(item);
+					continue;
+				}
+				if (HasWeatherEntryForPeriod(weatherId, entry.featureShortName, entry.settingPath,
+						entry.settingKey, entry.period, EntrySource::User)) {
+					preservedWeather["entries"].push_back(item);
+					continue;
+				}
+				config.entries.push_back(std::move(entry));
+				loaded++;
+			}
+			if (loaded > 0)
+				logger::info("[SceneSettings] Loaded {} weather entries for {}", loaded, spidKey);
+			unresolvedWeatherUserSettings[spidKey] = std::move(preservedWeather);
 		}
 
 		logger::info("[SceneSettings] Loaded weather user settings");
@@ -3343,16 +3289,12 @@ void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 	if (!IsEntryListSceneType(type))
 		return;
 	const auto previousEntryCount = GetEntries(type).size();
-	// TimeOfDay has period subfolders; delegate to a shared loader
+	const auto basePath = GetOverwritesPath(type);
 	if (type == SceneType::TimeOfDay) {
-		auto basePath = GetOverwritesPath(type);
-		for (int i = 0; i < kPeriodCount; ++i) {
-			auto period = static_cast<TimeOfDayPeriod>(i);
-			auto periodPath = basePath / GetPeriodName(period);
-			DiscoverOverwritesInDir(type, periodPath, period);
-		}
+		for (auto period : kPeriods)
+			DiscoverOverwritesInDir(type, GetOverwriteDir(basePath, period), period);
 	} else {
-		DiscoverOverwritesInDir(type, GetOverwritesPath(type));
+		DiscoverOverwritesInDir(type, basePath);
 	}
 
 	if (GetEntries(type).size() != previousEntryCount)
@@ -3396,7 +3338,6 @@ static bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 		entry.originalValue = entry.value;
 		entry.source = SSM::EntrySource::Overwrite;
 		entry.sourceFilename = filePath.filename().string();
-
 		entry.sourcePath = filePath;
 		outEntries.push_back(std::move(entry));
 		foundAny = true;
@@ -3592,14 +3533,15 @@ std::optional<float> SceneSettingsManager::ResolveWeatherLowerValue(RE::FormID w
 
 	float lowerValue = GetTimeOfDayPeriodFallbackFloat(baselineValue,
 		address.featureShortName, address.settingPath, address.settingKey, periodIndex);
-	if (selectedSource != EntrySource::Overwrite)
+	// Only a user entry has anything of the weather layer beneath it.
+	if (selectedSource != EntrySource::User)
 		return lowerValue;
 
 	auto configIt = weatherSceneConfigs.find(weatherId);
 	if (configIt == weatherSceneConfigs.end())
 		return lowerValue;
 	for (const auto& entry : configIt->second.entries) {
-		if (entry.source != EntrySource::User || entry.period != period || !IsEntryActive(entry) ||
+		if (entry.source != EntrySource::Overwrite || entry.period != period || !IsEntryActive(entry) ||
 			!IsNumericValue(entry.value) ||
 			!IsSameSetting(entry, address.featureShortName, address.settingPath, address.settingKey))
 			continue;
@@ -3793,8 +3735,8 @@ bool SceneSettingsManager::IsWeatherShowTimeOfDay(RE::FormID weatherId)
 	if (!TryEnsureWeatherDataLoaded())
 		return false;
 
-	auto it = weatherShowTimeOfDay_.find(weatherId);
-	return it != weatherShowTimeOfDay_.end() && it->second;
+	auto it = weatherShowTimeOfDay.find(weatherId);
+	return it != weatherShowTimeOfDay.end() && it->second;
 }
 
 void SceneSettingsManager::SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show)
@@ -3802,7 +3744,7 @@ void SceneSettingsManager::SetWeatherShowTimeOfDay(RE::FormID weatherId, bool sh
 	if (!TryEnsureWeatherDataLoaded())
 		return;
 
-	weatherShowTimeOfDay_[weatherId] = show;
+	weatherShowTimeOfDay[weatherId] = show;
 	PrepareWeatherUserSettingsMutation(weatherId, false);
 	SaveAllUserSettings();
 }
@@ -3923,19 +3865,18 @@ std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTarg
 	for (const auto& target : GetCurrentLocationTargets()) {
 		if (GetLocationConfigKey(target.type, target.formKey) == selectedTargetKey) {
 			targetFound = true;
-			if (selectedSource == EntrySource::Overwrite) {
+			if (selectedSource == EntrySource::User) {
 				auto configIt = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
 				if (configIt != locationSceneConfigs.end())
 					OverlayEntries(
-						lowerLayers, configIt->second.entries, SceneType::Location, EntrySource::User);
+						lowerLayers, configIt->second.entries, SceneType::Location, EntrySource::Overwrite);
 			}
 			break;
 		}
 		auto configIt = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
 		if (configIt == locationSceneConfigs.end())
 			continue;
-		OverlayEntries(lowerLayers, configIt->second.entries, SceneType::Location, EntrySource::User);
-		OverlayEntries(lowerLayers, configIt->second.entries, SceneType::Location, EntrySource::Overwrite);
+		OverlayAllEntries(lowerLayers, configIt->second.entries, SceneType::Location);
 	}
 	if (!targetFound)
 		return std::nullopt;
@@ -4027,7 +3968,7 @@ void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const 
 	const auto entry = it->second.entries[index];
 	const bool userEntry = entry.source == EntrySource::User;
 	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty() &&
-		!RemoveSettingFromOverwriteFile(GetLocationOverwritePath(type, formKey, entry), entry.settingPath, entry.settingKey))
+		!RemoveSettingFromOverwriteFile(GetLocationOverwritePath(formKey, entry), entry.settingPath, entry.settingKey))
 		return;
 	it->second.entries.erase(it->second.entries.begin() + static_cast<ptrdiff_t>(index));
 	BumpEntryPresentationRevision();
@@ -4141,18 +4082,6 @@ void SceneSettingsManager::ExportLocationUserSettingsToOverwrites(LocationTarget
 	auto configIt = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
 	if (configIt == locationSceneConfigs.end())
 		return;
-	auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
-	if (safeModName.empty())
-		return;
-
-	std::map<std::string, std::vector<const SettingEntry*>> groupedEntries;
-	for (auto index : indices) {
-		if (index >= configIt->second.entries.size())
-			continue;
-		const auto& entry = configIt->second.entries[index];
-		if (entry.source == EntrySource::User)
-			groupedEntries[entry.featureShortName].push_back(&entry);
-	}
 
 	const auto targetDescription = type == LocationTargetType::Cell ? "Cell" : "Location";
 	const json metadata = {
@@ -4160,27 +4089,22 @@ void SceneSettingsManager::ExportLocationUserSettingsToOverwrites(LocationTarget
 		{ "targetName", configIt->second.name },
 		{ "coc", configIt->second.cocCode },
 	};
-	const auto directory = GetLocationOverwritesDir(type) / configIt->second.formKey;
-	for (const auto& [featureShortName, grouped] : groupedEntries) {
-		WriteGroupedOverwriteFile(directory / std::format("{}_{}.json", safeModName, featureShortName),
-			featureShortName, targetDescription, grouped, metadata);
-	}
+	ExportUserEntriesToOverwrites(configIt->second.entries, indices,
+		GetLocationOverwritesDir() / configIt->second.formKey, modName, targetDescription, metadata);
 }
 
 void SceneSettingsManager::DiscoverLocationOverwrites()
 {
-	const auto root = GetLocationOverwritesDir(LocationTargetType::Location);
+	const auto root = GetLocationOverwritesDir();
 	std::error_code ec;
 	if (!std::filesystem::exists(root, ec))
 		return;
 	for (const auto& directory : GetSortedDirectoryPaths(root, true, "location overwrite directories"))
-		DiscoverLocationOverwritesForTarget(LocationTargetType::Location, directory);
+		DiscoverLocationOverwritesForTarget(directory);
 }
 
-void SceneSettingsManager::DiscoverLocationOverwritesForTarget(LocationTargetType type,
-	const std::filesystem::path& targetDir)
+void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesystem::path& targetDir)
 {
-	(void)type;
 	const auto formKey = targetDir.filename().string();
 	if (formKey.empty())
 		return;
@@ -4274,8 +4198,12 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(LocationTargetTyp
 
 void SceneSettingsManager::DiscoverWeatherOverwrites()
 {
-	const auto previousEntryCount = std::accumulate(weatherSceneConfigs.begin(), weatherSceneConfigs.end(), size_t{ 0 },
-		[](size_t total, const auto& config) { return total + config.second.entries.size(); });
+	const auto countWeatherEntries = [this] {
+		return std::accumulate(weatherSceneConfigs.begin(), weatherSceneConfigs.end(), size_t{ 0 },
+			[](size_t total, const auto& config) { return total + config.second.entries.size(); });
+	};
+
+	const auto previousEntryCount = countWeatherEntries();
 	auto baseDir = GetWeatherOverwritesDir();
 	std::error_code ec;
 	if (!std::filesystem::exists(baseDir, ec))
@@ -4294,9 +4222,7 @@ void SceneSettingsManager::DiscoverWeatherOverwrites()
 		DiscoverWeatherOverwritesForSpid(weatherId, weatherDirectory);
 	}
 
-	const auto entryCount = std::accumulate(weatherSceneConfigs.begin(), weatherSceneConfigs.end(), size_t{ 0 },
-		[](size_t total, const auto& config) { return total + config.second.entries.size(); });
-	if (entryCount != previousEntryCount)
+	if (countWeatherEntries() != previousEntryCount)
 		BumpEntryPresentationRevision();
 }
 
@@ -4305,77 +4231,66 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 	auto& config = GetWeatherConfigMut(weatherId);
 	FeatureSettingsCache featureSettingsCache;
 
-	// Scan period subfolders (TOD entries)
-	for (int i = 0; i < kPeriodCount; ++i) {
-		auto period = static_cast<TimeOfDayPeriod>(i);
-		auto periodDir = weatherDir / GetPeriodName(period);
+	const auto loadWeatherFile = [&](const std::filesystem::path& filePath, auto&& assignPeriods) {
+		try {
+			std::vector<SettingEntry> parsedEntries;
+			if (ParseOverwriteFileEntries(filePath, SceneType::TimeOfDay, true, parsedEntries, &featureSettingsCache))
+				for (auto& parsed : parsedEntries)
+					assignPeriods(parsed);
+		} catch (const std::exception& e) {
+			logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
+		}
+	};
+
+	for (auto period : kPeriods) {
+		const auto periodDir = weatherDir / GetPeriodName(period);
 		std::error_code ec;
 		if (!std::filesystem::exists(periodDir, ec))
 			continue;
 
-		for (const auto& filePath : GetSortedJsonFiles(periodDir, "weather period overwrite files")) {
-			try {
-				std::vector<SettingEntry> parsedEntries;
-				if (!ParseOverwriteFileEntries(filePath, SceneType::TimeOfDay, true, parsedEntries,
-						&featureSettingsCache))
-					continue;
-				for (auto& entry : parsedEntries) {
-					entry.period = period;
-					AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
-				}
-			} catch (const std::exception& e) {
-				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
-			}
-		}
+		for (const auto& filePath : GetSortedJsonFiles(periodDir, "weather period overwrite files"))
+			loadWeatherFile(filePath, [&](SettingEntry& parsed) {
+				parsed.period = period;
+				AddOverwriteEntryIfUnique(config.entries, std::move(parsed), "weather");
+			});
 	}
 
 	// Flat weather files are copied to every period after period-specific files are loaded.
-	{
-		for (const auto& filePath : GetSortedJsonFiles(weatherDir, "flat weather overwrite files")) {
-			try {
-				std::vector<SettingEntry> parsedEntries;
-				if (!ParseOverwriteFileEntries(filePath, SceneType::TimeOfDay, true, parsedEntries,
-						&featureSettingsCache))
-					continue;
-				for (auto& parsed : parsedEntries) {
-					for (int p = 0; p < kPeriodCount; ++p) {
-						SettingEntry entry = parsed;
-						entry.period = static_cast<TimeOfDayPeriod>(p);
-						AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
-					}
-				}
-			} catch (const std::exception& e) {
-				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
+	for (const auto& filePath : GetSortedJsonFiles(weatherDir, "flat weather overwrite files"))
+		loadWeatherFile(filePath, [&](const SettingEntry& parsed) {
+			for (auto period : kPeriods) {
+				SettingEntry entry = parsed;
+				entry.period = period;
+				AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
 			}
-		}
-	}
+		});
 }
 
-float SceneSettingsManager::GetTimeOfDayPeriodFallbackFloat(float baseVal, const std::string& shortName,
-	const std::vector<std::string>& settingPath, const std::string& key, int periodIdx) const
+float SceneSettingsManager::GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
+	const std::vector<std::string>& settingPath, const std::string& settingKey, int periodIndex) const
 {
 	const json* value = nullptr;
-	EntrySource source = EntrySource::User;
-	auto period = static_cast<TimeOfDayPeriod>(periodIdx);
+	EntrySource source = EntrySource::Overwrite;
+	const auto period = static_cast<TimeOfDayPeriod>(periodIndex);
 
 	for (const auto& entry : GetEntries(SceneType::TimeOfDay)) {
 		if (!IsEntryActive(entry) || entry.period != period ||
-			!IsSameSetting(entry, shortName, settingPath, key))
+			!IsSameSetting(entry, featureShortName, settingPath, settingKey))
 			continue;
-		if (!value || (entry.source == EntrySource::Overwrite && source != EntrySource::Overwrite)) {
+		if (!value || (entry.source == EntrySource::User && source != EntrySource::User)) {
 			value = &entry.value;
 			source = entry.source;
 		}
 	}
 
 	if (!value)
-		return baseVal;
+		return baseValue;
 	if (!IsNumericValue(*value)) {
-		logger::warn("SceneSettingsManager: TOD fallback value for '{}' is not a float",
-			GetSettingLogName(shortName, settingPath, key));
-		return baseVal;
+		logger::warn("[SceneSettings] Time of day fallback value for '{}' is not a float",
+			GetSettingLogName(featureShortName, settingPath, settingKey));
+		return baseValue;
 	}
 
-	float result = value->get<float>();
-	return std::isfinite(result) ? result : baseVal;
+	const float result = value->get<float>();
+	return std::isfinite(result) ? result : baseValue;
 }

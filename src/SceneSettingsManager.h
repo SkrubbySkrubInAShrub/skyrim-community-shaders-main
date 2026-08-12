@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include <array>
@@ -8,8 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <map>
 #include <limits>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -59,6 +58,12 @@ public:
 	/// Display names for each period - must match TimeOfDayPeriod order.
 	static constexpr std::array<const char*, kPeriodCount> kPeriodNames = {
 		"Dawn", "Sunrise", "Day", "Sunset", "Dusk", "Night"
+	};
+
+	/// Every real period in order, excluding the Count sentinel.
+	static constexpr std::array<TimeOfDayPeriod, kPeriodCount> kPeriods = {
+		TimeOfDayPeriod::Dawn, TimeOfDayPeriod::Sunrise, TimeOfDayPeriod::Day,
+		TimeOfDayPeriod::Sunset, TimeOfDayPeriod::Dusk, TimeOfDayPeriod::Night
 	};
 
 	/// Hour boundaries for each period [start, end).  Night wraps around midnight (21-28 i.e. 21-4).
@@ -179,7 +184,7 @@ public:
 
 	// --- Scene Application ---
 
-	/// Called every frame from State::Update().
+	/// Called every frame from State::Draw().
 	void Update();
 
 	/// Called by MenuOpenCloseEventHandler when a cell transition is detected.
@@ -198,17 +203,19 @@ public:
 	bool IsFeaturePaused(const std::string& featureShortName) const;
 	void SetFeaturePaused(const std::string& featureShortName, bool paused);
 
+	/// RAII suspend of the scene layer. Anything reading or writing a feature's *base* settings must
+	/// hold one, otherwise it captures an overridden value as if it were the user's choice.
 	class SceneLayerGuard
 	{
 	public:
-		explicit SceneLayerGuard(SceneSettingsManager& manager);
+		SceneLayerGuard();
 		~SceneLayerGuard();
 
 		SceneLayerGuard(const SceneLayerGuard&) = delete;
 		SceneLayerGuard& operator=(const SceneLayerGuard&) = delete;
 
 	private:
-		SceneSettingsManager& manager;
+		SceneSettingsManager* manager;
 	};
 
 	// --- Persistence ---
@@ -235,7 +242,9 @@ public:
 	static const char* GetPeriodName(TimeOfDayPeriod period);
 	static TimeOfDayPeriod GetPeriodFromName(const std::string& name);
 	static float GetCurrentGameHour();
-	void GetTimeOfDayFactors(float outFactors[static_cast<int>(TimeOfDayPeriod::Count)]);
+
+	/// Per-period blend weights for the current game hour. Weights sum to 1.
+	static std::array<float, kPeriodCount> GetTimeOfDayFactors();
 
 	/// Returns the period whose hour range contains the current game hour.
 	static TimeOfDayPeriod GetCurrentPeriod();
@@ -441,7 +450,9 @@ public:
 	void ExportLocationUserSettingsToOverwrites(LocationTargetType type, const std::string& formKey,
 		const std::vector<size_t>& indices, const std::string& modName);
 	void DeleteAllLocationUserSettings(LocationTargetType type, const std::string& formKey);
-	static std::filesystem::path GetLocationOverwritesDir(LocationTargetType type);
+
+	/// Locations and cells share one directory; each target's type comes from its form, not its path.
+	static std::filesystem::path GetLocationOverwritesDir();
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
@@ -490,7 +501,7 @@ private:
 	static const WeatherSceneConfig kEmptyWeatherConfig;
 
 	/// UI preference per weather: show TOD table vs flat view (keyed by FormID for fast access).
-	std::map<RE::FormID, bool> weatherShowTimeOfDay_;
+	std::map<RE::FormID, bool> weatherShowTimeOfDay;
 	json unresolvedWeatherUserSettings = json::object();
 	bool weatherDataLoaded = false;
 
@@ -541,6 +552,22 @@ private:
 	mutable bool locationTargetsCached = false;
 	mutable std::vector<LocationTarget> cachedLocationTargets;
 
+	/// Current and outgoing weather with the sky's blend factor. Ids are 0 when no weather is active.
+	struct WeatherBlend
+	{
+		RE::FormID currentWeatherId = 0;
+		RE::FormID previousWeatherId = 0;
+		float lerp = 0.0f;
+	};
+
+	/// Period containing a game hour, with that hour normalized into the period's range.
+	struct PeriodLookup
+	{
+		int index = -1;
+		float hour = 0.0f;
+	};
+	static PeriodLookup FindPeriodForHour(float hour);
+
 	// --- Per-Weather helpers ---
 	/// Load weather overwrites/user settings once game data is available for SPID resolution.
 	bool TryEnsureWeatherDataLoaded();
@@ -548,8 +575,9 @@ private:
 	void LoadWeatherData();
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
 	RE::FormID GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const;
-	float GetTimeOfDayPeriodFallbackFloat(float baseVal, const std::string& shortName,
-		const std::vector<std::string>& settingPath, const std::string& key, int periodIdx) const;
+	WeatherBlend GetWeatherBlend() const;
+	float GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, int periodIndex) const;
 
 	// --- Central runtime resolver ---
 	void ResolveAndApply(bool force = false);
@@ -562,9 +590,15 @@ private:
 	void ResolveWeatherSettings(ResolvedSettingMap& resolved) const;
 	void ResolveLocationSettings(ResolvedSettingMap& resolved, const std::vector<LocationTarget>& locationTargets) const;
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
-		SceneType type, std::optional<EntrySource> source = std::nullopt) const;
+		SceneType type, EntrySource source) const;
+	/// Overlay both sources, shipped overwrites first so user entries win.
+	void OverlayAllEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
+		SceneType type) const;
 	float ResolveTimeOfDayFloat(const SettingAddress& address, float baseValue) const;
 	std::optional<float> ResolveWeatherFloat(const SettingAddress& address, float baseValue) const;
+	/// Latest active per-period value for an address, indexed by period; user entries win.
+	std::array<std::optional<float>, kPeriodCount> CollectPeriodValues(
+		const std::vector<SettingEntry>& sourceEntries, const SettingAddress& address) const;
 	std::optional<float> ResolveWeatherLowerValue(RE::FormID weatherId, const SettingAddress& address,
 		TimeOfDayPeriod period, EntrySource selectedSource);
 	json GetBaselineValue(const SettingAddress& address);
@@ -577,7 +611,7 @@ private:
 	LocationSceneConfig& GetLocationConfigMut(LocationTargetType type, const std::string& formKey,
 		const std::string& name = {});
 	void DiscoverLocationOverwrites();
-	void DiscoverLocationOverwritesForTarget(LocationTargetType type, const std::filesystem::path& targetDir);
+	void DiscoverLocationOverwritesForTarget(const std::filesystem::path& targetDir);
 	void LoadLocationUserSettings(const json& data);
 	void PrepareLocationUserSettingsMutation(LocationTargetType type, std::string_view formKey,
 		bool replaceMalformedEntries);
@@ -586,6 +620,9 @@ private:
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
 	void BumpEntryPresentationRevision();
 	bool IsEntryActive(const SettingEntry& entry) const;
+	/// Active, catalog-permitted and, for TimeOfDay, transitionable float entry.
+	bool IsResolvableEntry(const SettingEntry& entry, SceneType type) const;
+	static SettingAddress GetEntryAddress(const SettingEntry& entry);
 	bool HasDuplicateEntry(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		EntrySource source, TimeOfDayPeriod period = TimeOfDayPeriod::Count) const;

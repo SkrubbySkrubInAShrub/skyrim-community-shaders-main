@@ -59,7 +59,7 @@ Current catalog on this fork: **325 entries**.
 2.  **Data loaded** — `SceneManager::DataLoaded()` calls `OnDataLoaded()` (weather/location data needs
     `TESDataHandler` for SPID resolution) and registers `MenuOpenCloseEventHandler`, which flags a cell
     transition when the loading menu closes.
-3.  **Per frame** — `State::Update()` calls `SceneManager::Update()` → `SceneSettingsManager::Update()` →
+3.  **Per frame** — `State::Draw()` calls `SceneManager::Update()` → `SceneSettingsManager::Update()` →
     `ResolveAndApply()`. The resolver early-outs unless something it depends on moved: interior flag,
     location/cell FormID, game hour (`kHourUpdateThreshold`), or weather pair + lerp.
 
@@ -86,8 +86,9 @@ round-trippable through them cannot be scene-controlled, no matter what its UI l
 interior  →  time of day  →  weather  →  location/cell
 ```
 
-Within a source, `EntrySource::Overwrite` (mod-shipped files) is the lower layer and `EntrySource::User`
-overrides it.
+Within a layer, `EntrySource::Overwrite` (mod-shipped files) is overlaid first and `EntrySource::User`
+overrides it, so a shipped overwrite acts as that layer's default and the user's own entry for the same
+address always wins. `SettingsUser.json` remains the baseline beneath all of this.
 
 -   **Time of day** — six periods (`Dawn`, `Sunrise`, `Day`, `Sunset`, `Dusk`, `Night`) with hour ranges in
     `kPeriodHours`; `Night` wraps midnight as `21..28`. Floats cross-fade across a `kTransitionHours` (0.5h)
@@ -100,8 +101,9 @@ overrides it.
 
 `SceneSettingsManager::SceneLayerGuard` is an RAII suspend of the scene layer. Anything that reads or writes
 a feature's *base* settings must hold one, otherwise it captures an overridden value as if it were the user's
-choice. Current holders: `State::Save`/`State::Load` paths (`State.cpp:291`, `State.cpp:486`) and five
-DevBench bridge endpoints. Add one to any new code path that serializes feature settings.
+choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
+exist yet. Current holders: `State::Load` / `State::SaveToJson`, two internal manager paths, and five DevBench
+bridge endpoints. Add one to any new code path that serializes feature settings.
 
 ## On-disk layout
 
@@ -112,7 +114,7 @@ Rooted at `Util::PathHelpers::GetSceneSettingsPath()` = `<CommunityShaders>/Scen
 | `SceneManager.json` | All user-authored entries (interior, TOD, weather, location) in one document. |
 | `InteriorOnly/`, `TimeOfDay/<Period>/` | Mod-shipped overwrite files per scene type. |
 | `Weather/<SPID>/` | Per-weather overwrites, folder keyed by `Util::FormIdToSpid`. |
-| `Location/`, `Cell/` | Per-location and per-cell overwrites, keyed by form key. |
+| `Locations/<form key>/` | Location **and** cell overwrites share one tree; the target's type comes from its form. |
 
 `SceneManager.json` is written atomically. If the existing document is present but not a JSON object, saves
 are **blocked** rather than clobbering it, and unknown fields on an entry are preserved through
@@ -138,7 +140,7 @@ discovered in the generated catalog.
 | ------- | ------- | ------- |
 | `IsAlwaysEnabled()` | `false` | Infrastructure that cannot be disabled at boot. `State` erases it from `disabledFeatures` and refuses toggles. |
 | `UsesMainSettings()` | `true` | Persists through the shared settings JSON; gates override discovery. |
-| `HasRestoreDefaults()` | `true` | Whether the UI offers "Restore Defaults". |
+| `HasRestoreDefaults()` | `true` | Whether the UI offers "Restore Defaults". Currently unread (see [Known gaps](#known-gaps)). |
 
 `Feature::RegisterWeatherVariables()` was **removed**. Features no longer register anything; they just draw
 plain ImGui controls over persisted members.
@@ -191,6 +193,8 @@ called `SceneSettingsUIHooks::Install()`).
     initializers call `SceneSettingsCatalog::RegisterControlResolver`, but nothing in `src/` calls
     `FindSettingForControl` or `GetVirtualAggregateControls` — those were the excluded UI hooks' entry
     points. The registrations are inert, not broken; they are the seam the UI layer plugs into.
+-   **`Feature::HasRestoreDefaults()` is unread.** Nothing in `src/` calls it; the "Restore Defaults" action it
+    gates lives in the excluded UI. Kept as the seam for that layer, same as the control resolvers.
 -   Catalog metadata aimed purely at presentation (`displayPath`, `selectorPath`, `AggregatePresentation`,
     `UnifiedEditMode`, choice display names) is generated and validated but unread at runtime for the same
     reason.
