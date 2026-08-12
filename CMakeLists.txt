@@ -351,16 +351,8 @@ target_sources(
 # #######################################################################################################################
 
 set(SCENE_SETTINGS_PYTHON_ARGS "")
-if(WIN32)
-    find_program(SCENE_SETTINGS_PYTHON_EXECUTABLE NAMES py.exe)
-    if(SCENE_SETTINGS_PYTHON_EXECUTABLE)
-        set(SCENE_SETTINGS_PYTHON_ARGS -3)
-    endif()
-endif()
-if(NOT SCENE_SETTINGS_PYTHON_EXECUTABLE)
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    set(SCENE_SETTINGS_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
-endif()
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(SCENE_SETTINGS_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
 
 set(SCENE_SETTINGS_CATALOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(SCENE_SETTINGS_CATALOG_HEADER "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.generated.h")
