@@ -9,7 +9,6 @@ struct SceneManager : Feature, SceneSettingsManager
 	std::string GetDisplayName() override { return T("feature.scene_manager.name", "Scene Manager"); }
 	std::string GetShortName() override { return "SceneManager"; }
 	std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
-	bool SupportsVR() override { return true; }
 	bool IsCore() const override { return true; }
 	bool IsAlwaysEnabled() const override { return true; }
 	bool IsDisabledByDefault() const override { return false; }
