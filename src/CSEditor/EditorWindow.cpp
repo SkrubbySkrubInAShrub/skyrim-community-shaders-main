@@ -5,7 +5,6 @@
 #include "Features/HDRDisplay.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
-#include "InteriorOnlyPanel.h"
 #include "Menu.h"
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
@@ -261,7 +260,6 @@ void EditorWindow::ShowObjectsWindow()
 				{ "Shader Particle Geometry", T(TKEY("category_shader_particle"), "Shader Particle Geometry") },
 				{ "Lens Flare", T(TKEY("category_lens_flare"), "Lens Flare") },
 				{ "Visual Effect", T(TKEY("category_visual_effect"), "Visual Effect") },
-				{ "Interior Only", T(TKEY("category_interior_only"), "Interior Only") },
 				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") }
 			};
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
@@ -279,15 +277,6 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::TableSetColumnIndex(1);
 
 		if (ImGui::BeginChild("##ObjectsContent", { 0, 0 }, ImGuiChildFlags_Borders, kStickyHeaderFlags)) {
-			// Interior Only category has its own panel
-			if (m_selectedCategory == "Interior Only") {
-				InteriorOnlyPanel::Draw();
-				ImGui::EndChild();
-				ImGui::EndTable();
-				ImGui::End();
-				return;
-			}
-
 			if (m_selectedCategory == "Light Editor") {
 				BeginScrollableContent("##LightEditorScroll");
 				lightEditor.DrawSettings();
@@ -1414,36 +1403,6 @@ void EditorWindow::RenderUI()
 	ImGui::GetStyle().FontScaleMain = previousScale;
 }
 
-void EditorWindow::OpenWeatherFeatureSetting(RE::TESWeather* weather, const std::string& featureName, const std::string& settingName)
-{
-	if (!weather) {
-		return;
-	}
-
-	// Open the editor if it's not already open
-	if (!open) {
-		open = true;
-	}
-
-	// Find the weather widget
-	for (auto& widget : weatherWidgets) {
-		auto* weatherWidget = dynamic_cast<WeatherWidget*>(widget.get());
-		if (weatherWidget && weatherWidget->weather == weather) {
-			// Open the widget if it's not already open
-			if (!weatherWidget->open) {
-				weatherWidget->open = true;
-			}
-
-			// Set up navigation to the specific feature/setting
-			weatherWidget->NavigateToFeatureSetting(featureName, settingName);
-
-			// Focus the widget window
-			weatherWidget->RequestFocus();
-			break;
-		}
-	}
-}
-
 EditorWindow::~EditorWindow()
 {
 	ShowGameMenus();
@@ -1593,6 +1552,10 @@ void EditorWindow::LoadSettings()
 		}
 	}
 	m_selectedCategory = settings.selectedCategory;
+	if (m_selectedCategory == "Interior Only") {
+		m_selectedCategory = "Weather";
+		settings.selectedCategory = m_selectedCategory;
+	}
 	SetWidgetTypeSizesFromJson(settings.widgetTypeSizes);
 }
 
