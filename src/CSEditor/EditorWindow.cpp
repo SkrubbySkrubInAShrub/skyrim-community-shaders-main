@@ -1450,6 +1450,9 @@ void EditorWindow::UpdateOpenState()
 {
 	static bool wasOpen = false;
 
+	// Runs even while closed so a Scene Manager panel's pause is always released.
+	SceneSettingsUI::SyncTimePause();
+
 	if (open && !wasOpen) {
 		DisableVanityCamera();
 		HideGameMenus();

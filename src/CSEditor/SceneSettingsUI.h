@@ -9,4 +9,11 @@ namespace SceneSettingsUI
 
 	/** @brief Draws the Scene Manager panel body in the CS Editor objects window. */
 	void DrawSceneManagerPanel();
+
+	/**
+	 * @brief Pauses game time while a panel is on screen and restores it once none are.
+	 *
+	 * Call once per frame, including while the editor is closed, so the pause is always released.
+	 */
+	void SyncTimePause();
 }
