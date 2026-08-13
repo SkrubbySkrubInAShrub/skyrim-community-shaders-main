@@ -457,6 +457,106 @@ public:
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
 
+	// --- Runtime State ---
+
+	/// Current and outgoing weather with the sky's blend factor. Ids are 0 when no weather is active.
+	struct WeatherBlend
+	{
+		RE::FormID currentWeatherId = 0;
+		RE::FormID previousWeatherId = 0;
+		float lerp = 0.0f;
+	};
+
+	// --- Debug Inspection ---
+
+	/// One stored entry, flattened for the debug UI.
+	struct DebugEntry
+	{
+		std::string feature;
+		std::string path;
+		std::string key;
+		std::string value;
+		std::string period;  // Empty when the entry is not per-period
+		bool overwrite = false;
+		bool paused = false;
+		bool active = false;
+		bool resolvable = false;
+	};
+
+	/// A group of entries the resolver treats as one layer (scene type, weather, or location).
+	struct DebugLayer
+	{
+		std::string name;
+		std::string detail;
+		bool matchesCurrentScene = false;
+		std::vector<DebugEntry> entries;
+	};
+
+	/// One address the resolver currently drives, with the inputs that produced its value.
+	struct DebugResolvedSetting
+	{
+		std::string feature;
+		std::string path;
+		std::string key;
+		std::string baseline;
+		std::string applied;
+		std::array<std::optional<float>, kPeriodCount> timeOfDayValues{};
+		std::array<std::optional<float>, kPeriodCount> currentWeatherValues{};
+		std::array<std::optional<float>, kPeriodCount> previousWeatherValues{};
+	};
+
+	/// Everything the resolver has in flight, sampled for the debug UI.
+	struct DebugSnapshot
+	{
+		// Live scene context
+		bool playerReady = false;
+		bool menuOpen = false;
+		bool interior = false;
+		RE::FormID cellId = 0;
+		std::string cellName;
+		std::string cellEditorId;
+		RE::FormID locationId = 0;
+		std::string locationName;
+		std::vector<LocationTarget> locationTargets;
+		float gameHour = 0.0f;
+		TimeOfDayPeriod period = TimeOfDayPeriod::Count;
+		std::array<float, kPeriodCount> timeOfDayFactors{};
+		WeatherBlend weather;
+		std::string currentWeatherName;
+		std::string previousWeatherName;
+
+		// Load and resolver state
+		bool dataLoaded = false;
+		bool weatherDataLoaded = false;
+		bool locationDataLoaded = false;
+		bool gameDataReady = false;
+		bool resolverSuspended = false;
+		bool resolverDirty = false;
+		bool activeEntryCacheDirty = false;
+		bool hasActiveSceneEntries = false;
+		bool deferredSceneChangesPending = false;
+		int sceneLayerSuspendDepth = 0;
+
+		// Inputs of the most recent resolve, and the factors it blended with
+		bool lastInterior = false;
+		RE::FormID lastCellId = 0;
+		RE::FormID lastLocationId = 0;
+		float lastHour = -1.0f;
+		WeatherBlend lastWeather;
+		std::array<float, kPeriodCount> blendFactors{};
+
+		std::vector<DebugLayer> sceneLayers;
+		std::vector<DebugLayer> weatherLayers;
+		std::vector<DebugLayer> locationLayers;
+		std::vector<DebugResolvedSetting> resolvedSettings;
+		std::vector<std::string> applyFailures;
+		std::vector<std::string> restoreFailures;
+		std::vector<std::string> pausedFeatures;
+	};
+
+	/// Sample the full resolver state. Built on demand, only for the debug UI.
+	DebugSnapshot GetDebugSnapshot() const;
+
 protected:
 	SceneSettingsManager();
 	~SceneSettingsManager();
@@ -554,14 +654,6 @@ private:
 	mutable RE::FormID cachedTargetCellId = 0;
 	mutable bool locationTargetsCached = false;
 	mutable std::vector<LocationTarget> cachedLocationTargets;
-
-	/// Current and outgoing weather with the sky's blend factor. Ids are 0 when no weather is active.
-	struct WeatherBlend
-	{
-		RE::FormID currentWeatherId = 0;
-		RE::FormID previousWeatherId = 0;
-		float lerp = 0.0f;
-	};
 
 	/// Period containing a game hour, with that hour normalized into the period's range.
 	struct PeriodLookup

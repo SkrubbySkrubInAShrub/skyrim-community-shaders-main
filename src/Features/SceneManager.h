@@ -16,6 +16,8 @@ struct SceneManager : Feature, SceneSettingsManager
 	bool HasRestoreDefaults() const override { return false; }
 
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
+	/// Debug view of the resolver's live state until the real Scene Manager UI lands.
+	void DrawSettings() override;
 	void SetupResources() override;
 	void DataLoaded() override;
 	void Update();
