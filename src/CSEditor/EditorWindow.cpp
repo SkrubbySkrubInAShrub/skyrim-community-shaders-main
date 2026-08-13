@@ -8,6 +8,7 @@
 #include "Menu.h"
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
+#include "SceneSettingsUI.h"
 #include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -260,7 +261,8 @@ void EditorWindow::ShowObjectsWindow()
 				{ "Shader Particle Geometry", T(TKEY("category_shader_particle"), "Shader Particle Geometry") },
 				{ "Lens Flare", T(TKEY("category_lens_flare"), "Lens Flare") },
 				{ "Visual Effect", T(TKEY("category_visual_effect"), "Visual Effect") },
-				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") }
+				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") },
+				{ "Scene Manager", T(TKEY("category_scene_manager"), "Scene Manager") }
 			};
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 				// Highlight the selected category
@@ -277,9 +279,14 @@ void EditorWindow::ShowObjectsWindow()
 		ImGui::TableSetColumnIndex(1);
 
 		if (ImGui::BeginChild("##ObjectsContent", { 0, 0 }, ImGuiChildFlags_Borders, kStickyHeaderFlags)) {
-			if (m_selectedCategory == "Light Editor") {
-				BeginScrollableContent("##LightEditorScroll");
-				lightEditor.DrawSettings();
+			// Categories that own their whole panel instead of listing form widgets.
+			const bool isLightEditor = m_selectedCategory == "Light Editor";
+			if (isLightEditor || m_selectedCategory == "Scene Manager") {
+				BeginScrollableContent(isLightEditor ? "##LightEditorScroll" : "##SceneManagerScroll");
+				if (isLightEditor)
+					lightEditor.DrawSettings();
+				else
+					SceneSettingsUI::DrawSceneManagerPanel();
 				EndScrollableContent();
 				ImGui::EndChild();
 				ImGui::EndTable();
