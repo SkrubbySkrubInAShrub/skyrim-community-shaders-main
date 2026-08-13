@@ -480,8 +480,11 @@ private:
 	bool dataLoaded = false;
 	bool deferredSceneChangesPending = false;
 	std::chrono::steady_clock::time_point deferredSceneChangesDeadline{};
+	int deferredSaveFailures = 0;
 	static constexpr auto kDeferredSaveDelay = std::chrono::milliseconds(250);
 	static constexpr auto kDeferredSaveRetryDelay = std::chrono::seconds(2);
+	/// A permanently locked file (MO2 VFS, antivirus, read-only install) must not log every retry forever.
+	static constexpr int kMaxDeferredSaveRetries = 5;
 
 	std::atomic<bool> queuedCellTransition = false;
 
@@ -578,6 +581,16 @@ private:
 	WeatherBlend GetWeatherBlend() const;
 	float GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, int periodIndex) const;
+
+	/// Live sky/time state sampled once per resolve so every setting blends against identical factors.
+	struct BlendSnapshot
+	{
+		WeatherBlend weather;
+		std::array<float, kPeriodCount> timeOfDayFactors{};
+	};
+	/// Resamples the blend inputs. Call once at the top of any pass that runs the resolvers.
+	void RefreshBlendSnapshot(bool interior);
+	BlendSnapshot blendSnapshot;
 
 	// --- Central runtime resolver ---
 	void ResolveAndApply(bool force = false);

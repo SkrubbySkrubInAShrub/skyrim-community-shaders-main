@@ -102,8 +102,11 @@ address always wins. `SettingsUser.json` remains the baseline beneath all of thi
 `SceneSettingsManager::SceneLayerGuard` is an RAII suspend of the scene layer. Anything that reads or writes
 a feature's *base* settings must hold one, otherwise it captures an overridden value as if it were the user's
 choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
-exist yet. Current holders: `State::Load` / `State::SaveToJson`, two internal manager paths, and five DevBench
-bridge endpoints. Add one to any new code path that serializes feature settings.
+exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, two internal manager
+paths, and six DevBench bridge endpoints. Add one to any new code path that serializes feature settings.
+
+In `State::SaveToJson` / `State::LoadFromJson` the guard is declared **before** `m_mutex` is taken, so the
+resolve it triggers on destruction does not run while the lock is held.
 
 ## On-disk layout
 
@@ -165,8 +168,8 @@ called `SceneSettingsUIHooks::Install()`).
 
 -   `src/WeatherManager.{h,cpp}`, `src/WeatherVariableRegistry.h` and `docs/weather-system-docs/` — the old
     registry the catalog replaces.
--   `Util::WeatherUI::{IsWeatherControlled,SliderFloat,Checkbox,ColorEdit3,ColorEdit4}` — call sites in
-    `IBL`, `ExponentialHeightFog`, `CSEditor` and `WeatherWidget` are now plain `ImGui::` calls.
+-   `Util::WeatherUI::{IsWeatherControlled,SliderFloat,Checkbox,ColorEdit3,ColorEdit4}` — its only call sites
+    were in `ExponentialHeightFog` (22) and `IBL` (7), and both are now plain `ImGui::` calls.
 -   `src/CSEditor/InteriorOnlyPanel.{h,cpp}` and its EditorWindow category. `EditorWindow::LoadSettings()`
     remaps a saved `"Interior Only"` category to `"Weather"`.
 -   The WeatherWidget per-feature "Features" tab and its `featureSettings` map (upstream replaced it with a

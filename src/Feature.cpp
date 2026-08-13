@@ -49,6 +49,8 @@
 #include "State.h"
 #include "TruePBR.h"
 
+#include <unordered_map>
+
 void Feature::Load(json& o_json)
 {
 	// Convert string to wstring
@@ -269,11 +271,16 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 
 Feature* Feature::FindFeatureByShortName(const std::string& shortName)
 {
-	for (auto* feature : GetFeatureList()) {
-		if (feature->loaded && feature->GetShortName() == shortName)
-			return feature;
-	}
-	return nullptr;
+	// GetShortName() returns by value, so index once rather than allocating per feature per call.
+	static const auto featuresByShortName = [] {
+		std::unordered_map<std::string, Feature*> index;
+		for (auto* feature : GetFeatureList())
+			index.emplace(feature->GetShortName(), feature);
+		return index;
+	}();
+
+	const auto it = featuresByShortName.find(shortName);
+	return it != featuresByShortName.end() && it->second->loaded ? it->second : nullptr;
 }
 
 std::vector<std::string> Feature::GetLoadedFeatureNames()

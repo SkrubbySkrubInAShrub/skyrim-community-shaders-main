@@ -200,6 +200,9 @@ namespace
 			// Marshal: FeatureEntry reads Feature::loaded and restart-gated settings bytes that
 			// main-thread toggles / settings-loads mutate.
 			return RunOnMainThread([]() {
+				// One guard for the whole listing: FeatureEntry diffs live settings bytes against
+				// boot values, which a scene override would otherwise report as a pending restart.
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				json out = json::array();
 				for (auto* f : Feature::GetFeatureList())
 					out.push_back(FeatureEntry(f));

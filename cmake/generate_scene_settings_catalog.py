@@ -1,13 +1,38 @@
 
 #!/usr/bin/env python3
 
+"""Generates the scene settings catalog from the feature sources at build time.
+
+Every scene-controllable setting is discovered by statically parsing C++: `SaveSettings`
+bodies give the serialized address a scene override writes to, and `DrawSettings` bodies
+give the editor metadata (label, category, bounds, choices) to present it with. There is no
+runtime reflection and no hand-maintained list, so a setting that stops being parsed simply
+disappears; the floors in `validate_entries` exist to make that loud instead of silent.
+
+Two invariants the parsing rests on:
+
+- `mask_cpp_source` is length-preserving, so an offset found in the masked view indexes the
+  raw text unchanged. Match on the masked view (a commented-out line must never win over the
+  live one), then slice the raw text to recover literals.
+- A missing binding must degrade to "not scene-controllable", never to a wrong binding.
+  `merge_unique` and the `add_metadata` priority ladder are both fail-closed for that reason.
+"""
+
 import argparse
 import ast
+import functools
 import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
+
+# Nested structs a feature persists but that are deliberately not scene-controllable.
+# Anything else non-primitive in a SaveSettings body fails the build, so an aggregate can
+# never drop out of the catalog silently.
+UNCATALOGED_PERSISTED_AGGREGATES = {
+    ("WetnessEffects", "DebugSettings"),
+}
 
 PRIMITIVE_TYPES = {
     "bool": "Boolean",
@@ -31,6 +56,20 @@ PRIMITIVE_TYPES = {
     "std::uint16_t": "Integer",
     "std::uint32_t": "Integer",
     "std::uint64_t": "Integer",
+    # Multi-word builtin spellings: without these a plain `unsigned int` member drops
+    # out of the catalog instead of being cataloged as an integer.
+    "unsigned": "Integer",
+    "unsigned int": "Integer",
+    "signed": "Integer",
+    "signed int": "Integer",
+    "short": "Integer",
+    "unsigned short": "Integer",
+    "long": "Integer",
+    "unsigned long": "Integer",
+    "long long": "Integer",
+    "unsigned long long": "Integer",
+    "size_t": "Integer",
+    "std::size_t": "Integer",
     "std::string": "String",
     "string": "String",
 }
@@ -270,8 +309,17 @@ SHIFT_UNIFIED_CONTROL_RE = re.compile(
 
 
 
+@functools.lru_cache(maxsize=None)
 def read_text(path: Path) -> str:
+    """Source of a file. Cached: every collector re-reads the same tree."""
     return path.read_text(encoding="utf-8", errors="ignore")
+
+
+@functools.lru_cache(maxsize=None)
+def masked_text(path: Path) -> str:
+    """Comment/string-masked view of a file. Length-preserving, so indices are
+    interchangeable with read_text(path) -- match on this, slice the raw text."""
+    return mask_cpp_source(read_text(path))
 
 
 def cpp_escape(value: str) -> str:
@@ -334,11 +382,18 @@ def split_args(arg_text: str) -> list[str]:
     return args
 
 
-def find_matching_paren(text: str, open_index: int) -> int:
+def find_matching_bracket(text: str, open_index: int, open_ch: str, close_ch: str) -> int:
+    """Index of the bracket closing the one at open_index, or -1.
+
+    Skips string literals and comments. Callers pass raw source as often as masked
+    source, and an unbalanced bracket inside a comment would otherwise silently
+    truncate a function body and drop every control in it.
+    """
     depth = 0
     in_string = False
     escaped = False
-    for i in range(open_index, len(text)):
+    i = open_index
+    while i < len(text):
         ch = text[i]
         if in_string:
             if escaped:
@@ -347,48 +402,41 @@ def find_matching_paren(text: str, open_index: int) -> int:
                 escaped = True
             elif ch == '"':
                 in_string = False
-            continue
-        if ch == '"':
+        elif ch == '"':
             in_string = True
-        elif ch == "(":
+        elif text.startswith("//", i):
+            newline = text.find("\n", i)
+            i = len(text) if newline < 0 else newline
+            continue
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = len(text) if end < 0 else end + 2
+            continue
+        elif ch == open_ch:
             depth += 1
-        elif ch == ")":
+        elif ch == close_ch:
             depth -= 1
             if depth == 0:
                 return i
+        i += 1
     return -1
+
+
+def find_matching_paren(text: str, open_index: int) -> int:
+    return find_matching_bracket(text, open_index, "(", ")")
 
 
 def find_matching_brace(text: str, open_index: int) -> int:
-    depth = 0
-    in_string = False
-    escaped = False
-    for i in range(open_index, len(text)):
-        ch = text[i]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return i
-    return -1
+    return find_matching_bracket(text, open_index, "{", "}")
 
 
 def collect_nlohmann_macros(paths: list[Path]) -> dict[str, list[str]]:
     macros: dict[str, list[str]] = {}
+    conflicts: list[str] = []
     token = "NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT"
     for path in paths:
-        text = read_text(path)
+        # Type names and field names survive masking, so the masked view is enough here.
+        text = masked_text(path)
         pos = 0
         while True:
             start = text.find(token, pos)
@@ -404,8 +452,14 @@ def collect_nlohmann_macros(paths: list[Path]) -> dict[str, list[str]]:
             if len(args) >= 2:
                 type_name = args[0].strip()
                 fields = [a.strip().rstrip(";") for a in args[1:] if a.strip()]
+                if macros.get(type_name, fields) != fields:
+                    conflicts.append(
+                        f"{type_name} is declared with conflicting field lists "
+                        f"({macros[type_name]} vs {fields})")
                 macros[type_name] = fields
             pos = close_index + 1
+    if conflicts:
+        raise SystemExit("conflicting nlohmann type definitions:\n  " + "\n  ".join(conflicts))
     return macros
 
 
@@ -594,7 +648,8 @@ def collect_feature_member_fields(paths: list[Path], features: dict[str, dict[st
 def collect_save_roots(paths: list[Path]) -> dict[str, str]:
     roots: dict[str, str] = {}
     for path in paths:
-        text = read_text(path)
+        # Masked: a commented-out assignment must not win over the live one.
+        text = masked_text(path)
         for match in re.finditer(r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*\{", text):
             feature_class = match.group(1)
             body_end = find_matching_brace(text, match.end() - 1)
@@ -611,24 +666,36 @@ def collect_direct_persisted_fields(
         paths: list[Path],
         feature_members: dict[str, dict[str, str]]) -> dict[str, list[tuple[str, str, str]]]:
     persisted_fields: dict[str, list[tuple[str, str, str]]] = {}
+    uncataloged: list[str] = []
     for path in paths:
-        text = read_text(path)
+        # Masked for matching so commented-out persistence cannot register a phantom key;
+        # the JSON key itself is blanked by masking, so read it back out of the raw text.
+        raw = read_text(path)
+        text = masked_text(path)
         for match in re.finditer(r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*\{", text):
             feature_class = match.group(1)
             body_end = find_matching_brace(text, match.end() - 1)
             if body_end < 0:
                 continue
-            body = text[match.end():body_end]
+            offset = match.end()
+            body = text[offset:body_end]
             for assignment in re.finditer(
                     r'\b[A-Za-z_]\w*\s*\[\s*"([^"]+)"\s*\]\s*=\s*(?:this->)?([A-Za-z_]\w*)\s*;',
                     body):
-                key = assignment.group(1)
+                key = raw[offset + assignment.start(1):offset + assignment.end(1)]
                 member = assignment.group(2)
-                value_type = type_to_value_type(
-                    feature_members.get(feature_class, {}).get(member, ""))
+                declared_type = feature_members.get(feature_class, {}).get(member, "")
+                value_type = type_to_value_type(declared_type)
                 if value_type:
                     persisted_fields.setdefault(feature_class, []).append(
                         (key, value_type, member))
+                elif declared_type and (feature_class, key) not in UNCATALOGED_PERSISTED_AGGREGATES:
+                    uncataloged.append(
+                        f"{feature_class}::SaveSettings persists '{key}' as non-primitive "
+                        f"'{declared_type}'; catalog it or list it in "
+                        f"UNCATALOGED_PERSISTED_AGGREGATES")
+    if uncataloged:
+        raise SystemExit("uncataloged persisted aggregates:\n  " + "\n  ".join(uncataloged))
     return persisted_fields
 
 
@@ -887,6 +954,7 @@ def resolve_control_translation(
         key=lambda item: (item[1] != fallback, len(item[1]), item[1]))
 
 
+@functools.lru_cache(maxsize=None)
 def mask_cpp_source(text: str) -> str:
     result = list(text)
     i = 0
@@ -2959,6 +3027,13 @@ def _project_standard_controls(
     choice_candidates = {}
 
     def add_metadata(identity, binding, priority):
+        """Records a candidate binding, keeping only those from the most direct evidence.
+
+        Priority is how directly the control names the member: 3 = `settings.x` written
+        literally in a DrawSettings body, 2 = recovered from the parameter origin of a typed
+        helper, 1 = projected through a call chain. Ties accumulate instead of picking a
+        winner, and a tie is later discarded as ambiguous.
+        """
         previous_priority, candidates = metadata_candidates.get(
             identity, (-1, set()))
         if priority > previous_priority:
@@ -3488,6 +3563,12 @@ def collect_control_index(
     conflicts = set()
 
     def merge_unique(target, additions):
+        """Merges bindings, dropping any identity two sources disagree on.
+
+        Fail-closed: an ambiguous identity is poisoned for the rest of the merge rather than
+        resolved arbitrarily, so it falls out of the catalog instead of shipping a binding
+        that writes the wrong member.
+        """
         for identity, value in additions.items():
             if identity in conflicts:
                 continue
@@ -3854,6 +3935,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         type_owner_name = type_owner.split("::")[-1]
         metadata_owners = tuple(dict.fromkeys(
             (context.field_class, type_owner_name, simple_type)))
+        # "Settings" is excluded because nearly every feature names its struct that: as a
+        # lookup owner it would match members of an unrelated feature's settings.
         metadata_suffix_owners = tuple(
             owner for owner in dict.fromkeys((
                 *inherited_metadata_owners, type_owner_name, simple_type))
@@ -4449,10 +4532,28 @@ namespace SceneSettingsCatalog
 """, encoding="utf-8")
 
 
-def validate_entries(entries: list[dict[str, object]], min_entries: int) -> None:
-    if len(entries) < min_entries:
-        raise ValueError(
-            f"scene settings catalog found {len(entries)} entries, expected at least {min_entries}")
+def validate_entries(
+        entries: list[dict[str, object]],
+        min_entries: int,
+        min_controllable: int = 1,
+        min_controllable_features: int = 1) -> None:
+    """Fails the build when the catalog shrinks past the floors, then checks each entry.
+
+    The three floors are not redundant. Persisted-but-hidden entries keep the total up even
+    if every scene binding is lost, and a healthy total hides one feature's bindings vanishing
+    behind another's growth, so the feature count is the only signal for a single broken parse.
+    """
+    controllable = [
+        entry for entry in entries
+        if "SceneSettingsCatalog::SettingFlag::SceneControllable" in entry.get("flags", "")]
+    controllable_features = {entry["feature"] for entry in controllable}
+    for found, floor, label in (
+            (len(entries), min_entries, "entries"),
+            (len(controllable), min_controllable, "scene-controllable entries"),
+            (len(controllable_features), min_controllable_features, "features with scene-controllable entries")):
+        if found < floor:
+            raise ValueError(
+                f"scene settings catalog found {found} {label}, expected at least {floor}")
 
     errors = []
     identities = set()
@@ -4507,13 +4608,16 @@ def main() -> int:
     parser.add_argument("--source-dir", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--min-entries", type=int, default=1)
+    parser.add_argument("--min-controllable", type=int, default=1)
+    parser.add_argument("--min-controllable-features", type=int, default=1)
     args = parser.parse_args()
 
     source_dir = Path(args.source_dir)
     out_dir = Path(args.out_dir)
     entries = build_entries(source_dir)
     try:
-        validate_entries(entries, args.min_entries)
+        validate_entries(
+            entries, args.min_entries, args.min_controllable, args.min_controllable_features)
     except ValueError as error:
         parser.error(str(error))
     write_catalog(entries, out_dir)

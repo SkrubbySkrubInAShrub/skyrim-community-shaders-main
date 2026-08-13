@@ -1,15 +1,28 @@
 import importlib.util
 import math
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
 
-GENERATOR_PATH = Path(__file__).parents[1] / "cmake" / "generate_scene_settings_catalog.py"
+REPO_ROOT = Path(__file__).parents[1]
+GENERATOR_PATH = REPO_ROOT / "cmake" / "generate_scene_settings_catalog.py"
 SPEC = importlib.util.spec_from_file_location("scene_catalog_generator", GENERATOR_PATH)
 GENERATOR = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(GENERATOR)
+
+
+def _cmake_catalog_floors():
+    """The floors CMake passes the generator, so the gate cannot drift from what CI runs."""
+    cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    return tuple(
+        int(re.search(rf"--{flag}\s+(\d+)", cmake).group(1))
+        for flag in ("min-entries", "min-controllable", "min-controllable-features"))
+
+
+CMAKE_CATALOG_FLOORS = _cmake_catalog_floors()
 
 
 def make_control_binding(owner, path, label, control_kind):
@@ -1231,7 +1244,27 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             for entry in virtual_entries))
 
     def test_catalog_satisfies_the_build_time_minimum(self):
-        GENERATOR.validate_entries(self.entries, 250)
+        GENERATOR.validate_entries(self.entries, *CMAKE_CATALOG_FLOORS)
+
+    def test_catalog_validation_rejects_lost_scene_bindings(self):
+        # Persisted-but-hidden entries alone must not satisfy the gate.
+        persisted_only = [
+            dict(entry, flags="SceneSettingsCatalog::SettingFlag::Persisted")
+            for entry in self.entries]
+        with self.assertRaises(ValueError):
+            GENERATOR.validate_entries(persisted_only, *CMAKE_CATALOG_FLOORS)
+
+    def test_catalog_validation_rejects_a_feature_losing_every_binding(self):
+        # One feature's bindings vanishing must fail even while the totals stay healthy.
+        largest = max(
+            {entry["feature"] for entry in self.entries},
+            key=lambda feature: sum(1 for entry in self.entries if entry["feature"] == feature))
+        survivors = [entry for entry in self.entries if entry["feature"] != largest]
+        padding = [
+            dict(entry, key=f"{entry['key']}Pad{index}")
+            for index, entry in enumerate(survivors[:len(self.entries) - len(survivors)])]
+        with self.assertRaises(ValueError):
+            GENERATOR.validate_entries(survivors + padding, *CMAKE_CATALOG_FLOORS)
 
     def test_settings_component_discovery_is_feature_agnostic(self):
         with tempfile.TemporaryDirectory() as directory:

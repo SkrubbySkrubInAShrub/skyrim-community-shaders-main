@@ -496,8 +496,9 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 void State::SaveToJson(nlohmann::json& settings)
 {
-	std::lock_guard<std::mutex> lock(m_mutex);
+	// Guard outlives the lock so its resolve-on-destruction does not run under m_mutex.
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
@@ -563,6 +564,8 @@ void State::SaveToJson(nlohmann::json& settings)
 
 void State::LoadFromJson(nlohmann::json& settings)
 {
+	// Guard outlives the lock so its resolve-on-destruction does not run under m_mutex.
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 	std::lock_guard<std::mutex> lock(m_mutex);
 	const auto shaderCache = globals::shaderCache;
 

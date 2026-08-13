@@ -895,12 +895,25 @@ namespace
 		return setting;
 	}
 
+	// Runs on the render thread, so a throwing feature must degrade to "skip the override", not crash.
+	bool TrySaveFeatureSettings(Feature& feature, std::string_view context, json& settings)
+	{
+		try {
+			feature.SaveSettings(settings);
+			return settings.is_object();
+		} catch (const std::exception& e) {
+			logger::warn("[SceneSettings] Could not {} for {}: {}", context, feature.GetShortName(), e.what());
+		} catch (...) {
+			logger::warn("[SceneSettings] Could not {} for {}", context, feature.GetShortName());
+		}
+		return false;
+	}
+
 	bool GetCatalogSettingValue(
 		Feature& feature, const SceneSettingsCatalog::SettingMetadata& setting, json& value)
 	{
 		json featureSettings;
-		feature.SaveSettings(featureSettings);
-		if (!featureSettings.is_object())
+		if (!TrySaveFeatureSettings(feature, "read settings", featureSettings))
 			return false;
 		const auto* serializedValue = GetCatalogSerializedValue(featureSettings, setting);
 		if (!serializedValue || !IsSceneSettingPrimitive(*serializedValue))
@@ -915,8 +928,7 @@ namespace
 			return true;
 
 		json originalSettings;
-		feature.SaveSettings(originalSettings);
-		if (!originalSettings.is_object())
+		if (!TrySaveFeatureSettings(feature, "snapshot settings", originalSettings))
 			return false;
 
 		auto candidateSettings = originalSettings;
@@ -948,7 +960,7 @@ namespace
 		return false;
 	}
 
-	bool CatalogHasSceneSettings(std::string_view featureShortName, bool transitionableOnly)
+	bool ComputeCatalogHasSceneSettings(std::string_view featureShortName, bool transitionableOnly)
 	{
 		for (const auto& setting : SceneSettingsCatalog::GetSettings()) {
 			if (setting.featureShortName != featureShortName || !IsCatalogSettingAllowedByPolicy(setting))
@@ -958,6 +970,27 @@ namespace
 				return true;
 		}
 		return false;
+	}
+
+	// The catalog and the policy are both compile-time constant, so answer every feature up front.
+	// Built once (thread-safe static init) and read-only afterwards: this is hit from both the
+	// render thread and the menu thread.
+	bool CatalogHasSceneSettings(std::string_view featureShortName, bool transitionableOnly)
+	{
+		// {any scene setting, any transitionable scene setting} per feature short name.
+		static const auto featureCoverage = [] {
+			std::map<std::string_view, std::pair<bool, bool>> coverage;
+			for (const auto& setting : SceneSettingsCatalog::GetSettings())
+				coverage.try_emplace(setting.featureShortName,
+					ComputeCatalogHasSceneSettings(setting.featureShortName, false),
+					ComputeCatalogHasSceneSettings(setting.featureShortName, true));
+			return coverage;
+		}();
+
+		const auto it = featureCoverage.find(featureShortName);
+		if (it == featureCoverage.end())
+			return false;
+		return transitionableOnly ? it->second.second : it->second.first;
 	}
 
 	std::vector<std::string> GetLoadedCatalogFeatureNames(bool transitionableOnly)
@@ -1217,8 +1250,7 @@ namespace
 
 		SceneSettingsManager::SceneLayerGuard guard;
 		json featureSettings;
-		feature->SaveSettings(featureSettings);
-		if (!featureSettings.is_object())
+		if (!TrySaveFeatureSettings(*feature, "read settings", featureSettings))
 			return {};
 
 		std::vector<ManagerSettingDescriptor> descriptors;
@@ -1459,18 +1491,8 @@ static bool GetFeatureSettingValueForValidation(Feature& feature, const std::str
 		return GetCatalogSettingValue(feature, setting, featureValue);
 
 	auto [snapshotIt, inserted] = featureSettingsCache->try_emplace(featureShortName);
-	if (inserted) {
-		try {
-			feature.SaveSettings(snapshotIt->second);
-		} catch (const std::exception& e) {
-			logger::warn("[SceneSettings] Could not snapshot {} while loading scene settings: {}",
-				featureShortName, e.what());
-			snapshotIt->second = nullptr;
-		} catch (...) {
-			logger::warn("[SceneSettings] Could not snapshot {} while loading scene settings", featureShortName);
-			snapshotIt->second = nullptr;
-		}
-	}
+	if (inserted && !TrySaveFeatureSettings(feature, "snapshot settings", snapshotIt->second))
+		snapshotIt->second = nullptr;
 	if (!snapshotIt->second.is_object())
 		return false;
 
@@ -2197,18 +2219,7 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 		return;
 
 	json featureSettings;
-	try {
-		feature->SaveSettings(featureSettings);
-	} catch (const std::exception& e) {
-		logger::warn("[SceneSettings] Could not inspect external changes for {}: {}",
-			feature->GetShortName(), e.what());
-		return;
-	} catch (...) {
-		logger::warn("[SceneSettings] Could not inspect external changes for {}",
-			feature->GetShortName());
-		return;
-	}
-	if (!featureSettings.is_object())
+	if (!TrySaveFeatureSettings(*feature, "inspect external changes", featureSettings))
 		return;
 
 	std::vector<std::pair<SettingAddress, json>> changedSettings;
@@ -2325,11 +2336,10 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	const auto locationId = location ? location->GetFormID() : 0;
 	const auto cellId = cell->GetFormID();
 
-	WeatherBlend weather;
-	if (!interior) {
+	if (!interior)
 		TryEnsureWeatherDataLoaded();
-		weather = GetWeatherBlend();
-	}
+	RefreshBlendSnapshot(interior);
+	const auto& weather = blendSnapshot.weather;
 
 	const bool contextChanged = interior != lastResolvedInterior ||
 	                            locationId != lastResolvedLocationId ||
@@ -2355,6 +2365,13 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	lastResolvedCurrentWeatherId = weather.currentWeatherId;
 	lastResolvedPreviousWeatherId = weather.previousWeatherId;
 	lastResolvedWeatherLerp = weather.lerp;
+}
+
+void SceneSettingsManager::RefreshBlendSnapshot(bool interior)
+{
+	// Indoors there is no weather to blend, and sampling one would churn the resolver's change check.
+	blendSnapshot.weather = interior ? WeatherBlend{} : GetWeatherBlend();
+	blendSnapshot.timeOfDayFactors = GetTimeOfDayFactors();
 }
 
 SceneSettingsManager::WeatherBlend SceneSettingsManager::GetWeatherBlend() const
@@ -2423,7 +2440,7 @@ SceneSettingsManager::ResolvedSettingMap SceneSettingsManager::BuildResolvedSett
 		ensureBaselines(GetEntries(SceneType::InteriorOnly), SceneType::InteriorOnly);
 	} else {
 		ensureBaselines(GetEntries(SceneType::TimeOfDay), SceneType::TimeOfDay);
-		const auto weather = GetWeatherBlend();
+		const auto& weather = blendSnapshot.weather;
 		for (auto weatherId : { weather.currentWeatherId, weather.previousWeatherId }) {
 			auto it = weatherSceneConfigs.find(weatherId);
 			if (it != weatherSceneConfigs.end())
@@ -2617,7 +2634,7 @@ void SceneSettingsManager::ResolveTimeOfDaySettings(ResolvedSettingMap& resolved
 
 void SceneSettingsManager::ResolveWeatherSettings(ResolvedSettingMap& resolved) const
 {
-	const auto weather = GetWeatherBlend();
+	const auto& weather = blendSnapshot.weather;
 	if (weather.currentWeatherId == 0)
 		return;
 
@@ -2698,7 +2715,7 @@ std::array<std::optional<float>, SceneSettingsManager::kPeriodCount> SceneSettin
 float SceneSettingsManager::ResolveTimeOfDayFloat(const SettingAddress& address, float baseValue) const
 {
 	const auto values = CollectPeriodValues(GetEntries(SceneType::TimeOfDay), address);
-	const auto factors = GetTimeOfDayFactors();
+	const auto& factors = blendSnapshot.timeOfDayFactors;
 	float result = 0.0f;
 	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
 		result += factors[periodIndex] * values[periodIndex].value_or(baseValue);
@@ -2707,11 +2724,11 @@ float SceneSettingsManager::ResolveTimeOfDayFloat(const SettingAddress& address,
 
 std::optional<float> SceneSettingsManager::ResolveWeatherFloat(const SettingAddress& address, float baseValue) const
 {
-	const auto weather = GetWeatherBlend();
+	const auto& weather = blendSnapshot.weather;
 	if (weather.currentWeatherId == 0)
 		return std::nullopt;
 
-	const auto factors = GetTimeOfDayFactors();
+	const auto& factors = blendSnapshot.timeOfDayFactors;
 	auto baselineIt = baselineSettings.find(address);
 	const float baselineValue = baselineIt != baselineSettings.end() && IsNumericValue(baselineIt->second) ?
 	                                baselineIt->second.get<float>() : baseValue;
@@ -2824,7 +2841,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 			logger::error("[SceneSettings] Refusing to overwrite SceneManager.json because its existing document is invalid");
 			userSettingsWriteBlockedWarning = true;
 		}
-		deferredSceneChangesPending = true;
+		deferredSceneChangesPending = ++deferredSaveFailures < kMaxDeferredSaveRetries;
 		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
 		return;
 	}
@@ -2919,12 +2936,20 @@ void SceneSettingsManager::SaveAllUserSettings()
 		weatherUserSettingsModified = false;
 		locationUserSettingsModified = false;
 		userSettingsWriteBlockedWarning = false;
+		deferredSaveFailures = 0;
 		logger::info("[SceneSettings] Saved SceneManager.json");
+		deferredSceneChangesPending = false;
+		return;
 	}
 
-	deferredSceneChangesPending = !saved;
-	if (!saved)
-		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
+	if (++deferredSaveFailures >= kMaxDeferredSaveRetries) {
+		logger::error("[SceneSettings] Giving up on SceneManager.json after {} attempts; changes stay in memory",
+			deferredSaveFailures);
+		deferredSceneChangesPending = false;
+		return;
+	}
+	deferredSceneChangesPending = true;
+	deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
 }
 
 static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::SettingEntry& entry,
@@ -3853,7 +3878,9 @@ std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTarg
 		return std::nullopt;
 
 	ResolvedSettingMap lowerLayers;
-	if (Util::IsInterior()) {
+	const bool interior = Util::IsInterior();
+	RefreshBlendSnapshot(interior);
+	if (interior) {
 		ResolveInteriorSettings(lowerLayers);
 	} else {
 		ResolveTimeOfDaySettings(lowerLayers);
