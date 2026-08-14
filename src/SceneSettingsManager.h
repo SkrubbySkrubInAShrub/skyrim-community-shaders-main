@@ -135,6 +135,9 @@ public:
 		std::filesystem::path sourcePath;                 // For overwrites: exact file path
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count;  // Which period this entry belongs to (TimeOfDay only)
 		std::optional<float> transitionSeconds;           // Location float transition override
+		// A transition this build cannot honor is dropped from the entry but kept in the template,
+		// so a document authored by another implementation round-trips with its field intact.
+		bool retainSerializedTransition = false;
 	};
 
 	/// One indexed value in an atomic scene-setting update.
@@ -454,7 +457,8 @@ public:
 		bool userAuthored = false;
 	};
 
-	std::vector<LocationTarget> GetCurrentLocationTargets() const;
+	/// The player's location chain, outermost first. Cached until the location or cell FormID moves.
+	const std::vector<LocationTarget>& GetCurrentLocationTargets() const;
 
 	/// Targets the user has taken on, for the editor's location list.
 	std::vector<LocationTarget> GetAuthoredLocationTargets() const;
@@ -740,6 +744,11 @@ private:
 	/// timescale (20x), this equals about 0.18 real seconds.
 	static constexpr float kHourUpdateThreshold = 1e-3f;
 
+	/// Location transitions are the one per-frame path, and each tick costs a full
+	/// SaveSettings/LoadSettings round trip per feature. A smoothstep blend is indistinguishable
+	/// at 30 Hz, so the tick is decoupled from the frame rate.
+	static constexpr float kLocationTransitionTickInterval = 1.0f / 30.0f;
+
 	// --- Pause states ---
 	std::map<std::string, bool> featurePauseStates;
 	int sceneLayerSuspendDepth = 0;
@@ -819,10 +828,12 @@ private:
 		float duration = 0.0f;
 		bool restoreAtEnd = false;
 	};
-	/// A feature's in-flight transitions, pushed as one LoadSettings call per frame.
+	/// A feature's in-flight transitions, pushed as one LoadSettings call per tick.
 	struct LocationTransitionBatch
 	{
 		std::vector<SettingAddress> addresses;
+		/// Points into activeLocationTransitions, which must stay node-based for these to survive
+		/// the erases the batch loop performs while iterating.
 		std::vector<LocationTransition*> transitions;
 		std::vector<CatalogSceneSettingUpdate> updates;
 		size_t signature = 0;
@@ -830,6 +841,7 @@ private:
 	std::map<SettingAddress, LocationTransition> activeLocationTransitions;
 	std::map<std::string, LocationTransitionBatch> locationTransitionBatches;
 	bool locationTransitionBatchesDirty = true;
+	float lastLocationTransitionTick = -1.0f;
 	ResolvedSettingMap lastLocationOverrideValues;
 	std::map<SettingAddress, float> lastLocationTransitionDurations;
 	std::map<SettingAddress, float> pendingLocationTransitionDurations;
@@ -892,7 +904,8 @@ private:
 	// --- Central runtime resolver ---
 	void ResolveAndApply(bool force = false);
 	bool HasActiveSceneEntriesCached();
-	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations);
+	/// @param interior Passed down from the caller's resolve, which already sampled it.
+	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations, bool interior);
 	void ApplyResolvedSettings(const ResolvedSettingMap& resolved, bool forceRetry);
 	void RestoreAppliedSettings();
 	void ResolveInteriorSettings(ResolvedSettingMap& resolved) const;

@@ -27,11 +27,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# Serialized keys whose nested struct is debug state, never scene-controllable. Anything else
-# non-primitive in a SaveSettings body fails the build, so an aggregate can never drop out of
-# the catalog silently. Keyed by serialized name only: naming a feature here would put policy
-# in the generator instead of SceneSettingsPolicy.h.
-UNCATALOGED_PERSISTED_AGGREGATE_KEYS = {
+# Struct types that are debug state, never scene-controllable. Anything else non-primitive in a
+# SaveSettings body fails the build, so an aggregate can never drop out of the catalog silently.
+# Keyed by declared type rather than serialized key: a feature persisting some other struct under
+# the name "DebugSettings" must still trip the guard, and naming features here would put policy in
+# the generator instead of SceneSettingsPolicy.h.
+UNCATALOGED_PERSISTED_AGGREGATE_TYPES = {
     "DebugSettings",
 }
 
@@ -393,6 +394,12 @@ def split_args(arg_text: str) -> list[str]:
     return args
 
 
+@functools.lru_cache(maxsize=None)
+def _bracket_scanner(open_ch: str, close_ch: str) -> re.Pattern[str]:
+    """Matches only the characters that can change bracket-scanning state."""
+    return re.compile("[" + re.escape(open_ch + close_ch) + '"/]')
+
+
 def find_matching_bracket(text: str, open_index: int, open_ch: str, close_ch: str) -> int:
     """Index of the bracket closing the one at open_index, or -1.
 
@@ -401,31 +408,41 @@ def find_matching_bracket(text: str, open_index: int, open_ch: str, close_ch: st
     truncate a function body and drop every control in it.
     """
     depth = 0
-    in_string = False
-    escaped = False
     i = open_index
-    while i < len(text):
+    length = len(text)
+    # Jump between state-changing characters in C rather than walking every character in Python.
+    search = _bracket_scanner(open_ch, close_ch).search
+    while i < length:
+        match = search(text, i)
+        if not match:
+            return -1
+        i = match.start()
         ch = text[i]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-        elif ch == '"':
-            in_string = True
-        elif text.startswith("//", i):
-            newline = text.find("\n", i)
-            i = len(text) if newline < 0 else newline
+        if ch == '"':
+            i += 1
+            while i < length:
+                quoted = text[i]
+                if quoted == "\\":
+                    i += 2
+                    continue
+                if quoted == '"':
+                    break
+                i += 1
+            i += 1
             continue
-        elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = len(text) if end < 0 else end + 2
+        if ch == "/":
+            if text.startswith("//", i):
+                newline = text.find("\n", i)
+                i = length if newline < 0 else newline
+            elif text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                i = length if end < 0 else end + 2
+            else:
+                i += 1
             continue
-        elif ch == open_ch:
+        if ch == open_ch:
             depth += 1
-        elif ch == close_ch:
+        else:
             depth -= 1
             if depth == 0:
                 return i
@@ -700,11 +717,11 @@ def collect_direct_persisted_fields(
                 if value_type:
                     persisted_fields.setdefault(feature_class, []).append(
                         (key, value_type, member))
-                elif declared_type and key not in UNCATALOGED_PERSISTED_AGGREGATE_KEYS:
+                elif declared_type and declared_type not in UNCATALOGED_PERSISTED_AGGREGATE_TYPES:
                     uncataloged.append(
                         f"{feature_class}::SaveSettings persists '{key}' as non-primitive "
                         f"'{declared_type}'; catalog it or list it in "
-                        f"UNCATALOGED_PERSISTED_AGGREGATE_KEYS")
+                        f"UNCATALOGED_PERSISTED_AGGREGATE_TYPES")
     if uncataloged:
         raise SystemExit("uncataloged persisted aggregates:\n  " + "\n  ".join(uncataloged))
     return persisted_fields
@@ -965,43 +982,67 @@ def resolve_control_translation(
         key=lambda item: (item[1] != fallback, len(item[1]), item[1]))
 
 
+_MASK_SCANNER = re.compile("[\"'/]")
+_MASK_NON_NEWLINE = re.compile(r"[^\r\n]")
+
+
+def _blank_keeping_newlines(segment: str) -> str:
+    """Blanks a segment while preserving line structure, so line numbers still line up."""
+    return _MASK_NON_NEWLINE.sub(" ", segment)
+
+
 @functools.lru_cache(maxsize=None)
 def mask_cpp_source(text: str) -> str:
-    result = list(text)
+    length = len(text)
+    # Copy whole runs between literals instead of rewriting the source character by character.
+    chunks: list[str] = []
+    copied = 0
     i = 0
-    while i < len(text):
-        if text.startswith("//", i):
-            end = text.find("\n", i)
-            end = len(text) if end < 0 else end
-            for j in range(i, end):
-                result[j] = " "
-            i = end
-            continue
-        if text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            end = len(text) if end < 0 else end + 2
-            for j in range(i, end):
-                if result[j] not in "\r\n":
-                    result[j] = " "
-            i = end
-            continue
-        if text[i] in ('"', "'"):
-            quote = text[i]
-            i += 1
-            while i < len(text):
-                if text[i] == "\\":
-                    result[i] = " "
-                    if i + 1 < len(text):
-                        result[i + 1] = " "
-                    i += 2
-                    continue
-                if text[i] == quote:
-                    break
-                if result[i] not in "\r\n":
-                    result[i] = " "
+    search = _MASK_SCANNER.search
+    while i < length:
+        match = search(text, i)
+        if not match:
+            break
+        i = match.start()
+        if text[i] == "/":
+            if text.startswith("//", i):
+                end = text.find("\n", i)
+                end = length if end < 0 else end
+                # A line comment runs to the newline, so blanking it cannot lose one.
+                chunks.append(text[copied:i])
+                chunks.append(" " * (end - i))
+            elif text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                end = length if end < 0 else end + 2
+                chunks.append(text[copied:i])
+                chunks.append(_blank_keeping_newlines(text[i:end]))
+            else:
                 i += 1
+                continue
+            copied = i = end
+            continue
+
+        # The quotes themselves survive; only the body is blanked.
+        quote = text[i]
+        chunks.append(text[copied:i + 1])
         i += 1
-    return "".join(result)
+        body: list[str] = []
+        while i < length:
+            ch = text[i]
+            if ch == "\\":
+                # An escape pair is blanked whole, even when it spans a line continuation.
+                body.append("  " if i + 1 < length else " ")
+                i += 2
+                continue
+            if ch == quote:
+                break
+            body.append(ch if ch in "\r\n" else " ")
+            i += 1
+        chunks.append("".join(body))
+        copied = min(i, length)
+        i = copied + 1
+    chunks.append(text[copied:])
+    return "".join(chunks)
 
 
 def extract_draw_settings_body(text: str) -> tuple[str, str] | None:
@@ -1066,6 +1107,7 @@ def collect_tab_selector_roots(
     }
 
 
+@functools.lru_cache(maxsize=None)
 def collect_numeric_constants(text: str) -> dict[str, float]:
     expressions: dict[str, str] = {}
     pattern = re.compile(
@@ -1112,6 +1154,17 @@ def collect_numeric_constants(text: str) -> dict[str, float]:
         if not changed:
             break
     return constants
+
+
+@functools.lru_cache(maxsize=None)
+def source_numeric_constants(source: Path) -> dict[str, float]:
+    """Numeric constants a translation unit can see, including its companion header.
+
+    Callers only read the result, so the cached dict is shared rather than copied.
+    """
+    header = source.with_suffix(".h")
+    return collect_numeric_constants(
+        read_text(source) + (read_text(header) if header.exists() else ""))
 
 
 def resolve_numeric_expression(expression: str, constants: dict[str, float]) -> float | None:
@@ -1443,10 +1496,8 @@ def resolve_editor_semantic(
         binding: ControlBinding | None,
         value_type: str,
         force_hidden: bool = False) -> str:
-    if force_hidden:
+    if force_hidden or binding is None:
         return "None"
-    if binding is None:
-        return "Generic" if value_type in {"Boolean", "Integer", "Float", "String"} else "None"
     if binding.choices and value_type == "Integer":
         return "Choice"
     if ((binding.control_kind == "Checkbox" or
@@ -1496,10 +1547,7 @@ def collect_projected_numeric_helpers(paths: list[Path]) -> dict[str, ProjectedN
         if storage_parameter is None:
             continue
 
-        constants = collect_numeric_constants(
-            read_text(function.source) + (
-                read_text(function.source.with_suffix(".h"))
-                if function.source.with_suffix(".h").exists() else ""))
+        constants = source_numeric_constants(function.source)
         loop_counts = set()
         loop_pattern = re.compile(
             rf"\bfor\s*\(\s*(?:[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\s+)+"
@@ -2074,9 +2122,7 @@ def collect_indirect_numeric_projections(paths: list[Path]):
     source_functions = collect_source_functions(paths)
     definitions = {}
     for path, text in texts.items():
-        companion_header = path.with_suffix(".h")
-        constants = collect_numeric_constants(
-            text + (read_text(companion_header) if companion_header.exists() else ""))
+        constants = source_numeric_constants(path)
         for function in (value for value in source_functions if value.source == path):
             parameters = tuple(
                 (value.type_name, value.name, value.default)
@@ -2101,9 +2147,7 @@ def collect_indirect_numeric_projections(paths: list[Path]):
 
         prefix_match = re.search(r'#define\s+I18N_KEY_PREFIX\s+"([^"]*)"', text)
         prefix = prefix_match.group(1) if prefix_match else ""
-        companion_header = path.with_suffix(".h")
-        constants = collect_numeric_constants(
-            text + (read_text(companion_header) if companion_header.exists() else ""))
+        constants = source_numeric_constants(path)
         categories = _collect_scoped_categories(body, prefix)
 
         for invocation_position, wrapper_name, args in _source_function_calls(body, definitions):
@@ -3063,55 +3107,67 @@ def collect_mapped_combo_helpers(paths: list[Path]) -> dict[str, MappedComboHelp
 
 
 
+_SOURCE_FUNCTION_PATTERN = re.compile(
+    r"\b(?:static\s+)?(?:inline\s+)?(?:bool|void)\s+"
+    r"(?:(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::)?"
+    r"(?P<name>[A-Za-z_]\w*)\s*\((?P<parameters>[^)]*)\)\s*(?:const\s*)?\{")
+_NAMESPACE_PATTERN = re.compile(
+    r"\bnamespace\s+(?:inline\s+)?([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\{")
+_I18N_PREFIX_PATTERN = re.compile(r'#define\s+I18N_KEY_PREFIX\s+"([^"]*)"')
+
+
+@functools.lru_cache(maxsize=None)
+def _file_source_functions(
+        path: Path, include_qualifiers: bool) -> tuple[SourceFunction, ...]:
+    """Functions declared in one file. Cached: callers scan the same tree repeatedly."""
+    functions = []
+    text = read_text(path)
+    masked = mask_cpp_source(text)
+    namespace_ranges = []
+    if include_qualifiers:
+        for namespace in _NAMESPACE_PATTERN.finditer(masked):
+            namespace_end = find_matching_brace(text, namespace.end() - 1)
+            if namespace_end >= 0:
+                namespace_ranges.append((
+                    namespace.start(), namespace_end,
+                    tuple(namespace.group(1).split("::"))))
+    prefix_match = _I18N_PREFIX_PATTERN.search(text)
+    prefix = prefix_match.group(1) if prefix_match else ""
+    for match in _SOURCE_FUNCTION_PATTERN.finditer(masked):
+        body_end = find_matching_brace(text, match.end() - 1)
+        if body_end < 0:
+            continue
+        parameters = tuple(
+            SourceParameter(type_name, name, default)
+            for type_name, name, default in parse_helper_parameters(
+                text[match.start("parameters"):match.end("parameters")]))
+        body = text[match.end():body_end]
+        namespace_path = tuple(
+            segment
+            for start, end, namespace in namespace_ranges
+            if start < match.start() < end
+            for segment in namespace)
+        owner_parts = tuple((match.group("owner") or "").split("::"))
+        owner_parts = tuple(part for part in owner_parts if part)
+        functions.append(SourceFunction(
+            match.group("name"),
+            owner_parts[-1] if owner_parts else "",
+            (*namespace_path, *owner_parts),
+            parameters,
+            body,
+            mask_cpp_source(body),
+            prefix,
+            path,
+            text[match.start("parameters"):match.end("parameters")]))
+    return tuple(functions)
+
+
 def collect_source_functions(
         paths: list[Path], include_qualifiers: bool = False) -> tuple[SourceFunction, ...]:
-    functions = []
-    pattern = re.compile(
-        r"\b(?:static\s+)?(?:inline\s+)?(?:bool|void)\s+"
-        r"(?:(?P<owner>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::)?"
-        r"(?P<name>[A-Za-z_]\w*)\s*\((?P<parameters>[^)]*)\)\s*(?:const\s*)?\{")
-    for path in paths:
-        text = read_text(path)
-        masked = mask_cpp_source(text)
-        namespace_ranges = []
-        if include_qualifiers:
-            for namespace in re.finditer(
-                    r"\bnamespace\s+(?:inline\s+)?"
-                    r"([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\{", masked):
-                namespace_end = find_matching_brace(text, namespace.end() - 1)
-                if namespace_end >= 0:
-                    namespace_ranges.append((
-                        namespace.start(), namespace_end,
-                        tuple(namespace.group(1).split("::"))))
-        prefix_match = re.search(r'#define\s+I18N_KEY_PREFIX\s+"([^"]*)"', text)
-        prefix = prefix_match.group(1) if prefix_match else ""
-        for match in pattern.finditer(masked):
-            body_end = find_matching_brace(text, match.end() - 1)
-            if body_end < 0:
-                continue
-            parameters = tuple(
-                SourceParameter(type_name, name, default)
-                for type_name, name, default in parse_helper_parameters(
-                    text[match.start("parameters"):match.end("parameters")]))
-            body = text[match.end():body_end]
-            namespace_path = tuple(
-                segment
-                for start, end, namespace in namespace_ranges
-                if start < match.start() < end
-                for segment in namespace)
-            owner_parts = tuple((match.group("owner") or "").split("::"))
-            owner_parts = tuple(part for part in owner_parts if part)
-            functions.append(SourceFunction(
-                match.group("name"),
-                owner_parts[-1] if owner_parts else "",
-                (*namespace_path, *owner_parts),
-                parameters,
-                body,
-                mask_cpp_source(body),
-                prefix,
-                path,
-                text[match.start("parameters"):match.end("parameters")]))
-    return tuple(functions)
+    return tuple(
+        function
+        for path in paths
+        for function in _file_source_functions(path, include_qualifiers))
 
 
 def _localized_text(expression: str, prefix: str) -> LocalizedText | None:

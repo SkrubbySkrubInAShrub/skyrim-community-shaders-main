@@ -92,7 +92,7 @@ class SceneSettingsPolicyTests(unittest.TestCase):
         cls.time_features = {path[0] for path in cls.time_paths}
 
     def test_policy_collections_are_nonempty_and_unique(self):
-        self.assertTrue(self.blacklist)
+        # The blacklist may legitimately be empty when no shipped setting needs excluding.
         self.assertTrue(self.location_paths)
         self.assertTrue(self.time_paths)
         self.assertTrue(self.location_features)
@@ -103,6 +103,11 @@ class SceneSettingsPolicyTests(unittest.TestCase):
         self.assertTrue(all(self.blacklist))
         self.assertTrue(all(self.location_paths))
         self.assertTrue(all(self.time_paths))
+        # Address normalization strips these, so a blacklist carrying one could never match.
+        self.assertTrue(all(
+            token.casefold() not in {"settings", "ppsettings"}
+            for path in self.blacklist
+            for token in path))
 
     def test_every_policy_feature_is_discovered(self):
         discovered = {entry["feature"] for entry in self.entries}
@@ -110,7 +115,7 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             *self.location_features,
             *self.time_features,
         }
-        self.assertTrue(policy_features <= discovered)
+        self.assertLessEqual(policy_features, discovered)
 
     def test_every_blacklist_prefix_matches_catalogued_settings(self):
         for path in self.blacklist:
@@ -136,11 +141,14 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 with self.subTest(feature=feature, prefix=prefix):
                     self.assertTrue(any(is_prefix(prefix, address)
                                         for address in feature_addresses))
-            if all(len(prefix) > 1 for prefix in prefixes):
-                self.assertTrue(any(
-                    not any(is_prefix(prefix, address) for prefix in prefixes)
-                    for address in feature_addresses
-                ))
+                    if len(prefix) > 1:
+                        # A narrowing prefix has to exclude something, or it narrows nothing.
+                        self.assertTrue(any(not is_prefix(prefix, address)
+                                            for address in feature_addresses))
+                    else:
+                        # A bare feature name grants the feature's whole surface.
+                        self.assertTrue(all(is_prefix(prefix, address)
+                                            for address in feature_addresses))
 
     def test_time_of_day_whitelist_prefixes_resolve(self):
         for path in self.time_paths:

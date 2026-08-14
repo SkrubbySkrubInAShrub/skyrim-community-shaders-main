@@ -383,22 +383,26 @@ namespace
 		return parts;
 	}
 
-	std::string ToCatalogPath(const std::vector<std::string>& path)
+	/// Writes into a caller-owned buffer so repeated lookups can reuse one allocation.
+	void ToCatalogPath(const std::vector<std::string>& path, std::string& out)
 	{
-		std::string result;
+		out.clear();
+		// Separate on position, not emptiness: a leading empty segment from a hand-edited
+		// JSON must not alias onto the address that omits it.
+		bool firstPart = true;
 		for (const auto& part : path) {
-			if (!result.empty())
-				result += '/';
+			if (!firstPart)
+				out += '/';
+			firstPart = false;
 			for (const char ch : part) {
 				if (ch == '~')
-					result += "~0";
+					out += "~0";
 				else if (ch == '/')
-					result += "~1";
+					out += "~1";
 				else
-					result += ch;
+					out += ch;
 			}
 		}
-		return result;
 	}
 
 	bool IsStructuralDisplayPart(std::string_view part)
@@ -967,8 +971,11 @@ namespace
 		std::string_view featureShortName, const std::vector<std::string>& settingPath,
 		std::string_view settingKey, bool requireTransitionable = false)
 	{
+		// Reused across lookups so a resolve does not allocate once per configured entry.
+		thread_local std::string catalogPath;
+		ToCatalogPath(settingPath, catalogPath);
 		auto* setting = SceneSettingsCatalog::FindSetting(
-			featureShortName, ToCatalogPath(settingPath), settingKey);
+			featureShortName, catalogPath, settingKey);
 		if (!setting || !IsCatalogSettingAllowedByPolicy(*setting))
 			return nullptr;
 		if (requireTransitionable &&
@@ -2266,9 +2273,10 @@ RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::Proces
 	RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening) {
-		// Defer cell transition to next frame - cell data isn't available yet
-		// Queue reset work until the menu closes.
-		GetSingleton()->queuedCellTransition.store(true, std::memory_order_relaxed);
+		// Defer cell transition to next frame - cell data isn't available yet.
+		// The sink outlives the manager, so a menu close during shutdown must find no singleton.
+		if (auto* manager = GetSingleton())
+			manager->queuedCellTransition.store(true, std::memory_order_relaxed);
 	}
 
 	return RE::BSEventNotifyControl::kContinue;
@@ -2394,8 +2402,15 @@ SceneSettingsManager::SceneLayerGuard::SceneLayerGuard() :
 
 SceneSettingsManager::SceneLayerGuard::~SceneLayerGuard()
 {
-	if (manager)
-		manager->ResumeSceneLayer();
+	// Resuming re-applies through arbitrary features, and a destructor is noexcept.
+	try {
+		if (manager)
+			manager->ResumeSceneLayer();
+	} catch (const std::exception& e) {
+		logger::error("[SceneSettings] Failed to resume the scene layer: {}", e.what());
+	} catch (...) {
+		logger::error("[SceneSettings] Failed to resume the scene layer");
+	}
 }
 
 bool SceneSettingsManager::IsFeaturePaused(const std::string& featureShortName) const
@@ -2499,7 +2514,7 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 
 	resolverDirty = false;
 	const bool reconcileLocationTransitions = locationContextChanged || locationOverridesDirty;
-	auto& resolved = BuildResolvedSettings(reconcileLocationTransitions);
+	auto& resolved = BuildResolvedSettings(reconcileLocationTransitions, interior);
 	if (reconcileLocationTransitions) {
 		// Only crossing a location boundary animates; editing a value in place snaps to it.
 		StartLocationTransitions(resolved, transitionTime, locationContextChanged);
@@ -2624,14 +2639,28 @@ bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 {
 	if (activeLocationTransitions.empty())
 		return false;
+	// A negative delta means the timer restarted, so it must not latch the tick off forever.
+	const auto sinceLastTick = now - lastLocationTransitionTick;
+	if (sinceLastTick >= 0.0f && sinceLastTick < kLocationTransitionTickInterval)
+		return false;
+	lastLocationTransitionTick = now;
 	if (locationTransitionBatchesDirty)
 		RebuildLocationTransitionBatches();
 
 	bool appliedAny = false;
 	const auto retryNow = std::chrono::steady_clock::now();
 	for (auto& [featureShortName, batch] : locationTransitionBatches) {
-		for (size_t index = 0; index < batch.transitions.size(); ++index)
-			batch.updates[index].value = EaseLocationTransition(*batch.transitions[index], now);
+		// A batch nobody can see move is a save/load round trip for nothing. The final tick always
+		// applies, so the target value still lands exactly.
+		bool valuesMoved = false;
+		for (size_t index = 0; index < batch.transitions.size(); ++index) {
+			const auto eased = EaseLocationTransition(*batch.transitions[index], now);
+			valuesMoved = valuesMoved || IsLocationTransitionFinished(*batch.transitions[index], now) ||
+			              std::abs(eased - batch.updates[index].value.get<float>()) >= kBlendEpsilon;
+			batch.updates[index].value = eased;
+		}
+		if (!valuesMoved)
+			continue;
 
 		auto failureIt = transitionApplyFailures.find(featureShortName);
 		if (failureIt != transitionApplyFailures.end() && failureIt->second.signature != batch.signature) {
@@ -2754,6 +2783,7 @@ void SceneSettingsManager::ClearLocationTransitions()
 	cachedLocationOverrides.clear();
 	cachedLocationOverridesValid = false;
 	locationTransitionBatchesDirty = false;
+	lastLocationTransitionTick = -1.0f;
 	locationOverridesDirty = true;
 }
 
@@ -2812,14 +2842,13 @@ bool SceneSettingsManager::HasActiveSceneEntriesCached()
 }
 
 SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSettings(
-	bool collectLocationTransitionDurations)
+	bool collectLocationTransitionDurations, bool interior)
 {
 	// Reuse the map's nodes across frames; null marks a slot the current resolve did not fill.
 	auto& resolved = resolvedSettingsScratch;
 	for (auto& [_, value] : resolved)
 		value = nullptr;
 
-	const bool interior = Util::IsInterior();
 	std::vector<SettingAddress> requiredBaselines;
 	const auto collectBaselines = [&](const std::vector<SettingEntry>& sourceEntries, SceneType type) {
 		for (const auto& entry : sourceEntries)
@@ -2845,7 +2874,7 @@ SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSet
 				collectGroupedBaselines(BuildWeatherValueGroups(weatherId));
 	}
 
-	const auto locationTargets = GetCurrentLocationTargets();
+	const auto& locationTargets = GetCurrentLocationTargets();
 	const bool rebuildLocationOverrides = collectLocationTransitionDurations || !cachedLocationOverridesValid;
 	if (rebuildLocationOverrides) {
 		for (const auto& target : locationTargets) {
@@ -3325,7 +3354,10 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 	snapshot.timeOfDayFactors = GetTimeOfDayFactors();
 
 	// Sampled live rather than from the resolver, so an interior still shows what the sky is doing.
+	// Observing must not advance the resolver's weather tracking, which an interior would not.
+	const auto trackedPreviousWeatherId = cachedPreviousWeatherId;
 	snapshot.weather = GetWeatherBlend();
+	cachedPreviousWeatherId = trackedPreviousWeatherId;
 	snapshot.currentWeatherName = FormatDebugFormName(snapshot.weather.currentWeatherId);
 	snapshot.previousWeatherName = FormatDebugFormName(snapshot.weather.previousWeatherId);
 
@@ -3399,6 +3431,10 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 		auto it = values.find(address);
 		return it != values.end() ? it->second : PeriodValues{};
 	};
+	// Each group build is revision-gated, but they are loop-invariant, so hoist the lookups too.
+	const auto& timeOfDayValues = BuildTimeOfDayValueGroups();
+	const auto& currentWeatherValues = BuildWeatherValueGroups(snapshot.weather.currentWeatherId);
+	const auto& previousWeatherValues = BuildWeatherValueGroups(snapshot.weather.previousWeatherId);
 	for (const auto& [address, value] : appliedSettings) {
 		DebugResolvedSetting resolvedSetting{
 			.feature = address.featureShortName,
@@ -3409,11 +3445,9 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 		};
 		if (auto baselineIt = baselineSettings.find(address); baselineIt != baselineSettings.end())
 			resolvedSetting.baseline = FormatDebugValue(baselineIt->second);
-		resolvedSetting.timeOfDayValues = periodValuesFor(BuildTimeOfDayValueGroups(), address);
-		resolvedSetting.currentWeatherValues =
-			periodValuesFor(BuildWeatherValueGroups(snapshot.weather.currentWeatherId), address);
-		resolvedSetting.previousWeatherValues =
-			periodValuesFor(BuildWeatherValueGroups(snapshot.weather.previousWeatherId), address);
+		resolvedSetting.timeOfDayValues = periodValuesFor(timeOfDayValues, address);
+		resolvedSetting.currentWeatherValues = periodValuesFor(currentWeatherValues, address);
+		resolvedSetting.previousWeatherValues = periodValuesFor(previousWeatherValues, address);
 		snapshot.resolvedSettings.push_back(std::move(resolvedSetting));
 	}
 
@@ -3447,7 +3481,7 @@ static json EntryToJson(const SceneSettingsManager::SettingEntry& entry)
 		item.erase("period");
 	if (entry.transitionSeconds)
 		item["transitionSeconds"] = *entry.transitionSeconds;
-	else
+	else if (!entry.retainSerializedTransition)
 		item.erase("transitionSeconds");
 	return item;
 }
@@ -3651,18 +3685,20 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	entry.source = SSM::EntrySource::User;
 
 	auto sceneType = allowedSceneType.value_or(requirePeriod ? SSM::SceneType::TimeOfDay : SSM::SceneType::InteriorOnly);
+	// An unusable transition costs the entry its blend, never its value: the setting still has to be
+	// honored, and the raw field still has to survive the round trip.
 	if (auto transitionIt = item.find("transitionSeconds"); transitionIt != item.end()) {
+		const auto seconds = transitionIt->is_number() ? transitionIt->get<float>() : 0.0f;
 		if (sceneType != SSM::SceneType::Location || !transitionIt->is_number()) {
-			logger::warn("[SceneSettings] {} entry transitionSeconds is not valid for this scene type", typeName);
-			return false;
-		}
-		const auto seconds = transitionIt->get<float>();
-		if (!std::isfinite(seconds) || seconds < 0.0f || seconds > SSM::kMaxLocationTransitionSeconds) {
-			logger::warn("[SceneSettings] {} entry transitionSeconds is outside 0..{}",
+			logger::warn("[SceneSettings] {} entry transitionSeconds is not valid for this scene type; applying it without a transition", typeName);
+			entry.retainSerializedTransition = true;
+		} else if (!std::isfinite(seconds) || seconds < 0.0f || seconds > SSM::kMaxLocationTransitionSeconds) {
+			logger::warn("[SceneSettings] {} entry transitionSeconds is outside 0..{}; applying it without a transition",
 				typeName, SSM::kMaxLocationTransitionSeconds);
-			return false;
+			entry.retainSerializedTransition = true;
+		} else {
+			entry.transitionSeconds = seconds;
 		}
-		entry.transitionSeconds = seconds;
 	}
 	if (!SSM::IsFeatureAllowedForType(sceneType, entry.featureShortName)) {
 		logger::warn("[SceneSettings] {} entry feature '{}' is not allowed for this scene type", typeName, entry.featureShortName);
@@ -3698,9 +3734,10 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	if (entry.transitionSeconds &&
 		(!IsNumericValue(entry.value) || !FindAllowedCatalogSetting(
 			entry.featureShortName, entry.settingPath, entry.settingKey, true))) {
-		logger::warn("[SceneSettings] {} entry {} has a transition on a discrete setting; preserving it without loading",
+		logger::warn("[SceneSettings] {} entry {} has a transition on a discrete setting; applying it instantly",
 			typeName, GetSettingLogName(entry.featureShortName, entry.settingPath, entry.settingKey));
-		return false;
+		entry.transitionSeconds.reset();
+		entry.retainSerializedTransition = true;
 	}
 
 	entry.displayName = GetSceneSettingDisplayName(entry.featureShortName, entry.settingPath, entry.settingKey);
@@ -3900,7 +3937,12 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 				}
 				config.entries.push_back(std::move(entry));
 			}
+			// The canonical key carries the metadata and every loaded entry, so the author's spelling
+			// only has to survive when it still holds entries this build rejected. Emitting it
+			// unconditionally would leave an empty duplicate target beside the canonical one.
 			if (hasValidEntry && formKey != canonicalFormKey) {
+				if (preservedConfig["entries"].empty())
+					continue;
 				preservedConfig.erase("type");
 				preservedConfig.erase("name");
 				preservedConfig.erase("editorId");
@@ -4595,7 +4637,7 @@ namespace
 		SceneSettingsManager::LocationTargetType type, std::string_view formKey)
 	{
 		if (auto* manager = SceneSettingsManager::GetSingleton()) {
-			const auto currentTargets = manager->GetCurrentLocationTargets();
+			const auto& currentTargets = manager->GetCurrentLocationTargets();
 			const auto normalizedKey = NormalizeLocationFormKey(formKey);
 			if (std::any_of(currentTargets.begin(), currentTargets.end(), [&](const auto& target) {
 					return target.type == type && NormalizeLocationFormKey(target.formKey) == normalizedKey;
@@ -4617,7 +4659,7 @@ namespace
 	}
 }
 
-std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetCurrentLocationTargets() const
+const std::vector<SceneSettingsManager::LocationTarget>& SceneSettingsManager::GetCurrentLocationTargets() const
 {
 	auto* player = RE::PlayerCharacter::GetSingleton();
 	auto* cell = player ? player->GetParentCell() : nullptr;
@@ -4626,7 +4668,7 @@ std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetCurre
 		cachedTargetCellId = 0;
 		locationTargetsCached = false;
 		cachedLocationTargets.clear();
-		return {};
+		return cachedLocationTargets;
 	}
 
 	auto* location = player->GetCurrentLocation();
@@ -4637,12 +4679,11 @@ std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetCurre
 	if (locationTargetsCached && cachedTargetLocationId == locationId && cachedTargetCellId == cellId)
 		return cachedLocationTargets;
 
-	auto targets = BuildLocationTargetChain(location, cell);
+	cachedLocationTargets = BuildLocationTargetChain(location, cell);
 	cachedTargetLocationId = locationId;
 	cachedTargetCellId = cellId;
 	locationTargetsCached = true;
-	cachedLocationTargets = targets;
-	return targets;
+	return cachedLocationTargets;
 }
 
 std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetAuthoredLocationTargets() const
@@ -5144,6 +5185,7 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 		if (entry.transitionSeconds == seconds)
 			continue;
 		entry.transitionSeconds = seconds;
+		entry.retainSerializedTransition = false;
 		changed = true;
 	}
 	if (!changed)
@@ -5629,8 +5671,10 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 		if (copy.destinationIndex) {
 			auto& destinationEntry = (*destinationEntries)[*copy.destinationIndex];
 			destinationEntry.value = copy.candidate->value;
-			if (destination.type == SceneContextType::Location)
+			if (destination.type == SceneContextType::Location) {
 				destinationEntry.transitionSeconds = copy.transitionSeconds;
+				destinationEntry.retainSerializedTransition = false;
+			}
 			++result.overwritten;
 			continue;
 		}

@@ -387,7 +387,9 @@ namespace
 	void DrawLocationChain()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto targets = manager->GetCurrentLocationTargets();
+		if (!manager)
+			return;
+		const auto& targets = manager->GetCurrentLocationTargets();
 		if (targets.empty()) {
 			Util::Text::WrappedDisabled("%s",
 				T(TKEY("location_chain_unavailable"), "Waiting for the player's location."));
@@ -439,6 +441,8 @@ namespace
 	void DrawAuthoredLocations()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
+		if (!manager)
+			return;
 		auto targets = manager->GetAuthoredLocationTargets();
 		if (targets.empty()) {
 			Util::Text::WrappedDisabled("%s", T(TKEY("location_list_empty"),

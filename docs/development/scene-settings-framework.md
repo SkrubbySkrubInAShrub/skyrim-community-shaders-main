@@ -37,8 +37,10 @@ Generated into `${CMAKE_CURRENT_BINARY_DIR}/generated` (e.g. `build/ALL/generate
 ## How the catalog is built
 
 `CMakeLists.txt` runs the generator as a custom command before compiling, with
-`--min-entries 250` as a regression gate. It statically parses feature sources and derives, for every
-persisted setting:
+`--min-entries 250 --min-controllable 290 --min-controllable-features 28` as a regression gate. The two
+controllable floors are the ones that matter: a parser change that stops binding a control does not
+remove the entry, it silently drops its `SceneControllable` flag. Keep them just under the real numbers.
+It statically parses feature sources and derives, for every persisted setting:
 
 -   the serialized address (`serializedPath` / `serializedKey` / `serializedComponent`) used to reach the
     value inside a feature's settings JSON
@@ -57,7 +59,7 @@ This makes the framework **feature-agnostic**: a feature exposes scene-controlla
 persisting them and drawing them with a recognized ImGui call. There is no registration API and no
 per-feature code to write. This is what replaced the deleted `WeatherVariableRegistry`.
 
-Current catalog on this fork: **325 entries**.
+Current catalog on this fork: **326 entries**, 299 of them scene-controllable across 28 features.
 
 ## Runtime flow
 
@@ -245,7 +247,10 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
 `src/SceneSettingsPolicy.h` is hand-maintained and pruned to features that exist in this fork:
 
 -   `kSettingBlacklist` — settings that must never be scene-overridden, matched by catalog address prefix.
-    **Currently empty**; upstream's entries all pointed at features this fork does not have.
+    Upstream's entries all pointed at features this fork does not have, so the list is this fork's own:
+    the `ExponentialHeightFog` volumetric entries, which shape the froxel grid and its history buffers.
+    Scene overrides travel through `SaveSettings` → JSON patch → `LoadSettings`, which never re-runs the
+    allocation those settings size, so blending them mid-frame is not something the feature can honor.
 -   `kLocationFeatureWhitelist` (5) and `kTimeOfDayFeatureWhitelist` (7) — which features those scene types
     may target.
 
@@ -333,8 +338,9 @@ as the only missing piece.
 -   **`Feature::HasRestoreDefaults()` is unread.** Nothing in `src/` calls it; the "Restore Defaults" action it
     gates lives in the excluded UI. Kept as the seam for that layer, same as the control resolvers.
 -   Catalog metadata aimed purely at presentation (`displayPath`, `selectorPath`, `AggregatePresentation`,
-    `UnifiedEditMode`, choice display names) is generated and validated but unread at runtime for the same
-    reason.
+    `UnifiedEditMode`, choice display names, `sourceWidget`, `clampNumericInput`, `hdrColor`) is generated
+    and validated but unread at runtime for the same reason. `GetNumericBounds` has no caller yet either,
+    so the implicit `0..1` bounds the generator derives for `ColorEdit` controls are not enforced anywhere.
 
 ## Testing
 
@@ -342,12 +348,13 @@ as the only missing piece.
 python -m unittest tests.test_scene_settings_catalog_generator tests.test_scene_settings_policy
 ```
 
-69 tests. Neither suite runs in CI; run them after touching the generator or the policy lists.
+74 tests. Neither suite runs in CI; run them after touching the generator or the policy lists.
 
 The generator can be run standalone to inspect its output:
 
 ```bash
-python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 250
+python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 250 \
+    --min-controllable 290 --min-controllable-features 28
 ```
 
 The generator test file is upstream's with the open-shaders-coupled assertions removed (`CSUtility`,

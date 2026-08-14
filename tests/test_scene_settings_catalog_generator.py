@@ -485,7 +485,8 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
 
         self.assertEqual(labels[("Example", ("derived", "x"))], (
             "Derived", "Derived Group", "feature.example.derived",
-            "feature.example.derived_group", "ProjectedColor3", -1.0, 2.0, 1.0))
+            "feature.example.derived_group", "ProjectedColor3", -1.0, 2.0, 1.0,
+            "DragFloat", False, False))
         self.assertEqual(components, {})
         self.assertEqual(
             virtual_controls[("Example", ("derived",))],
