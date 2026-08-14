@@ -46,7 +46,17 @@ So the real detour set is **10 ImGui functions / 11 entry points** (`Combo` has 
 
 `DragFloat` and `DragInt` (in the spec's list) have zero call sites in `src/Features` and are not detoured.
 
-**Known gap, accepted for v1:** the two `PercentageSlider` entries (ScreenSpaceGI `DepthDisocclusion`, `GISaturation`) and the three proxy-bound combos (`IBL::dalcMode`, `Upscaling::logLevelIdx`, `WetnessEffects::currentComboIndex`) bind a stack temporary, so `FindSettingForControl` misses and they draw with **no gutter** (unbindable, not greyed). That is 5 of 299 entries. Closing it needs the generator to emit proxy metadata; out of scope here.
+**Known gap, accepted for v1:** five of the 299 scene-controllable entries hand ImGui a stack temporary instead of their settings member, so `FindSettingForControl` misses and they draw with **no gutter** (unbindable, not greyed):
+
+- ScreenSpaceGI `DepthDisocclusion` and `GISaturation`, through `Util::PercentageSlider` (`src/Utils/UI.cpp:390`), which scales into a local before calling `SliderFloat`.
+- `IBL::DALCMode` (`src/Features/IBL.cpp:77-79`), `Upscaling::streamlineLogLevel` (`src/Features/Upscaling.cpp:450-452`), and `WetnessEffects::climatePreset` (`src/Features/WetnessEffects.cpp:408-415`), whose combos build a local `int` only because `ImGui::Combo` requires `int*` while the members are `uint` or an enum.
+
+Both groups are cheap to close later, additively, with no feature-file edits:
+
+- `Util::PercentageSlider` is shared infrastructure and already holds the real member address as its `data` parameter. One line inside it can pass that address to the interceptor before the inner `SliderFloat`, which also covers any future `Util::` wrapper that binds a temporary.
+- The combos need the generator to emit a `{label i18n key -> setting}` map for the proxies it already detects (`unwrap_combo_proxy`, `is_proxy_write`). Everything the write needs is in the catalog: these entries are `EditorSemantic::Choice` with `NumericTransform::Identity` and a real `ChoiceMetadata[]` (DALCMode's runs `{0, "Luminance Ratio"}` through `{3, "DALC + Sky (Directional)"}`), so index maps to stored value via `choices[index].value`.
+
+Note for whoever closes this: a *blind* label fallback across all 299 entries is still the wrong shape, because it would guess at controls the generator never classified. The fix above is a narrow, generator-emitted map covering only the handful of controls already known to be proxies.
 
 **Second, smaller deviation:** `ImGuiItemFlags_MixedValue` lives in `imgui_internal.h` and, per its own comment, "Currently only supported by Checkbox()". The mixed-across-periods state therefore uses `MixedValue` for checkboxes and a distinct gutter tint for every other widget kind. See Task 5.
 
@@ -1937,6 +1947,6 @@ Run: `git log -1 --stat` → the file list matches Tasks 1-10 and nothing else.
 **Type consistency.** `SceneWidgetBinding::Guard`'s accessors (`Bool`/`Int`/`Float`/`Raw`) are used with the same names in Task 3's detour bodies. `SceneWidgetInterceptor::Context` uses `perPeriod` in Tasks 3, 4, 5, 6, 7, 8, 9. The façade names (`FindContextUserEntry`, `FindContextUserEntryPerPeriod`, `AddContextSetting`, `UpdateContextEntryValues`, `RemoveContextSetting`, `TogglePauseContextEntry`, `RevertContextEntryToDefault`, `GetContextEntries`) are declared in Task 2 and used unchanged in Tasks 4 and 5.
 
 **Known gaps.**
-- The 5 proxy-bound controls listed at the top of this plan draw no gutter.
+- The 5 temporary-bound controls listed at the top of this plan draw no gutter. Closing them is additive and needs no feature-file edits: one line inside `Util::PercentageSlider`, plus a generator-emitted label map for the three combo proxies.
 - Interior contexts are not offered as copy sources or destinations; the copy switches reject them through their `default:` arms.
 - `CaptureExternalFeatureChanges` stays callerless: the replica commits through the façade rather than relying on post-hoc diffing.
