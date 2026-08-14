@@ -3388,6 +3388,7 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 				.key = entry.settingKey,
 				.value = FormatDebugValue(entry.value),
 				.period = entry.period == TimeOfDayPeriod::Count ? std::string() : GetPeriodName(entry.period),
+				.transitionSeconds = entry.transitionSeconds,
 				.overwrite = entry.source == EntrySource::Overwrite,
 				.paused = entry.paused,
 				.active = IsEntryActive(entry),
@@ -3450,6 +3451,28 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 		resolvedSetting.previousWeatherValues = periodValuesFor(previousWeatherValues, address);
 		snapshot.resolvedSettings.push_back(std::move(resolvedSetting));
 	}
+
+	snapshot.transitionTime = GetPauseAwareTime();
+	snapshot.lastTransitionTick = lastLocationTransitionTick;
+	snapshot.globalTransitionSeconds = locationTransitionSeconds;
+	snapshot.transitionBatchesDirty = locationTransitionBatchesDirty;
+	snapshot.transitionBatchCount = locationTransitionBatches.size();
+	for (const auto& [address, transition] : activeLocationTransitions) {
+		const auto elapsed = snapshot.transitionTime - transition.startTime;
+		snapshot.locationTransitions.push_back({
+			.feature = address.featureShortName,
+			.path = JoinDisplayParts(address.settingPath, {}),
+			.key = address.settingKey,
+			.startValue = transition.startValue,
+			.targetValue = transition.targetValue,
+			.currentValue = EaseLocationTransition(transition, snapshot.transitionTime),
+			.progress = transition.duration > 0.0f ? std::clamp(elapsed / transition.duration, 0.0f, 1.0f) : 1.0f,
+			.duration = transition.duration,
+			.restoreAtEnd = transition.restoreAtEnd,
+		});
+	}
+	for (const auto& [featureShortName, _] : transitionApplyFailures)
+		snapshot.transitionApplyFailures.push_back(featureShortName);
 
 	for (const auto& [featureShortName, _] : applyFailures)
 		snapshot.applyFailures.push_back(featureShortName);

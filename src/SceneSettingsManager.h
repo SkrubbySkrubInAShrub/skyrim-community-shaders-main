@@ -624,7 +624,8 @@ public:
 		std::string path;
 		std::string key;
 		std::string value;
-		std::string period;  // Empty when the entry is not per-period
+		std::string period;                       // Empty when the entry is not per-period
+		std::optional<float> transitionSeconds;   // Only set when the entry overrides the global duration
 		bool overwrite = false;
 		bool paused = false;
 		bool active = false;
@@ -651,6 +652,20 @@ public:
 		std::array<std::optional<float>, kPeriodCount> timeOfDayValues{};
 		std::array<std::optional<float>, kPeriodCount> currentWeatherValues{};
 		std::array<std::optional<float>, kPeriodCount> previousWeatherValues{};
+	};
+
+	/// One location float transition mid-flight, sampled for the debug UI.
+	struct DebugLocationTransition
+	{
+		std::string feature;
+		std::string path;
+		std::string key;
+		float startValue = 0.0f;
+		float targetValue = 0.0f;
+		float currentValue = 0.0f;
+		float progress = 0.0f;
+		float duration = 0.0f;
+		bool restoreAtEnd = false;
 	};
 
 	/// Everything the resolver has in flight, sampled for the debug UI.
@@ -692,6 +707,15 @@ public:
 		float lastHour = -1.0f;
 		WeatherBlend lastWeather;
 		std::array<float, kPeriodCount> blendFactors{};
+
+		// Location float transitions
+		float transitionTime = 0.0f;  // Pause-aware clock the transitions ease against
+		float lastTransitionTick = -1.0f;
+		float globalTransitionSeconds = 0.0f;
+		bool transitionBatchesDirty = false;
+		size_t transitionBatchCount = 0;
+		std::vector<DebugLocationTransition> locationTransitions;
+		std::vector<std::string> transitionApplyFailures;
 
 		std::vector<DebugLayer> sceneLayers;
 		std::vector<DebugLayer> weatherLayers;

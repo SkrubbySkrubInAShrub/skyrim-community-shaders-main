@@ -101,10 +101,10 @@ namespace
 			Util::Text::Disabled("No entries");
 			return;
 		}
-		if (!ImGui::BeginTable(id, 7, kDebugTableFlags))
+		if (!ImGui::BeginTable(id, 8, kDebugTableFlags))
 			return;
 
-		for (const auto* header : { "Feature", "Path", "Setting", "Value", "Period", "Source", "State" })
+		for (const auto* header : { "Feature", "Path", "Setting", "Value", "Period", "Transition", "Source", "State" })
 			ImGui::TableSetupColumn(header);
 		ImGui::TableHeadersRow();
 
@@ -114,6 +114,11 @@ namespace
 				ImGui::TableNextColumn();
 				ImGui::TextUnformatted(column->empty() ? kMissingValue : column->c_str());
 			}
+			ImGui::TableNextColumn();
+			if (entry.transitionSeconds)
+				ImGui::Text("%.2fs", *entry.transitionSeconds);
+			else
+				Util::Text::Disabled("global");
 			ImGui::TableNextColumn();
 			ImGui::TextUnformatted(entry.overwrite ? "overwrite" : "user");
 			ImGui::TableNextColumn();
@@ -268,6 +273,54 @@ namespace
 		DrawNameList(snapshot.restoreFailures);
 	}
 
+	void DrawLocationTransitions(const DebugSnapshot& snapshot)
+	{
+		if (BeginFieldTable("LocationTransitions")) {
+			DrawField("Global duration", std::format("{:.2f}s", snapshot.globalTransitionSeconds));
+			DrawField("Pause-aware clock", std::format("{:.3f}", snapshot.transitionTime));
+			DrawField("Last tick",
+				snapshot.lastTransitionTick < 0.0f ? std::string(kMissingValue) :
+													 std::format("{:.3f} ({:.3f} ago)", snapshot.lastTransitionTick,
+														 snapshot.transitionTime - snapshot.lastTransitionTick));
+			DrawField("Active transitions", std::format("{}", snapshot.locationTransitions.size()));
+			DrawField("Feature batches", std::format("{}", snapshot.transitionBatchCount));
+			DrawFlag("Batches dirty", snapshot.transitionBatchesDirty);
+			ImGui::EndTable();
+		}
+
+		ImGui::Spacing();
+		if (snapshot.locationTransitions.empty()) {
+			Util::Text::Disabled("No transitions are currently easing.");
+		} else if (ImGui::BeginTable("ActiveTransitions", 8, kDebugTableFlags)) {
+			for (const auto* header :
+				{ "Feature", "Path", "Setting", "Start", "Current", "Target", "Progress", "Direction" })
+				ImGui::TableSetupColumn(header);
+			ImGui::TableHeadersRow();
+			for (const auto& transition : snapshot.locationTransitions) {
+				ImGui::TableNextRow();
+				for (const auto* column : { &transition.feature, &transition.path, &transition.key }) {
+					ImGui::TableNextColumn();
+					ImGui::TextUnformatted(column->empty() ? kMissingValue : column->c_str());
+				}
+				ImGui::TableNextColumn();
+				ImGui::Text("%.4f", transition.startValue);
+				ImGui::TableNextColumn();
+				ImGui::Text("%.4f", transition.currentValue);
+				ImGui::TableNextColumn();
+				ImGui::Text("%.4f", transition.targetValue);
+				ImGui::TableNextColumn();
+				ImGui::Text("%.0f%% of %.2fs", transition.progress * 100.0f, transition.duration);
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted(transition.restoreAtEnd ? "restoring" : "applying");
+			}
+			ImGui::EndTable();
+		}
+
+		ImGui::Spacing();
+		ImGui::TextUnformatted("Features failing to apply transitions");
+		DrawNameList(snapshot.transitionApplyFailures);
+	}
+
 	void DrawResolvedSettings(const DebugSnapshot& snapshot)
 	{
 		if (snapshot.resolvedSettings.empty()) {
@@ -326,6 +379,8 @@ void SceneManager::DrawSettings()
 		DrawWeather(snapshot);
 	if (ImGui::CollapsingHeader("Resolver State"))
 		DrawResolverState(snapshot);
+	if (ImGui::CollapsingHeader("Location Transitions", ImGuiTreeNodeFlags_DefaultOpen))
+		DrawLocationTransitions(snapshot);
 	if (ImGui::CollapsingHeader("Applied Settings", ImGuiTreeNodeFlags_DefaultOpen))
 		DrawResolvedSettings(snapshot);
 	if (ImGui::CollapsingHeader("Scene Type Entries"))
