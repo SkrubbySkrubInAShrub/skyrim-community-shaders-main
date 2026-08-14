@@ -45,8 +45,9 @@ namespace
 	constexpr float kLocationRemoveColumnWidth = 40.0f;
 	/// Matches the weather list's JSON delete icon, which sits a little inside the row height.
 	constexpr float kRemoveIconScale = 0.85f;
+	/// Outlined like the weather editor's lists, which frame their rows the same way.
 	constexpr ImGuiTableFlags kLocationTableFlags =
-		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
+		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
 	/// Only the user's list sorts: the chain's order is its hierarchy, outermost first.
 	constexpr ImGuiTableFlags kAuthoredLocationTableFlags = kLocationTableFlags | ImGuiTableFlags_Sortable;
 
