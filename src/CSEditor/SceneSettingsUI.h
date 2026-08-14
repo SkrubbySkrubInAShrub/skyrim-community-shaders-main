@@ -19,6 +19,18 @@ namespace SceneSettingsUI
 	void DrawSceneManagerCategoryFeatures();
 
 	/**
+	 * @brief Draws the Locations category body: the live location chain to add from, and the user's list.
+	 */
+	void DrawLocationBrowser();
+
+	/**
+	 * @brief Draws one editor window per location the user opened from the browser.
+	 *
+	 * Call once per frame from the editor's window pass, alongside the other floating windows.
+	 */
+	void DrawLocationWindows();
+
+	/**
 	 * @brief Pauses game time while a panel is on screen and restores it once none are.
 	 *
 	 * Call once per frame, including while the editor is closed, so the pause is always released.

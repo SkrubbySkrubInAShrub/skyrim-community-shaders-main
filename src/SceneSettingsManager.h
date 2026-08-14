@@ -416,6 +416,9 @@ public:
 		LocationTargetType type = LocationTargetType::Location;
 		std::string formKey;
 		std::string name;
+		/// Several links of a chain can share a full name (Winterhold the hold and the town), so the
+		/// editor ID is what tells them apart.
+		std::string editorId;
 		std::string cocCode;
 		RE::FormID formId = 0;
 	};
@@ -425,11 +428,28 @@ public:
 		LocationTargetType type = LocationTargetType::Location;
 		std::string formKey;
 		std::string name;
+		/// Captured when the target is taken on, so same-named targets stay distinguishable in the
+		/// editor even when the plugin that defines them is not installed.
+		std::string editorId;
 		std::string cocCode;
 		std::vector<SettingEntry> entries;
+		/// The user put this target on their list. Keeps a target that has no settings yet persistable,
+		/// and separates it from a config that only exists because a mod shipped an overwrite for it.
+		bool userAuthored = false;
 	};
 
 	std::vector<LocationTarget> GetCurrentLocationTargets() const;
+
+	/// Targets the user has taken on, for the editor's location list.
+	std::vector<LocationTarget> GetAuthoredLocationTargets() const;
+
+	/// Put a target on the user's list so it can be authored before it has any settings.
+	bool AddLocationTarget(const LocationTarget& target);
+	bool IsLocationTargetAuthored(LocationTargetType type, std::string_view formKey) const;
+
+	/// Drop a target from the user's list, discarding the settings they authored for it.
+	void RemoveLocationTarget(LocationTargetType type, const std::string& formKey);
+
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool HasLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool AddLocationSetting(LocationTargetType type, const std::string& formKey, const std::string& name,
@@ -715,6 +735,12 @@ private:
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);
 	LocationSceneConfig& GetLocationConfigMut(LocationTargetType type, const std::string& formKey,
 		const std::string& name = {});
+	/// Upserts a target's identity and claims it for the user, shared by adding a target and its first setting.
+	LocationSceneConfig& EnsureAuthoredLocationConfig(LocationTargetType type, const std::string& formKey,
+		const std::string& name, const std::string& cocCode, const std::string& editorId = {});
+	/// Raw user-document keys that resolve to one target: a form can be spelled several ways in the file.
+	static std::vector<std::string> MatchingRawLocationKeys(const json& section, LocationTargetType type,
+		std::string_view formKey);
 	void DiscoverLocationOverwrites();
 	void DiscoverLocationOverwritesForTarget(const std::filesystem::path& targetDir);
 	void LoadLocationUserSettings(const json& data);

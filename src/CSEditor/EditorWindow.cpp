@@ -262,7 +262,8 @@ void EditorWindow::ShowObjectsWindow()
 				{ "Lens Flare", T(TKEY("category_lens_flare"), "Lens Flare") },
 				{ "Visual Effect", T(TKEY("category_visual_effect"), "Visual Effect") },
 				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") },
-				{ "Scene Manager", T(TKEY("category_scene_manager"), "Scene Manager") }
+				{ "Scene Manager", T(TKEY("category_scene_manager"), "Scene Manager") },
+				{ "Locations", T(TKEY("category_locations"), "Locations") }
 			};
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 				// Highlight the selected category
@@ -284,10 +285,19 @@ void EditorWindow::ShowObjectsWindow()
 		if (ImGui::BeginChild("##ObjectsContent", { 0, 0 }, ImGuiChildFlags_Borders, kStickyHeaderFlags)) {
 			// Categories that own their whole panel instead of listing form widgets.
 			const bool isLightEditor = m_selectedCategory == "Light Editor";
-			if (isLightEditor || m_selectedCategory == "Scene Manager") {
-				BeginScrollableContent(isLightEditor ? "##LightEditorScroll" : "##SceneManagerScroll");
+			const bool isLocations = m_selectedCategory == "Locations";
+			if (isLightEditor || isLocations || m_selectedCategory == "Scene Manager") {
+				const char* scrollId = "##SceneManagerScroll";
+				if (isLightEditor)
+					scrollId = "##LightEditorScroll";
+				else if (isLocations)
+					scrollId = "##LocationsScroll";
+
+				BeginScrollableContent(scrollId);
 				if (isLightEditor)
 					lightEditor.DrawSettings();
+				else if (isLocations)
+					SceneSettingsUI::DrawLocationBrowser();
 				else
 					SceneSettingsUI::DrawSceneManagerPanel();
 				EndScrollableContent();
@@ -1398,6 +1408,9 @@ void EditorWindow::RenderUI()
 	}
 
 	ShowWidgetWindow();
+
+	// Locations are not form widgets, so their windows are drawn alongside the widget pass.
+	SceneSettingsUI::DrawLocationWindows();
 
 	// Show palette window
 	PaletteWindow::GetSingleton()->Draw();

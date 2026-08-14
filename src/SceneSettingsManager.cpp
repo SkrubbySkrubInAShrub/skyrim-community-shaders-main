@@ -208,6 +208,12 @@ namespace
 		return formId != 0 ? Util::FormIdToSpid(formId) : std::string(formKey);
 	}
 
+	/// The user document keeps locations and cells in separate sections; both hold the same shape.
+	const char* LocationSectionName(SceneSettingsManager::LocationTargetType type)
+	{
+		return type == SceneSettingsManager::LocationTargetType::Cell ? "cells" : "locations";
+	}
+
 	bool ReadOptionalStringField(const json& object, std::string_view field, std::string& value,
 		std::string_view context)
 	{
@@ -3054,9 +3060,10 @@ void SceneSettingsManager::SaveAllUserSettings()
 		                       unresolvedLocationUserSettings : json::object();
 		for (const auto& [_, config] : locationSceneConfigs) {
 			auto userEntries = UserEntriesToArray(config.entries);
-			if (userEntries.empty())
+			// A target the user took on is worth remembering even before it has a single setting.
+			if (userEntries.empty() && !config.userAuthored)
 				continue;
-			const auto* sectionName = config.type == LocationTargetType::Cell ? "cells" : "locations";
+			const auto* sectionName = LocationSectionName(config.type);
 			auto& section = locationObj[sectionName];
 			if (!section.is_object())
 				section = json::object();
@@ -3068,6 +3075,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 					userEntries.push_back(rawEntry);
 			locationEntry["type"] = config.type == LocationTargetType::Cell ? "Cell" : "Location";
 			locationEntry["name"] = config.name;
+			locationEntry["editorId"] = config.editorId;
 			locationEntry["coc"] = config.cocCode;
 			locationEntry["entries"] = std::move(userEntries);
 			rawConfig = std::move(locationEntry);
@@ -3315,10 +3323,12 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 			std::string name;
 			std::string persistedType;
 			std::string cocCode;
+			std::string editorId;
 			const auto expectedType = type == LocationTargetType::Cell ? "Cell" : "Location";
 			persistedType = expectedType;
 			if (!ReadOptionalStringField(rawConfig, "name", name, configContext) ||
 				!ReadOptionalStringField(rawConfig, "type", persistedType, configContext) ||
+				!ReadOptionalStringField(rawConfig, "editorId", editorId, configContext) ||
 				!ReadOptionalStringField(rawConfig, "coc", cocCode, configContext)) {
 				preservedSection[formKey] = rawConfig;
 				continue;
@@ -3327,9 +3337,8 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 				preservedSection[formKey] = rawConfig;
 				continue;
 			}
-			auto& config = GetLocationConfigMut(type, canonicalFormKey, name);
-			if (!cocCode.empty())
-				config.cocCode = cocCode;
+			// Presence in the user document is what makes a target theirs, entries or not.
+			auto& config = EnsureAuthoredLocationConfig(type, canonicalFormKey, name, cocCode, editorId);
 			auto entriesIt = rawConfig.find("entries");
 			if (entriesIt == rawConfig.end()) {
 				preservedSection[formKey] = rawConfig;
@@ -3361,6 +3370,7 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 			if (hasValidEntry && formKey != canonicalFormKey) {
 				preservedConfig.erase("type");
 				preservedConfig.erase("name");
+				preservedConfig.erase("editorId");
 				preservedConfig.erase("coc");
 			}
 			preservedSection[formKey] = std::move(preservedConfig);
@@ -3368,8 +3378,8 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 		unresolvedLocationUserSettings[sectionName] = std::move(preservedSection);
 	};
 
-	loadSection("locations", LocationTargetType::Location);
-	loadSection("cells", LocationTargetType::Cell);
+	for (const auto type : { LocationTargetType::Location, LocationTargetType::Cell })
+		loadSection(LocationSectionName(type), type);
 }
 
 void SceneSettingsManager::LoadWeatherUserSettings()
@@ -3971,6 +3981,7 @@ std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetCurre
 			.type = LocationTargetType::Location,
 			.formKey = Util::GetFormFileKey(current),
 			.name = getDisplayName(current),
+			.editorId = Util::GetFormEditorID(current),
 			.cocCode = cocCode,
 			.formId = current->GetFormID(),
 		});
@@ -3980,6 +3991,7 @@ std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetCurre
 		.type = LocationTargetType::Cell,
 		.formKey = Util::GetFormFileKey(cell),
 		.name = getDisplayName(cell),
+		.editorId = cocCode,  // The coc code is the cell's own editor ID.
 		.cocCode = cocCode,
 		.formId = cell->GetFormID(),
 	});
@@ -3988,6 +4000,76 @@ std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetCurre
 	locationTargetsCached = true;
 	cachedLocationTargets = targets;
 	return targets;
+}
+
+std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetAuthoredLocationTargets() const
+{
+	std::vector<LocationTarget> targets;
+	for (const auto& [configKey, config] : locationSceneConfigs) {
+		if (!config.userAuthored)
+			continue;
+		// formId is left unresolved: an authored target may name content that is not loaded, and
+		// SpidToFormId warns on every miss. Callers that need the live form resolve it themselves.
+		targets.push_back({
+			.type = config.type,
+			.formKey = config.formKey,
+			.name = config.name.empty() ? configKey : config.name,
+			.editorId = config.editorId,
+			.cocCode = config.cocCode,
+		});
+	}
+	std::ranges::sort(targets, [](const auto& lhs, const auto& rhs) { return lhs.name < rhs.name; });
+	return targets;
+}
+
+bool SceneSettingsManager::AddLocationTarget(const LocationTarget& target)
+{
+	if (!TryEnsureLocationDataLoaded() || target.formKey.empty() ||
+		IsLocationTargetAuthored(target.type, target.formKey))
+		return false;
+
+	EnsureAuthoredLocationConfig(target.type, target.formKey, target.name, target.cocCode, target.editorId);
+	PrepareLocationUserSettingsMutation(target.type, target.formKey, false);
+	SaveAllUserSettings();
+	return true;
+}
+
+bool SceneSettingsManager::IsLocationTargetAuthored(LocationTargetType type, std::string_view formKey) const
+{
+	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
+	return it != locationSceneConfigs.end() && it->second.userAuthored;
+}
+
+void SceneSettingsManager::RemoveLocationTarget(LocationTargetType type, const std::string& formKey)
+{
+	if (!TryEnsureLocationDataLoaded())
+		return;
+
+	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
+	if (it == locationSceneConfigs.end())
+		return;
+
+	const auto removedEntries = std::erase_if(it->second.entries,
+		[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+	// Shipped overwrites keep the config alive; without them nothing is left to remember.
+	if (it->second.entries.empty())
+		locationSceneConfigs.erase(it);
+	else
+		it->second.userAuthored = false;
+
+	// The loader treats presence in the user document as ownership, so the target has to leave it
+	// entirely. Deleting only its entries would resurrect the target on the next launch.
+	PrepareLocationUserSettingsMutation(type, formKey, false);
+	const auto* sectionName = LocationSectionName(type);
+	if (auto sectionIt = unresolvedLocationUserSettings.find(sectionName);
+		sectionIt != unresolvedLocationUserSettings.end())
+		for (const auto& rawFormKey : MatchingRawLocationKeys(*sectionIt, type, formKey))
+			sectionIt->erase(rawFormKey);
+
+	if (removedEntries != 0)
+		BumpEntryPresentationRevision();
+	SaveAllUserSettings();
+	ReapplyIfActive();
 }
 
 SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::GetLocationConfigMut(
@@ -3999,6 +4081,19 @@ SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::GetLocationConf
 	config.formKey = canonicalFormKey;
 	if (!name.empty())
 		config.name = name;
+	return config;
+}
+
+SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::EnsureAuthoredLocationConfig(
+	LocationTargetType type, const std::string& formKey, const std::string& name, const std::string& cocCode,
+	const std::string& editorId)
+{
+	auto& config = GetLocationConfigMut(type, formKey, name);
+	if (!cocCode.empty())
+		config.cocCode = cocCode;
+	if (!editorId.empty())
+		config.editorId = editorId;
+	config.userAuthored = true;
 	return config;
 }
 
@@ -4067,7 +4162,7 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 	locationUserSettingsModified = true;
 	if (!unresolvedLocationUserSettings.is_object())
 		unresolvedLocationUserSettings = json::object();
-	const auto* sectionName = type == LocationTargetType::Cell ? "cells" : "locations";
+	const auto* sectionName = LocationSectionName(type);
 	auto& section = unresolvedLocationUserSettings[sectionName];
 	if (!section.is_object())
 		section = json::object();
@@ -4084,6 +4179,7 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 			if (rawFormKey != canonicalFormKey) {
 				rawConfig.erase("type");
 				rawConfig.erase("name");
+				rawConfig.erase("editorId");
 				rawConfig.erase("coc");
 			}
 		}
@@ -4112,9 +4208,7 @@ bool SceneSettingsManager::AddLocationSetting(LocationTargetType type, const std
 	if (!lowerValue || !ValidateSceneSettingEntry("Location", featureShortName, settingPath, settingKey, *lowerValue, false))
 		return false;
 
-	auto& config = GetLocationConfigMut(type, formKey, name);
-	if (!cocCode.empty())
-		config.cocCode = cocCode;
+	auto& config = EnsureAuthoredLocationConfig(type, formKey, name, cocCode);
 	config.entries.push_back({
 		.featureShortName = featureShortName,
 		.settingPath = settingPath,
@@ -4165,17 +4259,27 @@ void SceneSettingsManager::DeleteAllLocationUserSettings(LocationTargetType type
 			BumpEntryPresentationRevision();
 	}
 	PrepareLocationUserSettingsMutation(type, formKey, false);
-	const auto* sectionName = type == LocationTargetType::Cell ? "cells" : "locations";
+	const auto* sectionName = LocationSectionName(type);
 	auto sectionIt = unresolvedLocationUserSettings.find(sectionName);
-	if (sectionIt != unresolvedLocationUserSettings.end() && sectionIt->is_object()) {
-		const auto targetKey = GetLocationConfigKey(type, formKey);
-		for (auto& [rawFormKey, rawConfig] : sectionIt->items())
-			if (rawConfig.is_object() &&
-				GetLocationConfigKey(type, CanonicalizeResolvedLocationFormKey(rawFormKey)) == targetKey)
-				rawConfig.erase("entries");
-	}
+	if (sectionIt != unresolvedLocationUserSettings.end())
+		for (const auto& rawFormKey : MatchingRawLocationKeys(*sectionIt, type, formKey))
+			(*sectionIt)[rawFormKey].erase("entries");
 	SaveAllUserSettings();
 	ReapplyIfActive();
+}
+
+std::vector<std::string> SceneSettingsManager::MatchingRawLocationKeys(const json& section,
+	LocationTargetType type, std::string_view formKey)
+{
+	std::vector<std::string> keys;
+	if (!section.is_object())
+		return keys;
+	const auto targetKey = GetLocationConfigKey(type, formKey);
+	for (const auto& [rawFormKey, rawConfig] : section.items())
+		if (rawConfig.is_object() &&
+			GetLocationConfigKey(type, CanonicalizeResolvedLocationFormKey(rawFormKey)) == targetKey)
+			keys.push_back(rawFormKey);
+	return keys;
 }
 
 void SceneSettingsManager::TogglePauseLocationEntry(LocationTargetType type, const std::string& formKey, size_t index)

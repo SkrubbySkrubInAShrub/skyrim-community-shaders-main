@@ -8,6 +8,7 @@
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "Utils/UI.h"
+#include "WeatherUtils.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
 
@@ -36,6 +37,18 @@ namespace
 	/// The objects window nests its list inside the category list, so it reads as a sub-level.
 	constexpr float kNestedFeatureFontScale = 0.85f;
 
+	/// Name and editor ID share the slack; the type and the trailing action are fixed and narrow.
+	constexpr float kLocationTypeColumnWidth = 90.0f;
+	constexpr float kLocationAddColumnWidth = 60.0f;
+	constexpr float kLocationRemoveColumnWidth = 40.0f;
+	/// Matches the weather list's JSON delete icon, which sits a little inside the row height.
+	constexpr float kRemoveIconScale = 0.85f;
+	constexpr ImGuiTableFlags kLocationTableFlags =
+		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
+
+	/// Location windows share their size with each other, like the form widgets do per type.
+	constexpr const char* kLocationWidgetType = "SceneLocation";
+
 	/// One bar shared by every panel: it tracks live time, which is global.
 	struct PeriodBarState
 	{
@@ -54,9 +67,20 @@ namespace
 		std::string label;
 	};
 
-	/// Each panel keeps its own selection: both can be on screen at once.
+	/// Each panel keeps its own selection: several can be on screen at once.
 	std::string weatherSelectedFeature;
 	std::string panelSelectedFeature;
+
+	/// A location the user opened for editing. Locations are not forms in the widget system, so the
+	/// editor tracks its own windows instead of going through Widget.
+	struct LocationWindow
+	{
+		SceneSettingsManager::LocationTarget target;
+		std::string selectedFeature;
+		bool open = true;
+		bool pendingFocus = false;
+	};
+	std::vector<LocationWindow> locationWindows;
 
 	// Latch driving the automatic time pause.
 	bool panelVisible = false;
@@ -174,24 +198,27 @@ namespace
 	}
 
 	/// Period bar plus the shared notice, so both panels stay visually identical while empty.
-	void DrawPanel(const char* intro)
+	void DrawPanel(const char* intro, bool withPeriodBar = true)
 	{
-		DrawPeriodBar();
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
+		if (withPeriodBar) {
+			DrawPeriodBar();
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+		}
 		ImGui::TextWrapped("%s", intro);
 		ImGui::Spacing();
 		Util::Text::WrappedDisabled("%s",
 			T(TKEY("scene_manager_unavailable"), "Scene settings authoring is not yet available."));
 	}
-}
 
-void SceneSettingsUI::DrawWeatherSceneTab()
-{
-	panelVisible = true;
+	/// Feature column beside the panel body, split by a divider the user can drag.
+	/// Transitionable features are the per-period set; the rest also covers interior and location.
+	void DrawFeatureLayout(std::string& selectedFeature, bool transitionableOnly, const char* intro, bool withPeriodBar)
+	{
+		if (!ImGui::BeginTable("SceneFeatureLayout", 2, kFeatureLayoutFlags))
+			return;
 
-	if (ImGui::BeginTable("SceneFeatureLayout", 2, kFeatureLayoutFlags)) {
 		ImGui::TableSetupColumn("##Features", ImGuiTableColumnFlags_WidthFixed, kFeatureListWidth * Util::GetUIScale());
 		ImGui::TableSetupColumn("##Body", ImGuiTableColumnFlags_WidthStretch);
 		ImGui::TableNextRow();
@@ -203,24 +230,180 @@ void SceneSettingsUI::DrawWeatherSceneTab()
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
-			DrawFeatureList(weatherSelectedFeature, GetFeatureEntries(true));
+			DrawFeatureList(selectedFeature, GetFeatureEntries(transitionableOnly));
 		}
 		ImGui::EndChild();
 
 		ImGui::TableSetColumnIndex(1);
 		if (ImGui::BeginChild("##SceneFeatureBody"))
-			DrawPanel(T(TKEY("scene_manager_weather_intro"), "Settings overridden while this weather is active."));
+			DrawPanel(intro, withPeriodBar);
 		ImGui::EndChild();
 
 		ImGui::EndTable();
 	}
+
+	const char* GetLocationTypeLabel(SceneSettingsManager::LocationTargetType type)
+	{
+		return type == SceneSettingsManager::LocationTargetType::Cell ?
+		           T(TKEY("location_type_cell"), "Cell") :
+		           T(TKEY("location_type_location"), "Location");
+	}
+
+	/// Opens a location's editor window, focusing the existing one rather than opening a second.
+	void OpenLocationWindow(const SceneSettingsManager::LocationTarget& target)
+	{
+		auto existing = std::ranges::find_if(locationWindows, [&](const auto& window) {
+			return window.target.type == target.type && window.target.formKey == target.formKey;
+		});
+		if (existing != locationWindows.end()) {
+			existing->open = true;
+			existing->pendingFocus = true;
+			return;
+		}
+		locationWindows.push_back({ .target = target });
+	}
+
+	/// Both location tables identify a target the same way; only the trailing action differs.
+	void SetupLocationColumns(float actionWidth)
+	{
+		const float scale = Util::GetUIScale();
+		ImGui::TableSetupColumn(T(TKEY("location_column_name"), "Name"), ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T(TKEY("location_column_editor_id"), "Editor ID"), ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T(TKEY("location_column_type"), "Type"), ImGuiTableColumnFlags_WidthFixed, kLocationTypeColumnWidth * scale);
+		ImGui::TableSetupColumn("##Action", ImGuiTableColumnFlags_WidthFixed, actionWidth * scale);
+		ImGui::TableHeadersRow();
+	}
+
+	/// Editor ID and type: what tells apart two links of a chain that share a display name.
+	void DrawLocationDetailColumns(const SceneSettingsManager::LocationTarget& target)
+	{
+		ImGui::TableNextColumn();
+		// The form key is the fallback identity for targets whose editor ID the game does not expose.
+		if (target.editorId.empty())
+			Util::Text::Disabled("%s", target.formKey.c_str());
+		else
+			ImGui::TextUnformatted(target.editorId.c_str());
+
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(GetLocationTypeLabel(target.type));
+	}
+
+	/// The chain the player is standing in, outermost first, each link addable on its own.
+	void DrawLocationChain()
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto targets = manager->GetCurrentLocationTargets();
+		if (targets.empty()) {
+			Util::Text::WrappedDisabled("%s",
+				T(TKEY("location_chain_unavailable"), "Waiting for the player's location."));
+			return;
+		}
+
+		if (!ImGui::BeginTable("LocationChain", 4, kLocationTableFlags))
+			return;
+
+		SetupLocationColumns(kLocationAddColumnWidth);
+		for (const auto& target : targets) {
+			ImGui::TableNextRow();
+			ImGui::PushID(target.formKey.c_str());
+
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(target.name.c_str());
+			DrawLocationDetailColumns(target);
+
+			ImGui::TableNextColumn();
+			const bool authored = manager->IsLocationTargetAuthored(target.type, target.formKey);
+			ImGui::BeginDisabled(authored);
+			if (ImGui::SmallButton(T(TKEY("location_add"), "Add")))
+				manager->AddLocationTarget(target);
+			ImGui::EndDisabled();
+			if (authored)
+				Util::AddTooltip(T(TKEY("location_already_added"), "Already on your list."),
+					ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+	}
+
+	/// The editor's delete icon, matching the weather list's JSON removal action.
+	bool DrawLocationRemoveButton()
+	{
+		// The row selectable spans every column, so the button has to claim the clicks over it.
+		ImGui::SetNextItemAllowOverlap();
+
+		auto* menu = globals::menu;
+		if (!menu || !menu->uiIcons.deleteSettings.texture)
+			return Util::ErrorTextButton(T(TKEY("remove"), "Remove"));
+
+		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
+		return Util::ErrorImageButton("##remove", menu->uiIcons.deleteSettings.texture, { iconSize, iconSize });
+	}
+
+	/// The user's list: double-click a row to edit it, or drop it and its settings.
+	void DrawAuthoredLocations()
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto targets = manager->GetAuthoredLocationTargets();
+		if (targets.empty()) {
+			Util::Text::WrappedDisabled("%s", T(TKEY("location_list_empty"),
+				"No locations yet. Add one from where you are standing."));
+			return;
+		}
+
+		if (!ImGui::BeginTable("AuthoredLocations", 4, kLocationTableFlags))
+			return;
+
+		SetupLocationColumns(kLocationRemoveColumnWidth);
+
+		// Removal mutates the manager's map, so it waits until the rows are submitted.
+		const SceneSettingsManager::LocationTarget* pendingRemoval = nullptr;
+		for (const auto& target : targets) {
+			ImGui::TableNextRow();
+			ImGui::PushID(target.formKey.c_str());
+
+			ImGui::TableNextColumn();
+			const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
+				return window.open && window.target.type == target.type && window.target.formKey == target.formKey;
+			});
+			if (Util::TableRowSelectable(target.name.c_str(), opened,
+					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
+				ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+				OpenLocationWindow(target);
+			DrawLocationDetailColumns(target);
+
+			ImGui::TableNextColumn();
+			if (DrawLocationRemoveButton())
+				pendingRemoval = &target;
+			Util::AddTooltip(T(TKEY("location_remove_tooltip"),
+				"Drops the location from the list along with the settings authored for it."));
+
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+
+		if (pendingRemoval) {
+			std::erase_if(locationWindows, [&](const auto& window) {
+				return window.target.type == pendingRemoval->type && window.target.formKey == pendingRemoval->formKey;
+			});
+			manager->RemoveLocationTarget(pendingRemoval->type, pendingRemoval->formKey);
+		}
+	}
+}
+
+void SceneSettingsUI::DrawWeatherSceneTab()
+{
+	panelVisible = true;
+
+	DrawFeatureLayout(weatherSelectedFeature, true,
+		T(TKEY("scene_manager_weather_intro"), "Settings overridden while this weather is active."), true);
 }
 
 void SceneSettingsUI::DrawSceneManagerPanel()
 {
 	panelVisible = true;
 
-	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior, time of day, and location."));
+	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior and time of day."));
 }
 
 void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
@@ -234,6 +417,56 @@ void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
 	DrawFeatureList(panelSelectedFeature, GetFeatureEntries(false));
 	ImGui::SetWindowFontScale(1.0f);
 	ImGui::Unindent();
+}
+
+void SceneSettingsUI::DrawLocationBrowser()
+{
+	ImGui::TextWrapped("%s", T(TKEY("location_browser_intro"),
+		"Locations resolve last, so they win over interior, time of day, and weather. A cell wins over the locations that contain it."));
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	ImGui::Text("%s", T(TKEY("location_add_from_here"), "Add from where you are"));
+	ImGui::Spacing();
+	DrawLocationChain();
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	ImGui::Text("%s", T(TKEY("location_list_title"), "Your locations"));
+	Util::AddTooltip(T(TKEY("location_list_tooltip"), "Double-click a location to edit its settings."));
+	ImGui::Spacing();
+	DrawAuthoredLocations();
+}
+
+void SceneSettingsUI::DrawLocationWindows()
+{
+	for (auto& window : locationWindows) {
+		if (!window.open)
+			continue;
+
+		if (window.pendingFocus) {
+			ImGui::SetNextWindowFocus();
+			window.pendingFocus = false;
+		}
+
+		SetupWidgetWindowDefaults(kLocationWidgetType);
+		// The form key keeps the id stable while the visible name stays readable.
+		const auto title = std::format("{} ({})###SceneLocation_{}", window.target.name,
+			GetLocationTypeLabel(window.target.type), window.target.formKey);
+		const bool visible = Util::BeginWithRoundedClose(title.c_str(), &window.open, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
+		UpdateWidgetTypeSize(kLocationWidgetType);
+		if (visible) {
+			// Location settings are flat, so the window carries no period bar and no time selection.
+			DrawFeatureLayout(window.selectedFeature, false,
+				T(TKEY("scene_manager_location_intro"), "Settings overridden while the player is in this location."), false);
+		}
+		ImGui::End();
+	}
+
+	std::erase_if(locationWindows, [](const auto& window) { return !window.open; });
 }
 
 void SceneSettingsUI::SyncTimePause()
