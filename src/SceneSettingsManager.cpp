@@ -1090,11 +1090,20 @@ SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetPeriodFromName(co
 	return TimeOfDayPeriod::Count;
 }
 
+namespace
+{
+	/// The editor can run before globals are cached, so the singleton is the fallback.
+	RE::Calendar* GetCalendar()
+	{
+		return globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	}
+}
+
 float SceneSettingsManager::GetCurrentGameHour()
 {
 	// Prefer calendar (ground truth), which the Weather Editor slider writes to.
 	// sky->currentGameHour may lag when timeScale is 0 (time paused).
-	auto calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	auto calendar = GetCalendar();
 	float hour = 12.0f;
 	if (calendar && calendar->gameHour)
 		hour = calendar->gameHour->value;
@@ -1108,6 +1117,26 @@ float SceneSettingsManager::GetCurrentGameHour()
 	if (hour >= 24.0f)
 		hour = 0.0f;
 	return hour;
+}
+
+void SceneSettingsManager::SetGameHour(float hour)
+{
+	if (!std::isfinite(hour))
+		return;
+	auto calendar = GetCalendar();
+	if (calendar && calendar->gameHour)
+		calendar->gameHour->value = std::clamp(hour, 0.0f, 24.0f);
+}
+
+float SceneSettingsManager::GetPeriodMidHour(TimeOfDayPeriod period)
+{
+	const int index = static_cast<int>(period);
+	if (index < 0 || index >= kPeriodCount)
+		return GetCurrentGameHour();
+
+	// Night ends past 24, so its middle lands after midnight.
+	const float mid = (kPeriodHours[index][0] + kPeriodHours[index][1]) * 0.5f;
+	return mid >= 24.0f ? mid - 24.0f : mid;
 }
 
 SceneSettingsManager::PeriodLookup SceneSettingsManager::FindPeriodForHour(float hour)

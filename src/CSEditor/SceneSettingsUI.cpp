@@ -169,8 +169,13 @@ namespace
 				const bool marksLive = editing && period == live && period != active;
 				if (marksLive)
 					ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.CurrentHotkey);
-				if (ImGui::Selectable(GetPeriodLabel(period), period == active))
+				if (ImGui::Selectable(GetPeriodLabel(period), period == active)) {
 					periodBar.selected = period;
+					// Jump time into the middle of the period so the scene shows what is being edited.
+					// The baseline moves with it, or the scrub check would drop straight back to following.
+					periodBar.lastHour = SceneSettingsManager::GetPeriodMidHour(static_cast<TimeOfDayPeriod>(period));
+					SceneSettingsManager::SetGameHour(periodBar.lastHour);
+				}
 				if (marksLive)
 					ImGui::PopStyleColor();
 			}
@@ -203,7 +208,7 @@ namespace
 		else if (!timeOfDayEnabled)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_off"), "Time of day editing is off. The bar does not follow game time."));
 		else if (periodBar.selected < 0)
-			Util::Text::Disabled("%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to edit it on its own."));
+			Util::Text::Disabled("%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to jump to it and edit it on its own."));
 		else
 			Util::Text::Disabled(T(TKEY("period_bar_manual"), "Editing %s. Scrub the time of day to follow it again."), GetPeriodLabel(active));
 

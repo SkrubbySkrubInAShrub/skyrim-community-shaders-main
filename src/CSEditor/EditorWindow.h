@@ -372,6 +372,12 @@ private:
 	// Widget focus tracking for Ctrl+W
 	Widget* lastFocusedWidget = nullptr;
 
+	/** @brief Locks the current weather when the overlay opens, unless the user already locked one. */
+	void LockWeatherForOverlay();
+
+	/// True while the lock belongs to the overlay, so closing it only releases what it took.
+	bool weatherLockedByOverlay = false;
+
 	// Time control state
 	bool timePaused = false;
 	float savedTimeScale = kVanillaTimeScale;

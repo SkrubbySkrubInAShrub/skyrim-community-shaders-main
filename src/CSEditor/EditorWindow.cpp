@@ -1469,16 +1469,25 @@ void EditorWindow::UpdateOpenState()
 	// Runs even while closed so a Scene Manager panel's pause is always released.
 	SceneSettingsUI::SyncTimePause();
 
+	// The user can release the lock from the weather controls; it stops being ours the moment they do.
+	if (weatherLockedByOverlay && !IsWeatherLocked())
+		weatherLockedByOverlay = false;
+
 	if (open && !wasOpen) {
 		DisableVanityCamera();
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
+		LockWeatherForOverlay();
 
 	} else if (!open && wasOpen) {
 		lightEditor.ResetOverrides();
 		RestoreVanityCamera();
 		ShowGameMenus();
 		BackgroundBlur::SetCSEditorActive(false);
+		if (weatherLockedByOverlay) {
+			UnlockWeather();
+			weatherLockedByOverlay = false;
+		}
 	}
 
 	wasOpen = open;
@@ -2019,6 +2028,17 @@ void EditorWindow::LockWeather(RE::TESWeather* weather)
 	MaintainWeatherLock();
 
 	logger::info("Weather locked: {}", weather->GetFormEditorID() ? weather->GetFormEditorID() : "Unknown");
+}
+
+void EditorWindow::LockWeatherForOverlay()
+{
+	// Weather drifting mid-session changes the scene under whatever is being edited.
+	auto* sky = globals::game::sky;
+	if (!sky || IsWeatherLocked())
+		return;
+
+	LockWeather(sky->currentWeather);
+	weatherLockedByOverlay = IsWeatherLocked();
 }
 
 void EditorWindow::UnlockWeather()

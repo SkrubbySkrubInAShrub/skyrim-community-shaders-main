@@ -243,6 +243,12 @@ public:
 	static TimeOfDayPeriod GetPeriodFromName(const std::string& name);
 	static float GetCurrentGameHour();
 
+	/// Writes the game hour every reader, including GetCurrentGameHour, resolves against.
+	static void SetGameHour(float hour);
+
+	/// Middle of a period's hour range, wrapped into [0, 24): Night runs past midnight.
+	static float GetPeriodMidHour(TimeOfDayPeriod period);
+
 	/// Per-period blend weights for the current game hour. Weights sum to 1.
 	static std::array<float, kPeriodCount> GetTimeOfDayFactors();
 

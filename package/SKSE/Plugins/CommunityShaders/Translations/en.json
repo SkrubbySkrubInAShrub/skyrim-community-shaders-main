@@ -272,7 +272,7 @@
     "cs_editor.path_must_end_dds": "Path must end with '.dds'",
     "cs_editor.pause_time": "Pause Time",
     "cs_editor.pause_time_tooltip": "Pause or resume game time progression",
-    "cs_editor.period_bar_following": "Following the time of day. Click a period to edit it on its own.",
+    "cs_editor.period_bar_following": "Following the time of day. Click a period to jump to it and edit it on its own.",
     "cs_editor.period_bar_interior": "Time of day editing is unavailable indoors.",
     "cs_editor.period_bar_manual": "Editing %s. Scrub the time of day to follow it again.",
     "cs_editor.period_bar_off": "Time of day editing is off. The bar does not follow game time.",
