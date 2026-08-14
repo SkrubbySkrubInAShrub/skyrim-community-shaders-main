@@ -11,6 +11,14 @@ namespace SceneSettingsUI
 	void DrawSceneManagerPanel();
 
 	/**
+	 * @brief Draws the objects window's feature list, nested under the Scene Manager category entry.
+	 *
+	 * The panel body has no room for a feature column, so the list lives with the category that owns it.
+	 * Call only while that category is selected.
+	 */
+	void DrawSceneManagerCategoryFeatures();
+
+	/**
 	 * @brief Pauses game time while a panel is on screen and restores it once none are.
 	 *
 	 * Call once per frame, including while the editor is closed, so the pause is always released.

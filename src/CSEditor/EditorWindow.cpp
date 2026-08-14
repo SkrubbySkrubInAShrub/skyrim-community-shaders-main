@@ -269,6 +269,9 @@ void EditorWindow::ShowObjectsWindow()
 				if (ImGui::Selectable(categories[i].label, m_selectedCategory == categories[i].id)) {
 					m_selectedCategory = categories[i].id;  // Keep the stable English ID internally
 				}
+				// The Scene Manager panel has no room for a feature column, so it owns one here.
+				if (m_selectedCategory == categories[i].id && m_selectedCategory == "Scene Manager")
+					SceneSettingsUI::DrawSceneManagerCategoryFeatures();
 			}
 			ImGui::EndListBox();
 		}
