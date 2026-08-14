@@ -1,6 +1,7 @@
 #include "SceneSettingsUI.h"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 
 #include "../I18n/I18n.h"
@@ -46,6 +47,17 @@ namespace
 	constexpr float kRemoveIconScale = 0.85f;
 	constexpr ImGuiTableFlags kLocationTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
+	/// Only the user's list sorts: the chain's order is its hierarchy, outermost first.
+	constexpr ImGuiTableFlags kAuthoredLocationTableFlags = kLocationTableFlags | ImGuiTableFlags_Sortable;
+
+	/// Identifies the clicked header in the sort specs, which go by user ID rather than position.
+	enum LocationColumnId
+	{
+		LocationColumnName,
+		LocationColumnEditorId,
+		LocationColumnType,
+		LocationColumnAction
+	};
 
 	/// Location windows share their size with each other, like the form widgets do per type.
 	constexpr const char* kLocationWidgetType = "SceneLocation";
@@ -303,25 +315,61 @@ namespace
 	void SetupLocationColumns(float actionWidth)
 	{
 		const float scale = Util::GetUIScale();
-		ImGui::TableSetupColumn(T(TKEY("location_column_name"), "Name"), ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn(T(TKEY("location_column_editor_id"), "Editor ID"), ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn(T(TKEY("location_column_type"), "Type"), ImGuiTableColumnFlags_WidthFixed, kLocationTypeColumnWidth * scale);
-		ImGui::TableSetupColumn("##Action", ImGuiTableColumnFlags_WidthFixed, actionWidth * scale);
+		ImGui::TableSetupColumn(T(TKEY("location_column_name"), "Name"), ImGuiTableColumnFlags_WidthStretch, 0.0f, LocationColumnName);
+		ImGui::TableSetupColumn(T(TKEY("location_column_editor_id"), "Editor ID"), ImGuiTableColumnFlags_WidthStretch, 0.0f, LocationColumnEditorId);
+		ImGui::TableSetupColumn(T(TKEY("location_column_type"), "Type"), ImGuiTableColumnFlags_WidthFixed, kLocationTypeColumnWidth * scale, LocationColumnType);
+		ImGui::TableSetupColumn("##Action", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, actionWidth * scale, LocationColumnAction);
 		ImGui::TableHeadersRow();
+	}
+
+	/// The form key is the fallback identity for targets whose editor ID the game does not expose.
+	const std::string& GetLocationIdentityText(const SceneSettingsManager::LocationTarget& target)
+	{
+		return target.editorId.empty() ? target.formKey : target.editorId;
 	}
 
 	/// Editor ID and type: what tells apart two links of a chain that share a display name.
 	void DrawLocationDetailColumns(const SceneSettingsManager::LocationTarget& target)
 	{
 		ImGui::TableNextColumn();
-		// The form key is the fallback identity for targets whose editor ID the game does not expose.
+		const auto& identity = GetLocationIdentityText(target);
 		if (target.editorId.empty())
-			Util::Text::Disabled("%s", target.formKey.c_str());
+			Util::Text::Disabled("%s", identity.c_str());
 		else
-			ImGui::TextUnformatted(target.editorId.c_str());
+			ImGui::TextUnformatted(identity.c_str());
 
 		ImGui::TableNextColumn();
 		ImGui::TextUnformatted(GetLocationTypeLabel(target.type));
+	}
+
+	/// Orders the user's list by the clicked header; ImGui owns the direction cycling and the arrow.
+	void SortLocationTargets(std::vector<SceneSettingsManager::LocationTarget>& targets)
+	{
+		const ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
+		if (!specs || specs->SpecsCount <= 0)
+			return;
+
+		const ImGuiTableColumnSortSpecs& spec = specs->Specs[0];
+		std::ranges::sort(targets, [&spec](const auto& lhs, const auto& rhs) {
+			int comparison = 0;
+			switch (spec.ColumnUserID) {
+			case LocationColumnName:
+				comparison = _stricmp(lhs.name.c_str(), rhs.name.c_str());
+				break;
+			case LocationColumnEditorId:
+				comparison = _stricmp(GetLocationIdentityText(lhs).c_str(), GetLocationIdentityText(rhs).c_str());
+				break;
+			case LocationColumnType:
+				comparison = _stricmp(GetLocationTypeLabel(lhs.type), GetLocationTypeLabel(rhs.type));
+				break;
+			default:
+				break;
+			}
+			// The form key breaks ties: the sort is unstable, so equal keys would otherwise swap rows per frame.
+			if (comparison == 0)
+				comparison = _stricmp(lhs.formKey.c_str(), rhs.formKey.c_str());
+			return spec.SortDirection == ImGuiSortDirection_Ascending ? comparison < 0 : comparison > 0;
+		});
 	}
 
 	/// The chain the player is standing in, outermost first, each link addable on its own.
@@ -380,17 +428,19 @@ namespace
 	void DrawAuthoredLocations()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto targets = manager->GetAuthoredLocationTargets();
+		auto targets = manager->GetAuthoredLocationTargets();
 		if (targets.empty()) {
 			Util::Text::WrappedDisabled("%s", T(TKEY("location_list_empty"),
 				"No locations yet. Add one from where you are standing."));
 			return;
 		}
 
-		if (!ImGui::BeginTable("AuthoredLocations", 4, kLocationTableFlags))
+		if (!ImGui::BeginTable("AuthoredLocations", 4, kAuthoredLocationTableFlags))
 			return;
 
 		SetupLocationColumns(kLocationRemoveColumnWidth);
+		// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
+		SortLocationTargets(targets);
 
 		// Removal mutates the manager's map, so it waits until the rows are submitted.
 		const SceneSettingsManager::LocationTarget* pendingRemoval = nullptr;
