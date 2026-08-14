@@ -27,11 +27,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-# Nested structs a feature persists but that are deliberately not scene-controllable.
-# Anything else non-primitive in a SaveSettings body fails the build, so an aggregate can
-# never drop out of the catalog silently.
-UNCATALOGED_PERSISTED_AGGREGATES = {
-    ("WetnessEffects", "DebugSettings"),
+# Serialized keys whose nested struct is debug state, never scene-controllable. Anything else
+# non-primitive in a SaveSettings body fails the build, so an aggregate can never drop out of
+# the catalog silently. Keyed by serialized name only: naming a feature here would put policy
+# in the generator instead of SceneSettingsPolicy.h.
+UNCATALOGED_PERSISTED_AGGREGATE_KEYS = {
+    "DebugSettings",
 }
 
 PRIMITIVE_TYPES = {
@@ -73,6 +74,10 @@ PRIMITIVE_TYPES = {
     "std::string": "String",
     "string": "String",
 }
+
+INTEGRAL_TYPE_PATTERN = (
+    r"(?:signed|unsigned|int|uint|long|short|size_t|std::size_t|"
+    r"u?int(?:8|16|32|64)_t|std::u?int(?:8|16|32|64)_t)")
 
 VECTOR_COMPONENTS = {
     "float2": ("x", "y"),
@@ -132,6 +137,9 @@ class NumericControlFlow:
     semantic: str
     presentation: str
     supports_unified_edit: bool
+    source_widget: str
+    clamp_numeric_input: bool
+    hdr_color: bool
 
 
 @dataclass(frozen=True)
@@ -151,6 +159,7 @@ class SourceParameter:
 class SourceFunction:
     name: str
     owner: str
+    qualifier: tuple[str, ...]
     parameters: tuple[SourceParameter, ...]
     body: str
     masked_body: str
@@ -175,6 +184,9 @@ class ControlBinding:
     aggregate_all: bool = False
     virtual_control: tuple[str, str] | None = None
     supports_unified_edit: bool = False
+    source_widget: str = ""
+    clamp_numeric_input: bool = False
+    hdr_color: bool = False
 
 
 @dataclass(frozen=True)
@@ -286,7 +298,6 @@ def resolve_vector_binding(
 STRUCT_DECL_RE = r"\bstruct\s+(?:alignas\s*\([^)]*\)\s+)?(\w+)([^;{]*)\{"
 
 CATEGORY_CONTROL_NAMES = {
-    "BeginTabItem",
     "CollapsingHeader",
     "TreeNode",
     "TreeNodeEx",
@@ -689,11 +700,11 @@ def collect_direct_persisted_fields(
                 if value_type:
                     persisted_fields.setdefault(feature_class, []).append(
                         (key, value_type, member))
-                elif declared_type and (feature_class, key) not in UNCATALOGED_PERSISTED_AGGREGATES:
+                elif declared_type and key not in UNCATALOGED_PERSISTED_AGGREGATE_KEYS:
                     uncataloged.append(
                         f"{feature_class}::SaveSettings persists '{key}' as non-primitive "
                         f"'{declared_type}'; catalog it or list it in "
-                        f"UNCATALOGED_PERSISTED_AGGREGATES")
+                        f"UNCATALOGED_PERSISTED_AGGREGATE_KEYS")
     if uncataloged:
         raise SystemExit("uncataloged persisted aggregates:\n  " + "\n  ".join(uncataloged))
     return persisted_fields
@@ -1107,6 +1118,7 @@ def resolve_numeric_expression(expression: str, constants: dict[str, float]) -> 
     expression = expression.strip()
     expression = re.sub(r"^&", "", expression).strip()
     expression = re.sub(r"\b(static_cast|reinterpret_cast|const_cast)\s*<[^>]+>\s*\((.*)\)$", r"\2", expression)
+    expression = re.sub(rf"\(\s*{INTEGRAL_TYPE_PATTERN}\s*\)", "", expression)
     expression = re.sub(
         r"(?<![A-Za-z_])((?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:[fFuUlL]+)\b",
         r"\1", expression)
@@ -1154,10 +1166,14 @@ def parse_helper_parameters(
     parameters = []
     for parameter in split_args(parameter_text):
         declaration, separator, default = parameter.partition("=")
-        name_match = re.search(r"([A-Za-z_]\w*)\s*$", declaration.strip())
+        stripped = declaration.strip()
+        name_match = re.search(
+            r"([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)+$", stripped)
+        if not name_match:
+            name_match = re.search(r"([A-Za-z_]\w*)\s*$", stripped)
         if name_match:
             parameters.append((
-                clean_type(declaration[:name_match.start()]),
+                clean_type(stripped[:name_match.start()]),
                 name_match.group(1),
                 default.strip() if separator else None))
     return tuple(parameters)
@@ -1180,17 +1196,102 @@ def substitute_helper_parameters(
 
 
 
+def control_source_widget(control_kind: str) -> str:
+    if re.fullmatch(r"ShiftSliderFloat[234]", control_kind):
+        return "ShiftSlider"
+    return "" if control_kind.startswith("Projected") else control_kind
+
+
+def control_flags_argument_index(control_kind: str) -> int | None:
+    if re.fullmatch(r"ColorEdit[34]", control_kind):
+        return 2
+    if re.fullmatch(r"ShiftSliderFloat[234]", control_kind):
+        return 5
+    if control_kind == "SliderScalar":
+        return 6
+    if control_kind == "SliderScalarN":
+        return 7
+    if control_kind.startswith("Slider"):
+        return 5
+    if control_kind == "DragScalar":
+        return 7
+    if control_kind == "DragScalarN":
+        return 8
+    if control_kind.startswith("Drag"):
+        return 6
+    return None
+
+
+def resolve_control_flags_expression(
+        body: str, position: int, control_kind: str, args: list[str]) -> str:
+    flags_index = control_flags_argument_index(control_kind)
+    if flags_index is None or flags_index >= len(args):
+        return ""
+
+    expression = args[flags_index].strip()
+    visited = set()
+    prefix = body[:position]
+    masked_prefix = mask_cpp_source(prefix)
+    while re.fullmatch(r"[A-Za-z_]\w*", expression) and expression not in visited:
+        visited.add(expression)
+        assignment_pattern = re.compile(
+            rf"\b(?:const(?:expr)?\s+)?(?:auto|ImGui(?:Slider|ColorEdit)Flags)\s+"
+            rf"{re.escape(expression)}\s*=\s*([^;]+);")
+        assignments = list(assignment_pattern.finditer(masked_prefix))
+        if not assignments:
+            break
+        match = assignments[-1]
+        resolved = prefix[match.start(1):match.end(1)].strip()
+        additions = [
+            prefix[addition.start(1):addition.end(1)].strip()
+            for addition in re.finditer(
+                rf"\b{re.escape(expression)}\s*\|=\s*([^;]+);",
+                masked_prefix)
+            if addition.start() > match.end()
+        ]
+        expression = " | ".join((resolved, *additions))
+    return expression
+
+
+def control_is_hdr_color(control_kind: str, flags_expression: str) -> bool:
+    return (re.fullmatch(r"ColorEdit[34]", control_kind) is not None and
+            re.search(r"\bImGuiColorEditFlags_HDR\b", flags_expression) is not None)
+
+
+def control_clamps_numeric_input(
+        control_kind: str, flags_expression: str) -> bool:
+    if re.fullmatch(r"ColorEdit[34]", control_kind):
+        return not control_is_hdr_color(control_kind, flags_expression)
+    return re.search(
+        r"\bImGuiSliderFlags_AlwaysClamp\b", flags_expression) is not None
+
+
+def control_bounds_argument_indices(control_kind: str) -> tuple[int, int] | None:
+    if control_kind == "SliderScalar":
+        return 3, 4
+    if control_kind == "SliderScalarN":
+        return 4, 5
+    if control_kind.startswith(("Slider", "ShiftSlider")):
+        return 2, 3
+    if control_kind == "DragScalar":
+        return 4, 5
+    if control_kind == "DragScalarN":
+        return 5, 6
+    if control_kind.startswith("Drag"):
+        return 3, 4
+    return None
+
+
 def get_control_numeric_metadata(control_kind: str, args: list[str],
-                                 constants: dict[str, float]) -> tuple[float, float, float] | None:
+                                 constants: dict[str, float],
+                                 flags_expression: str = "") -> tuple[float, float, float] | None:
     bounds: tuple[str, str] | None = None
-    if (control_kind.startswith(("Slider", "ShiftSlider")) and
-            control_kind != "SliderScalarN" and len(args) >= 4):
-        if control_kind.startswith("SliderScalar") and len(args) >= 5:
-            bounds = (args[3], args[4])
-        else:
-            bounds = (args[2], args[3])
-    elif control_kind.startswith("Drag") and len(args) >= 5:
-        bounds = (args[3], args[4])
+    if re.fullmatch(r"ColorEdit[34]", control_kind):
+        if control_is_hdr_color(control_kind, flags_expression):
+            return None
+        bounds = ("0.0", "1.0")
+    elif (indices := control_bounds_argument_indices(control_kind)) and len(args) > indices[1]:
+        bounds = args[indices[0]], args[indices[1]]
     elif control_kind == "PercentageSlider":
         bounds = (args[2] if len(args) >= 3 else "0.0", args[3] if len(args) >= 4 else "100.0")
     if not bounds:
@@ -1225,9 +1326,10 @@ def collect_local_setting_aliases(body: str) -> dict[str, tuple[str, ...]]:
     pattern = re.compile(
         r"\b(?:bool|int|unsigned|uint(?:32_t)?|float|double|auto)\s*(&?)\s*"
         r"([A-Za-z_]\w*)\s*=\s*"
-        r"([^;\n]+)")
+        r"([^;]+)")
     for match in pattern.finditer(mask_cpp_source(body)):
-        expression = unwrap_combo_proxy(match.group(3), True)
+        expression = strip_integral_casts(
+            unwrap_combo_proxy(re.sub(r"\s+", " ", match.group(3)), True))
         setting_pattern = (
             r"((?:settings|debugSettings|[A-Za-z_]\w*Settings)\."
             r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*))")
@@ -1248,9 +1350,24 @@ def collect_local_setting_aliases(body: str) -> dict[str, tuple[str, ...]]:
         writes = re.findall(
             rf"\b{re.escape(setting_expression)}\s*=\s*(?!=)([^;]+);",
             mask_cpp_source(body[match.end():]))
-        if writes and all(
-                unwrap_combo_proxy(write) == match.group(2)
-                for write in writes):
+        local_name = match.group(2)
+
+        def is_proxy_write(write: str) -> bool:
+            value = strip_integral_casts(unwrap_combo_proxy(
+                re.sub(r"\s+", " ", write), True))
+            if value == local_name:
+                return True
+            if normalized_boolean and re.fullmatch(
+                    rf"{re.escape(local_name)}\s*\?\s*"
+                    r"(?:true|1(?:[uUlL]+)?)\s*:\s*(?:false|0(?:[uUlL]+)?)",
+                    value):
+                return True
+            clamp = re.fullmatch(
+                r"(?:(?:std|[A-Za-z_]\w*)::)?clamp\s*\((.*)\)", value)
+            return bool(clamp and len(arguments := split_args(clamp.group(1))) == 3 and
+                        strip_integral_casts(arguments[0]) == local_name)
+
+        if writes and all(is_proxy_write(write) for write in writes):
             aliases[match.group(2)] = setting_path
     return aliases
 
@@ -1326,8 +1443,10 @@ def resolve_editor_semantic(
         binding: ControlBinding | None,
         value_type: str,
         force_hidden: bool = False) -> str:
-    if force_hidden or binding is None:
+    if force_hidden:
         return "None"
+    if binding is None:
+        return "Generic" if value_type in {"Boolean", "Integer", "Float", "String"} else "None"
     if binding.choices and value_type == "Integer":
         return "Choice"
     if ((binding.control_kind == "Checkbox" or
@@ -1506,10 +1625,9 @@ def _resolve_source_function(definitions: dict[str, list[tuple]], name: str, arg
 
 
 def _control_bounds_expressions(control_kind: str, args: list[str]):
-    if control_kind.startswith("Slider") and control_kind != "SliderScalarN" and len(args) >= 4:
-        return (args[3], args[4]) if control_kind.startswith("SliderScalar") and len(args) >= 5 else (args[2], args[3])
-    if control_kind.startswith("Drag") and len(args) >= 5:
-        return args[3], args[4]
+    indices = control_bounds_argument_indices(control_kind)
+    if indices and len(args) > indices[1]:
+        return args[indices[0]], args[indices[1]]
     if control_kind == "PercentageSlider":
         return (args[2] if len(args) >= 3 else "0.0",
                 args[3] if len(args) >= 4 else "100.0")
@@ -1594,29 +1712,38 @@ def _summarize_numeric_control_flow(
     controls = set()
     masked = mask_cpp_source(body)
     for control in DIRECT_UI_CONTROL_RE.finditer(masked):
+        control_kind = control.group(1)
         close = find_matching_paren(body, control.end() - 1)
         if close < 0:
             continue
         args = split_args(body[control.end():close])
-        bounds = _control_bounds_expressions(control.group(1), args)
-        storage_index = control_storage_argument_index(control.group(1))
+        flags_expression = resolve_control_flags_expression(
+            body, control.start(), control_kind, args)
+        bounds = _control_bounds_expressions(control_kind, args)
+        if (not bounds and re.fullmatch(r"ColorEdit[34]", control_kind) and
+                not control_is_hdr_color(control_kind, flags_expression)):
+            bounds = ("0.0", "1.0")
+        storage_index = control_storage_argument_index(control_kind)
         if not bounds or len(args) <= storage_index:
             continue
         storage = _parameter_storage_flow(
             args[storage_index], parameters, body, control.start(),
-            control_component_count(control.group(1)), constants)
+            control_component_count(control_kind), constants)
         if not storage:
             continue
         indexed = re.search(r"\[\s*([A-Za-z_]\w*)\s*\]", args[storage_index])
         color_marked = indexed and re.search(
             rf"\bSetNextItemColorMarker\s*\([^;]*\[\s*{re.escape(indexed.group(1))}\s*\]",
             masked)
-        is_color_editor = control.group(1).startswith("ColorEdit")
+        is_color_editor = control_kind.startswith("ColorEdit")
         semantic = "Color" if is_color_editor or color_marked else "Numeric"
         controls.add(NumericControlFlow(
             storage[0], storage[1], storage[2], args[0].strip(),
             bounds[0].strip(), bounds[1].strip(), semantic,
-            "ColorPicker" if is_color_editor else "Components", False))
+            "ColorPicker" if is_color_editor else "Components", False,
+            control_source_widget(control_kind),
+            control_clamps_numeric_input(control_kind, flags_expression),
+            control_is_hdr_color(control_kind, flags_expression)))
 
     for control in SHIFT_UNIFIED_CONTROL_RE.finditer(masked):
         close = find_matching_paren(body, control.end() - 1)
@@ -1626,6 +1753,9 @@ def _summarize_numeric_control_flow(
         if len(args) < 4:
             continue
         component_count = int(control.group(1))
+        control_kind = f"ShiftSliderFloat{component_count}"
+        flags_expression = resolve_control_flags_expression(
+            body, control.start(), control_kind, args)
         storage = _parameter_storage_flow(
             args[1], parameters, body, control.start(),
             component_count, constants)
@@ -1633,7 +1763,9 @@ def _summarize_numeric_control_flow(
             continue
         controls.add(NumericControlFlow(
             storage[0], storage[1], storage[2], args[0].strip(),
-            args[2].strip(), args[3].strip(), "Numeric", "Components", True))
+            args[2].strip(), args[3].strip(), "Numeric", "Components", True,
+            control_source_widget(control_kind),
+            control_clamps_numeric_input(control_kind, flags_expression), False))
 
     for _, called_name, args in _source_function_calls(body, definitions):
         called = _resolve_source_function(definitions, called_name, len(args))
@@ -1658,12 +1790,14 @@ def _summarize_numeric_control_flow(
                 substitute_helper_parameters(flow.item_label, arguments),
                 substitute_helper_parameters(flow.minimum_expression, arguments),
                 substitute_helper_parameters(flow.maximum_expression, arguments),
-                flow.semantic, flow.presentation, flow.supports_unified_edit))
+                flow.semantic, flow.presentation, flow.supports_unified_edit,
+                flow.source_widget, flow.clamp_numeric_input, flow.hdr_color))
 
     cache[identity] = tuple(sorted(controls, key=lambda value: (
         value.storage_parameter, value.storage_offset, value.component_count,
         value.item_label, value.minimum_expression, value.maximum_expression,
-        value.semantic)))
+        value.semantic, value.source_widget, value.clamp_numeric_input,
+        value.hdr_color)))
     return cache[identity]
 
 
@@ -1839,12 +1973,14 @@ def _infer_indirect_numeric_bindings(
                                 layouts.add((slice_start, flow.component_count, -1, item_label,
                                              flow.semantic, flow.presentation,
                                              flow.supports_unified_edit,
-                                             minimum, maximum))
+                                             minimum, maximum, flow.source_widget,
+                                             flow.clamp_numeric_input, flow.hdr_color))
                         elif scalar[1] + 1 == slice_start:
                             layouts.add((scalar[1], flow.component_count + 1, scalar[1], "",
                                          flow.semantic, flow.presentation,
                                          flow.supports_unified_edit,
-                                         minimum, maximum))
+                                         minimum, maximum, flow.source_widget,
+                                         flow.clamp_numeric_input, flow.hdr_color))
 
                 if len(layouts) > 1:
                     raise ValueError(f"ambiguous indirect numeric layout {name}")
@@ -1852,13 +1988,15 @@ def _infer_indirect_numeric_bindings(
                     continue
                 (aggregate_start, aggregate_count, aggregate_all, virtual_label,
                  semantic, presentation, supports_unified_edit,
-                 minimum, maximum) = next(iter(layouts))
+                 minimum, maximum, source_widget, clamp_numeric_input,
+                 hdr_color) = next(iter(layouts))
                 binding_candidates.setdefault(name, set()).add((
                     record_type, record_parameter, pointer_field, aggregate_start,
                     aggregate_count, semantic, presentation, aggregate_all,
                     next(iter(push_fields)), next(iter(label_fields)), minimum,
                     maximum, virtual_label, vector_components,
-                    supports_unified_edit))
+                    supports_unified_edit, source_widget,
+                    clamp_numeric_input, hdr_color))
 
     bindings = {}
     for name, candidates in binding_candidates.items():
@@ -1984,7 +2122,8 @@ def collect_indirect_numeric_projections(paths: list[Path]):
             (record_type, _, pointer_field, aggregate_start, aggregate_count,
              aggregate_semantic, aggregate_presentation, aggregate_all,
              push_id_field, display_label_field, minimum_field, maximum_field,
-             virtual_item_label, components, supports_unified_edit) = binding
+             virtual_item_label, components, supports_unified_edit,
+             source_widget, clamp_numeric_input, hdr_color) = binding
             provider_type, rows = providers[provider_name]
             if provider_type != record_type:
                 continue
@@ -2019,7 +2158,8 @@ def collect_indirect_numeric_projections(paths: list[Path]):
                     f"Projected{aggregate_semantic}{aggregate_count}")
                 label_metadata = (
                     label.split("##", 1)[0], category_label, label_key, category_key,
-                    control_kind, minimum, maximum, 1.0)
+                    control_kind, minimum, maximum, 1.0, source_widget,
+                    clamp_numeric_input, hdr_color)
                 label_identity = (owner, (field, components[aggregate_start]))
                 collected_labels.setdefault(label_identity, set()).add(label_metadata)
                 if supports_unified_edit:
@@ -2131,8 +2271,7 @@ def strip_integral_casts(expression: str) -> str:
             value = cast.group(1).strip()
             continue
         c_cast = re.fullmatch(
-            r"\(\s*(?:signed|unsigned|int|long|short|size_t|std::size_t|"
-            r"u?int(?:8|16|32|64)_t|std::u?int(?:8|16|32|64)_t)\s*\)\s*(.+)", value)
+            rf"\(\s*{INTEGRAL_TYPE_PATTERN}\s*\)\s*(.+)", value)
         if c_cast:
             value = c_cast.group(1).strip()
             continue
@@ -2550,21 +2689,26 @@ def collect_member_selector_contexts(paths: list[Path], ui_choices):
     }
 
 
-def _collect_record_label_providers(text: str, prefix: str):
-    masked = mask_cpp_source(text)
+def _collect_record_schemas(text: str, masked: str | None = None):
+    masked = masked if masked is not None else mask_cpp_source(text)
     schemas = {}
     for declaration in re.finditer(STRUCT_DECL_RE, masked):
         body_end = find_matching_brace(text, declaration.end() - 1)
         if body_end < 0:
             continue
-        fields = [
+        fields = tuple(
             parsed[0]
-            for statement in mask_cpp_source(
-                text[declaration.end():body_end]).split(";")
+            for statement in masked[declaration.end():body_end].split(";")
             if (parsed := parse_field_statement(statement))
-        ]
+        )
         if fields:
-            schemas[declaration.group(1)] = tuple(fields)
+            schemas[declaration.group(1)] = fields
+    return schemas
+
+
+def _collect_record_label_providers(text: str, prefix: str):
+    masked = mask_cpp_source(text)
+    schemas = _collect_record_schemas(text, masked)
 
     candidates = {}
     provider_pattern = re.compile(
@@ -2919,7 +3063,8 @@ def collect_mapped_combo_helpers(paths: list[Path]) -> dict[str, MappedComboHelp
 
 
 
-def collect_source_functions(paths: list[Path]) -> tuple[SourceFunction, ...]:
+def collect_source_functions(
+        paths: list[Path], include_qualifiers: bool = False) -> tuple[SourceFunction, ...]:
     functions = []
     pattern = re.compile(
         r"\b(?:static\s+)?(?:inline\s+)?(?:bool|void)\s+"
@@ -2928,6 +3073,16 @@ def collect_source_functions(paths: list[Path]) -> tuple[SourceFunction, ...]:
     for path in paths:
         text = read_text(path)
         masked = mask_cpp_source(text)
+        namespace_ranges = []
+        if include_qualifiers:
+            for namespace in re.finditer(
+                    r"\bnamespace\s+(?:inline\s+)?"
+                    r"([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\{", masked):
+                namespace_end = find_matching_brace(text, namespace.end() - 1)
+                if namespace_end >= 0:
+                    namespace_ranges.append((
+                        namespace.start(), namespace_end,
+                        tuple(namespace.group(1).split("::"))))
         prefix_match = re.search(r'#define\s+I18N_KEY_PREFIX\s+"([^"]*)"', text)
         prefix = prefix_match.group(1) if prefix_match else ""
         for match in pattern.finditer(masked):
@@ -2939,9 +3094,17 @@ def collect_source_functions(paths: list[Path]) -> tuple[SourceFunction, ...]:
                 for type_name, name, default in parse_helper_parameters(
                     text[match.start("parameters"):match.end("parameters")]))
             body = text[match.end():body_end]
+            namespace_path = tuple(
+                segment
+                for start, end, namespace in namespace_ranges
+                if start < match.start() < end
+                for segment in namespace)
+            owner_parts = tuple((match.group("owner") or "").split("::"))
+            owner_parts = tuple(part for part in owner_parts if part)
             functions.append(SourceFunction(
                 match.group("name"),
-                (match.group("owner") or "").split("::")[-1],
+                owner_parts[-1] if owner_parts else "",
+                (*namespace_path, *owner_parts),
                 parameters,
                 body,
                 mask_cpp_source(body),
@@ -2966,18 +3129,92 @@ def _localized_text(expression: str, prefix: str) -> LocalizedText | None:
     return LocalizedText(literal.split("##", 1)[0]) if literal else None
 
 
+def resolve_record_array_radio_choices(
+        body: str, position: int, label_expression: str,
+        value_expression: str, prefix: str,
+        constants: dict[str, float]) -> tuple[tuple[int, str, str], ...]:
+    label_member = re.fullmatch(
+        r"\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*", label_expression)
+    value_member = re.fullmatch(
+        r"\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*",
+        strip_integral_casts(value_expression))
+    if (not label_member or not value_member or
+            label_member.group(1) != value_member.group(1)):
+        return ()
+
+    masked = mask_cpp_source(body)
+    ranges = {}
+    for loop in re.finditer(
+            r"\bfor\s*\(\s*[^;:()]*?\b([A-Za-z_]\w*)\s*:\s*"
+            r"([A-Za-z_]\w*)\s*\)", masked[:position]):
+        block_start = masked.find("{", loop.end())
+        block_end = find_matching_brace(body, block_start) if block_start >= 0 else -1
+        if block_start < position < block_end:
+            ranges[loop.group(1)] = loop.group(2)
+
+    array_name = label_member.group(1)
+    seen = set()
+    while array_name in ranges and array_name not in seen:
+        seen.add(array_name)
+        array_name = ranges[array_name]
+    if not seen:
+        return ()
+
+    schemas = _collect_record_schemas(body, masked)
+
+    declarations = list(re.finditer(
+        rf"\b(?:(?:static|constexpr|const)\s+)*"
+        rf"([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s+{re.escape(array_name)}\s*"
+        r"(?:\[[^\]]*\]\s*)+\s*=\s*\{", masked))
+    if len(declarations) != 1:
+        return ()
+    declaration = declarations[0]
+    fields = schemas.get(declaration.group(1).split("::")[-1])
+    if (not fields or label_member.group(2) not in fields or
+            value_member.group(2) not in fields):
+        return ()
+
+    array_end = find_matching_brace(body, declaration.end() - 1)
+    if array_end < 0:
+        return ()
+    initializer = body[declaration.end():array_end]
+    masked_initializer = mask_cpp_source(initializer)
+    label_index = fields.index(label_member.group(2))
+    value_index = fields.index(value_member.group(2))
+    choices = []
+    for record in re.finditer(r"\{", masked_initializer):
+        record_end = find_matching_brace(initializer, record.start())
+        values = split_args(initializer[record.end():record_end]) if record_end >= 0 else []
+        if len(values) != len(fields):
+            continue
+        value = resolve_numeric_expression(values[value_index], constants)
+        label = _localized_text(values[label_index], prefix)
+        if value is not None and value.is_integer() and label:
+            choices.append((int(value), label.text, label.key))
+    return tuple(choices)
+
+
 def _project_standard_controls(
         paths: list[Path], provider_paths: list[Path]) -> dict[
             tuple[str, tuple[str, ...]], ControlBinding]:
-    functions = collect_source_functions(paths)
+    functions = collect_source_functions(paths, include_qualifiers=True)
     definitions: dict[str, list[SourceFunction]] = {}
     for function in functions:
         definitions.setdefault(function.name, []).append(function)
-    unique_functions = {
-        name: candidates[0]
-        for name, candidates in definitions.items()
-        if len(candidates) == 1
-    }
+    def resolve_callee(name: str, qualifier: tuple[str, ...], argument_count: int):
+        candidates = [
+            function for function in definitions.get(name, ())
+            if sum(parameter.default is None for parameter in function.parameters) <=
+            argument_count <= len(function.parameters)
+        ]
+        if qualifier:
+            qualified = [
+                function for function in candidates
+                if len(function.qualifier) >= len(qualifier) and
+                function.qualifier[-len(qualifier):] == qualifier
+            ]
+            candidates = qualified
+        return candidates[0] if len(candidates) == 1 else None
     text_by_path = {path: read_text(path) for path in paths}
     aliases_by_path = {
         path: collect_type_aliases(text) for path, text in text_by_path.items()
@@ -2995,30 +3232,33 @@ def _project_standard_controls(
     providers = collect_string_array_providers(provider_paths)
     call_sites = {}
     for function in functions:
-        by_name = {}
+        calls = []
         for invocation in re.finditer(
-                r"(?<!ImGui::)(?<!Util::)\b([A-Za-z_]\w*)\s*\(",
+                r"\b((?:[A-Za-z_]\w*::)*)([A-Za-z_]\w*)\s*\(",
                 function.masked_body):
-            name = invocation.group(1)
-            if name not in unique_functions:
+            qualifier = tuple(
+                part for part in invocation.group(1).split("::") if part)
+            name = invocation.group(2)
+            if qualifier in {("ImGui",), ("Util",)} or name not in definitions:
                 continue
             close = find_matching_paren(function.body, invocation.end() - 1)
             if close >= 0:
-                by_name.setdefault(name, []).append((
-                    invocation.start(),
-                    split_args(function.body[invocation.end():close])))
-        call_sites[function] = by_name
+                arguments = split_args(function.body[invocation.end():close])
+                callee = resolve_callee(
+                    name, qualifier, len(arguments))
+                if callee:
+                    calls.append((callee, invocation.start(), arguments))
+        call_sites[function] = calls
     draw_control_functions = {
         function for function in functions
         if function.name == "DrawSettings" and function.owner
     }
-    for _ in range(len(unique_functions)):
+    for _ in range(len(functions)):
         discovered = {
             callee
             for caller in draw_control_functions
-            for helper_name in call_sites[caller]
-            if (callee := unique_functions.get(helper_name)) and
-            callee.owner == caller.owner
+            for callee, _, _ in call_sites[caller]
+            if callee.owner == caller.owner
         }
         if discovered <= draw_control_functions:
             break
@@ -3059,6 +3299,9 @@ def _project_standard_controls(
             label = _localized_text(args[0], function.prefix)
             if value is not None and value.is_integer() and label:
                 return ((int(value), label.text, label.key),)
+            return resolve_record_array_radio_choices(
+                function.body, position, args[0], args[2], function.prefix,
+                constants_by_path[function.source])
         return ()
 
     def make_binding(function, position, owner, setting_path, kind, args,
@@ -3077,15 +3320,21 @@ def _project_standard_controls(
         if category is None:
             text, key = _control_category(function.body, position, function.prefix)
             category = LocalizedText(text, key)
+        flags_expression = resolve_control_flags_expression(
+            function.body, position, kind, list(args))
         numeric = get_control_numeric_metadata(
-            kind, list(args), constants_by_path[function.source])
+            kind, list(args), constants_by_path[function.source], flags_expression)
         minimum, maximum, scale = numeric or (None, None, 1.0)
         return ControlBinding(
             owner, setting_path, label, category, kind,
             minimum, maximum, scale, "Identity", tuple(choices),
-            supports_unified_edit=control_supports_unified_edit(kind))
+            supports_unified_edit=control_supports_unified_edit(kind),
+            source_widget=control_source_widget(kind),
+            clamp_numeric_input=control_clamps_numeric_input(
+                kind, flags_expression),
+            hdr_color=control_is_hdr_color(kind, flags_expression))
 
-    templates: dict[str, list[ControlTemplate]] = {}
+    templates: dict[SourceFunction, list[ControlTemplate]] = {}
     for function in functions:
         parameter_tuples = tuple(
             (parameter.type_name, parameter.name, parameter.default)
@@ -3171,7 +3420,7 @@ def _project_standard_controls(
             if parameter_origin:
                 category_text, category_key = _control_category(
                     function.body, control.start(), function.prefix)
-                templates.setdefault(function.name, []).append(ControlTemplate(
+                templates.setdefault(function, []).append(ControlTemplate(
                     parameter_origin[0], parameter_origin[1],
                     args[0] if args else "", LocalizedText(category_text, category_key),
                     kind, tuple(args), choices))
@@ -3212,7 +3461,7 @@ def _project_standard_controls(
             if parameter_origin:
                 category_text, category_key = _control_category(
                     function.body, control.start(), function.prefix)
-                templates.setdefault(function.name, []).append(ControlTemplate(
+                templates.setdefault(function, []).append(ControlTemplate(
                     parameter_origin[0], parameter_origin[1],
                     args[0] if args else "", LocalizedText(category_text, category_key),
                     kind, tuple(args)))
@@ -3269,7 +3518,10 @@ def _project_standard_controls(
                     base.owner, base.path, base.label, base.category,
                     f"ProjectedNumeric{summary.component_count}",
                     base.minimum, base.maximum, base.display_scale,
-                    component_labels=tuple(LocalizedText(*label) for label in labels))
+                    component_labels=tuple(LocalizedText(*label) for label in labels),
+                    source_widget=base.source_widget,
+                    clamp_numeric_input=base.clamp_numeric_input,
+                    hdr_color=base.hdr_color)
                 add_metadata((function.owner, setting_path), binding, 3)
 
     mapped_helpers = collect_mapped_combo_helpers(paths)
@@ -3302,46 +3554,44 @@ def _project_standard_controls(
                 add_metadata((function.owner, setting_path), binding, 3)
                 add_choices((function.owner, setting_path), summary.choices)
 
-    for _ in range(len(unique_functions)):
+    for _ in range(len(functions)):
         changed = False
-        for wrapper_name, wrapper in unique_functions.items():
+        for wrapper in functions:
             wrapper_parameters = tuple(
                 (parameter.type_name, parameter.name, parameter.default)
                 for parameter in wrapper.parameters)
-            for helper_name, invocations in call_sites[wrapper].items():
-                summaries = templates.get(helper_name, ())
-                callee = unique_functions.get(helper_name)
-                if not callee or helper_name == wrapper_name:
+            for callee, position, call_args in call_sites[wrapper]:
+                summaries = templates.get(callee, ())
+                if callee == wrapper:
                     continue
-                for position, call_args in invocations:
-                    substitutions = {
-                        parameter.name: (call_args[index] if index < len(call_args) else parameter.default)
-                        for index, parameter in enumerate(callee.parameters)
-                        if index < len(call_args) or parameter.default is not None
-                    }
-                    for summary in tuple(summaries):
-                        storage_expression = substitutions.get(
-                            callee.parameters[summary.storage_parameter].name)
-                        if storage_expression is None:
-                            continue
-                        origin = find_parameter_origin(storage_expression, wrapper_parameters)
-                        if not origin:
-                            continue
-                        category_text, category_key = _control_category(
-                            wrapper.body, position, wrapper.prefix)
-                        projected = ControlTemplate(
-                            origin[0], (*origin[1], *summary.storage_path),
-                            substitute_helper_parameters(summary.label_expression, substitutions),
-                            LocalizedText(category_text, category_key)
-                            if category_text else summary.category,
-                            summary.control_kind,
-                            tuple(substitute_helper_parameters(argument, substitutions)
-                                  for argument in summary.control_args),
-                            summary.choices)
-                        existing = templates.setdefault(wrapper_name, [])
-                        if projected not in existing:
-                            existing.append(projected)
-                            changed = True
+                substitutions = {
+                    parameter.name: (call_args[index] if index < len(call_args) else parameter.default)
+                    for index, parameter in enumerate(callee.parameters)
+                    if index < len(call_args) or parameter.default is not None
+                }
+                for summary in tuple(summaries):
+                    storage_expression = substitutions.get(
+                        callee.parameters[summary.storage_parameter].name)
+                    if storage_expression is None:
+                        continue
+                    origin = find_parameter_origin(storage_expression, wrapper_parameters)
+                    if not origin:
+                        continue
+                    category_text, category_key = _control_category(
+                        wrapper.body, position, wrapper.prefix)
+                    projected = ControlTemplate(
+                        origin[0], (*origin[1], *summary.storage_path),
+                        substitute_helper_parameters(summary.label_expression, substitutions),
+                        LocalizedText(category_text, category_key)
+                        if category_text else summary.category,
+                        summary.control_kind,
+                        tuple(substitute_helper_parameters(argument, substitutions)
+                              for argument in summary.control_args),
+                        summary.choices)
+                    existing = templates.setdefault(wrapper, [])
+                    if projected not in existing:
+                        existing.append(projected)
+                        changed = True
         if not changed:
             break
 
@@ -3350,52 +3600,50 @@ def _project_standard_controls(
             (parameter.type_name, parameter.name, parameter.default)
             for parameter in caller.parameters)
         caller_aliases = collect_local_setting_aliases(caller.body)
-        for helper_name, invocations in call_sites[caller].items():
-            summaries = templates.get(helper_name, ())
-            callee = unique_functions[helper_name]
-            for position, call_args in invocations:
-                substitutions = {
-                    parameter.name: (call_args[index] if index < len(call_args) else parameter.default)
-                    for index, parameter in enumerate(callee.parameters)
-                    if index < len(call_args) or parameter.default is not None
-                }
-                for summary in summaries:
-                    if summary.storage_parameter >= len(call_args):
-                        continue
-                    storage = call_args[summary.storage_parameter]
-                    owner = ""
-                    path = None
-                    if caller.name == "DrawSettings" and caller.owner:
-                        pseudo = [""] * (control_storage_argument_index(summary.control_kind) + 1)
-                        pseudo[-1] = storage
-                        path = extract_control_setting_path(
-                            summary.control_kind, pseudo, caller_aliases)
-                        owner = caller.owner
-                    if not path:
-                        origin = find_parameter_origin(storage, caller_parameters)
-                        if origin is not None:
-                            owner = resolve_type_alias(
-                                caller.parameters[origin[0]].type_name,
-                                aliases_by_path[caller.source])
-                            path = (*origin[1], *summary.storage_path)
-                    elif summary.storage_path:
-                        path = (*path, *summary.storage_path)
-                    if not owner or not path:
-                        continue
-                    resolved_args = tuple(
-                        substitute_helper_parameters(argument, substitutions)
-                        for argument in summary.control_args)
-                    label_expression = substitute_helper_parameters(
-                        summary.label_expression, substitutions)
-                    category_text, category_key = _control_category(
-                        caller.body, position, caller.prefix)
-                    category = (LocalizedText(category_text, category_key)
-                                if category_text else summary.category)
-                    identity = owner, tuple(path)
-                    add_metadata(identity, make_binding(
-                        caller, position, *identity, summary.control_kind,
-                        resolved_args, label_expression, category, summary.choices), 1)
-                    add_choices(identity, summary.choices)
+        for callee, position, call_args in call_sites[caller]:
+            summaries = templates.get(callee, ())
+            substitutions = {
+                parameter.name: (call_args[index] if index < len(call_args) else parameter.default)
+                for index, parameter in enumerate(callee.parameters)
+                if index < len(call_args) or parameter.default is not None
+            }
+            for summary in summaries:
+                if summary.storage_parameter >= len(call_args):
+                    continue
+                storage = call_args[summary.storage_parameter]
+                owner = ""
+                path = None
+                if caller.name == "DrawSettings" and caller.owner:
+                    pseudo = [""] * (control_storage_argument_index(summary.control_kind) + 1)
+                    pseudo[-1] = storage
+                    path = extract_control_setting_path(
+                        summary.control_kind, pseudo, caller_aliases)
+                    owner = caller.owner
+                if not path:
+                    origin = find_parameter_origin(storage, caller_parameters)
+                    if origin is not None:
+                        owner = resolve_type_alias(
+                            caller.parameters[origin[0]].type_name,
+                            aliases_by_path[caller.source])
+                        path = (*origin[1], *summary.storage_path)
+                elif summary.storage_path:
+                    path = (*path, *summary.storage_path)
+                if not owner or not path:
+                    continue
+                resolved_args = tuple(
+                    substitute_helper_parameters(argument, substitutions)
+                    for argument in summary.control_args)
+                label_expression = substitute_helper_parameters(
+                    summary.label_expression, substitutions)
+                category_text, category_key = _control_category(
+                    caller.body, position, caller.prefix)
+                category = (LocalizedText(category_text, category_key)
+                            if category_text else summary.category)
+                identity = owner, tuple(path)
+                add_metadata(identity, make_binding(
+                    caller, position, *identity, summary.control_kind,
+                    resolved_args, label_expression, category, summary.choices), 1)
+                add_choices(identity, summary.choices)
 
     for function in functions:
         if function.name != "DrawSettings" or not function.owner:
@@ -3430,11 +3678,13 @@ def _project_standard_controls(
                 binding.control_kind, binding.minimum, binding.maximum,
                 binding.display_scale, binding.numeric_transform, choices,
                 binding.component_labels, binding.aggregate_all,
-                binding.virtual_control, binding.supports_unified_edit)
+                binding.virtual_control, binding.supports_unified_edit,
+                binding.source_widget, binding.clamp_numeric_input,
+                binding.hdr_color)
         else:
             bindings[identity] = ControlBinding(
                 identity[0], identity[1], None, LocalizedText(), "Combo",
-                choices=choices)
+                choices=choices, source_widget="Combo")
     return bindings
 
 
@@ -3496,15 +3746,20 @@ def _collect_reversible_numeric_bindings(
             label = _localized_text(args[0], function.prefix) if args else None
             if not label:
                 continue
+            flags_expression = resolve_control_flags_expression(
+                function.body, control.start(), control_kind, args)
             numeric = get_control_numeric_metadata(
-                control_kind, args, constants_by_path.get(function.source, {}))
+                control_kind, args, constants_by_path.get(function.source, {}),
+                flags_expression)
             minimum, maximum, display_scale = numeric or (None, None, 1.0)
             if proven[0][1] == "Log2" and minimum is not None and maximum is not None:
                 minimum, maximum = 2.0 ** minimum, 2.0 ** maximum
             function_summaries.add((
                 component_count, proven[0][0], label, control_kind,
                 minimum, maximum, display_scale, proven[0][1],
-                supports_unified_edit))
+                supports_unified_edit, control_source_widget(control_kind),
+                control_clamps_numeric_input(control_kind, flags_expression),
+                control_is_hdr_color(control_kind, flags_expression)))
         if function_summaries:
             summaries[name] = tuple(function_summaries)
 
@@ -3530,7 +3785,8 @@ def _collect_reversible_numeric_bindings(
                 if len(matching) != 1:
                     continue
                 (_, parameter_index, label, control_kind, minimum, maximum,
-                 display_scale, transform, supports_unified_edit) = matching[0]
+                 display_scale, transform, supports_unified_edit, source_widget,
+                 clamp_numeric_input, hdr_color) = matching[0]
                 if parameter_index >= len(args):
                     continue
                 path = extract_control_setting_path(
@@ -3544,7 +3800,10 @@ def _collect_reversible_numeric_bindings(
                     function.owner, path, label,
                     LocalizedText(category, category_key), control_kind,
                     minimum, maximum, display_scale, transform,
-                    supports_unified_edit=supports_unified_edit)
+                    supports_unified_edit=supports_unified_edit,
+                    source_widget=source_widget,
+                    clamp_numeric_input=clamp_numeric_input,
+                    hdr_color=hdr_color)
                 previous = collected.get(identity)
                 if identity in conflicts:
                     continue
@@ -3601,7 +3860,10 @@ def collect_control_index(
             component_labels=component_labels,
             aggregate_all=bool(aggregate_all.get(identity)),
             virtual_control=virtual_controls.get((identity[0], base_path)),
-            supports_unified_edit=bool(unified_edit.get(identity)))
+            supports_unified_edit=bool(unified_edit.get(identity)),
+            source_widget=metadata[8],
+            clamp_numeric_input=metadata[9],
+            hdr_color=metadata[10])
     merge_unique(bindings, indirect_bindings)
 
     functions = collect_source_functions(paths)
@@ -3797,7 +4059,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                 LocalizedText(override_label, override_label_key),
                 LocalizedText(override_category, override_category_key),
                 override_kind, override_minimum, override_maximum,
-                override_scale)
+                override_scale, source_widget=control_source_widget(override_kind))
             binding_match = BindingMatch(binding, 0)
 
         choices = binding.choices if binding else ()
@@ -3912,6 +4174,11 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             "displayScale": display_scale,
             "numericTransform": numeric_transform,
             "hasNumericBounds": minimum is not None and maximum is not None,
+            "sourceWidget": binding.source_widget if binding else "",
+            "clampNumericInput": bool(
+                binding and binding.clamp_numeric_input and
+                minimum is not None and maximum is not None),
+            "hdrColor": bool(binding and binding.hdr_color),
             "invertedDisplay": control_kind == "InvertedCheckbox",
             "choices": choices,
             "access": access,
@@ -4290,11 +4557,14 @@ namespace SceneSettingsCatalog
 \t\tValueType valueType;
 \t\tSettingFlag flags;
 \t\tEditorSemantic editorSemantic;
+\t\tstd::string_view sourceWidget;
 \t\tdouble minimumValue;
 \t\tdouble maximumValue;
 \t\tdouble displayScale;
 \t\tNumericTransform numericTransform;
 \t\tbool hasNumericBounds;
+\t\tbool clampNumericInput;
+\t\tbool hdrColor;
 \t\tbool invertedDisplay;
 \t\tconst ChoiceMetadata* choices;
 \t\tstd::size_t choiceCount;
@@ -4357,9 +4627,13 @@ namespace SceneSettingsCatalog
             f'{e["aggregateStart"]}, {e["aggregateCount"]}, '
             f'SceneSettingsCatalog::ValueType::{e["type"]}, {e["flags"]}, '
             f'SceneSettingsCatalog::EditorSemantic::{e["editorSemantic"]}, '
+            f'"{cpp_escape(e.get("sourceWidget", ""))}", '
             f'{e["minimum"]!r}, {e["maximum"]!r}, {e["displayScale"]!r}, '
             f'SceneSettingsCatalog::NumericTransform::{e.get("numericTransform", "Identity")}, '
-            f'{str(e["hasNumericBounds"]).lower()}, {str(e["invertedDisplay"]).lower()}, '
+            f'{str(e["hasNumericBounds"]).lower()}, '
+            f'{str(e.get("clampNumericInput", False)).lower()}, '
+            f'{str(e.get("hdrColor", False)).lower()}, '
+            f'{str(e["invertedDisplay"]).lower()}, '
             f'{choice_pointer}, {choice_count} }},'
         )
     joined_rows = "\n".join(rows)
@@ -4578,6 +4852,17 @@ def validate_entries(
             errors.append(f"numeric transform without numeric editor for {identity}")
         if transform == "Log2" and entry["hasNumericBounds"] and entry["minimum"] <= 0.0:
             errors.append(f"invalid Log2 storage bounds for {identity}")
+        if entry.get("clampNumericInput", False) and not entry["hasNumericBounds"]:
+            errors.append(f"clamped numeric input without bounds for {identity}")
+        if entry.get("hdrColor", False):
+            if (entry.get("sourceWidget") not in {"ColorEdit3", "ColorEdit4"} or
+                    entry["hasNumericBounds"] or entry.get("clampNumericInput", False)):
+                errors.append(f"invalid HDR color metadata for {identity}")
+        if (entry.get("sourceWidget") in {"ColorEdit3", "ColorEdit4"} and
+                not entry.get("hdrColor", False) and
+                (not entry["hasNumericBounds"] or entry["minimum"] != 0.0 or
+                 entry["maximum"] != 1.0 or not entry.get("clampNumericInput", False))):
+            errors.append(f"invalid standard color metadata for {identity}")
         if semantic == "Choice":
             values = [choice[0] for choice in entry["choices"]]
             if len(values) < 2 or len(values) != len(set(values)):

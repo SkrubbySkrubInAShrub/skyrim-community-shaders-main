@@ -188,8 +188,7 @@ namespace
 			for (const auto& target : snapshot.locationTargets) {
 				ImGui::TableNextRow();
 				ImGui::TableNextColumn();
-				ImGui::TextUnformatted(
-					target.type == SceneSettingsManager::LocationTargetType::Cell ? "Cell" : "Location");
+				ImGui::TextUnformatted(SceneSettingsManager::GetLocationTargetTypeName(target.type));
 				for (const auto* column : { &target.name, &target.formKey, &target.cocCode }) {
 					ImGui::TableNextColumn();
 					ImGui::TextUnformatted(column->empty() ? kMissingValue : column->c_str());

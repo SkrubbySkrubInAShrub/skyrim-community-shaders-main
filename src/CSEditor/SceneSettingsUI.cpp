@@ -298,9 +298,14 @@ namespace
 
 	const char* GetLocationTypeLabel(SceneSettingsManager::LocationTargetType type)
 	{
-		return type == SceneSettingsManager::LocationTargetType::Cell ?
-		           T(TKEY("location_type_cell"), "Cell") :
-		           T(TKEY("location_type_location"), "Location");
+		switch (type) {
+		case SceneSettingsManager::LocationTargetType::Category:
+			return T(TKEY("location_type_category"), "Category");
+		case SceneSettingsManager::LocationTargetType::Cell:
+			return T(TKEY("location_type_cell"), "Cell");
+		default:
+			return T(TKEY("location_type_location"), "Location");
+		}
 	}
 
 	/// Opens a location's editor window, focusing the existing one rather than opening a second.

@@ -1,31 +1,41 @@
 #pragma once
 
-#include <array>
 #include <string_view>
 #include <vector>
 
 namespace SceneSettingsPolicy
 {
-	using SettingBlacklistPath = std::vector<std::string_view>;
+	/// Catalog address prefix: feature short name, then setting path segments, then the key.
+	/// A bare feature name covers everything the feature exposes.
+	using SettingPolicyPath = std::vector<std::string_view>;
 
 	/// Settings that must never be scene-overridden, matched by catalog address prefix.
-	inline const std::vector<SettingBlacklistPath> kSettingBlacklist = {};
-
-	inline constexpr std::array<std::string_view, 5> kLocationFeatureWhitelist = {
-		"ExponentialHeightFog",
-		"ImageBasedLighting",
-		"ScreenSpaceGI",
-		"ScreenSpaceShadows",
-		"SubsurfaceScattering",
+	inline const std::vector<SettingPolicyPath> kSettingBlacklist = {
+		{ "ExponentialHeightFog", "volumetricGridPixelSize" },
+		{ "ExponentialHeightFog", "volumetricGridSizeZ" },
+		{ "ExponentialHeightFog", "volumetricShadowBias" },
+		{ "ExponentialHeightFog", "volumetricDepthDistributionScale" },
+		{ "ExponentialHeightFog", "volumetricHistoryWeight" },
+		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
+		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
+		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
 	};
 
-	inline constexpr std::array<std::string_view, 7> kTimeOfDayFeatureWhitelist = {
-		"CloudShadows",
-		"ExponentialHeightFog",
-		"GrassLighting",
-		"ImageBasedLighting",
-		"Skylighting",
-		"SubsurfaceScattering",
-		"WetnessEffects",
+	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {
+		{ "ExponentialHeightFog" },
+		{ "ImageBasedLighting" },
+		{ "ScreenSpaceGI" },
+		{ "ScreenSpaceShadows" },
+		{ "SubsurfaceScattering" },
+	};
+
+	inline const std::vector<SettingPolicyPath> kTimeOfDayFeatureWhitelist = {
+		{ "CloudShadows" },
+		{ "ExponentialHeightFog" },
+		{ "GrassLighting" },
+		{ "ImageBasedLighting" },
+		{ "Skylighting" },
+		{ "SubsurfaceScattering" },
+		{ "WetnessEffects" },
 	};
 }
