@@ -7,6 +7,7 @@
 #include "EditorWindow.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "WeatherUtils.h"
 
@@ -60,6 +61,25 @@ namespace
 	/// Off by default: the bar only takes over time, and pauses the game, once the user asks for it.
 	bool timeOfDayEnabled = false;
 
+	/// The Scene Manager panel edits interior and time of day, and only one of them resolves at a
+	/// time, so its toggles follow the player instead of being matched to the cell by hand.
+	bool interiorEnabled = false;
+	bool lastInterior = false;
+
+	/// Re-arms both toggles on a cell transition and reports whether the player is indoors.
+	bool SyncSceneToggles()
+	{
+		const bool interior = Util::IsInterior();
+		if (interior != lastInterior) {
+			lastInterior = interior;
+			interiorEnabled = interior;
+			// Time of day never resolves indoors, so the interior takes the panel over outright.
+			if (interior)
+				timeOfDayEnabled = false;
+		}
+		return interior;
+	}
+
 	/// A selectable feature, with its label built once because the list is fixed after boot.
 	struct FeatureListEntry
 	{
@@ -106,11 +126,14 @@ namespace
 	}
 
 	/// Draws the period bar with its enable toggle and returns the period the panel below it should edit.
-	int DrawPeriodBar()
+	/// The interior toggle belongs to the Scene Manager panel, which is the only place both layers meet.
+	int DrawPeriodBar(bool withInteriorToggle = false)
 	{
+		const bool interior = withInteriorToggle && SyncSceneToggles();
+		const bool editing = timeOfDayEnabled && !interior;
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
 
-		if (timeOfDayEnabled) {
+		if (editing) {
 			const float hour = SceneSettingsManager::GetCurrentGameHour();
 			if (std::abs(hour - periodBar.lastHour) > kScrubEpsilon) {
 				periodBar.selected = -1;
@@ -123,14 +146,14 @@ namespace
 
 		const int active = periodBar.selected < 0 ? live : periodBar.selected;
 
-		ImGui::BeginDisabled(!timeOfDayEnabled);
+		ImGui::BeginDisabled(!editing);
 		ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, kSegmentTextAlign);
 		if (ImGui::BeginTable("PeriodBar", kPeriodCount, kPeriodBarFlags)) {
 			for (int period = 0; period < kPeriodCount; ++period) {
 				ImGui::TableNextColumn();
 				// Colour the live period only when the selection has left it, so the bar always
 				// shows where time actually is.
-				const bool marksLive = timeOfDayEnabled && period == live && period != active;
+				const bool marksLive = editing && period == live && period != active;
 				if (marksLive)
 					ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.CurrentHotkey);
 				if (ImGui::Selectable(GetPeriodLabel(period), period == active))
@@ -143,15 +166,28 @@ namespace
 		ImGui::PopStyleVar();
 		ImGui::EndDisabled();
 
+		if (withInteriorToggle) {
+			ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled);
+			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
+				"Edit the settings applied indoors. Follows the cell the player is in."));
+			ImGui::SameLine();
+		}
+
+		ImGui::BeginDisabled(interior);
 		// Enabling re-couples the bar to live time, so it always lands on the current period.
 		if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &timeOfDayEnabled) && timeOfDayEnabled) {
 			periodBar.selected = -1;
 			periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
 		}
-		Util::AddTooltip(T(TKEY("time_of_day_toggle_tooltip"),
-			"Edit one period at a time. Game time pauses while a Scene Manager panel is open."));
+		ImGui::EndDisabled();
+		const char* toggleTooltip = interior ?
+		                                T(TKEY("time_of_day_toggle_interior_tooltip"), "Time of day does not resolve indoors. Edit the interior instead.") :
+		                                T(TKEY("time_of_day_toggle_tooltip"), "Edit one period at a time. Game time pauses while a Scene Manager panel is open.");
+		Util::AddTooltip(toggleTooltip, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
-		if (!timeOfDayEnabled)
+		if (interior)
+			Util::Text::Disabled("%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
+		else if (!timeOfDayEnabled)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_off"), "Time of day editing is off. The bar does not follow game time."));
 		else if (periodBar.selected < 0)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to edit it on its own."));
@@ -198,10 +234,10 @@ namespace
 	}
 
 	/// Period bar plus the shared notice, so both panels stay visually identical while empty.
-	void DrawPanel(const char* intro, bool withPeriodBar = true)
+	void DrawPanel(const char* intro, bool withPeriodBar = true, bool withInteriorToggle = false)
 	{
 		if (withPeriodBar) {
-			DrawPeriodBar();
+			DrawPeriodBar(withInteriorToggle);
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
@@ -403,7 +439,7 @@ void SceneSettingsUI::DrawSceneManagerPanel()
 {
 	panelVisible = true;
 
-	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior and time of day."));
+	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior and time of day."), true, true);
 }
 
 void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
