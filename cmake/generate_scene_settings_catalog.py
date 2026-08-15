@@ -4646,6 +4646,8 @@ namespace SceneSettingsCatalog
 
 \tstd::span<const SettingMetadata> GetSettings();
 \tstd::span<const VirtualAggregateControlMetadata> GetVirtualAggregateControls();
+\t/// ImGui entry points SceneWidgetInterceptor must detour to cover every scene-controllable control.
+\tstd::span<const std::string_view> GetRequiredInterceptorEntryPoints();
 \tconst SettingMetadata* FindSetting(std::string_view featureShortName, std::string_view settingPath, std::string_view settingKey);
 \tusing ControlResolver = const SettingMetadata* (*)(Feature*, const void*);
 \tbool RegisterControlResolver(std::string_view featureShortName, ControlResolver resolver);
@@ -4756,6 +4758,8 @@ namespace SceneSettingsCatalog
 \t\tSceneSettingsCatalog::RegisterControlResolver(
 \t\t\t"{cpp_escape(feature_short)}", {resolver_name});''')
     joined_feature_blocks = "\n".join(feature_blocks)
+    entry_points = required_entry_points(entries)
+    entry_point_rows = "\n".join(f'\t\t"{point}",' for point in entry_points)
     source.write_text(f"""#include "SceneSettingsCatalog.generated.h"
 
 #include <algorithm>
@@ -4770,6 +4774,9 @@ namespace
 \tstatic constexpr std::array<SceneSettingsCatalog::VirtualAggregateControlMetadata, {len(virtual_controls)}> kVirtualAggregateControls = {{{{
 {virtual_rows}
 \t}}}};
+\tstatic constexpr std::array<std::string_view, {len(entry_points)}> kRequiredInterceptorEntryPoints = {{{{
+{entry_point_rows}
+\t}}}};
 }}
 
 namespace SceneSettingsCatalog
@@ -4782,6 +4789,11 @@ namespace SceneSettingsCatalog
 \tstd::span<const VirtualAggregateControlMetadata> GetVirtualAggregateControls()
 \t{{
 \t\treturn kVirtualAggregateControls;
+\t}}
+
+\tstd::span<const std::string_view> GetRequiredInterceptorEntryPoints()
+\t{{
+\t\treturn kRequiredInterceptorEntryPoints;
 \t}}
 
 \tconst SettingMetadata* FindSetting(std::string_view featureShortName, std::string_view settingPath, std::string_view settingKey)
@@ -4862,6 +4874,33 @@ namespace SceneSettingsCatalog
 """, encoding="utf-8")
 
 
+# Logical editor kind -> the ImGui entry points that can produce it. `sourceWidget` names an
+# editor kind, not an ImGui function: Combo also covers 3-arg RadioButton groups, and
+# PercentageSlider is Util::PercentageSlider over SliderFloat.
+SOURCE_WIDGET_ENTRY_POINTS = {
+    "Checkbox": ("Checkbox",),
+    "ColorEdit3": ("ColorEdit3",),
+    "ColorEdit4": ("ColorEdit4",),
+    "Combo": ("Combo", "RadioButton"),
+    "PercentageSlider": ("SliderFloat",),
+    "SliderAngle": ("SliderAngle",),
+    "SliderFloat": ("SliderFloat",),
+    "SliderFloat2": ("SliderFloat2",),
+    "SliderInt": ("SliderInt",),
+    "SliderScalar": ("SliderScalar",),
+}
+
+
+def required_entry_points(entries: list[dict[str, object]]) -> list[str]:
+    """Sorted union of ImGui entry points the interceptor must cover for these entries."""
+    points: set[str] = set()
+    for entry in entries:
+        if "SceneSettingsCatalog::SettingFlag::SceneControllable" not in entry.get("flags", ""):
+            continue
+        points.update(SOURCE_WIDGET_ENTRY_POINTS.get(entry.get("sourceWidget", ""), ()))
+    return sorted(points)
+
+
 def validate_entries(
         entries: list[dict[str, object]],
         min_entries: int,
@@ -4901,6 +4940,13 @@ def validate_entries(
         semantic = entry["editorSemantic"]
         if allowed == (semantic == "None"):
             errors.append(f"invalid editor for {identity}")
+        if allowed:
+            widget = entry.get("sourceWidget", "")
+            if widget not in SOURCE_WIDGET_ENTRY_POINTS:
+                errors.append(
+                    f"scene-controllable {identity} uses widget '{widget}' with no interceptor "
+                    f"entry point; add it to SOURCE_WIDGET_ENTRY_POINTS and to "
+                    f"SceneWidgetInterceptor's detour table")
         transform = entry.get("numericTransform", "Identity")
         if transform not in {"Identity", "Log2"}:
             errors.append(f"invalid numeric transform for {identity}")

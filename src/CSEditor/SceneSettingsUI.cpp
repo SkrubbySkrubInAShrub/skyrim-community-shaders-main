@@ -7,6 +7,7 @@
 #include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "Menu.h"
+#include "SceneFeatureReplica.h"
 #include "SceneSettingsManager.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -251,24 +252,36 @@ namespace
 		return selected;
 	}
 
-	/// Period bar plus the shared notice, so both panels stay visually identical while empty.
-	void DrawPanel(const char* intro, bool withPeriodBar = true, bool withInteriorToggle = false)
+	/// Period bar, intro, and the replicated feature UI bound to one scene context.
+	void DrawPanel(const char* intro, const std::string& selectedFeature,
+		const SceneSettingsManager::SceneContextId& baseContext, bool withPeriodBar = true,
+		bool withInteriorToggle = false)
 	{
+		auto context = baseContext;
 		if (withPeriodBar) {
-			DrawPeriodBar(withInteriorToggle);
+			const auto period = static_cast<TimeOfDayPeriod>(DrawPeriodBar(withInteriorToggle));
+			// The interior layer is aperiodic, so the bar informs the view but not the context.
+			if (context.type != SceneSettingsManager::SceneContextType::Interior)
+				context.period = period;
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 		}
 		ImGui::TextWrapped("%s", intro);
 		ImGui::Spacing();
-		Util::Text::WrappedDisabled("%s",
-			T(TKEY("scene_manager_unavailable"), "Scene settings authoring is not yet available."));
+
+		if (selectedFeature.empty())
+			return;
+		const bool perPeriod = timeOfDayEnabled &&
+		                       context.type != SceneSettingsManager::SceneContextType::Interior &&
+		                       context.type != SceneSettingsManager::SceneContextType::Location;
+		SceneFeatureReplica::Draw(selectedFeature, context, perPeriod);
 	}
 
 	/// Feature column beside the panel body, split by a divider the user can drag.
 	/// Transitionable features are the per-period set; the rest also covers interior and location.
-	void DrawFeatureLayout(std::string& selectedFeature, bool transitionableOnly, const char* intro, bool withPeriodBar)
+	void DrawFeatureLayout(std::string& selectedFeature, bool transitionableOnly, const char* intro,
+		bool withPeriodBar, const SceneSettingsManager::SceneContextId& baseContext)
 	{
 		if (!ImGui::BeginTable("SceneFeatureLayout", 2, kFeatureLayoutFlags))
 			return;
@@ -290,7 +303,7 @@ namespace
 
 		ImGui::TableSetColumnIndex(1);
 		if (ImGui::BeginChild("##SceneFeatureBody"))
-			DrawPanel(intro, withPeriodBar);
+			DrawPanel(intro, selectedFeature, baseContext, withPeriodBar);
 		ImGui::EndChild();
 
 		ImGui::EndTable();
@@ -492,19 +505,38 @@ namespace
 	}
 }
 
-void SceneSettingsUI::DrawWeatherSceneTab()
+void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 {
 	panelVisible = true;
 
+	if (weatherId == 0) {
+		Util::Text::WrappedDisabled("%s",
+			T(TKEY("scene_weather_unresolved"), "This weather has no form, so it cannot hold overrides."));
+		return;
+	}
+
+	const SceneSettingsManager::SceneContextId context{
+		.type = SceneSettingsManager::SceneContextType::Weather,
+		.weatherId = weatherId,
+	};
 	DrawFeatureLayout(weatherSelectedFeature, true,
-		T(TKEY("scene_manager_weather_intro"), "Settings overridden while this weather is active."), true);
+		T(TKEY("scene_manager_weather_intro"), "Settings overridden while this weather is active."), true, context);
 }
 
 void SceneSettingsUI::DrawSceneManagerPanel()
 {
 	panelVisible = true;
 
-	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior and time of day."), true, true);
+	// The interior layer takes the panel over indoors, and it has no periods.
+	const bool interior = SyncSceneToggles() && interiorEnabled;
+	const SceneSettingsManager::SceneContextId context{
+		.type = interior ? SceneSettingsManager::SceneContextType::Interior :
+						   SceneSettingsManager::SceneContextType::TimeOfDay,
+		.period = interior ? TimeOfDayPeriod::Count : TimeOfDayPeriod::Dawn,
+	};
+
+	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior and time of day."),
+		panelSelectedFeature, context, true, true);
 }
 
 void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
@@ -560,9 +592,16 @@ void SceneSettingsUI::DrawLocationWindows()
 		const bool visible = Util::BeginWithRoundedClose(title.c_str(), &window.open, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
 		UpdateWidgetTypeSize(kLocationWidgetType);
 		if (visible) {
+			const SceneSettingsManager::SceneContextId context{
+				.type = SceneSettingsManager::SceneContextType::Location,
+				.period = TimeOfDayPeriod::Count,
+				.locationType = window.target.type,
+				.locationFormKey = window.target.formKey,
+			};
 			// Location settings are flat, so the window carries no period bar and no time selection.
 			DrawFeatureLayout(window.selectedFeature, false,
-				T(TKEY("scene_manager_location_intro"), "Settings overridden while the player is in this location."), false);
+				T(TKEY("scene_manager_location_intro"), "Settings overridden while the player is in this location."),
+				false, context);
 		}
 		ImGui::End();
 	}

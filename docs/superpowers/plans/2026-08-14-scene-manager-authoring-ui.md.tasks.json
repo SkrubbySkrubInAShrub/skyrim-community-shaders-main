@@ -7,7 +7,7 @@
       "activeForm": "Adding the interceptor coverage gate to the catalog generator",
       "description": "**Goal:** The build fails if a feature introduces a widget kind the interceptor does not cover, and the generated header tells the interceptor which ImGui entry points it must install.\n\n**Files:**\n- Modify: `cmake/generate_scene_settings_catalog.py` (`validate_entries` at :4865, `write_catalog`, `main` at :4947)\n- Modify: `tests/test_scene_settings_catalog_generator.py`\n\n**Acceptance Criteria:**\n- [ ] `SOURCE_WIDGET_ENTRY_POINTS` maps all 10 observed `sourceWidget` values to the ImGui entry-point names that can produce them.\n- [ ] `validate_entries` raises `ValueError` naming the offending widget when a scene-controllable entry has a `sourceWidget` absent from the map.\n- [ ] The generated header declares `std::span<const std::string_view> GetRequiredInterceptorEntryPoints()`, whose contents are the sorted union of entry points required by the scene-controllable entries actually present.\n- [ ] `PercentageSlider` maps to `SliderFloat` (it is a `Util::` helper over it), so it does not trip the gate.\n- [ ] Regenerating the catalog against the current tree still emits 299 scene-controllable entries and passes the existing floors.\n\n**Verify:** `python -m pytest tests/test_scene_settings_catalog_generator.py -v` -> all pass, including the two new tests.\n\nFull steps with code: `docs/superpowers/plans/2026-08-14-scene-manager-authoring-ui.md` Task 1.\n\n```json:metadata\n{\"files\": [\"cmake/generate_scene_settings_catalog.py\", \"tests/test_scene_settings_catalog_generator.py\"], \"verifyCommand\": \"python -m pytest tests/test_scene_settings_catalog_generator.py -v\", \"acceptanceCriteria\": [\"SOURCE_WIDGET_ENTRY_POINTS covers all 10 observed sourceWidget values\", \"validate_entries raises ValueError naming an unmapped widget\", \"generated header declares GetRequiredInterceptorEntryPoints\", \"PercentageSlider maps to SliderFloat\", \"regeneration still emits 299 scene-controllable entries\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-2",
@@ -15,7 +15,7 @@
       "activeForm": "Adding the SceneContextId-keyed entry facade",
       "description": "**Goal:** One set of entry operations keyed on `SceneContextId`, so the interceptor never branches on interior vs time-of-day vs weather vs location.\n\n**Files:**\n- Modify: `src/SceneSettingsManager.h:526-543` (add `SceneContextType::Interior`), and add the facade declarations after the copy block at `:603`\n- Modify: `src/SceneSettingsManager.cpp` (add definitions next to `GetCopyContextEntries` at `:5272`)\n\n**Acceptance Criteria:**\n- [ ] `SceneContextType::Interior` exists and `IsValidSceneContext` accepts it with `period == Count`, `weatherId == 0`, empty `locationFormKey`.\n- [ ] `GetCopyContextEntries` returns `&GetEntries(SceneType::InteriorOnly)` for an Interior context; the copy switches all have `default:` arms, so nothing else needs touching.\n- [ ] `FindContextUserEntry` returns the index of the `EntrySource::User` entry matching feature/path/key and the context's period, or `nullopt`.\n- [ ] `FindContextUserEntryPerPeriod` returns a `kPeriodCount`-sized array for TimeOfDay and Weather contexts, and an array with only index 0 populated for Interior and Location.\n- [ ] `AddContextSetting` captures the feature's current base value, matching the underlying `AddSetting`/`AddWeatherSetting`/`AddLocationSetting` behaviour, and returns the new entry's index.\n- [ ] `UpdateContextEntryValues`, `RemoveContextSetting`, `TogglePauseContextEntry`, `RevertContextEntryToDefault` all dispatch to the existing per-type implementations.\n- [ ] Every facade call on an invalid context is a no-op (`IsValidSceneContext` guard) and never throws.\n\n**Verify:** `python -m pytest tests/test_scene_settings_policy.py -v` -> passes, and the plugin compiles: `./BuildDevFast.bat`.\n\nFull steps with code: `docs/superpowers/plans/2026-08-14-scene-manager-authoring-ui.md` Task 2.\n\n```json:metadata\n{\"files\": [\"src/SceneSettingsManager.h\", \"src/SceneSettingsManager.cpp\"], \"verifyCommand\": \"python -m pytest tests/test_scene_settings_policy.py -v\", \"acceptanceCriteria\": [\"SceneContextType::Interior added and validated\", \"GetCopyContextEntries handles Interior\", \"FindContextUserEntry matches feature/path/key/period\", \"FindContextUserEntryPerPeriod fills index 0 for aperiodic contexts\", \"AddContextSetting returns the new index\", \"all facade calls no-op on invalid contexts\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-3",
@@ -23,7 +23,7 @@
       "activeForm": "Installing the ImGui detours and arm scope",
       "description": "**Goal:** Eleven ImGui entry points are detoured once at startup; while unarmed each detour tail-calls the original, and an arm scope carries the feature and `SceneContextId` for the replica being drawn.\n\n**Files:**\n- Create: `src/CSEditor/SceneWidgetInterceptor.h`\n- Create: `src/CSEditor/SceneWidgetInterceptor.cpp`\n- Modify: `src/Menu.cpp:645` (`Menu::Init`)\n\n**Acceptance Criteria:**\n- [ ] `Install()` is idempotent, runs on the render thread from `Menu::Init()` before the first ImGui frame, and returns `false` with a populated `GetInstallError()` if any `DetourAttach` fails.\n- [ ] On partial failure every already-attached detour is rolled back inside the same transaction, so the process is never left half-hooked.\n- [ ] `Install()` asserts that every name in `SceneSettingsCatalog::GetRequiredInterceptorEntryPoints()` appears in the local detour table.\n- [ ] With no `Scope` alive, every detour is a direct call to the original with unchanged arguments.\n- [ ] `Scope` is non-copyable, nests safely (inner scope replaces the context and restores it on destruction), and is exception-safe.\n- [ ] Both used `ImGui::Combo` overloads (array form and `\\0`-separated form) and the 3-arg `ImGui::RadioButton` are detoured; the ambiguity is resolved with explicit `static_cast` of the function pointers.\n\n**Verify:** `./BuildDevFast.bat` compiles, then launch the game and confirm `CommunityShaders.log` contains `SceneWidgetInterceptor: installed 11 entry points` and the normal feature menu renders and edits exactly as before.\n\nFull steps with code: `docs/superpowers/plans/2026-08-14-scene-manager-authoring-ui.md` Task 3.\n\n```json:metadata\n{\"files\": [\"src/CSEditor/SceneWidgetInterceptor.h\", \"src/CSEditor/SceneWidgetInterceptor.cpp\", \"src/Menu.cpp\"], \"verifyCommand\": \"./BuildDevFast.bat\", \"acceptanceCriteria\": [\"Install is idempotent and rolls back on partial failure\", \"Install asserts coverage against GetRequiredInterceptorEntryPoints\", \"unarmed detours tail-call the original unchanged\", \"Scope is non-copyable and nests safely\", \"both Combo overloads and 3-arg RadioButton are detoured with explicit casts\", \"log line confirms 11 entry points installed\"], \"modelTier\": \"frontier\"}\n```",
       "blockedBy": [],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-4",
@@ -34,7 +34,7 @@
         "task-2",
         "task-3"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-5",
@@ -44,7 +44,7 @@
       "blockedBy": [
         "task-4"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-6",
@@ -55,7 +55,7 @@
         "task-3",
         "task-4"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-7",
@@ -65,7 +65,7 @@
       "blockedBy": [
         "task-6"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-8",
@@ -75,7 +75,7 @@
       "blockedBy": [
         "task-6"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-9",
@@ -85,7 +85,7 @@
       "blockedBy": [
         "task-6"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-10",
@@ -97,7 +97,7 @@
         "task-8",
         "task-9"
       ],
-      "status": "pending"
+      "status": "completed"
     },
     {
       "id": "task-11",
@@ -118,5 +118,6 @@
       ],
       "status": "pending"
     }
-  ]
+  ],
+  "lastUpdated": "2026-08-15T09:57:54.019992+00:00"
 }

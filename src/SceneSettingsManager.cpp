@@ -5226,6 +5226,9 @@ bool SceneSettingsManager::IsValidSceneContext(const SceneContextId& context)
 {
 	const auto periodIndex = static_cast<int>(context.period);
 	switch (context.type) {
+	case SceneContextType::Interior:
+		return context.period == TimeOfDayPeriod::Count && context.weatherId == 0 &&
+		       context.locationFormKey.empty() && context.locationType == LocationTargetType::Location;
 	case SceneContextType::TimeOfDay:
 		return periodIndex >= 0 && periodIndex < kPeriodCount && context.weatherId == 0 &&
 		       context.locationFormKey.empty() && context.locationType == LocationTargetType::Location;
@@ -5245,6 +5248,8 @@ bool SceneSettingsManager::IsSameSceneContext(const SceneContextId& lhs, const S
 	if (lhs.type != rhs.type)
 		return false;
 	switch (lhs.type) {
+	case SceneContextType::Interior:
+		return true;
 	case SceneContextType::TimeOfDay:
 		return lhs.period == rhs.period;
 	case SceneContextType::Weather:
@@ -5275,6 +5280,8 @@ const std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::Get
 	if (!IsValidSceneContext(context))
 		return nullptr;
 	switch (context.type) {
+	case SceneContextType::Interior:
+		return &GetEntries(SceneType::InteriorOnly);
 	case SceneContextType::TimeOfDay:
 		return &GetEntries(SceneType::TimeOfDay);
 	case SceneContextType::Weather:
@@ -5289,6 +5296,189 @@ const std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::Get
 		return nullptr;
 	default:
 		return nullptr;
+	}
+}
+
+namespace
+{
+	/// The stored SceneType behind a non-weather, non-location context.
+	SceneSettingsManager::SceneType ContextSceneType(SceneSettingsManager::SceneContextType type)
+	{
+		return type == SceneSettingsManager::SceneContextType::Interior ?
+		           SceneSettingsManager::SceneType::InteriorOnly :
+		           SceneSettingsManager::SceneType::TimeOfDay;
+	}
+}
+
+std::vector<std::string> SceneSettingsManager::SplitSettingPath(std::string_view catalogPath)
+{
+	return SplitCatalogPath(catalogPath);
+}
+
+std::span<const SceneSettingsManager::SettingEntry> SceneSettingsManager::GetContextEntries(
+	const SceneContextId& context) const
+{
+	const auto* contextEntries = GetCopyContextEntries(context);
+	return contextEntries ? std::span{ *contextEntries } : std::span<const SettingEntry>{};
+}
+
+std::optional<size_t> SceneSettingsManager::FindContextUserEntry(const SceneContextId& context,
+	const std::string& featureShortName, const std::vector<std::string>& settingPath,
+	const std::string& settingKey) const
+{
+	if (!IsValidSceneContext(context))
+		return std::nullopt;
+	const auto contextEntries = GetContextEntries(context);
+	for (size_t index = 0; index < contextEntries.size(); ++index) {
+		const auto& entry = contextEntries[index];
+		if (entry.source == EntrySource::User && entry.featureShortName == featureShortName &&
+			entry.settingPath == settingPath && entry.settingKey == settingKey &&
+			entry.period == context.period)
+			return index;
+	}
+	return std::nullopt;
+}
+
+std::array<std::optional<size_t>, SceneSettingsManager::kPeriodCount>
+SceneSettingsManager::FindContextUserEntryPerPeriod(const SceneContextId& context,
+	const std::string& featureShortName, const std::vector<std::string>& settingPath,
+	const std::string& settingKey) const
+{
+	std::array<std::optional<size_t>, kPeriodCount> indices{};
+	if (!IsValidSceneContext(context))
+		return indices;
+
+	const bool periodic = context.type == SceneContextType::TimeOfDay ||
+	                      context.type == SceneContextType::Weather;
+	const auto contextEntries = GetContextEntries(context);
+	for (size_t index = 0; index < contextEntries.size(); ++index) {
+		const auto& entry = contextEntries[index];
+		if (entry.source != EntrySource::User || entry.featureShortName != featureShortName ||
+			entry.settingPath != settingPath || entry.settingKey != settingKey)
+			continue;
+		const auto slot = periodic ? static_cast<int>(entry.period) : 0;
+		if (slot >= 0 && slot < kPeriodCount)
+			indices[static_cast<size_t>(slot)] = index;
+	}
+	return indices;
+}
+
+std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContextId& context,
+	const std::string& featureShortName, const std::vector<std::string>& settingPath,
+	const std::string& settingKey, bool deferSave)
+{
+	if (!IsValidSceneContext(context))
+		return std::nullopt;
+
+	bool added = false;
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay: {
+		// AddSetting takes the value; the others capture it themselves.
+		const auto value = GetFeatureSettingValue(featureShortName, settingPath, settingKey);
+		if (value.is_null())
+			return std::nullopt;
+		added = AddSetting(ContextSceneType(context.type), featureShortName, settingPath, settingKey,
+			value, context.period, deferSave);
+		break;
+	}
+	case SceneContextType::Weather:
+		added = AddWeatherSetting(context.weatherId, featureShortName, settingPath, settingKey,
+			context.period, deferSave);
+		break;
+	case SceneContextType::Location: {
+		const auto& config = GetLocationConfig(context.locationType, context.locationFormKey);
+		added = AddLocationSetting(context.locationType, context.locationFormKey, config.name,
+			config.cocCode, featureShortName, settingPath, settingKey, deferSave);
+		break;
+	}
+	default:
+		return std::nullopt;
+	}
+
+	if (!added)
+		return std::nullopt;
+	return FindContextUserEntry(context, featureShortName, settingPath, settingKey);
+}
+
+void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& context,
+	std::span<const EntryValueUpdate> updates, bool deferSave)
+{
+	if (!IsValidSceneContext(context))
+		return;
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay:
+		UpdateEntryValues(ContextSceneType(context.type), updates, deferSave);
+		break;
+	case SceneContextType::Weather:
+		UpdateWeatherEntryValues(context.weatherId, updates, deferSave);
+		break;
+	case SceneContextType::Location:
+		UpdateLocationEntryValues(context.locationType, context.locationFormKey, updates, deferSave);
+		break;
+	default:
+		break;
+	}
+}
+
+void SceneSettingsManager::RemoveContextSetting(const SceneContextId& context, size_t index)
+{
+	if (!IsValidSceneContext(context))
+		return;
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay:
+		RemoveSetting(ContextSceneType(context.type), index);
+		break;
+	case SceneContextType::Weather:
+		RemoveWeatherSetting(context.weatherId, index);
+		break;
+	case SceneContextType::Location:
+		RemoveLocationSetting(context.locationType, context.locationFormKey, index);
+		break;
+	default:
+		break;
+	}
+}
+
+void SceneSettingsManager::TogglePauseContextEntry(const SceneContextId& context, size_t index)
+{
+	if (!IsValidSceneContext(context))
+		return;
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay:
+		TogglePauseEntry(ContextSceneType(context.type), index);
+		break;
+	case SceneContextType::Weather:
+		TogglePauseWeatherEntry(context.weatherId, index);
+		break;
+	case SceneContextType::Location:
+		TogglePauseLocationEntry(context.locationType, context.locationFormKey, index);
+		break;
+	default:
+		break;
+	}
+}
+
+void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& context, size_t index)
+{
+	if (!IsValidSceneContext(context))
+		return;
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay:
+		RevertEntryToDefault(ContextSceneType(context.type), index);
+		break;
+	case SceneContextType::Weather:
+		RevertWeatherEntryToDefault(context.weatherId, index);
+		break;
+	case SceneContextType::Location:
+		RevertLocationEntryToDefault(context.locationType, context.locationFormKey, index);
+		break;
+	default:
+		break;
 	}
 }
 
@@ -5552,6 +5742,9 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 		destinationEntries = destinationNeedsMaterialization ? &emptyDestinationEntries : &configIt->second.entries;
 		break;
 	}
+	default:
+		// Interior is not a copy destination in v1; refuse cleanly instead of returning stats for a copy that never ran.
+		return {};
 	}
 	if (!destinationEntries)
 		return result;
@@ -5728,6 +5921,9 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 		break;
 	case SceneContextType::Location:
 		PrepareLocationUserSettingsMutation(destination.locationType, destination.locationFormKey, true);
+		break;
+	default:
+		// Interior never reaches here; the destination-materialization switch above returns before any copy occurs.
 		break;
 	}
 	CommitSceneSettingChanges();

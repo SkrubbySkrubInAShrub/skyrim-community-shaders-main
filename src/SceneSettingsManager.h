@@ -522,9 +522,10 @@ public:
 		auto operator<=>(const SettingIdentity&) const = default;
 	};
 
-	/// Kind of scene context participating in a copy operation.
+	/// Kind of scene context participating in a copy or authoring operation.
 	enum class SceneContextType : std::uint8_t
 	{
+		Interior,
 		TimeOfDay,
 		Weather,
 		Location,
@@ -601,6 +602,39 @@ public:
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy, CopyScope scope = CopyScope::EntireContext,
 		const std::optional<SettingIdentity>& setting = std::nullopt);
+
+	// --- Context-Keyed Entry Access (Scene Manager authoring UI) ---
+
+	/// Split a catalog setting path into the segment vector every entry API takes.
+	static std::vector<std::string> SplitSettingPath(std::string_view catalogPath);
+
+	/// Index of the user entry for one setting in one context, or nullopt when none exists.
+	std::optional<size_t> FindContextUserEntry(const SceneContextId& context,
+		const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey) const;
+
+	/// Per-period user entry indices for one setting. Contexts without periods populate index 0 only.
+	std::array<std::optional<size_t>, kPeriodCount> FindContextUserEntryPerPeriod(
+		const SceneContextId& context, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
+
+	/// Add a user entry capturing the feature's current base value. Returns its index.
+	std::optional<size_t> AddContextSetting(const SceneContextId& context,
+		const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey, bool deferSave = false);
+
+	/// Validate and update a group of context entries before applying any of them.
+	void UpdateContextEntryValues(const SceneContextId& context,
+		std::span<const EntryValueUpdate> updates, bool deferSave = false);
+	/// Remove one entry from a context.
+	void RemoveContextSetting(const SceneContextId& context, size_t index);
+	/// Toggle the paused state of one context entry.
+	void TogglePauseContextEntry(const SceneContextId& context, size_t index);
+	/// Revert one context entry's value to its originalValue.
+	void RevertContextEntryToDefault(const SceneContextId& context, size_t index);
+
+	/// Entries stored for one context, unfiltered by period. Empty when the context holds none.
+	std::span<const SettingEntry> GetContextEntries(const SceneContextId& context) const;
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();

@@ -1493,6 +1493,27 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             self.assertNotEqual(allowed, denied)
             self.assertEqual(allowed, entry["editorSemantic"] != "None")
 
+    def test_unmapped_source_widget_fails_validation(self):
+        entries = [{
+            "feature": "Foo", "path": "", "key": "Bar",
+            "flags": "SceneSettingsCatalog::SettingFlag::SceneControllable",
+            "editorSemantic": "Scalar", "sourceWidget": "KnobWidget",
+        }]
+        with self.assertRaises(ValueError) as caught:
+            GENERATOR.validate_entries(entries, 1, 1, 1)
+        self.assertIn("KnobWidget", str(caught.exception))
+
+    def test_percentage_slider_maps_onto_slider_float(self):
+        self.assertEqual(
+            GENERATOR.SOURCE_WIDGET_ENTRY_POINTS["PercentageSlider"], ("SliderFloat",))
+        entries = [{
+            "feature": "Foo", "path": "", "key": "Bar",
+            "flags": "SceneSettingsCatalog::SettingFlag::SceneControllable",
+            "editorSemantic": "Scalar", "sourceWidget": "PercentageSlider",
+        }]
+        GENERATOR.validate_entries(entries, 1, 1, 1)
+        self.assertEqual(GENERATOR.required_entry_points(entries), ["SliderFloat"])
+
 
 if __name__ == "__main__":
     unittest.main()

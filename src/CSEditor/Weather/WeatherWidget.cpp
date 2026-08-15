@@ -405,7 +405,7 @@ void WeatherWidget::DrawWidget()
 
 		if (ImGui::BeginTabItem(T(TKEY("scene_manager"), WeatherTab::kSceneManager), nullptr, sceneManagerFlags)) {
 			BeginScrollableContent("##SceneManagerScroll");
-			SceneSettingsUI::DrawWeatherSceneTab();
+			SceneSettingsUI::DrawWeatherSceneTab(weather ? weather->GetFormID() : 0);
 			EndScrollableContent();
 			ImGui::EndTabItem();
 		}
