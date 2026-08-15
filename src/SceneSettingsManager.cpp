@@ -52,6 +52,21 @@ namespace
 	}
 
 	SceneSettingsManager* sceneSettingsManagerSingleton = nullptr;
+
+	/// RAII CPU pass for the in-game Profiling UI; ends the pass on every early-return path.
+	struct ProfilerPassScope
+	{
+		explicit ProfilerPassScope(const std::string& name)
+		{
+			if (globals::profiler)
+				globals::profiler->BeginPass(name);
+		}
+		~ProfilerPassScope()
+		{
+			if (globals::profiler)
+				globals::profiler->EndPass();
+		}
+	};
 }
 
 SceneSettingsManager::SceneSettingsManager()
@@ -2286,7 +2301,7 @@ RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::Proces
 
 void SceneSettingsManager::Update()
 {
-	ZoneScopedN("SceneSettingsManager::Update");
+	ProfilerPassScope profilerPass("SceneSettingsManager::Update");
 	if (globals::state) {
 		const auto frame = globals::state->frameCount;
 		if (lastUpdateFrame == frame)
@@ -2454,7 +2469,6 @@ void SceneSettingsManager::ResumeSceneLayer()
 
 void SceneSettingsManager::ResolveAndApply(bool force)
 {
-	ZoneScopedN("SceneSettingsManager::ResolveAndApply");
 	if (resolverSuspended || sceneLayerSuspendDepth > 0)
 		return;
 	if (!locationDataLoaded)
@@ -2639,7 +2653,6 @@ void SceneSettingsManager::StartLocationTransitions(
 
 bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 {
-	ZoneScopedN("SceneSettingsManager::AdvanceLocationTransitions");
 	if (activeLocationTransitions.empty())
 		return false;
 	// A negative delta means the timer restarted, so it must not latch the tick off forever.
@@ -2847,7 +2860,6 @@ bool SceneSettingsManager::HasActiveSceneEntriesCached()
 SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSettings(
 	bool collectLocationTransitionDurations, bool interior)
 {
-	ZoneScopedN("SceneSettingsManager::BuildResolvedSettings");
 	// Reuse the map's nodes across frames; null marks a slot the current resolve did not fill.
 	auto& resolved = resolvedSettingsScratch;
 	for (auto& [_, value] : resolved)
@@ -2913,7 +2925,6 @@ SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSet
 
 void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resolved, bool forceRetry)
 {
-	ZoneScopedN("SceneSettingsManager::ApplyResolvedSettings");
 	struct PendingUpdate
 	{
 		const SettingAddress* address = nullptr;
@@ -3009,7 +3020,6 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 
 void SceneSettingsManager::RestoreAppliedSettings()
 {
-	ZoneScopedN("SceneSettingsManager::RestoreAppliedSettings");
 	ClearLocationTransitions();
 
 	struct PendingRestore

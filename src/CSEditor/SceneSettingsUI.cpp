@@ -143,7 +143,9 @@ namespace
 	/// The interior toggle belongs to the Scene Manager panel, which is the only place both layers meet.
 	int DrawPeriodBar(bool withInteriorToggle = false)
 	{
-		const bool interior = withInteriorToggle && SyncSceneToggles();
+		if (withInteriorToggle)
+			SyncSceneToggles();
+		const bool interior = withInteriorToggle && interiorEnabled;
 		const bool editing = timeOfDayEnabled && !interior;
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
 
@@ -186,7 +188,9 @@ namespace
 		ImGui::EndDisabled();
 
 		if (withInteriorToggle) {
-			ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled);
+			// Interior and time of day are mutually exclusive layers; only one resolves at a time.
+			if (ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled) && interiorEnabled)
+				timeOfDayEnabled = false;
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
 				"Edit the settings applied indoors. Follows the cell the player is in."));
 			ImGui::SameLine();
