@@ -214,7 +214,12 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 
 	ResolveComponents();
 	if (components.empty()) {
-		metadata = nullptr;
+		// A scene setting this context cannot hold, e.g. a non-transitionable one under time of day.
+		// Greyed rather than left live, because an edit here would rewrite the feature's base value
+		// from a panel that only promises overrides.
+		state = State::Unavailable;
+		ImGui::BeginDisabled();
+		disabledOpened = true;
 		return;
 	}
 
@@ -663,6 +668,9 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	if (state == State::Unbound)
 		return a_changed;
+	// The greyed control took no input, so it owns no gutter and reports nothing to commit.
+	if (state == State::Unavailable)
+		return false;
 
 	// Read the drag state before the menu or the gutter becomes the current item.
 	const bool dragging = ImGui::IsItemActive();

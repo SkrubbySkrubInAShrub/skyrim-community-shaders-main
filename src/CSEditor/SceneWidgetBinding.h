@@ -66,10 +66,11 @@ namespace SceneWidgetBinding
 	/// colouring can read it without reshaping the guard.
 	enum class State : std::uint8_t
 	{
-		Unbound,  // resolver miss: behaves exactly like the normal menu
-		Absent,   // scene-controllable, no entry yet
-		Active,   // entry exists and applies
-		Paused    // entry exists and is held back
+		Unbound,      // resolver miss: behaves exactly like the normal menu
+		Unavailable,  // scene-controllable, but not by this scene type: greyed, never bindable here
+		Absent,       // scene-controllable, no entry yet
+		Active,       // entry exists and applies
+		Paused        // entry exists and is held back
 	};
 
 	/// Wraps one intercepted widget call for the duration of that call.
