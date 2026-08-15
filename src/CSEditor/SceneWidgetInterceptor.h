@@ -24,6 +24,11 @@ namespace SceneWidgetInterceptor
 
 	bool IsInstalled();
 
+	/// True while a Scope is active, i.e. a feature's DrawSettings is being replicated for scene
+	/// authoring. Features can use this to hide non-setting UI (debug views, buffer viewers) that
+	/// has no scene-context meaning.
+	bool IsArmed();
+
 	/// Empty while healthy; otherwise names the entry point whose attach failed.
 	std::string_view GetInstallError();
 

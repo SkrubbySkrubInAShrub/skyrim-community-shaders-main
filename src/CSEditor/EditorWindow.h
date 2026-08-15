@@ -132,6 +132,9 @@ public:
 	/** @brief Draw the Objects browser window listing all editable form widgets. */
 	void ShowObjectsWindow();
 
+	/** @brief Draw a compact "Active: <weather>" line matching the indicator shown atop other object categories. */
+	void DrawActiveWeatherIndicator();
+
 	/** @brief Draw the game viewport preview window with render target display. */
 	void ShowViewportWindow();
 

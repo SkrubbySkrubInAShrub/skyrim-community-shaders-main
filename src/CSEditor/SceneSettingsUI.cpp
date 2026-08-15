@@ -527,6 +527,8 @@ void SceneSettingsUI::DrawSceneManagerPanel()
 {
 	panelVisible = true;
 
+	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
+
 	// The interior layer takes the panel over indoors, and it has no periods.
 	const bool interior = SyncSceneToggles() && interiorEnabled;
 	const SceneSettingsManager::SceneContextId context{
@@ -554,6 +556,8 @@ void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
 
 void SceneSettingsUI::DrawLocationBrowser()
 {
+	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
+
 	ImGui::TextWrapped("%s", T(TKEY("location_browser_intro"),
 		"Locations resolve last, so they win over interior, time of day, and weather. A cell wins over the locations that contain it."));
 	ImGui::Spacing();

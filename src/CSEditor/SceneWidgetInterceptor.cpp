@@ -284,3 +284,8 @@ const SceneWidgetInterceptor::Context* SceneWidgetInterceptor::GetArmedContext()
 {
 	return armed ? &armedContext : nullptr;
 }
+
+bool SceneWidgetInterceptor::IsArmed()
+{
+	return armed;
+}

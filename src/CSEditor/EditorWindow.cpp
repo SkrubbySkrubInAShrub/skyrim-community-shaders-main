@@ -213,6 +213,38 @@ std::string EditorWindow::ResolveEditorId(RE::TESForm* form, const WidgetVec& wi
 	return editorid ? editorid : std::format("0x{:08X}", form->GetFormID());
 }
 
+void EditorWindow::DrawActiveWeatherIndicator()
+{
+	auto* sky = globals::game::sky;
+	auto* weather = sky ? sky->currentWeather : nullptr;
+	if (!weather)
+		return;
+
+	const auto& theme = Menu::GetSingleton()->GetTheme();
+	const auto id = weather->GetFormID();
+
+	ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.RestartNeeded);
+	ImGui::Text("%s", T(TKEY("active"), "Active:"));
+	ImGui::PopStyleColor();
+	ImGui::SameLine();
+	ImGui::TextColored(theme.Palette.Text, "%s", ResolveEditorId(weather, weatherWidgets).c_str());
+	ImGui::SameLine();
+	ImGui::TextDisabled("(0x%08X)", id);
+	ImGui::SameLine();
+	if (ImGui::SmallButton(std::format("{}##active_weather_indicator", T(TKEY("open"), "Open")).c_str())) {
+		for (const auto& widget : weatherWidgets) {
+			if (widget->form && widget->form->GetFormID() == id) {
+				widget->SetOpen(true);
+				widget->RequestFocus();
+				break;
+			}
+		}
+	}
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+}
+
 void EditorWindow::ShowObjectsWindow()
 {
 	Util::BeginWithRoundedClose(T(TKEY("weather_lighting_browser"), "CS Editor Browser"), nullptr);

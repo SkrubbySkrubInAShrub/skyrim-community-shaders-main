@@ -3,6 +3,7 @@
 #include <DirectXTex.h>
 
 #include "../I18n/I18n.h"
+#include "CSEditor/SceneWidgetInterceptor.h"
 #include "Deferred.h"
 #include "State.h"
 #include "Util.h"
@@ -318,6 +319,11 @@ void ScreenSpaceGI::DrawSettings()
 			}
 		}
 	}
+
+	// The buffer viewer has no scene-context meaning, so hide it while a Scene Manager replica
+	// is borrowing this panel to author overrides.
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
 
 	///////////////////////////////
 	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
