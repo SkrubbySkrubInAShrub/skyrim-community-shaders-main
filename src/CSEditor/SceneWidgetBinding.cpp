@@ -23,9 +23,12 @@ namespace
 	using Kind = SceneWidgetBinding::Value::Kind;
 	using SettingMetadata = SceneSettingsCatalog::SettingMetadata;
 
-	/// Matches the location menu's delete icon sizing (SceneSettingsUI.cpp) so both remove
-	/// actions read as the same control.
-	constexpr float kRemoveIconScale = 0.85f;
+	/// Smaller than the location menu's delete icon (SceneSettingsUI.cpp): the gutter sits inline
+	/// with a checkbox rather than a table row, so the icon needs to read as the lighter action.
+	constexpr float kRemoveIconScale = 0.75f;
+
+	/// Keeps the gutter off the window's scrollbar/border instead of sitting flush against it.
+	constexpr float kGutterRightMargin = 8.0f;
 
 	constexpr int kPeriodCount = SceneSettingsManager::kPeriodCount;
 
@@ -543,10 +546,11 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	                               ImGui::CalcTextSize(T(TKEY("scene_override_remove"), "Remove")).x +
 	                                   style.FramePadding.x * 2.0f;
 	const float gutterWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
+	const auto margin = kGutterRightMargin * Util::GetUIScale();
 
 	// Anchors the checkbox/remove pair to the right edge of whatever space the control left behind.
-	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth)
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth);
+	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth + margin)
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth - margin);
 
 	if (mixedAcrossPeriods) {
 		const auto& mixedColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
