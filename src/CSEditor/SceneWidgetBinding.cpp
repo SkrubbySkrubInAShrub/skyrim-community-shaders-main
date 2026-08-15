@@ -196,7 +196,12 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 		context->feature, proxy ? proxy->member : value.data);
 	if (!metadata || !SceneSettingsManager::IsSceneSettingAllowed(
 						 metadata->featureShortName, metadata->settingPath, metadata->settingKey)) {
+		// Unresolved or barred by policy, so no scene will ever hold it. Greyed rather than left
+		// live, because an edit here would rewrite the feature's base value from a panel that only
+		// promises overrides.
+		state = State::Unbound;
 		metadata = nullptr;
+		OpenDisabled();
 		return;
 	}
 
@@ -215,11 +220,8 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	ResolveComponents();
 	if (components.empty()) {
 		// A scene setting this context cannot hold, e.g. a non-transitionable one under time of day.
-		// Greyed rather than left live, because an edit here would rewrite the feature's base value
-		// from a panel that only promises overrides.
 		state = State::Unavailable;
-		ImGui::BeginDisabled();
-		disabledOpened = true;
+		OpenDisabled();
 		return;
 	}
 
@@ -227,8 +229,7 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	if (state == State::Paused) {
 		// The greyed control shows what is stored, not what the scene is currently running.
 		StoreHoldingValue();
-		ImGui::BeginDisabled();
-		disabledOpened = true;
+		OpenDisabled();
 	}
 	if (mixedAcrossPeriods && value.kind == Kind::Bool) {
 		// Only Checkbox honours the flag; every other kind gets the tinted gutter instead.
@@ -531,7 +532,7 @@ void SceneWidgetBinding::Guard::Commit()
 		std::memcpy(value.data, preCall.bytes, valueSize);
 		if (!EnsureEntries(true)) {
 			// Nothing will hold the edit, so keeping it would silently rewrite the feature's base.
-			state = State::Unbound;
+			state = State::Unsupported;
 			return;
 		}
 		std::memcpy(value.data, edited.bytes, valueSize);
@@ -666,10 +667,10 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 		disabledOpened = false;
 	}
 
-	if (state == State::Unbound)
+	if (state == State::Unsupported)
 		return a_changed;
-	// The greyed control took no input, so it owns no gutter and reports nothing to commit.
-	if (state == State::Unavailable)
+	// Both were greyed, so neither took input: no gutter to own and nothing to commit.
+	if (state == State::Unbound || state == State::Unavailable)
 		return false;
 
 	// Read the drag state before the menu or the gutter becomes the current item.
@@ -687,14 +688,20 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	// Feature code queries the last item after the call, so the control must stay the current one.
 	const auto controlItem = ImGui::GetCurrentContext()->LastItemData;
-	if (state != State::Unbound && state != State::Absent && !dragging)
+	if (state != State::Unsupported && state != State::Absent && !dragging)
 		DrawContextMenu();
-	if (state != State::Unbound && (policy == GutterPolicy::Owner || ClaimGutter(value.data)))
+	if (state != State::Unsupported && (policy == GutterPolicy::Owner || ClaimGutter(value.data)))
 		DrawGutter();
 	ImGui::GetCurrentContext()->LastItemData = controlItem;
 
 	// A paused control must never report a change: nothing behind it moved.
 	return state == State::Paused ? false : a_changed;
+}
+
+void SceneWidgetBinding::Guard::OpenDisabled()
+{
+	ImGui::BeginDisabled();
+	disabledOpened = true;
 }
 
 #undef I18N_KEY_PREFIX

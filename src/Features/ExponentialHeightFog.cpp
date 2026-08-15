@@ -1,5 +1,6 @@
 #include "ExponentialHeightFog.h"
 
+#include "CSEditor/SceneWidgetInterceptor.h"
 #include "Deferred.h"
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
@@ -149,6 +150,11 @@ void ExponentialHeightFog::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("directional_scattering_intensity"), "Directional Scattering Intensity"), &settings.volumetricDirectionalScatteringIntensity, 0.0f, 10.0f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("sky_lighting_scattering_intensity"), "Sky Lighting Scattering Intensity"), &settings.volumetricSkyLightingIntensity, 0.0f, 10.0f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("local_light_scattering_intensity"), "Local Light Scattering Intensity"), &settings.volumetricLocalLightScatteringIntensity, 0.0f, 10.0f, "%.2f");
+		// The froxel grid tuning has no scene-context meaning, so hide it while a Scene Manager
+		// replica is borrowing this panel to author overrides.
+		if (SceneWidgetInterceptor::IsArmed())
+			return;
+
 		if (ImGui::TreeNode(T(TKEY("debug"), "Debug"))) {
 			uint32_t minGridPixelSize = 4;
 			uint32_t maxGridPixelSize = 64;

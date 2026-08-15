@@ -272,10 +272,9 @@ namespace
 			ImGui::Spacing();
 		}
 		ImGui::TextWrapped("%s", intro);
-		// A location holds anything its feature list offers, so only the narrower layers grey out.
-		if (context.type != SceneSettingsManager::SceneContextType::Location)
-			Util::Text::WrappedDisabled("%s", T(TKEY("scene_settings_greyed_note"),
-				"Greyed settings cannot be overridden by this kind of scene. A location override can hold them."));
+		// Greying covers both what no scene can hold and what only another scene type can.
+		Util::Text::WrappedDisabled("%s", T(TKEY("scene_settings_greyed_note"),
+			"Greyed settings cannot be overridden here. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
 		ImGui::Spacing();
 
 		if (selectedFeature.empty())

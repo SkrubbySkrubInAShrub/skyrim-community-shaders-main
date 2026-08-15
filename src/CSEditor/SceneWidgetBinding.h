@@ -66,7 +66,8 @@ namespace SceneWidgetBinding
 	/// colouring can read it without reshaping the guard.
 	enum class State : std::uint8_t
 	{
-		Unbound,      // resolver miss: behaves exactly like the normal menu
+		Unsupported,  // the interceptor cannot bind it: behaves exactly like the normal menu
+		Unbound,      // no scene can hold it: greyed for good, never bindable anywhere
 		Unavailable,  // scene-controllable, but not by this scene type: greyed, never bindable here
 		Absent,       // scene-controllable, no entry yet
 		Active,       // entry exists and applies
@@ -102,6 +103,9 @@ namespace SceneWidgetBinding
 		const SceneSettingsManager::SettingEntry* GetEntry() const;
 
 	private:
+		/// Greys the control for the rest of the call, so an unbindable one cannot edit the base value.
+		void OpenDisabled();
+
 		/// One catalog component behind this control, and the entries that persist it.
 		struct Component
 		{
@@ -158,7 +162,7 @@ namespace SceneWidgetBinding
 		const char* label;
 		Value value;
 		GutterPolicy policy;
-		State state = State::Unbound;
+		State state = State::Unsupported;
 		std::size_t valueSize = 0;
 		/// Widget value = persisted value * widgetScale; only a proxied control scales.
 		float widgetScale = 1.0f;

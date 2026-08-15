@@ -334,7 +334,7 @@
     "cs_editor.scene_override_remove": "Remove",
     "cs_editor.scene_override_remove_tooltip": "Remove this override from the saved settings.",
     "cs_editor.scene_override_revert": "Revert to original",
-    "cs_editor.scene_settings_greyed_note": "Greyed settings cannot be overridden by this kind of scene. A location override can hold them.",
+    "cs_editor.scene_settings_greyed_note": "Greyed settings cannot be overridden here. Some cannot be overridden by any scene; others need a different kind, such as a location override.",
     "cs_editor.scene_weather_unresolved": "This weather has no form, so it cannot hold overrides.",
     "cs_editor.search_settings_hint": "Search settings (Ctrl+F)",
     "cs_editor.session_history": "Session & History",
