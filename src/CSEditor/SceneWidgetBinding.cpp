@@ -23,8 +23,9 @@ namespace
 	using Kind = SceneWidgetBinding::Value::Kind;
 	using SettingMetadata = SceneSettingsCatalog::SettingMetadata;
 
-	/// The gutter reads as an annotation on the control, not as a second control.
-	constexpr float kGutterSize = 14.0f;
+	/// Matches the location menu's delete icon sizing (SceneSettingsUI.cpp) so both remove
+	/// actions read as the same control.
+	constexpr float kRemoveIconScale = 0.85f;
 
 	constexpr int kPeriodCount = SceneSettingsManager::kPeriodCount;
 
@@ -528,19 +529,34 @@ void SceneWidgetBinding::Guard::DrawGutter()
 {
 	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
 
-	const auto side = kGutterSize * Util::GetUIScale();
 	bool enabled = state == State::Active;
+	const bool hasOverride = state != State::Absent;
 
 	ImGui::PushID(label);
+
+	const auto& style = ImGui::GetStyle();
+	auto* menu = Menu::GetSingleton();
+	const bool hasRemoveIcon = menu && menu->uiIcons.deleteSettings.texture;
+	const float removeIconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
+	const float removeWidth = hasRemoveIcon ?
+	                               removeIconSize :
+	                               ImGui::CalcTextSize(T(TKEY("scene_override_remove"), "Remove")).x +
+	                                   style.FramePadding.x * 2.0f;
+	const float gutterWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
+
+	// Anchors the checkbox/remove pair to the right edge of whatever space the control left behind.
+	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth)
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth);
+
 	if (mixedAcrossPeriods) {
-		// FeatureToggle is a Button, so the mixed tint has to go on the two colours it reads.
 		const auto& mixedColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
-		ImGui::PushStyleColor(ImGuiCol_Header, mixedColor);
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, mixedColor);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, mixedColor);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgActive, mixedColor);
 	}
-	const bool toggled = Util::FeatureToggle("##SceneOverride", &enabled, ImVec2(side, side));
+	const bool toggled = ImGui::Checkbox("##SceneOverride", &enabled);
 	if (mixedAcrossPeriods)
-		ImGui::PopStyleColor(2);
+		ImGui::PopStyleColor(3);
 
 	if (toggled) {
 		auto* manager = SceneSettingsManager::GetSingleton();
@@ -573,6 +589,18 @@ void SceneWidgetBinding::Guard::DrawGutter()
 		tooltip = T(TKEY("scene_override_active"),
 			"Override applies here. Untick to hold it back without losing the value.");
 	Util::AddTooltip(tooltip);
+
+	ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+	ImGui::BeginDisabled(!hasOverride);
+	const bool removeClicked = hasRemoveIcon ?
+	                                Util::ErrorImageButton("##SceneOverrideRemove", menu->uiIcons.deleteSettings.texture,
+	                                    ImVec2(removeIconSize, removeIconSize)) :
+	                                Util::ErrorTextButton(T(TKEY("scene_override_remove"), "Remove"));
+	ImGui::EndDisabled();
+	Util::AddTooltip(T(TKEY("scene_override_remove_tooltip"), "Remove this override from the saved settings."));
+	if (removeClicked)
+		DeleteOverride();
+
 	ImGui::PopID();
 }
 
@@ -592,18 +620,22 @@ void SceneWidgetBinding::Guard::DrawContextMenu()
 				manager->RevertContextEntryToDefault(contextId, index);
 			ResolveState();
 		}
-		if (ImGui::MenuItem(T(TKEY("scene_override_delete"), "Delete override"))) {
-			// Removal renumbers the entries behind it, so drop the highest index first.
-			auto owned = CollectOwnedEntries();
-			std::ranges::sort(owned, std::greater{});
-			for (const auto index : owned)
-				manager->RemoveContextSetting(contextId, index);
-			ForgetEntries();
-		}
+		if (ImGui::MenuItem(T(TKEY("scene_override_delete"), "Delete override")))
+			DeleteOverride();
 
 		ImGui::EndPopup();
 	}
 	ImGui::PopID();
+}
+
+void SceneWidgetBinding::Guard::DeleteOverride()
+{
+	// Removal renumbers the entries behind it, so drop the highest index first.
+	auto owned = CollectOwnedEntries();
+	std::ranges::sort(owned, std::greater{});
+	for (const auto index : owned)
+		SceneSettingsManager::GetSingleton()->RemoveContextSetting(contextId, index);
+	ForgetEntries();
 }
 
 bool SceneWidgetBinding::Guard::Finish(bool a_changed)

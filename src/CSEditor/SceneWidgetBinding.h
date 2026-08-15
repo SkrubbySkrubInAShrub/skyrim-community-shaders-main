@@ -121,6 +121,10 @@ namespace SceneWidgetBinding
 		void DrawGutter();
 		void DrawContextMenu();
 
+		/// Drops every entry this control owns, shared by the gutter's remove button and the
+		/// context menu's "Delete override" item.
+		void DeleteOverride();
+
 		/// Whether a period slot is one this control reads and writes.
 		bool IsCoveredSlot(int a_slot) const;
 		bool HasAllCoveredEntries() const;
