@@ -159,6 +159,8 @@ namespace SceneWidgetBinding
 		GutterPolicy policy;
 		State state = State::Unbound;
 		std::size_t valueSize = 0;
+		/// Widget value = persisted value * widgetScale; only a proxied control scales.
+		float widgetScale = 1.0f;
 
 		const SceneSettingsCatalog::SettingMetadata* metadata = nullptr;
 		SceneSettingsManager::SceneContextId contextId;

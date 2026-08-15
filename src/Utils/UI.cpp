@@ -1,6 +1,7 @@
 #include "UI.h"
 
 #include "../CSEditor/EditorWindow.h"
+#include "../CSEditor/SceneWidgetInterceptor.h"
 #include "../I18n/I18n.h"
 #include "D3D.h"
 #include "FileSystem.h"
@@ -387,11 +388,16 @@ namespace Util
 		return result;
 	}
 
+	constexpr float kPercentageScale = 1e2f;
+
 	bool PercentageSlider(const char* label, float* data, float lb, float ub, const char* format)
 	{
-		float percentageData = (*data) * 1e2f;
+		// The slider binds a temporary, so name the member it stands for or scene authoring misses it.
+		SceneWidgetInterceptor::ProxyScope sceneProxy(data, kPercentageScale);
+
+		float percentageData = (*data) * kPercentageScale;
 		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format);
-		(*data) = percentageData * 1e-2f;
+		(*data) = percentageData / kPercentageScale;
 		return retval;
 	}
 

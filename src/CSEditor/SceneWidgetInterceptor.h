@@ -47,6 +47,33 @@ namespace SceneWidgetInterceptor
 		bool previousArmed;
 	};
 
+	/// A control that binds a stack temporary rather than its settings member, as the Util:: wrappers
+	/// that rescale a value before handing it to ImGui do.
+	struct Proxy
+	{
+		/// The settings member the control stands for, which is what the catalog resolves.
+		const void* member = nullptr;
+		/// Temporary value = member value * displayScale, matching the catalog's displayScale.
+		float displayScale = 1.0f;
+	};
+
+	/// Declares the proxy for the ImGui control drawn inside it, so a rescaled temporary still binds.
+	class ProxyScope
+	{
+	public:
+		ProxyScope(const void* a_member, float a_displayScale);
+		~ProxyScope();
+
+		ProxyScope(const ProxyScope&) = delete;
+		ProxyScope& operator=(const ProxyScope&) = delete;
+
+	private:
+		Proxy previous;
+	};
+
 	/// The armed context, or nullptr when unarmed. For SceneWidgetBinding only.
 	const Context* GetArmedContext();
+
+	/// The proxy declared around the control being drawn, or nullptr. For SceneWidgetBinding only.
+	const Proxy* GetArmedProxy();
 }

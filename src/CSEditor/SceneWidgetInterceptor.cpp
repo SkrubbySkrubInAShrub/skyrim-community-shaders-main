@@ -20,6 +20,7 @@ namespace
 
 	bool armed = false;
 	Context armedContext;
+	Proxy armedProxy;
 
 	// --- Originals ---
 	auto* RealSliderFloat = &ImGui::SliderFloat;
@@ -280,9 +281,26 @@ SceneWidgetInterceptor::Scope::~Scope()
 	armed = previousArmed;
 }
 
+SceneWidgetInterceptor::ProxyScope::ProxyScope(const void* a_member, float a_displayScale) :
+	previous(armedProxy)
+{
+	assert(a_displayScale != 0.0f && "a proxied control cannot collapse its member to one value");
+	armedProxy = { a_member, a_displayScale };
+}
+
+SceneWidgetInterceptor::ProxyScope::~ProxyScope()
+{
+	armedProxy = previous;
+}
+
 const SceneWidgetInterceptor::Context* SceneWidgetInterceptor::GetArmedContext()
 {
 	return armed ? &armedContext : nullptr;
+}
+
+const SceneWidgetInterceptor::Proxy* SceneWidgetInterceptor::GetArmedProxy()
+{
+	return armedProxy.member ? &armedProxy : nullptr;
 }
 
 bool SceneWidgetInterceptor::IsArmed()

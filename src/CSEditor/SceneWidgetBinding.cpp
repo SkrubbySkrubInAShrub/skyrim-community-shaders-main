@@ -186,7 +186,14 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	if (!context)
 		return;
 
-	metadata = SceneSettingsCatalog::FindSettingForControl(context->feature, value.data);
+	// A Util:: wrapper may hand ImGui a rescaled temporary, so the member it stands for is what
+	// resolves and what gets persisted.
+	const auto* proxy = SceneWidgetInterceptor::GetArmedProxy();
+	if (proxy)
+		widgetScale = proxy->displayScale;
+
+	metadata = SceneSettingsCatalog::FindSettingForControl(
+		context->feature, proxy ? proxy->member : value.data);
 	if (!metadata || !SceneSettingsManager::IsSceneSettingAllowed(
 						 metadata->featureShortName, metadata->settingPath, metadata->settingKey)) {
 		metadata = nullptr;
@@ -434,7 +441,7 @@ void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_compone
 	if (!a_stored.is_number())
 		return;
 
-	const auto number = a_stored.get<double>();
+	const auto number = a_stored.get<double>() * widgetScale;
 	switch (value.kind) {
 	case Kind::Int:
 		*reinterpret_cast<int*>(holding.bytes) = static_cast<int>(number);
@@ -471,6 +478,7 @@ json SceneWidgetBinding::Guard::ReadEditedValue(const Component& a_component) co
 	default:
 		return {};
 	}
+	number /= widgetScale;
 
 	// The catalog owns the persisted type, so an integer setting never lands as a float literal.
 	return a_component.setting->valueType == SceneSettingsCatalog::ValueType::Integer ?
