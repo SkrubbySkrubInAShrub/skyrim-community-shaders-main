@@ -91,7 +91,9 @@ void ScreenSpaceGI::DrawSettings()
 	{
 		auto qualityGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::BeginTable("Presets", 5)) {
+		// A preset button writes several settings at once, which the per-control override system
+		// cannot represent, so hide it while a Scene Manager replica is borrowing this panel.
+		if (!SceneWidgetInterceptor::IsArmed() && ImGui::BeginTable("Presets", 5)) {
 			ImGui::TableNextColumn();
 			if (ImGui::Button(T(TKEY("ao_only"), "AO only"), { -1, 0 })) {
 				settings.NumSlices = 1;
@@ -169,7 +171,7 @@ void ScreenSpaceGI::DrawSettings()
 									  "Controls accuracy of lighting, and noise when effect radius is large."));
 		}
 
-		if (ImGui::BeginTable("Less Work", 3)) {
+		if (ImGui::BeginTable("Less Work", 3, ImGuiTableFlags_SizingStretchSame)) {
 			ImGui::TableNextColumn();
 			recompileFlag |= ImGui::RadioButton(T(TKEY("full_res"), "Full Res"), &settings.ResolutionMode, 0);
 			ImGui::TableNextColumn();

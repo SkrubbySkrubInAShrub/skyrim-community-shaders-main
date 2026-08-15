@@ -170,6 +170,12 @@ namespace
 	}
 }
 
+void SceneWidgetBinding::WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value)
+{
+	if (const auto traits = GetScalarTraits(a_type); traits.write)
+		traits.write(a_destination, a_value);
+}
+
 SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, GutterPolicy a_policy) :
 	label(a_label), value(a_value), policy(a_policy)
 {
@@ -562,9 +568,11 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	const float gutterWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
 	const auto margin = kGutterRightMargin * Util::GetUIScale();
 
-	// Anchors the checkbox/remove pair to the right edge of whatever space the control left behind.
-	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth + margin)
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth - margin);
+	// Anchors the checkbox/remove pair to the window's right edge rather than the current table
+	// column's: a radio group only the first button of which owns the gutter must still land past
+	// the last button, and GetContentRegionAvail() is column-scoped inside a table.
+	const auto rightEdge = ImGui::GetWindowContentRegionMax().x;
+	ImGui::SetCursorPosX(rightEdge - gutterWidth - margin);
 
 	if (mixedAcrossPeriods) {
 		const auto& mixedColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;

@@ -188,11 +188,14 @@ namespace
 		ImGui::EndDisabled();
 
 		if (withInteriorToggle) {
-			// Interior and time of day are mutually exclusive layers; only one resolves at a time.
-			if (ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled) && interiorEnabled)
-				timeOfDayEnabled = false;
+			// Indicator only: interior always follows the cell the player is actually in, so
+			// toggling it by hand would silently do nothing when the layer can't resolve.
+			ImGui::BeginDisabled();
+			ImGui::Checkbox(T(TKEY("interior_toggle"), "Interior"), &interiorEnabled);
+			ImGui::EndDisabled();
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
-				"Edit the settings applied indoors. Follows the cell the player is in."));
+				"Shows whether interior settings are being edited. Follows the cell the player is in."),
+				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 			ImGui::SameLine();
 		}
 

@@ -48,6 +48,10 @@ namespace SceneWidgetBinding
 		}
 	};
 
+	/// Writes a number into a scalar of the given ImGui data type; no-op for a type the intercepted
+	/// scalar widgets don't accept. Shared so palette value drops write the same way the widgets do.
+	void WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value);
+
 	/// Scratch for one widget value of any intercepted kind, sized for the widest control.
 	struct ValueStorage
 	{

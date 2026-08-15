@@ -2250,13 +2250,18 @@ void SceneSettingsManager::UpdateEntryValues(
 			GetSceneTypeName(type), vec, updates, requireNumeric, userEntriesChanged))
 		return;
 
-	if (userEntriesChanged) {
+	if (userEntriesChanged)
 		MarkEntryListUserSettingsModified(type);
-		if (deferSave)
-			MarkDeferredSceneChanges();
-		else
-			SaveAllUserSettings();
+
+	// Mirrors AddSetting/CommitSceneSettingChanges: a deferred commit defers the resolve along with
+	// the save, so a palette drop or a settled edit doesn't force a synchronous ResolveAndApply
+	// mid-DrawSettings for every feature holding an active scene override.
+	if (deferSave) {
+		MarkDeferredSceneChanges();
+		return;
 	}
+	if (userEntriesChanged)
+		SaveAllUserSettings();
 	ReapplyIfActive();
 }
 

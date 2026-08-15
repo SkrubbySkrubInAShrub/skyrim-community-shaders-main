@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <cstring>
 #include <span>
 #include <string>
 
@@ -60,6 +62,32 @@ namespace
 
 namespace
 {
+	// Unbound/Unavailable controls are greyed via BeginDisabled precisely so an edit here cannot
+	// rewrite the feature's base value; BeginDragDropTarget ignores that flag, so drop acceptance
+	// has to check the resolved state itself or it would bypass the same protection.
+	bool CanAcceptPaletteDrop(const SceneWidgetBinding::Guard& a_guard)
+	{
+		const auto state = a_guard.GetState();
+		return state != SceneWidgetBinding::State::Unbound && state != SceneWidgetBinding::State::Unavailable;
+	}
+
+	// Mirrors AcceptPaletteColorDrop below: the palette's "VALUE_DND" payload is a raw float, not a
+	// type ImGui's own widgets recognise, so every intercepted scalar slider must accept it by hand.
+	bool AcceptPaletteValueDrop(double& a_outValue)
+	{
+		bool accepted = false;
+		if (ImGui::BeginDragDropTarget()) {
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("VALUE_DND")) {
+				if (payload->DataSize == sizeof(float)) {
+					a_outValue = static_cast<double>(*static_cast<const float*>(payload->Data));
+					accepted = true;
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
+		return accepted;
+	}
+
 	bool DetouredSliderFloat(const char* label, float* v, float vMin, float vMax,
 		const char* format, ImGuiSliderFlags flags)
 	{
@@ -67,7 +95,12 @@ namespace
 			return RealSliderFloat(label, v, vMin, vMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(v));
-		return guard.Finish(RealSliderFloat(label, guard.Float(), vMin, vMax, format, flags));
+		bool changed = RealSliderFloat(label, guard.Float(), vMin, vMax, format, flags);
+		if (double dropped; CanAcceptPaletteDrop(guard) && AcceptPaletteValueDrop(dropped)) {
+			*guard.Float() = static_cast<float>(std::clamp(dropped, (double)vMin, (double)vMax));
+			changed = true;
+		}
+		return guard.Finish(changed);
 	}
 
 	bool DetouredSliderFloat2(const char* label, float v[2], float vMin, float vMax,
@@ -87,7 +120,12 @@ namespace
 			return RealSliderInt(label, v, vMin, vMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Int(v));
-		return guard.Finish(RealSliderInt(label, guard.Int(), vMin, vMax, format, flags));
+		bool changed = RealSliderInt(label, guard.Int(), vMin, vMax, format, flags);
+		if (double dropped; CanAcceptPaletteDrop(guard) && AcceptPaletteValueDrop(dropped)) {
+			*guard.Int() = std::clamp(static_cast<int>(std::lround(dropped)), vMin, vMax);
+			changed = true;
+		}
+		return guard.Finish(changed);
 	}
 
 	bool DetouredSliderScalar(const char* label, ImGuiDataType dataType, void* data,
@@ -97,8 +135,12 @@ namespace
 			return RealSliderScalar(label, dataType, data, min, max, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Scalar(data, dataType));
-		return guard.Finish(
-			RealSliderScalar(label, dataType, guard.Raw(), min, max, format, flags));
+		bool changed = RealSliderScalar(label, dataType, guard.Raw(), min, max, format, flags);
+		if (double dropped; CanAcceptPaletteDrop(guard) && AcceptPaletteValueDrop(dropped)) {
+			SceneWidgetBinding::WriteScalarValue(guard.Raw(), dataType, dropped);
+			changed = true;
+		}
+		return guard.Finish(changed);
 	}
 
 	bool DetouredSliderAngle(const char* label, float* radians, float degreesMin, float degreesMax,
@@ -108,8 +150,14 @@ namespace
 			return RealSliderAngle(label, radians, degreesMin, degreesMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(radians));
-		return guard.Finish(
-			RealSliderAngle(label, guard.Float(), degreesMin, degreesMax, format, flags));
+		bool changed = RealSliderAngle(label, guard.Float(), degreesMin, degreesMax, format, flags);
+		// The palette stores raw slider units, and an angle slider's raw unit is radians, so a
+		// dropped value is written as-is rather than reinterpreted through the degree bounds.
+		if (double dropped; CanAcceptPaletteDrop(guard) && AcceptPaletteValueDrop(dropped)) {
+			*guard.Float() = static_cast<float>(dropped);
+			changed = true;
+		}
+		return guard.Finish(changed);
 	}
 
 	bool DetouredCheckbox(const char* label, bool* v)
@@ -121,13 +169,33 @@ namespace
 		return guard.Finish(RealCheckbox(label, guard.Bool()));
 	}
 
+	// The palette drags a custom "COLOR_DND" payload rather than ImGui's native _COL3F/_COL4F, so
+	// forwarding straight to the real widget (which only recognises its own payload) drops palette
+	// support entirely; every intercepted color control needs this wired in by hand.
+	bool AcceptPaletteColorDrop(float* col, int componentCount)
+	{
+		bool accepted = false;
+		if (ImGui::BeginDragDropTarget()) {
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("COLOR_DND")) {
+				if (payload->DataSize == sizeof(float3)) {
+					std::memcpy(col, payload->Data, sizeof(float) * std::min(componentCount, 3));
+					accepted = true;
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
+		return accepted;
+	}
+
 	bool DetouredColorEdit3(const char* label, float col[3], ImGuiColorEditFlags flags)
 	{
 		if (!ShouldIntercept())
 			return RealColorEdit3(label, col, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::FloatVector(col, 3));
-		return guard.Finish(RealColorEdit3(label, guard.Float(), flags));
+		const bool changed = RealColorEdit3(label, guard.Float(), flags);
+		const bool dropped = CanAcceptPaletteDrop(guard) && AcceptPaletteColorDrop(guard.Float(), 3);
+		return guard.Finish(dropped || changed);
 	}
 
 	bool DetouredColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flags)
@@ -136,7 +204,9 @@ namespace
 			return RealColorEdit4(label, col, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::FloatVector(col, 4));
-		return guard.Finish(RealColorEdit4(label, guard.Float(), flags));
+		const bool changed = RealColorEdit4(label, guard.Float(), flags);
+		const bool dropped = CanAcceptPaletteDrop(guard) && AcceptPaletteColorDrop(guard.Float(), 4);
+		return guard.Finish(dropped || changed);
 	}
 
 	bool DetouredComboArray(const char* label, int* current, const char* const items[],
