@@ -615,6 +615,11 @@ public:
 	std::vector<CopySource> GetCopySources(const SceneContextId& destination,
 		CopyScope scope = CopyScope::EntireContext,
 		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+	/// Return every context a source can copy compatible data into, including pages with no
+	/// settings yet: every weather and known location, not just the ones already authored.
+	std::vector<CopySource> GetCopyDestinations(const SceneContextId& source,
+		CopyScope scope = CopyScope::EntireContext,
+		const std::optional<SettingIdentity>& setting = std::nullopt) const;
 	/// Inspect the settings and conflicts in a proposed copy without mutating state.
 	/// AllPeriods answers for every period at once: a row conflicts if any of them already holds it.
 	std::vector<CopyCandidate> GetCopyCandidates(const SceneContextId& source,

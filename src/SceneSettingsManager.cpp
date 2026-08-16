@@ -5784,6 +5784,73 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 	return sources;
 }
 
+std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDestinations(
+	const SceneContextId& source, CopyScope scope, const std::optional<SettingIdentity>& setting) const
+{
+	if (!IsValidSceneContext(source) || !IsValidCopyScope(scope) || (scope == CopyScope::Setting && !setting) ||
+		!GetCopyContextEntries(source))
+		return {};
+
+	std::vector<CopySource> destinations;
+	// Every candidate is validated through BuildCopyCandidates, the same path a real copy takes, so a
+	// destination is only offered when it would actually accept something.
+	const auto addDestination = [&](const SceneContextId& context, std::string displayName) {
+		if (IsSameSceneContext(context, source))
+			return;
+		const auto candidates = BuildCopyCandidates(source, context, scope, setting, PeriodScope::ActivePeriod);
+		const auto compatibleCount = static_cast<size_t>(
+			std::count_if(candidates.begin(), candidates.end(), [](const auto& candidate) { return candidate.compatible; }));
+		if (compatibleCount != 0)
+			destinations.push_back({ context, std::move(displayName), compatibleCount });
+	};
+
+	const SceneContextId interiorContext{ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count };
+	addDestination(interiorContext, GetSceneContextDisplayName(interiorContext));
+
+	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
+		const SceneContextId context{ .type = SceneContextType::TimeOfDay,
+			.period = static_cast<TimeOfDayPeriod>(periodIndex) };
+		addDestination(context, GetSceneContextDisplayName(context));
+	}
+
+	// Weather has no "already authored" cache to lean on the way locations do, so every loaded
+	// weather form is a candidate destination, whether or not it holds any settings yet.
+	if (auto* dataHandler = RE::TESDataHandler::GetSingleton()) {
+		for (auto* weather : dataHandler->GetFormArray<RE::TESWeather>()) {
+			if (!weather)
+				continue;
+			for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
+				const SceneContextId context{ .type = SceneContextType::Weather,
+					.period = static_cast<TimeOfDayPeriod>(periodIndex),
+					.weatherId = weather->GetFormID() };
+				addDestination(context, GetSceneContextDisplayName(context));
+			}
+		}
+	}
+
+	// The current chain plus everything already authored covers every location this session can
+	// navigate to, the same universe the location browser offers.
+	std::vector<LocationTarget> locationTargets = GetCurrentLocationTargets();
+	for (auto& target : GetAuthoredLocationTargets())
+		if (std::none_of(locationTargets.begin(), locationTargets.end(), [&](const auto& existing) {
+				return existing.type == target.type &&
+				       NormalizeLocationFormKey(existing.formKey) == NormalizeLocationFormKey(target.formKey);
+			}))
+			locationTargets.push_back(std::move(target));
+	for (const auto& target : locationTargets) {
+		const SceneContextId context{ .type = SceneContextType::Location,
+			.locationType = target.type,
+			.locationFormKey = target.formKey };
+		addDestination(context, std::format("{} / {}", GetCopyLocationTypeName(target.type), target.name));
+	}
+
+	std::sort(destinations.begin(), destinations.end(), [](const auto& lhs, const auto& rhs) {
+		return std::tie(lhs.context.type, lhs.displayName, lhs.context) <
+		       std::tie(rhs.context.type, rhs.displayName, rhs.context);
+	});
+	return destinations;
+}
+
 std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextId& context) const
 {
 	switch (context.type) {

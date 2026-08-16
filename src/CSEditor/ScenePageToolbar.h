@@ -2,8 +2,9 @@
 
 #include "SceneSettingsManager.h"
 
-/// Page-wide actions for one scene context: pause or resume it, copy another context into it,
-/// export it (reserved), and clear it. The destination is always the page being drawn.
+/// Page-wide actions for one scene context: pause or resume it, copy settings between it and
+/// another context (in either direction), export it (reserved), and clear it. The page being
+/// drawn is always one side of the copy; the other side is picked from the From/To submenus.
 namespace ScenePageToolbar
 {
 	/// Draws the actions right-aligned on the current row, along with the dialogs they open.

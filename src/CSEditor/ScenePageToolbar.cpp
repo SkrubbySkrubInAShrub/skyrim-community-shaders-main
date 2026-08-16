@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -34,18 +36,23 @@ namespace
 	constexpr ImGuiTableFlags kPreviewTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
 
-	constexpr const char* kSourcePopupId = "##ScenePageCopySources";
+	constexpr const char* kCopyPopupId = "##ScenePageCopy";
 
-	/// Source enumeration walks every weather period and every location, so it is cached until the
-	/// entries it counts change. The dropdown recomputes on open, so a stale count never picks.
-	struct SourceCache
+	/// Height the From/To submenus scroll within once their list outgrows it, most notably To, which
+	/// walks every weather period rather than only the ones already authored.
+	constexpr float kCopyListHeight = 260.0f;
+
+	/// Source/destination enumeration walks every weather period and every location, so each direction is
+	/// cached until the entries it counts change. The dropdown recomputes on open, so a stale count never picks.
+	struct CopyListCache
 	{
 		std::uint64_t revision = 0;
 		int lastUsedFrame = 0;
 		bool valid = false;
-		std::vector<CopySource> sources;
+		std::vector<CopySource> entries;
 	};
-	std::map<SceneContextId, SourceCache> sourceCaches;
+	std::map<SceneContextId, CopyListCache> sourceCaches;
+	std::map<SceneContextId, CopyListCache> destinationCaches;
 	/// A page that has not drawn for this long has been closed or scrolled out of the tree. Evicting on
 	/// size instead would drop caches pages are still using, which costs a rebuild every frame.
 	constexpr int kSourceCacheRetentionFrames = 120;
@@ -68,23 +75,38 @@ namespace
 	bool clearRequested = false;
 	Util::ConfirmationPopup clearConfirmation;
 
-	const std::vector<CopySource>& GetCopySources(const SceneContextId& context, bool forceRefresh)
+	/// Shared cache/eviction logic for both copy directions; only what fetches the list differs.
+	template <typename Fetch>
+	const std::vector<CopySource>& GetCachedCopyList(
+		std::map<SceneContextId, CopyListCache>& caches, const SceneContextId& context, bool forceRefresh, Fetch fetch)
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto revision = manager->GetEntryPresentationRevision();
 		const auto frame = ImGui::GetFrameCount();
-		std::erase_if(sourceCaches, [&](const auto& entry) {
+		std::erase_if(caches, [&](const auto& entry) {
 			return entry.first != context && frame - entry.second.lastUsedFrame > kSourceCacheRetentionFrames;
 		});
 
-		auto& cache = sourceCaches[context];
+		auto& cache = caches[context];
 		cache.lastUsedFrame = frame;
 		if (forceRefresh || !cache.valid || cache.revision != revision) {
-			cache.sources = manager->GetCopySources(context);
+			cache.entries = fetch(manager, context);
 			cache.revision = revision;
 			cache.valid = true;
 		}
-		return cache.sources;
+		return cache.entries;
+	}
+
+	const std::vector<CopySource>& GetCopySources(const SceneContextId& context, bool forceRefresh)
+	{
+		return GetCachedCopyList(sourceCaches, context, forceRefresh,
+			[](auto* manager, const auto& ctx) { return manager->GetCopySources(ctx); });
+	}
+
+	const std::vector<CopySource>& GetCopyDestinations(const SceneContextId& context, bool forceRefresh)
+	{
+		return GetCachedCopyList(destinationCaches, context, forceRefresh,
+			[](auto* manager, const auto& ctx) { return manager->GetCopyDestinations(ctx); });
 	}
 
 	/// Heading the source list groups under, matching the type-first order GetCopySources returns.
@@ -143,37 +165,74 @@ namespace
 	}
 
 	/// Dry run first: a copy with nothing to overwrite needs no preview and runs on the click.
-	void StartCopy(const CopySource& source, const SceneContextId& destination, PeriodScope periodScope)
+	void StartCopy(const SceneContextId& source, const SceneContextId& destination, const std::string& sourceName,
+		PeriodScope periodScope)
 	{
-		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source.context, destination,
+		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source, destination,
 			SceneSettingsManager::CopyScope::EntireContext, std::nullopt, periodScope);
 		if (std::ranges::none_of(candidates, [](const auto& candidate) { return candidate.conflicts; })) {
-			RunCopy(source.context, destination, CopyConflictPolicy::SkipExisting, periodScope);
+			RunCopy(source, destination, CopyConflictPolicy::SkipExisting, periodScope);
 			return;
 		}
-		copyFlow = { .source = source.context,
+		copyFlow = { .source = source,
 			.destination = destination,
-			.sourceName = source.displayName,
+			.sourceName = sourceName,
 			.candidates = std::move(candidates),
 			.periodScope = periodScope,
 			.active = true,
 			.pendingOpen = true };
 	}
 
-	void DrawCopySourcePopup(const SceneContextId& context, PeriodScope periodScope)
+	/// One scrollable, type-grouped list shared by the From and To submenus.
+	void DrawCopyList(std::span<const CopySource> entries, const std::function<void(const CopySource&)>& onPick)
 	{
-		if (!ImGui::BeginPopup(kSourcePopupId))
+		if (ImGui::BeginChild("##ScenePageCopyList", ImVec2(0.0f, kCopyListHeight * Util::GetUIScale()))) {
+			auto lastType = std::optional<SceneContextType>{};
+			for (const auto& entry : entries) {
+				if (lastType != entry.context.type) {
+					lastType = entry.context.type;
+					ImGui::SeparatorText(GetContextTypeLabel(*lastType));
+				}
+				if (ImGui::Selectable(std::format("{} ({})", entry.displayName, entry.settingCount).c_str()))
+					onPick(entry);
+			}
+		}
+		ImGui::EndChild();
+	}
+
+	void DrawCopyPopup(const SceneContextId& context, PeriodScope periodScope)
+	{
+		if (!ImGui::BeginPopup(kCopyPopupId))
 			return;
 
-		auto lastType = std::optional<SceneContextType>{};
-		for (const auto& source : GetCopySources(context, false)) {
-			if (lastType != source.context.type) {
-				lastType = source.context.type;
-				ImGui::SeparatorText(GetContextTypeLabel(*lastType));
-			}
-			if (ImGui::Selectable(std::format("{} ({})", source.displayName, source.settingCount).c_str()))
-				StartCopy(source, context, periodScope);
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto& sources = GetCopySources(context, false);
+		ImGui::BeginDisabled(sources.empty());
+		if (ImGui::BeginMenu(T(TKEY("scene_page_copy_from"), "From"))) {
+			DrawCopyList(sources, [&](const CopySource& source) {
+				StartCopy(source.context, context, source.displayName, periodScope);
+				ImGui::CloseCurrentPopup();
+			});
+			ImGui::EndMenu();
 		}
+		ImGui::EndDisabled();
+		Util::AddTooltip(T(TKEY("scene_page_copy_from_tooltip"), "Copies another context's settings into this page."),
+			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+
+		const auto& destinations = GetCopyDestinations(context, false);
+		ImGui::BeginDisabled(destinations.empty());
+		if (ImGui::BeginMenu(T(TKEY("scene_page_copy_to"), "To"))) {
+			const auto sourceName = manager->GetSceneContextDisplayName(context);
+			DrawCopyList(destinations, [&](const CopySource& destination) {
+				StartCopy(context, destination.context, sourceName, periodScope);
+				ImGui::CloseCurrentPopup();
+			});
+			ImGui::EndMenu();
+		}
+		ImGui::EndDisabled();
+		Util::AddTooltip(T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
+			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+
 		ImGui::EndPopup();
 	}
 
@@ -292,7 +351,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 
 	const char* toggleLabel = pauseTarget ? T(TKEY("scene_page_pause_all"), "Pause All") :
 	                                        T(TKEY("scene_page_resume_all"), "Resume All");
-	const char* copyLabel = T(TKEY("scene_page_copy"), "Copy From");
+	const char* copyLabel = T(TKEY("scene_page_copy"), "Copy");
 	const char* exportLabel = T(TKEY("scene_page_export"), "Export");
 	const char* clearLabel = T(TKEY("scene_page_clear"), "Clear");
 
@@ -321,17 +380,19 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 	ImGui::SameLine();
-	// The dropdown is rebuilt on open, so what it offers is never a frame behind the page.
+	// The lists are rebuilt on open, so what they offer is never a frame behind the page.
 	const bool hasSources = !GetCopySources(context, false).empty();
-	ImGui::BeginDisabled(!hasSources);
+	const bool hasDestinations = !GetCopyDestinations(context, false).empty();
+	ImGui::BeginDisabled(!hasSources && !hasDestinations);
 	if (ImGui::Button(copyLabel)) {
 		GetCopySources(context, true);
-		ImGui::OpenPopup(kSourcePopupId);
+		GetCopyDestinations(context, true);
+		ImGui::OpenPopup(kCopyPopupId);
 	}
 	ImGui::EndDisabled();
-	Util::AddTooltip(T(TKEY("scene_page_copy_tooltip"), "Copies another context's settings into this page."),
+	Util::AddTooltip(T(TKEY("scene_page_copy_tooltip"), "Copies settings between this page and another context."),
 		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
-	DrawCopySourcePopup(context, periodScope);
+	DrawCopyPopup(context, periodScope);
 
 	ImGui::SameLine();
 	ImGui::BeginDisabled();
