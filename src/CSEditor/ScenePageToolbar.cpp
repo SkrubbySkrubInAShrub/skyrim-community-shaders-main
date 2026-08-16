@@ -208,7 +208,12 @@ namespace
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto& sources = GetCopySources(context, false);
 		ImGui::BeginDisabled(sources.empty());
-		if (ImGui::BeginMenu(T(TKEY("scene_page_copy_from"), "From"))) {
+		// IsItemHovered() must run right after BeginMenu(), before the submenu's own items are drawn:
+		// once EndMenu() returns, the "last item" is whatever was hovered inside the submenu, not the header.
+		const bool fromOpen = ImGui::BeginMenu(T(TKEY("scene_page_copy_from"), "From"));
+		Util::AddTooltip(T(TKEY("scene_page_copy_from_tooltip"), "Copies another context's settings into this page."),
+			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		if (fromOpen) {
 			DrawCopyList(sources, [&](const CopySource& source) {
 				StartCopy(source.context, context, source.displayName, periodScope);
 				ImGui::CloseCurrentPopup();
@@ -216,12 +221,13 @@ namespace
 			ImGui::EndMenu();
 		}
 		ImGui::EndDisabled();
-		Util::AddTooltip(T(TKEY("scene_page_copy_from_tooltip"), "Copies another context's settings into this page."),
-			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 		const auto& destinations = GetCopyDestinations(context, false);
 		ImGui::BeginDisabled(destinations.empty());
-		if (ImGui::BeginMenu(T(TKEY("scene_page_copy_to"), "To"))) {
+		const bool toOpen = ImGui::BeginMenu(T(TKEY("scene_page_copy_to"), "To"));
+		Util::AddTooltip(T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
+			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		if (toOpen) {
 			const auto sourceName = manager->GetSceneContextDisplayName(context);
 			DrawCopyList(destinations, [&](const CopySource& destination) {
 				StartCopy(context, destination.context, sourceName, periodScope);
@@ -230,8 +236,6 @@ namespace
 			ImGui::EndMenu();
 		}
 		ImGui::EndDisabled();
-		Util::AddTooltip(T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
-			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 		ImGui::EndPopup();
 	}
@@ -259,10 +263,19 @@ namespace
 		}
 	}
 
-	void DrawCopyPreview(const SceneContextId& context)
+	/// Draws wherever the destination page's own toolbar happens to render, which may not be the page
+	/// the user is currently looking at (e.g. copying to a period other than the one on screen). The
+	/// flow is global, so this only needs to run once per frame even if several toolbars call it.
+	void DrawCopyPreview()
 	{
-		if (!copyFlow.active || copyFlow.destination != context)
+		if (!copyFlow.active)
 			return;
+
+		static int lastDrawnFrame = -1;
+		const int frame = ImGui::GetFrameCount();
+		if (lastDrawnFrame == frame)
+			return;
+		lastDrawnFrame = frame;
 
 		const char* title = T(TKEY("scene_page_copy_title"), "Copy settings");
 		if (copyFlow.pendingOpen) {
@@ -274,7 +287,7 @@ namespace
 		bool open = true;
 		std::optional<CopyConflictPolicy> decision;
 		if (auto popup = Util::CenteredPopupModal(title, &open)) {
-			const auto destinationName = manager->GetSceneContextDisplayName(context);
+			const auto destinationName = manager->GetSceneContextDisplayName(copyFlow.destination);
 			ImGui::TextWrapped("%s", std::vformat(T(TKEY("scene_page_copy_intro"), "Copying {} into {}."),
 										std::make_format_args(copyFlow.sourceName, destinationName))
 										.c_str());
@@ -425,7 +438,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 	DrawClearConfirmation(context, periodScope);
-	DrawCopyPreview(context);
+	DrawCopyPreview();
 
 	ImGui::PopID();
 }
