@@ -5,7 +5,6 @@
 #include <cstring>
 #include <functional>
 #include <map>
-#include <set>
 #include <tuple>
 #include <utility>
 
@@ -138,17 +137,25 @@ namespace
 	int gutterFrame = -1;
 	// Keyed by window as well as address: two panels drawing the same feature must each get their
 	// own gutter instead of the second panel finding the first's claim already taken.
-	std::set<std::pair<ImGuiID, const void*>> gutterOwners;
+	using GutterKey = std::pair<ImGuiID, const void*>;
+	std::map<GutterKey, int> gutterCalls;
+	std::map<GutterKey, int> previousGutterCalls;
 
-	/// First call against a (window, address) pair in a frame owns its gutter, so one radio group
-	/// still draws a single toggle while the same group in another window gets its own.
+	/// Last call against a (window, address) pair in a frame owns its gutter, so a radio group draws
+	/// a single toggle and draws it past its final button rather than crowding the first. The group
+	/// size only becomes known once a frame has drawn it, so its first frame falls back to the first
+	/// call and settles on the next.
 	bool ClaimGutter(const void* address)
 	{
 		if (const auto frame = ImGui::GetFrameCount(); frame != gutterFrame) {
 			gutterFrame = frame;
-			gutterOwners.clear();
+			previousGutterCalls.swap(gutterCalls);
+			gutterCalls.clear();
 		}
-		return gutterOwners.insert({ ImGui::GetCurrentWindow()->ID, address }).second;
+		const GutterKey key{ ImGui::GetCurrentWindow()->ID, address };
+		const auto call = ++gutterCalls[key];
+		const auto previous = previousGutterCalls.find(key);
+		return previous == previousGutterCalls.end() ? call == 1 : call == previous->second;
 	}
 
 	/// Same scene-type split the manager applies when persisting a new entry (AddContextSetting),
@@ -200,11 +207,17 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 
 	metadata = SceneSettingsCatalog::FindSettingForControl(
 		context->feature, proxy ? proxy->member : value.data);
-	if (!metadata || !SceneSettingsManager::IsSceneSettingAllowed(
-						 metadata->featureShortName, metadata->settingPath, metadata->settingKey)) {
-		// Unresolved or barred by policy, so no scene will ever hold it. Greyed rather than left
-		// live, because an edit here would rewrite the feature's base value from a panel that only
-		// promises overrides.
+	if (!metadata) {
+		// Not a catalogued setting at all (e.g. a plain UI toggle like "Show Advanced"), so the
+		// interceptor has nothing to bind. Left live rather than greyed: it never promised an
+		// override in the first place.
+		state = State::Unsupported;
+		return;
+	}
+	if (!SceneSettingsManager::IsSceneSettingAllowed(
+			metadata->featureShortName, metadata->settingPath, metadata->settingKey)) {
+		// Barred by policy, so no scene will ever hold it. Greyed rather than left live, because an
+		// edit here would rewrite the feature's base value from a panel that only promises overrides.
 		state = State::Unbound;
 		metadata = nullptr;
 		OpenDisabled();
@@ -448,6 +461,8 @@ void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_compone
 	if (value.kind == Kind::Bool) {
 		if (a_stored.is_boolean())
 			*reinterpret_cast<bool*>(holding.bytes) = a_stored.get<bool>();
+		else if (a_stored.is_number_integer())
+			*reinterpret_cast<bool*>(holding.bytes) = a_stored.get<std::int64_t>() != 0;
 		return;
 	}
 	if (!a_stored.is_number())
@@ -472,8 +487,14 @@ void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_compone
 
 json SceneWidgetBinding::Guard::ReadEditedValue(const Component& a_component) const
 {
-	if (value.kind == Kind::Bool)
-		return *static_cast<const bool*>(value.data);
+	if (value.kind == Kind::Bool) {
+		// A checkbox over an int-backed member (uint flags cast to bool*) persists as an integer, or
+		// validation rejects the edit and the entry keeps the base value the scene then re-applies.
+		const bool checked = *static_cast<const bool*>(value.data);
+		return a_component.setting->valueType == SceneSettingsCatalog::ValueType::Integer ?
+		           json(static_cast<std::int64_t>(checked)) :
+		           json(checked);
+	}
 
 	double number = 0.0;
 	switch (value.kind) {
@@ -568,11 +589,11 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	const float gutterWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
 	const auto margin = kGutterRightMargin * Util::GetUIScale();
 
-	// Anchors the checkbox/remove pair to the window's right edge rather than the current table
-	// column's: a radio group only the first button of which owns the gutter must still land past
-	// the last button, and GetContentRegionAvail() is column-scoped inside a table.
-	const auto rightEdge = ImGui::GetWindowContentRegionMax().x;
-	ImGui::SetCursorPosX(rightEdge - gutterWidth - margin);
+	// Anchors the pair to the right edge of the space the control left behind, which inside a table
+	// is its own cell: a table clips each cell to its column, so reaching for the window's right
+	// edge from a cell culls the gutter entirely.
+	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth + margin)
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth - margin);
 
 	if (mixedAcrossPeriods) {
 		const auto& mixedColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;

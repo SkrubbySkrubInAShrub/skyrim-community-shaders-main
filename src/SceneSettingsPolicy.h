@@ -25,7 +25,6 @@ namespace SceneSettingsPolicy
 		{ "ExponentialHeightFog" },
 		{ "ImageBasedLighting" },
 		{ "ScreenSpaceGI" },
-		{ "ScreenSpaceShadows" },
 		{ "SubsurfaceScattering" },
 	};
 
