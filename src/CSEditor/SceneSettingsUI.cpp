@@ -8,6 +8,7 @@
 #include "EditorWindow.h"
 #include "Menu.h"
 #include "SceneFeatureReplica.h"
+#include "ScenePageToolbar.h"
 #include "SceneSettingsManager.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -139,9 +140,30 @@ namespace
 		}
 	}
 
-	/// Draws the period bar with its enable toggle and returns the period the panel below it should edit.
+	/// The context one page edits: the base context, narrowed to the period the bar has selected.
+	SceneSettingsManager::SceneContextId ResolvePageContext(
+		const SceneSettingsManager::SceneContextId& baseContext, TimeOfDayPeriod period)
+	{
+		auto context = baseContext;
+		// The interior and location layers are aperiodic, so the bar informs the view but not the context.
+		if (SceneSettingsManager::IsPeriodicContext(context.type))
+			context.period = period;
+		return context;
+	}
+
+	/// How much of a page an action owns: with time of day off, editing a periodic page writes every
+	/// period at once, so the page-wide actions have to cover every period too.
+	SceneSettingsManager::PeriodScope ResolvePeriodScope(const SceneSettingsManager::SceneContextId& context)
+	{
+		return SceneSettingsManager::IsPeriodicContext(context.type) && !timeOfDayEnabled ?
+		           SceneSettingsManager::PeriodScope::AllPeriods :
+		           SceneSettingsManager::PeriodScope::ActivePeriod;
+	}
+
+	/// Draws the period bar with its enable toggle and the page toolbar, and returns the period the
+	/// panel below it should edit.
 	/// The interior toggle belongs to the Scene Manager panel, which is the only place both layers meet.
-	int DrawPeriodBar(bool withInteriorToggle = false)
+	int DrawPeriodBar(const SceneSettingsManager::SceneContextId& baseContext, bool withInteriorToggle = false)
 	{
 		if (withInteriorToggle)
 			SyncSceneToggles();
@@ -211,6 +233,10 @@ namespace
 		                                T(TKEY("time_of_day_toggle_tooltip"), "Edit one period at a time. Game time pauses while a Scene Manager panel is open.");
 		Util::AddTooltip(toggleTooltip, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
+		ImGui::SameLine();
+		const auto pageContext = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active));
+		ScenePageToolbar::Draw(pageContext, ResolvePeriodScope(pageContext));
+
 		if (interior)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
 		else if (!timeOfDayEnabled)
@@ -266,13 +292,14 @@ namespace
 	{
 		auto context = baseContext;
 		if (withPeriodBar) {
-			const auto period = static_cast<TimeOfDayPeriod>(DrawPeriodBar(withInteriorToggle));
-			// The interior layer is aperiodic, so the bar informs the view but not the context.
-			if (context.type != SceneSettingsManager::SceneContextType::Interior)
-				context.period = period;
+			const auto period = static_cast<TimeOfDayPeriod>(DrawPeriodBar(baseContext, withInteriorToggle));
+			context = ResolvePageContext(baseContext, period);
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
+		} else {
+			// A page without the bar has no toggle row to share, so the actions get a row of their own.
+			ScenePageToolbar::Draw(context, ResolvePeriodScope(context));
 		}
 		ImGui::TextWrapped("%s", intro);
 		// Greying covers both what no scene can hold and what only another scene type can.
@@ -282,9 +309,7 @@ namespace
 
 		if (selectedFeature.empty())
 			return;
-		const bool perPeriod = timeOfDayEnabled &&
-		                       context.type != SceneSettingsManager::SceneContextType::Interior &&
-		                       context.type != SceneSettingsManager::SceneContextType::Location;
+		const bool perPeriod = timeOfDayEnabled && SceneSettingsManager::IsPeriodicContext(context.type);
 		SceneFeatureReplica::Draw(selectedFeature, context, perPeriod);
 	}
 

@@ -177,10 +177,6 @@ public:
 	bool AreAllOverwritesPaused(SceneType type) const;
 	void DeleteAllOverwrites(SceneType type);
 
-	void SetAllUserPaused(SceneType type, bool paused);
-	bool AreAllUserPaused(SceneType type) const;
-	void DeleteAllUserSettings(SceneType type);
-
 	/// Export selected user entries to grouped per-feature overwrite JSON files.
 	void ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName);
 	void ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName);
@@ -543,6 +539,17 @@ public:
 		auto operator<=>(const SceneContextId&) const = default;
 	};
 
+	/// Whether a context stores one entry per time-of-day period. Interior and location do not.
+	static bool IsPeriodicContext(SceneContextType type);
+
+	/// How much of a periodic context an action covers. A page with time of day off authors every
+	/// period at once, so its actions have to cover every period too.
+	enum class PeriodScope : std::uint8_t
+	{
+		ActivePeriod,
+		AllPeriods,
+	};
+
 	/// Amount copied from a source context.
 	enum class CopyScope : std::uint8_t
 	{
@@ -556,6 +563,17 @@ public:
 		SkipExisting,
 		OverwriteExisting,
 		Cancel,
+	};
+
+	/// Why a candidate cannot be copied, so a preview can explain itself. None when it can.
+	enum class CopyRejection : std::uint8_t
+	{
+		None,
+		NotInCatalog,            ///< No catalog entry the destination layer permits.
+		NotAllowedInLayer,       ///< Feature not loaded, or the destination layer forbids the setting.
+		ValueRejected,           ///< The source value is not a legal value at the destination.
+		BlockedByOverwrite,      ///< An unpaused mod-authored overwrite holds the destination address.
+		GroupCompanionRejected,  ///< This row is fine; a sibling in the same control is not.
 	};
 
 	/// One source context with settings compatible with a destination.
@@ -572,6 +590,9 @@ public:
 		SettingIdentity setting;
 		std::string displayName;
 		json value;
+		/// The user value this would replace, so a preview can render the transition.
+		std::optional<json> destinationValue;
+		CopyRejection rejection = CopyRejection::None;
 		bool compatible = false;
 		bool conflicts = false;
 	};
@@ -595,13 +616,20 @@ public:
 		CopyScope scope = CopyScope::EntireContext,
 		const std::optional<SettingIdentity>& setting = std::nullopt) const;
 	/// Inspect the settings and conflicts in a proposed copy without mutating state.
+	/// AllPeriods answers for every period at once: a row conflicts if any of them already holds it.
 	std::vector<CopyCandidate> GetCopyCandidates(const SceneContextId& source,
 		const SceneContextId& destination, CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+		const std::optional<SettingIdentity>& setting = std::nullopt,
+		PeriodScope periodScope = PeriodScope::ActivePeriod) const;
 	/// Copy settings as one validated mutation and one save/reapply operation.
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy, CopyScope scope = CopyScope::EntireContext,
 		const std::optional<SettingIdentity>& setting = std::nullopt);
+	/// Copy into every period of a flat page, or into the one period of a normal page, as one save.
+	CopyResult CopySettingsAcrossPeriods(const SceneContextId& source, const SceneContextId& destination,
+		CopyConflictPolicy conflictPolicy, PeriodScope periodScope);
+	/// Name one context the way the copy source list spells it.
+	std::string GetSceneContextDisplayName(const SceneContextId& context) const;
 
 	// --- Context-Keyed Entry Access (Scene Manager authoring UI) ---
 
@@ -635,6 +663,26 @@ public:
 
 	/// Entries stored for one context, unfiltered by period. Empty when the context holds none.
 	std::span<const SettingEntry> GetContextEntries(const SceneContextId& context) const;
+
+	/// What a context's user entries amount to, for the page-wide actions that act on all of them.
+	struct ContextEntrySummary
+	{
+		size_t total = 0;
+		size_t paused = 0;
+
+		bool AllPaused() const { return total != 0 && paused == total; }
+	};
+
+	/// Count the user entries belonging to one context, and how many of them are paused.
+	ContextEntrySummary GetContextUserEntrySummary(const SceneContextId& context,
+		PeriodScope periodScope = PeriodScope::ActivePeriod) const;
+	/// Pause or resume every user entry in a context as one save.
+	void SetContextEntriesPaused(const SceneContextId& context, bool paused,
+		PeriodScope periodScope = PeriodScope::ActivePeriod);
+	/// Remove every user entry in a context as one save. Mod-authored overwrites are left alone,
+	/// as are raw entries this session could not resolve to a loaded feature.
+	void ClearContextEntries(const SceneContextId& context,
+		PeriodScope periodScope = PeriodScope::ActivePeriod);
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
@@ -1000,9 +1048,16 @@ private:
 	static EffectiveContextEntries BuildEffectiveContextEntries(
 		const std::vector<SettingEntry>& contextEntries, const SceneContextId& context);
 	const std::vector<SettingEntry>* GetCopyContextEntries(const SceneContextId& context) const;
+	std::vector<SettingEntry>* GetContextEntriesMut(const SceneContextId& context);
+	/// One presentation bump, one mark and one save for a mutation spanning a whole context.
+	void CommitContextUserEntryMutation(const SceneContextId& context);
 	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
 		const SceneContextId& destination, CopyScope scope,
-		const std::optional<SettingIdentity>& selectedSetting) const;
+		const std::optional<SettingIdentity>& selectedSetting, PeriodScope periodScope) const;
+	/// Deferring the commit lets a fan-out over the periods land as one save.
+	CopyResult CopySettingsToContext(const SceneContextId& source, const SceneContextId& destination,
+		CopyConflictPolicy conflictPolicy, CopyScope scope,
+		const std::optional<SettingIdentity>& setting, bool deferCommit);
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
 	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
 		std::span<const CatalogSceneSettingUpdate> updates);

@@ -2011,56 +2011,6 @@ void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
 	ReapplyIfActive();
 }
 
-void SceneSettingsManager::SetAllUserPaused(SceneType type, bool paused)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	bool changed = false;
-	for (auto& entry : GetEntriesMut(type)) {
-		if (entry.source == EntrySource::User && entry.paused != paused) {
-			entry.paused = paused;
-			changed = true;
-		}
-	}
-	if (changed)
-		BumpEntryPresentationRevision();
-	MarkEntryListUserSettingsModified(type);
-	SaveAllUserSettings();
-	ReapplyIfActive();
-}
-
-bool SceneSettingsManager::AreAllUserPaused(SceneType type) const
-{
-	if (!IsEntryListSceneType(type))
-		return false;
-	bool found = false;
-	for (const auto& entry : GetEntries(type)) {
-		if (entry.source != EntrySource::User)
-			continue;
-		found = true;
-		if (!entry.paused)
-			return false;
-	}
-	return found;
-}
-
-void SceneSettingsManager::DeleteAllUserSettings(SceneType type)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	auto& vec = GetEntriesMut(type);
-	const auto removed = std::erase_if(vec, [](const SettingEntry& e) {
-		return e.source == EntrySource::User;
-	});
-	if (removed != 0)
-		BumpEntryPresentationRevision();
-	unresolvedUserEntries[type].clear();
-
-	MarkEntryListUserSettingsModified(type);
-	SaveAllUserSettings();
-	ReapplyIfActive();
-}
-
 /// Per-period overwrites live in a period subfolder of their scene's directory.
 static std::filesystem::path GetOverwriteDir(const std::filesystem::path& baseDir,
 	SceneSettingsManager::TimeOfDayPeriod period)
@@ -5179,6 +5129,15 @@ namespace
 		return context.type == SceneSettingsManager::SceneContextType::Location ||
 		       entry.period == context.period;
 	}
+
+	/// AllPeriods drops the period filter, which is what a flat page's fan-out amounts to.
+	bool EntryCoveredByContext(const SceneSettingsManager::SettingEntry& entry,
+		const SceneSettingsManager::SceneContextId& context, SceneSettingsManager::PeriodScope periodScope)
+	{
+		return (periodScope == SceneSettingsManager::PeriodScope::AllPeriods &&
+			       SceneSettingsManager::IsPeriodicContext(context.type)) ||
+		       EntryBelongsToContext(entry, context);
+	}
 }
 
 void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType type,
@@ -5241,6 +5200,11 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 	else
 		SaveAllUserSettings();
 	ReapplyIfActive();
+}
+
+bool SceneSettingsManager::IsPeriodicContext(SceneContextType type)
+{
+	return type == SceneContextType::TimeOfDay || type == SceneContextType::Weather;
 }
 
 bool SceneSettingsManager::IsValidSceneContext(const SceneContextId& context)
@@ -5329,6 +5293,29 @@ namespace
 		           SceneSettingsManager::SceneType::InteriorOnly :
 		           SceneSettingsManager::SceneType::TimeOfDay;
 	}
+
+	/// What a copy destination validates against: the layer it lands on and whether it blends.
+	struct CopyDestinationRules
+	{
+		SceneSettingsManager::SceneType sceneType;
+		bool requireNumeric;
+	};
+
+	/// Mirrors the entry-add path each context type takes, so a copy never offers what AddSetting rejects.
+	CopyDestinationRules GetCopyDestinationRules(SceneSettingsManager::SceneContextType type)
+	{
+		using SceneContextType = SceneSettingsManager::SceneContextType;
+		using SceneType = SceneSettingsManager::SceneType;
+		switch (type) {
+		case SceneContextType::Interior:
+			return { SceneType::InteriorOnly, false };
+		case SceneContextType::Location:
+			return { SceneType::Location, false };
+		default:
+			// Time of day and weather both blend over a period, so both demand transitionable floats.
+			return { SceneType::TimeOfDay, true };
+		}
+	}
 }
 
 std::vector<std::string> SceneSettingsManager::SplitSettingPath(std::string_view catalogPath)
@@ -5341,6 +5328,102 @@ std::span<const SceneSettingsManager::SettingEntry> SceneSettingsManager::GetCon
 {
 	const auto* contextEntries = GetCopyContextEntries(context);
 	return contextEntries ? std::span{ *contextEntries } : std::span<const SettingEntry>{};
+}
+
+std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::GetContextEntriesMut(
+	const SceneContextId& context)
+{
+	if (!IsValidSceneContext(context))
+		return nullptr;
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay:
+		return &GetEntriesMut(ContextSceneType(context.type));
+	case SceneContextType::Weather:
+		if (!TryEnsureWeatherDataLoaded())
+			return nullptr;
+		if (auto configIt = weatherSceneConfigs.find(context.weatherId); configIt != weatherSceneConfigs.end())
+			return &configIt->second.entries;
+		return nullptr;
+	case SceneContextType::Location:
+		if (!TryEnsureLocationDataLoaded())
+			return nullptr;
+		if (auto configIt = locationSceneConfigs.find(
+				GetLocationConfigKey(context.locationType, context.locationFormKey));
+			configIt != locationSceneConfigs.end())
+			return &configIt->second.entries;
+		return nullptr;
+	default:
+		return nullptr;
+	}
+}
+
+void SceneSettingsManager::CommitContextUserEntryMutation(const SceneContextId& context)
+{
+	BumpEntryPresentationRevision();
+	switch (context.type) {
+	case SceneContextType::Interior:
+	case SceneContextType::TimeOfDay:
+		MarkEntryListUserSettingsModified(ContextSceneType(context.type));
+		break;
+	case SceneContextType::Weather:
+		PrepareWeatherUserSettingsMutation(context.weatherId, true);
+		break;
+	case SceneContextType::Location:
+		PrepareLocationUserSettingsMutation(context.locationType, context.locationFormKey, true);
+		break;
+	default:
+		break;
+	}
+	CommitSceneSettingChanges();
+}
+
+SceneSettingsManager::ContextEntrySummary SceneSettingsManager::GetContextUserEntrySummary(
+	const SceneContextId& context, PeriodScope periodScope) const
+{
+	ContextEntrySummary summary;
+	if (!IsValidSceneContext(context))
+		return summary;
+	for (const auto& entry : GetContextEntries(context)) {
+		if (entry.source != EntrySource::User || !EntryCoveredByContext(entry, context, periodScope))
+			continue;
+		++summary.total;
+		summary.paused += entry.paused ? 1 : 0;
+	}
+	return summary;
+}
+
+void SceneSettingsManager::SetContextEntriesPaused(const SceneContextId& context, bool paused,
+	PeriodScope periodScope)
+{
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries)
+		return;
+
+	bool changed = false;
+	for (auto& entry : *contextEntries) {
+		if (entry.source != EntrySource::User || entry.paused == paused ||
+			!EntryCoveredByContext(entry, context, periodScope))
+			continue;
+		entry.paused = paused;
+		changed = true;
+	}
+	if (changed)
+		CommitContextUserEntryMutation(context);
+}
+
+void SceneSettingsManager::ClearContextEntries(const SceneContextId& context, PeriodScope periodScope)
+{
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries)
+		return;
+
+	// Unresolved raw entries are left in the document: they belong to features this session cannot judge.
+	const auto removed = std::erase_if(*contextEntries, [&](const SettingEntry& entry) {
+		return entry.source == EntrySource::User && EntryCoveredByContext(entry, context, periodScope);
+	});
+	if (removed != 0)
+		CommitContextUserEntryMutation(context);
 }
 
 std::optional<size_t> SceneSettingsManager::FindContextUserEntry(const SceneContextId& context,
@@ -5505,7 +5588,7 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopyCandidates(
 	const SceneContextId& source, const SceneContextId& destination, CopyScope scope,
-	const std::optional<SettingIdentity>& selectedSetting) const
+	const std::optional<SettingIdentity>& selectedSetting, PeriodScope periodScope) const
 {
 	std::vector<CopyCandidate> candidates;
 	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination) || !IsValidCopyScope(scope) ||
@@ -5525,22 +5608,21 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 		destinationEntries = &empty;
 
 	const auto effectiveEntries = BuildEffectiveContextEntries(*sourceEntries, source);
-	std::set<SettingIdentity> destinationUserSettings;
+	std::map<SettingIdentity, json> destinationUserSettings;
 	std::set<SettingIdentity> destinationOverwriteSettings;
 	for (const auto& entry : *destinationEntries) {
-		if (!EntryBelongsToContext(entry, destination))
+		if (!EntryCoveredByContext(entry, destination, periodScope))
 			continue;
 		if (entry.source == EntrySource::User)
-			destinationUserSettings.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
+			destinationUserSettings.try_emplace(
+				SettingIdentity{ entry.featureShortName, entry.settingPath, entry.settingKey }, entry.value);
 		else if (entry.source == EntrySource::Overwrite && !entry.paused)
 			destinationOverwriteSettings.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 	}
 
 	const auto selectedGroup = selectedSetting ? std::optional{ GetCopyGroupKey(*selectedSetting) } : std::nullopt;
 	const bool selectedIsAggregate = selectedGroup && std::get<5>(*selectedGroup) != SettingControlType::Scalar;
-	// Only the location layer accepts non-float settings, so every other destination requires numbers.
-	const bool requireNumeric = destination.type != SceneContextType::Location;
-	const auto destinationSceneType = requireNumeric ? SceneType::TimeOfDay : SceneType::Location;
+	const auto [destinationSceneType, requireNumeric] = GetCopyDestinationRules(destination.type);
 	for (const auto& [identity, entry] : effectiveEntries) {
 		if (scope == CopyScope::Setting && identity != *selectedSetting &&
 			!(selectedIsAggregate && GetCopyGroupKey(identity) == *selectedGroup))
@@ -5548,19 +5630,30 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 
 		auto* setting = FindAllowedCatalogSetting(
 			identity.featureShortName, identity.settingPath, identity.settingKey, requireNumeric);
-		const bool compatible = setting &&
-		                        IsSettingAllowedForType(destinationSceneType, identity.featureShortName,
-			                        identity.settingPath, identity.settingKey) &&
-		                        IsSceneSettingValueAllowed(entry->value, *setting, entry->value, requireNumeric) &&
-		                        !destinationOverwriteSettings.contains(identity);
+		auto rejection = CopyRejection::None;
+		if (!setting)
+			rejection = CopyRejection::NotInCatalog;
+		else if (!IsSettingAllowedForType(destinationSceneType, identity.featureShortName,
+					 identity.settingPath, identity.settingKey))
+			rejection = CopyRejection::NotAllowedInLayer;
+		else if (!IsSceneSettingValueAllowed(entry->value, *setting, entry->value, requireNumeric))
+			rejection = CopyRejection::ValueRejected;
+		else if (destinationOverwriteSettings.contains(identity))
+			rejection = CopyRejection::BlockedByOverwrite;
+
+		const bool compatible = rejection == CopyRejection::None;
+		const auto destinationIt = destinationUserSettings.find(identity);
+		const bool conflicts = destinationIt != destinationUserSettings.end();
 		candidates.push_back({
 			.setting = identity,
 			.displayName = entry->displayName.empty() ?
 			                   GetSceneSettingDisplayName(identity.featureShortName, identity.settingPath, identity.settingKey) :
 			                   entry->displayName,
 			.value = entry->value,
+			.destinationValue = conflicts ? std::optional{ destinationIt->second } : std::nullopt,
+			.rejection = rejection,
 			.compatible = compatible,
-			.conflicts = compatible && destinationUserSettings.contains(identity),
+			.conflicts = compatible && conflicts,
 		});
 	}
 
@@ -5572,6 +5665,9 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 		if (std::all_of(indices.begin(), indices.end(), [&](size_t index) { return candidates[index].compatible; }))
 			continue;
 		for (const auto index : indices) {
+			// A row with no fault of its own is out purely because a sibling is, which is worth saying.
+			if (candidates[index].rejection == CopyRejection::None)
+				candidates[index].rejection = CopyRejection::GroupCompanionRejected;
 			candidates[index].compatible = false;
 			candidates[index].conflicts = false;
 		}
@@ -5584,9 +5680,9 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::GetCopyCandidates(
 	const SceneContextId& source, const SceneContextId& destination, CopyScope scope,
-	const std::optional<SettingIdentity>& setting) const
+	const std::optional<SettingIdentity>& setting, PeriodScope periodScope) const
 {
-	return BuildCopyCandidates(source, destination, scope, setting);
+	return BuildCopyCandidates(source, destination, scope, setting, periodScope);
 }
 
 std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySources(
@@ -5611,8 +5707,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 		return scope == CopyScope::EntireContext || identity == *setting ||
 		       (selectedIsAggregate && GetCopyGroupKey(identity) == *selectedGroup);
 	};
-	const bool requireNumeric = destination.type != SceneContextType::Location;
-	const auto destinationSceneType = requireNumeric ? SceneType::TimeOfDay : SceneType::Location;
+	const auto [destinationSceneType, requireNumeric] = GetCopyDestinationRules(destination.type);
 	const auto countCompatible = [&](const EffectiveContextEntries& effectiveEntries) {
 		struct GroupCount
 		{
@@ -5641,12 +5736,11 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 	};
 
 	std::vector<CopySource> sources;
-	const auto addSource = [&](const SceneContextId& context,
-							   const EffectiveContextEntries& effectiveEntries, std::string displayName) {
+	const auto addSource = [&](const SceneContextId& context, const EffectiveContextEntries& effectiveEntries) {
 		if (IsSameSceneContext(context, destination))
 			return;
 		if (const auto settingCount = countCompatible(effectiveEntries); settingCount != 0)
-			sources.push_back({ context, std::move(displayName), settingCount });
+			sources.push_back({ context, GetSceneContextDisplayName(context), settingCount });
 	};
 	const auto buildPeriodMaps = [](const std::vector<SettingEntry>& sourceEntries) {
 		std::array<EffectiveContextEntries, kPeriodCount> periods;
@@ -5659,20 +5753,21 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 		return periods;
 	};
 
+	const SceneContextId interiorContext{ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count };
+	addSource(interiorContext,
+		BuildEffectiveContextEntries(GetEntries(SceneType::InteriorOnly), interiorContext));
+
 	const auto timeOfDayPeriods = buildPeriodMaps(GetEntries(SceneType::TimeOfDay));
-	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
-		const auto period = static_cast<TimeOfDayPeriod>(periodIndex);
-		addSource({ .type = SceneContextType::TimeOfDay, .period = period },
-			timeOfDayPeriods[periodIndex], GetCopyPeriodName(period));
-	}
+	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
+		addSource({ .type = SceneContextType::TimeOfDay, .period = static_cast<TimeOfDayPeriod>(periodIndex) },
+			timeOfDayPeriods[periodIndex]);
 	for (const auto& [weatherId, config] : weatherSceneConfigs) {
 		const auto weatherPeriods = buildPeriodMaps(config.entries);
-		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
-			const auto period = static_cast<TimeOfDayPeriod>(periodIndex);
-			addSource({ .type = SceneContextType::Weather, .period = period, .weatherId = weatherId },
-				weatherPeriods[periodIndex],
-				std::format("{} / {}", Util::GetFormDisplayName(weatherId), GetCopyPeriodName(period)));
-		}
+		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
+			addSource({ .type = SceneContextType::Weather,
+						  .period = static_cast<TimeOfDayPeriod>(periodIndex),
+						  .weatherId = weatherId },
+				weatherPeriods[periodIndex]);
 	}
 	for (const auto& [configKey, config] : locationSceneConfigs) {
 		SceneContextId context{
@@ -5680,9 +5775,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 			.locationType = config.type,
 			.locationFormKey = config.formKey,
 		};
-		addSource(context, BuildEffectiveContextEntries(config.entries, context),
-			std::format("{} / {}", GetCopyLocationTypeName(config.type),
-				config.name.empty() ? config.formKey : config.name));
+		addSource(context, BuildEffectiveContextEntries(config.entries, context));
 	}
 	std::sort(sources.begin(), sources.end(), [](const auto& lhs, const auto& rhs) {
 		return std::tie(lhs.context.type, lhs.displayName, lhs.context) <
@@ -5691,9 +5784,33 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 	return sources;
 }
 
-SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneContextId& source,
+std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextId& context) const
+{
+	switch (context.type) {
+	case SceneContextType::Interior:
+		return T("feature.scene_manager.context.interior", "Interior");
+	case SceneContextType::TimeOfDay:
+		return GetCopyPeriodName(context.period);
+	case SceneContextType::Weather:
+		return std::format("{} / {}", Util::GetFormDisplayName(context.weatherId),
+			GetCopyPeriodName(context.period));
+	case SceneContextType::Location: {
+		auto configIt = locationSceneConfigs.find(
+			GetLocationConfigKey(context.locationType, context.locationFormKey));
+		// The form key is the fallback identity for targets the game never named.
+		const std::string* name = &context.locationFormKey;
+		if (configIt != locationSceneConfigs.end())
+			name = configIt->second.name.empty() ? &configIt->second.formKey : &configIt->second.name;
+		return std::format("{} / {}", GetCopyLocationTypeName(context.locationType), *name);
+	}
+	default:
+		return {};
+	}
+}
+
+SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(const SceneContextId& source,
 	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, CopyScope scope,
-	const std::optional<SettingIdentity>& setting)
+	const std::optional<SettingIdentity>& setting, bool deferCommit)
 {
 	CopyResult result;
 	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination) || !IsValidCopyScope(scope) ||
@@ -5706,7 +5823,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 		!TryEnsureLocationDataLoaded())
 		return result;
 
-	const auto candidates = BuildCopyCandidates(source, destination, scope, setting);
+	const auto candidates = BuildCopyCandidates(source, destination, scope, setting, PeriodScope::ActivePeriod);
 	if (candidates.empty())
 		return result;
 	std::map<CopyGroupKey, std::vector<CopyCandidate>> groups;
@@ -5747,8 +5864,9 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 	std::vector<SettingEntry>* destinationEntries = nullptr;
 	bool destinationNeedsMaterialization = false;
 	switch (destination.type) {
+	case SceneContextType::Interior:
 	case SceneContextType::TimeOfDay:
-		destinationEntries = &GetEntriesMut(SceneType::TimeOfDay);
+		destinationEntries = &GetEntriesMut(ContextSceneType(destination.type));
 		break;
 	case SceneContextType::Weather: {
 		auto configIt = weatherSceneConfigs.find(destination.weatherId);
@@ -5764,11 +5882,14 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 		break;
 	}
 	default:
-		// Interior is not a copy destination in v1; refuse cleanly instead of returning stats for a copy that never ran.
 		return {};
 	}
 	if (!destinationEntries)
 		return result;
+
+	// The interior and location layers are aperiodic, so entries landing there carry no period.
+	const bool aperiodicDestination = destination.type == SceneContextType::Interior ||
+	                                  destination.type == SceneContextType::Location;
 
 	std::map<SettingIdentity, size_t> destinationUserIndices;
 	for (size_t index = 0; index < destinationEntries->size(); ++index) {
@@ -5924,30 +6045,60 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 			.originalValue = std::move(copy.originalValue),
 			.paused = false,
 			.source = EntrySource::User,
-			.period = destination.type == SceneContextType::Location ? TimeOfDayPeriod::Count : destination.period,
+			.period = aperiodicDestination ? TimeOfDayPeriod::Count : destination.period,
 			.transitionSeconds = copy.transitionSeconds,
 		});
 		++result.copied;
 	}
-	if (!result.Changed())
+	if (!result.Changed() || deferCommit)
 		return result;
 
-	BumpEntryPresentationRevision();
-	switch (destination.type) {
-	case SceneContextType::TimeOfDay:
-		MarkEntryListUserSettingsModified(SceneType::TimeOfDay);
-		break;
-	case SceneContextType::Weather:
-		PrepareWeatherUserSettingsMutation(destination.weatherId, true);
-		break;
-	case SceneContextType::Location:
-		PrepareLocationUserSettingsMutation(destination.locationType, destination.locationFormKey, true);
-		break;
-	default:
-		// Interior never reaches here; the destination-materialization switch above returns before any copy occurs.
-		break;
+	CommitContextUserEntryMutation(destination);
+	return result;
+}
+
+SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneContextId& source,
+	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, CopyScope scope,
+	const std::optional<SettingIdentity>& setting)
+{
+	return CopySettingsToContext(source, destination, conflictPolicy, scope, setting, false);
+}
+
+SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsAcrossPeriods(const SceneContextId& source,
+	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, PeriodScope periodScope)
+{
+	if (periodScope == PeriodScope::ActivePeriod || !IsPeriodicContext(destination.type))
+		return CopySettings(source, destination, conflictPolicy);
+
+	CopyResult result;
+	// Cancelling has to be decided over the whole fan-out, or the earlier periods land before a later one refuses.
+	if (conflictPolicy == CopyConflictPolicy::Cancel) {
+		const auto candidates = BuildCopyCandidates(source, destination, CopyScope::EntireContext,
+			std::nullopt, PeriodScope::AllPeriods);
+		if (std::any_of(candidates.begin(), candidates.end(),
+				[](const auto& candidate) { return candidate.conflicts; })) {
+			result.hadConflicts = true;
+			result.cancelled = true;
+			return result;
+		}
 	}
-	CommitSceneSettingChanges();
+
+	for (const auto period : kPeriods) {
+		auto periodDestination = destination;
+		periodDestination.period = period;
+		if (IsSameSceneContext(periodDestination, source))
+			continue;
+		const auto periodResult = CopySettingsToContext(source, periodDestination, conflictPolicy,
+			CopyScope::EntireContext, std::nullopt, true);
+		result.copied += periodResult.copied;
+		result.skipped += periodResult.skipped;
+		result.overwritten += periodResult.overwritten;
+		result.incompatible += periodResult.incompatible;
+		result.hadConflicts |= periodResult.hadConflicts;
+		result.cancelled |= periodResult.cancelled;
+	}
+	if (result.Changed())
+		CommitContextUserEntryMutation(destination);
 	return result;
 }
 

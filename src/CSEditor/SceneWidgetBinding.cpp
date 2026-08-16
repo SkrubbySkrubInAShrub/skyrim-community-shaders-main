@@ -228,9 +228,8 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	featureShortName = std::string{ metadata->featureShortName };
 	settingPath = SceneSettingsManager::SplitSettingPath(metadata->settingPath);
 
-	// Interior and Location store one entry with no period, so only these two can fan out.
-	const bool periodic = contextId.type == SceneSettingsManager::SceneContextType::TimeOfDay ||
-	                      contextId.type == SceneSettingsManager::SceneContextType::Weather;
+	// Interior and Location store one entry with no period, so only a periodic context can fan out.
+	const bool periodic = SceneSettingsManager::IsPeriodicContext(contextId.type);
 	flatAcrossPeriods = periodic && !context->perPeriod;
 	if (const auto period = static_cast<int>(contextId.period);
 		periodic && period >= 0 && period < kPeriodCount)
