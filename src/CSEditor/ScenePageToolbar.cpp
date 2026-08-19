@@ -8,12 +8,14 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "Menu.h"
+#include "Utils/Format.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -274,18 +276,94 @@ namespace
 		return tree;
 	}
 
+	/// Display names collide (two location forms can share a name), so scope menu entries by the
+	/// context identity behind them to keep ImGui IDs distinct.
+	void PushContextId(const SceneContextId& context)
+	{
+		ImGui::PushID(static_cast<int>(context.weatherId));
+		ImGui::PushID(context.locationFormKey.c_str());
+	}
+
+	void PopContextId()
+	{
+		ImGui::PopID();
+		ImGui::PopID();
+	}
+
 	void DrawCopyMenuItem(const std::string& label, size_t settingCount, const CopySource& entry,
 		const std::function<void(const CopySource&)>& onPick)
 	{
+		PushContextId(entry.context);
 		if (ImGui::MenuItem(std::format("{} ({})", label, settingCount).c_str()))
 			onPick(entry);
+		PopContextId();
 	}
 
+	/// How long a typed prefix survives without further typing before the next key starts a new search.
+	constexpr double kTypeAheadResetSeconds = 1.0;
+
+	/// Type-to-jump for the long leaf lists. Menus never read the character queue, so it is ours to
+	/// consume: typed letters accumulate into a prefix the list scrolls to the first entry of.
+	struct CopyTypeAhead
+	{
+		std::string prefix;
+		double lastInputTime = 0.0;
+		int lastFrame = -1;
+		bool pendingJump = false;
+		bool retryLastKey = false;
+
+		/// Consumes this frame's typing. Call once inside the list, before drawing its entries.
+		void BeginList()
+		{
+			const auto time = ImGui::GetTime();
+			const auto frame = ImGui::GetFrameCount();
+			// A skipped frame means a different list opened, so its search starts from nothing.
+			if (frame != lastFrame + 1 || time - lastInputTime > kTypeAheadResetSeconds)
+				prefix.clear();
+			lastFrame = frame;
+
+			pendingJump = std::exchange(retryLastKey, false);
+			for (const auto character : ImGui::GetIO().InputQueueCharacters) {
+				if (character < ' ' || character > '~')
+					continue;
+				prefix.push_back(static_cast<char>(character));
+				lastInputTime = time;
+				pendingJump = true;
+			}
+		}
+
+		/// Scrolls to the first entry the typed prefix matches. Call right after drawing each entry.
+		void ScrollToMatch(std::string_view name)
+		{
+			if (!pendingJump || name.size() < prefix.size())
+				return;
+			if (Util::IEquals(name.substr(0, prefix.size()), prefix)) {
+				ImGui::SetScrollHereY(0.0f);
+				pendingJump = false;
+			}
+		}
+
+		/// Call once after the entries. A prefix that matched nothing was a fresh jump rather than a
+		/// longer search, so the next frame retries with the last key alone.
+		void EndList()
+		{
+			if (!pendingJump || prefix.size() < 2)
+				return;
+			prefix.erase(0, prefix.size() - 1);
+			retryLastKey = true;
+		}
+	};
+	CopyTypeAhead copyTypeAhead;
+
 	/// Scrollable wrapper for leaf lists that can still grow long: individual weather scenes, locations.
+	/// Typing while one is open jumps to the first entry starting with what was typed.
 	void DrawScrollableChild(const std::function<void()>& drawItems)
 	{
-		if (ImGui::BeginChild("##ScenePageCopyScroll", ImVec2(0.0f, kCopyListHeight * Util::GetUIScale())))
+		if (ImGui::BeginChild("##ScenePageCopyScroll", ImVec2(0.0f, kCopyListHeight * Util::GetUIScale()))) {
+			copyTypeAhead.BeginList();
 			drawItems();
+			copyTypeAhead.EndList();
+		}
 		ImGui::EndChild();
 	}
 
@@ -311,14 +389,17 @@ namespace
 					const auto* firstPeriod = group.periods.front();
 					if (!manager->IsWeatherShowTimeOfDay(firstPeriod->context.weatherId)) {
 						DrawCopyMenuItem(group.displayName, firstPeriod->settingCount, *firstPeriod, onPick);
-						continue;
+					} else {
+						PushContextId(firstPeriod->context);
+						if (ImGui::BeginMenu(group.displayName.c_str())) {
+							for (const auto* entry : group.periods)
+								DrawCopyMenuItem(SplitWeatherDisplayName(entry->displayName).second,
+									entry->settingCount, *entry, onPick);
+							ImGui::EndMenu();
+						}
+						PopContextId();
 					}
-					if (ImGui::BeginMenu(group.displayName.c_str())) {
-						for (const auto* entry : group.periods)
-							DrawCopyMenuItem(
-								SplitWeatherDisplayName(entry->displayName).second, entry->settingCount, *entry, onPick);
-						ImGui::EndMenu();
-					}
+					copyTypeAhead.ScrollToMatch(group.displayName);
 				}
 			});
 			ImGui::EndMenu();
@@ -326,8 +407,10 @@ namespace
 
 		if (!tree.location.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Location))) {
 			DrawScrollableChild([&] {
-				for (const auto* entry : tree.location)
+				for (const auto* entry : tree.location) {
 					DrawCopyMenuItem(entry->displayName, entry->settingCount, *entry, onPick);
+					copyTypeAhead.ScrollToMatch(entry->displayName);
+				}
 			});
 			ImGui::EndMenu();
 		}
