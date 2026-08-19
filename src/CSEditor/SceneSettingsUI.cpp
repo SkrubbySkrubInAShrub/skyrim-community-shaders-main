@@ -73,26 +73,23 @@ namespace
 	};
 	PeriodBarState periodBar;
 
-	/// Off by default: the bar only takes over time, and pauses the game, once the user asks for it.
-	bool timeOfDayEnabled = false;
+	/// Weather pages are flat until the user asks for periods; the bar only takes over time, and
+	/// pauses the game, once they do. The Scene Manager panel has no flat mode and never shows this.
+	bool weatherTimeOfDayEnabled = false;
 
 	/// The Scene Manager panel edits interior and time of day, and only one of them resolves at a
-	/// time, so its toggles follow the player instead of being matched to the cell by hand.
+	/// time, so it follows the player instead of being matched to the cell by hand.
 	bool interiorEnabled = false;
 	bool lastInterior = false;
 
-	/// Re-arms both toggles on a cell transition and reports whether the player is indoors.
-	bool SyncSceneToggles()
+	/// Re-arms the interior layer on a cell transition.
+	void SyncSceneToggles()
 	{
 		const bool interior = Util::IsInterior();
 		if (interior != lastInterior) {
 			lastInterior = interior;
 			interiorEnabled = interior;
-			// Time of day never resolves indoors, so the interior takes the panel over outright.
-			if (interior)
-				timeOfDayEnabled = false;
 		}
-		return interior;
 	}
 
 	/// A selectable feature, with its label built once because the list is fixed after boot.
@@ -117,8 +114,8 @@ namespace
 	};
 	std::vector<LocationWindow> locationWindows;
 
-	// Latch driving the automatic time pause.
-	bool panelVisible = false;
+	// Latch driving the automatic time pause: raised by any page editing a period this frame.
+	bool periodEditingThisFrame = false;
 	bool wasEditingTimeOfDay = false;
 	bool pausedByPanel = false;
 
@@ -151,24 +148,30 @@ namespace
 		return context;
 	}
 
-	/// How much of a page an action owns: with time of day off, editing a periodic page writes every
-	/// period at once, so the page-wide actions have to cover every period too.
-	SceneSettingsManager::PeriodScope ResolvePeriodScope(const SceneSettingsManager::SceneContextId& context)
+	/// Whether a page edits one period at a time. The Scene Manager panel has no flat mode, so it
+	/// always does, except indoors where the aperiodic interior layer takes the panel over.
+	bool ResolvePeriodEditing(bool sceneManagerPanel)
 	{
-		return SceneSettingsManager::IsPeriodicContext(context.type) && !timeOfDayEnabled ?
+		return sceneManagerPanel ? !interiorEnabled : weatherTimeOfDayEnabled;
+	}
+
+	/// How much of a page an action owns: a flat periodic page writes every period at once, so the
+	/// page-wide actions have to cover every period too.
+	SceneSettingsManager::PeriodScope ResolvePeriodScope(
+		const SceneSettingsManager::SceneContextId& context, bool periodEditing)
+	{
+		return SceneSettingsManager::IsPeriodicContext(context.type) && !periodEditing ?
 		           SceneSettingsManager::PeriodScope::AllPeriods :
 		           SceneSettingsManager::PeriodScope::ActivePeriod;
 	}
 
-	/// Draws the period bar with its enable toggle and the page toolbar, and returns the period the
-	/// panel below it should edit.
-	/// The interior toggle belongs to the Scene Manager panel, which is the only place both layers meet.
-	int DrawPeriodBar(const SceneSettingsManager::SceneContextId& baseContext, bool withInteriorToggle = false)
+	/// Draws the period bar and the page toolbar, and returns the period the panel below it should
+	/// edit. The Scene Manager panel is the only place both layers meet, so it is the only one that
+	/// shows the interior indicator, and it takes the toggle's place there.
+	int DrawPeriodBar(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
+		bool sceneManagerPanel)
 	{
-		if (withInteriorToggle)
-			SyncSceneToggles();
-		const bool interior = withInteriorToggle && interiorEnabled;
-		const bool editing = timeOfDayEnabled && !interior;
+		const bool interior = sceneManagerPanel && interiorEnabled;
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
 
 		if (editing) {
@@ -209,7 +212,7 @@ namespace
 		ImGui::PopStyleVar();
 		ImGui::EndDisabled();
 
-		if (withInteriorToggle) {
+		if (sceneManagerPanel) {
 			// Indicator only: interior always follows the cell the player is actually in, so
 			// toggling it by hand would silently do nothing when the layer can't resolve.
 			ImGui::BeginDisabled();
@@ -218,28 +221,24 @@ namespace
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
 				"Shows whether interior settings are being edited. Follows the cell the player is in."),
 				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
-			ImGui::SameLine();
+		} else {
+			// Enabling re-couples the bar to live time, so it always lands on the current period.
+			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &weatherTimeOfDayEnabled) && weatherTimeOfDayEnabled) {
+				periodBar.selected = -1;
+				periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
+			}
+			Util::AddTooltip(T(TKEY("time_of_day_toggle_tooltip"),
+				"Edit one period at a time instead of the whole page at once. Game time pauses while a period is being edited."),
+				ImGuiHoveredFlags_DelayNormal);
 		}
-
-		ImGui::BeginDisabled(interior);
-		// Enabling re-couples the bar to live time, so it always lands on the current period.
-		if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &timeOfDayEnabled) && timeOfDayEnabled) {
-			periodBar.selected = -1;
-			periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
-		}
-		ImGui::EndDisabled();
-		const char* toggleTooltip = interior ?
-		                                T(TKEY("time_of_day_toggle_interior_tooltip"), "Time of day does not resolve indoors. Edit the interior instead.") :
-		                                T(TKEY("time_of_day_toggle_tooltip"), "Edit one period at a time. Game time pauses while a Scene Manager panel is open.");
-		Util::AddTooltip(toggleTooltip, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 		ImGui::SameLine();
 		const auto pageContext = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active));
-		ScenePageToolbar::Draw(pageContext, ResolvePeriodScope(pageContext));
+		ScenePageToolbar::Draw(pageContext, ResolvePeriodScope(pageContext, editing));
 
 		if (interior)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
-		else if (!timeOfDayEnabled)
+		else if (!editing)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_off"), "Time of day editing is off. The bar does not follow game time."));
 		else if (periodBar.selected < 0)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to jump to it and edit it on its own."));
@@ -288,18 +287,22 @@ namespace
 	/// Period bar, intro, and the replicated feature UI bound to one scene context.
 	void DrawPanel(const char* intro, const std::string& selectedFeature,
 		const SceneSettingsManager::SceneContextId& baseContext, bool withPeriodBar = true,
-		bool withInteriorToggle = false)
+		bool sceneManagerPanel = false)
 	{
 		auto context = baseContext;
+		bool periodEditing = false;
 		if (withPeriodBar) {
-			const auto period = static_cast<TimeOfDayPeriod>(DrawPeriodBar(baseContext, withInteriorToggle));
+			periodEditing = ResolvePeriodEditing(sceneManagerPanel);
+			periodEditingThisFrame |= periodEditing;
+			const auto period = static_cast<TimeOfDayPeriod>(
+				DrawPeriodBar(baseContext, periodEditing, sceneManagerPanel));
 			context = ResolvePageContext(baseContext, period);
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 		} else {
 			// A page without the bar has no toggle row to share, so the actions get a row of their own.
-			ScenePageToolbar::Draw(context, ResolvePeriodScope(context));
+			ScenePageToolbar::Draw(context, ResolvePeriodScope(context, periodEditing));
 		}
 		ImGui::TextWrapped("%s", intro);
 		// Greying covers both what no scene can hold and what only another scene type can.
@@ -309,7 +312,7 @@ namespace
 
 		if (selectedFeature.empty())
 			return;
-		const bool perPeriod = timeOfDayEnabled && SceneSettingsManager::IsPeriodicContext(context.type);
+		const bool perPeriod = periodEditing && SceneSettingsManager::IsPeriodicContext(context.type);
 		SceneFeatureReplica::Draw(selectedFeature, context, perPeriod);
 	}
 
@@ -542,8 +545,6 @@ namespace
 
 void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 {
-	panelVisible = true;
-
 	if (weatherId == 0) {
 		Util::Text::WrappedDisabled("%s",
 			T(TKEY("scene_weather_unresolved"), "This weather has no form, so it cannot hold overrides."));
@@ -560,12 +561,11 @@ void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 
 void SceneSettingsUI::DrawSceneManagerPanel()
 {
-	panelVisible = true;
-
 	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
 
 	// The interior layer takes the panel over indoors, and it has no periods.
-	const bool interior = SyncSceneToggles() && interiorEnabled;
+	SyncSceneToggles();
+	const bool interior = interiorEnabled;
 	const SceneSettingsManager::SceneContextId context{
 		.type = interior ? SceneSettingsManager::SceneContextType::Interior :
 						   SceneSettingsManager::SceneContextType::TimeOfDay,
@@ -651,8 +651,8 @@ void SceneSettingsUI::DrawLocationWindows()
 void SceneSettingsUI::SyncTimePause()
 {
 	// Time only stops for a panel that is actually editing a period.
-	const bool editing = panelVisible && timeOfDayEnabled;
-	panelVisible = false;
+	const bool editing = periodEditingThisFrame;
+	periodEditingThisFrame = false;
 	if (editing == wasEditingTimeOfDay)
 		return;
 	wasEditingTimeOfDay = editing;
