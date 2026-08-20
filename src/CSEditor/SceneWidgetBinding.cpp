@@ -13,6 +13,7 @@
 #include "../I18n/I18n.h"
 #include "Menu.h"
 #include "SceneWidgetInterceptor.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -158,6 +159,93 @@ namespace
 		return previous == previousGutterCalls.end() ? call == 1 : call == previous->second;
 	}
 
+	using SceneContextId = SceneSettingsManager::SceneContextId;
+	using SceneContextType = SceneSettingsManager::SceneContextType;
+	using SettingLayer = SceneSettingsManager::SettingLayer;
+
+	/// Which layer supplies one address, per period. An aperiodic context fills every slot, so a
+	/// periodic page above it reads its own period out of the same row.
+	using PeriodLayers = std::array<SettingLayer, kPeriodCount>;
+	using LayerIndex = std::map<SceneSettingsManager::SettingIdentity, PeriodLayers>;
+
+	/// The layers a page sits on top of, highest first: weather resolves over time of day, and a
+	/// location over whichever stack is running. Interior and the exterior stack never resolve at the
+	/// same time, so the live cell picks the one a location sits on, exactly as the resolver does.
+	/// Periods are filled in because a context is only fetchable with a valid one.
+	std::vector<SceneContextId> CollectLowerContexts(const SceneContextId& a_page)
+	{
+		std::vector<SceneContextId> lower;
+		if (a_page.type == SceneContextType::Location && Util::IsInterior()) {
+			lower.push_back({ .type = SceneContextType::Interior });
+			return lower;
+		}
+
+		switch (a_page.type) {
+		case SceneContextType::Location:
+			if (const auto* sky = globals::game::sky; sky && sky->currentWeather)
+				lower.push_back({ .type = SceneContextType::Weather,
+					.period = SceneSettingsManager::kPeriods[0],
+					.weatherId = sky->currentWeather->GetFormID() });
+			[[fallthrough]];
+		case SceneContextType::Weather:
+			lower.push_back({ .type = SceneContextType::TimeOfDay, .period = SceneSettingsManager::kPeriods[0] });
+			break;
+		default:
+			break;
+		}
+		return lower;
+	}
+
+	/// Fills one feature's rows from a context, highest-ranking source last so a user entry shadows
+	/// the overwrite it was authored over.
+	void CollectContextLayers(const SceneContextId& a_context, const std::string& a_feature, LayerIndex& a_index)
+	{
+		using EntrySource = SceneSettingsManager::EntrySource;
+		auto* manager = SceneSettingsManager::GetSingleton();
+
+		for (const auto source : { EntrySource::Overwrite, EntrySource::User }) {
+			for (const auto& entry : manager->GetContextEntries(a_context)) {
+				if (entry.source != source || entry.paused || entry.featureShortName != a_feature)
+					continue;
+				auto layer = source == EntrySource::Overwrite ? SettingLayer::Overwrite : SettingLayer::User;
+				if (entry.deleted)
+					layer = SettingLayer::Deleted;
+
+				auto& row = a_index[{ entry.featureShortName, entry.settingPath, entry.settingKey }];
+				if (const auto period = static_cast<size_t>(entry.period); period < static_cast<size_t>(kPeriodCount))
+					row[period] = layer;
+				else
+					row.fill(layer);
+			}
+		}
+	}
+
+	/// Layers supplying one feature's addresses in one context. Every control on a page asks this of
+	/// the same entries, and the walk is the whole context, so it is cached until the entries change.
+	const LayerIndex& GetContextLayerIndex(const SceneContextId& a_context, const std::string& a_feature)
+	{
+		struct CachedIndex
+		{
+			bool built = false;
+			std::uint64_t revision = 0;
+			LayerIndex layers;
+		};
+		static std::map<std::pair<SceneContextId, std::string>, CachedIndex> cache;
+
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto revision = manager->GetEntryPresentationRevision();
+		auto& cached = cache[{ a_context, a_feature }];
+		if (!cached.built || cached.revision != revision) {
+			cached.built = true;
+			cached.revision = revision;
+			cached.layers.clear();
+			// Nothing a paused feature holds applies, so its every context reads as empty.
+			if (!manager->IsFeaturePaused(a_feature))
+				CollectContextLayers(a_context, a_feature, cached.layers);
+		}
+		return cached.layers;
+	}
+
 	/// Same scene-type split the manager applies when persisting a new entry (AddContextSetting),
 	/// so a control never resolves as allowed here and then fails to gain an entry on the gutter tick.
 	SceneSettingsManager::SceneType SceneTypeForContext(SceneSettingsManager::SceneContextType a_type)
@@ -248,6 +336,10 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 		// The greyed control shows what is stored, not what the scene is currently running.
 		StoreHoldingValue();
 		OpenDisabled();
+	} else if (IsDrivenFromBelow()) {
+		// A layer beneath this page owns the address, so editing here would author against a value
+		// this page never resolves. The gutter stays live so the override can still be captured.
+		OpenDisabled();
 	}
 	if (mixedAcrossPeriods && value.kind == Kind::Bool) {
 		// Only Checkbox honours the flag; every other kind gets the tinted gutter instead.
@@ -333,6 +425,7 @@ void SceneWidgetBinding::Guard::ResolveState()
 
 	entryIndex.reset();
 	mixedAcrossPeriods = false;
+	lowerLayer = SceneSettingsManager::SettingLayer::None;
 
 	bool anyActive = false;
 	bool anyPaused = false;
@@ -387,6 +480,10 @@ void SceneWidgetBinding::Guard::ResolveState()
 
 	if (!anyActive && !anyPaused) {
 		state = winningLayer == SceneSettingsManager::SettingLayer::Overwrite ? State::Overwritten : State::Absent;
+		// Nothing in this context holds the address, so a layer under this page may be driving it and
+		// the page has to say so. A tombstone here already suppressed everything below.
+		if (winningLayer == SceneSettingsManager::SettingLayer::None)
+			lowerLayer = ResolveLowerLayer(components.front().settingKey);
 		return;
 	}
 
@@ -439,6 +536,46 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveWinningLaye
 	if (sawDeleted)
 		return SettingLayer::Deleted;
 	return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
+}
+
+SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer(
+	const std::string& a_settingKey) const
+{
+	const SceneSettingsManager::SettingIdentity identity{ featureShortName, settingPath, a_settingKey };
+	// A page with no period of its own sits above every period of a periodic layer beneath it.
+	const bool everyPeriod = !SceneSettingsManager::IsPeriodicContext(contextId.type);
+
+	for (const auto& lower : CollectLowerContexts(contextId)) {
+		const auto& index = GetContextLayerIndex(lower, featureShortName);
+		const auto row = index.find(identity);
+		if (row == index.end())
+			continue;
+
+		bool sawDeleted = false, sawOverwrite = false;
+		for (int slot = 0; slot < kPeriodCount; ++slot) {
+			if (!everyPeriod && !IsCoveredSlot(slot))
+				continue;
+			switch (row->second[static_cast<size_t>(slot)]) {
+			case SettingLayer::User:
+				return SettingLayer::User;
+			case SettingLayer::Deleted:
+				sawDeleted = true;
+				break;
+			case SettingLayer::Overwrite:
+				sawOverwrite = true;
+				break;
+			default:
+				break;
+			}
+		}
+		// A tombstone suppresses the layers under it and then supplies nothing itself, so this page
+		// is left free to author here.
+		if (sawDeleted)
+			return SettingLayer::None;
+		if (sawOverwrite)
+			return SettingLayer::Overwrite;
+	}
+	return SettingLayer::None;
 }
 
 bool SceneWidgetBinding::Guard::IsCoveredSlot(int a_slot) const
@@ -620,9 +757,11 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveProvenanceColor() const
 	// A disagreement about the data outranks a statement about its source.
 	if (mixedAcrossPeriods)
 		return Util::Colors::GetWarning();
-	if (winningLayer == SceneSettingsManager::SettingLayer::Overwrite)
+	// A layer below only answers once this page holds nothing, so the two never both apply.
+	const auto layer = winningLayer != SceneSettingsManager::SettingLayer::None ? winningLayer : lowerLayer;
+	if (layer == SceneSettingsManager::SettingLayer::Overwrite)
 		return Util::Colors::GetInfo();
-	if (winningLayer == SceneSettingsManager::SettingLayer::User)
+	if (layer == SceneSettingsManager::SettingLayer::User)
 		return Util::Colors::GetSuccess();
 	return std::nullopt;
 }
@@ -632,6 +771,12 @@ const char* SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 	if (mixedAcrossPeriods)
 		return T(TKEY("scene_override_mixed"),
 			"Values differ across this control. Editing writes the same value to all of them.");
+	if (lowerLayer == SceneSettingsManager::SettingLayer::Overwrite)
+		return T(TKEY("scene_override_from_mod_below"),
+			"A mod supplies this value from a scene layer below this one. Tick to pin your own here.");
+	if (lowerLayer == SceneSettingsManager::SettingLayer::User)
+		return T(TKEY("scene_override_from_user_below"),
+			"Your override on a scene layer below this one supplies this value. Tick to pin one here too.");
 	switch (state) {
 	case State::Overwritten:
 		return T(TKEY("scene_override_from_mod"),
@@ -871,8 +1016,10 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	// The tint says only that something else holds this value; the gutter's words say what. Drawn
 	// before the feature's own tooltip, which appends to the same window once the call returns.
+	// A control greyed by a lower layer is exactly the one that has to explain itself, so hovering
+	// it has to answer even while disabled.
 	if (ResolveProvenanceColor())
-		Util::AddTooltip(ResolveStatusTooltip());
+		Util::AddTooltip(ResolveStatusTooltip(), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 	// A paused control must never report a change: nothing behind it moved.
 	return state == State::Paused ? false : a_changed;

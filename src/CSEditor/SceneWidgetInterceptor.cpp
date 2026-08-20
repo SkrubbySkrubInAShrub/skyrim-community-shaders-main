@@ -62,13 +62,15 @@ namespace
 
 namespace
 {
-	// Unbound/Unavailable controls are greyed via BeginDisabled precisely so an edit here cannot
-	// rewrite the feature's base value; BeginDragDropTarget ignores that flag, so drop acceptance
-	// has to check the resolved state itself or it would bypass the same protection.
+	// Unbound/Unavailable controls, and ones a lower layer drives, are greyed via BeginDisabled
+	// precisely so an edit here cannot rewrite the feature's base value; BeginDragDropTarget ignores
+	// that flag, so drop acceptance has to check the resolved state itself or it would bypass the
+	// same protection.
 	bool CanAcceptPaletteDrop(const SceneWidgetBinding::Guard& a_guard)
 	{
 		const auto state = a_guard.GetState();
-		return state != SceneWidgetBinding::State::Unbound && state != SceneWidgetBinding::State::Unavailable;
+		return state != SceneWidgetBinding::State::Unbound &&
+		       state != SceneWidgetBinding::State::Unavailable && !a_guard.IsDrivenFromBelow();
 	}
 
 	// Mirrors AcceptPaletteColorDrop below: the palette's "VALUE_DND" payload is a raw float, not a

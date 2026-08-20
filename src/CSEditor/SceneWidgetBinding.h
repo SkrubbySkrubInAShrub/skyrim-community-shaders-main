@@ -101,6 +101,11 @@ namespace SceneWidgetBinding
 		bool Finish(bool a_changed);
 
 		State GetState() const { return state; }
+
+		/// Whether a layer beneath this page supplies the value, which is what greys the control:
+		/// only the layer that owns an address may edit it.
+		bool IsDrivenFromBelow() const { return lowerLayer != SceneSettingsManager::SettingLayer::None; }
+
 		std::optional<size_t> GetEntryIndex() const { return entryIndex; }
 		const SceneSettingsCatalog::SettingMetadata* GetMetadata() const { return metadata; }
 		const SceneSettingsManager::SceneContextId& GetContextId() const { return contextId; }
@@ -130,6 +135,10 @@ namespace SceneWidgetBinding
 		/// Provenance across every period this control covers, combined "any user wins" like
 		/// ResolveState's anyActive/anyPaused.
 		SceneSettingsManager::SettingLayer ResolveWinningLayer(const std::string& a_settingKey) const;
+
+		/// Highest layer beneath this page supplying the address, once this page supplies nothing
+		/// itself. None when the layers below leave the feature's base in place.
+		SceneSettingsManager::SettingLayer ResolveLowerLayer(const std::string& a_settingKey) const;
 
 		/// Colour standing for where the value comes from, or nothing when the feature's base wins.
 		/// Shared by the control's tint and the gutter's toggle so the two never disagree.
@@ -186,6 +195,9 @@ namespace SceneWidgetBinding
 		/// Layer winning at this address, which drives the colour independently of `state`. A paused
 		/// user entry stays Paused so the checkbox has something to resume, but reads as the mod's.
 		SceneSettingsManager::SettingLayer winningLayer = SceneSettingsManager::SettingLayer::None;
+		/// Layer beneath this page supplying the address, resolved only when this page supplies
+		/// nothing: it colours the control the same way and greys it.
+		SceneSettingsManager::SettingLayer lowerLayer = SceneSettingsManager::SettingLayer::None;
 		std::size_t valueSize = 0;
 		/// Widget value = persisted value * widgetScale; only a proxied control scales.
 		float widgetScale = 1.0f;

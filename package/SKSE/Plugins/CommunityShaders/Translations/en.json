@@ -343,6 +343,8 @@
     "cs_editor.scene_override_delete": "Delete override",
     "cs_editor.scene_override_deleted": "You removed the mod's value here. Tick or edit to take it back.",
     "cs_editor.scene_override_from_mod": "A mod supplies this value. Tick to pin your own, or remove it to suppress the mod's.",
+    "cs_editor.scene_override_from_mod_below": "A mod supplies this value from a scene layer below this one. Tick to pin your own here.",
+    "cs_editor.scene_override_from_user_below": "Your override on a scene layer below this one supplies this value. Tick to pin one here too.",
     "cs_editor.scene_override_mixed": "Values differ across this control. Editing writes the same value to all of them.",
     "cs_editor.scene_override_paused": "Override stored but held back. Tick to apply it.",
     "cs_editor.scene_override_remove": "Remove",
