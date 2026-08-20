@@ -46,6 +46,9 @@ namespace
 	/// weather list, which offers every loaded weather form rather than only the ones already authored.
 	constexpr float kCopyListHeight = 260.0f;
 
+	/// Font sizes ImGui reserves past a menu row's label for its check mark or submenu arrow.
+	constexpr float kMenuMarkWidthRatio = 1.2f;
+
 	/// Source/destination enumeration walks every weather period and every location, so each direction is
 	/// cached until the entries it counts change. The dropdown recomputes on open, so a stale count never picks.
 	struct CopyListCache
@@ -296,11 +299,17 @@ namespace
 		ImGui::PopID();
 	}
 
+	/// The row every context is offered as: its name plus how much picking it would carry.
+	std::string FormatCopyLabel(const std::string& label, size_t settingCount)
+	{
+		return std::format("{} ({})", label, settingCount);
+	}
+
 	void DrawCopyMenuItem(const std::string& label, size_t settingCount, const CopySource& entry,
 		const std::function<void(const CopySource&)>& onPick)
 	{
 		PushContextId(entry.context);
-		if (ImGui::MenuItem(std::format("{} ({})", label, settingCount).c_str()))
+		if (ImGui::MenuItem(FormatCopyLabel(label, settingCount).c_str()))
 			onPick(entry);
 		PopContextId();
 	}
@@ -361,11 +370,27 @@ namespace
 	};
 	CopyTypeAhead copyTypeAhead;
 
+	/// Width a leaf list needs for its widest row. A child sizes itself from the width its parent has
+	/// already resolved, and a menu resolves its width from what it drew, so a child left to fill the
+	/// available width would pin the submenu it opens in to the minimum window width instead.
+	float CalcCopyListWidth(std::span<const std::string> rowLabels)
+	{
+		const auto& style = ImGui::GetStyle();
+		float widest = 0.0f;
+		for (const auto& label : rowLabels)
+			widest = std::max(widest, ImGui::CalcTextSize(label.c_str()).x);
+		widest += style.ItemSpacing.x + ImGui::GetFontSize() * kMenuMarkWidthRatio;
+		if (rowLabels.size() * ImGui::GetTextLineHeightWithSpacing() > kCopyListHeight * Util::GetUIScale())
+			widest += style.ScrollbarSize;
+		return widest;
+	}
+
 	/// Scrollable wrapper for leaf lists that can still grow long: individual weather scenes, locations.
 	/// Typing while one is open jumps to the first entry starting with what was typed.
-	void DrawScrollableChild(const std::function<void()>& drawItems)
+	void DrawScrollableChild(std::span<const std::string> rowLabels, const std::function<void()>& drawItems)
 	{
-		if (ImGui::BeginChild("##ScenePageCopyScroll", ImVec2(0.0f, kCopyListHeight * Util::GetUIScale()))) {
+		const ImVec2 size(CalcCopyListWidth(rowLabels), kCopyListHeight * Util::GetUIScale());
+		if (ImGui::BeginChild("##ScenePageCopyScroll", size)) {
 			copyTypeAhead.BeginList();
 			drawItems();
 			copyTypeAhead.EndList();
@@ -390,7 +415,12 @@ namespace
 
 		auto* manager = SceneSettingsManager::GetSingleton();
 		if (!tree.weather.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Weather))) {
-			DrawScrollableChild([&] {
+			std::vector<std::string> rowLabels;
+			rowLabels.reserve(tree.weather.size());
+			for (const auto& group : tree.weather)
+				rowLabels.push_back(FormatCopyLabel(group.displayName, group.periods.front()->settingCount));
+
+			DrawScrollableChild(rowLabels, [&] {
 				for (const auto& group : tree.weather) {
 					const auto* firstPeriod = group.periods.front();
 					if (!manager->IsWeatherShowTimeOfDay(firstPeriod->context.weatherId)) {
@@ -412,7 +442,12 @@ namespace
 		}
 
 		if (!tree.location.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Location))) {
-			DrawScrollableChild([&] {
+			std::vector<std::string> rowLabels;
+			rowLabels.reserve(tree.location.size());
+			for (const auto* entry : tree.location)
+				rowLabels.push_back(FormatCopyLabel(entry->displayName, entry->settingCount));
+
+			DrawScrollableChild(rowLabels, [&] {
 				for (const auto* entry : tree.location) {
 					DrawCopyMenuItem(entry->displayName, entry->settingCount, *entry, onPick);
 					copyTypeAhead.ScrollToMatch(entry->displayName);
