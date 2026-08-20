@@ -15,6 +15,7 @@
 #include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "Menu.h"
+#include "ScenePresetExport.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
 
@@ -77,6 +78,11 @@ namespace
 	SceneContextId clearContext;
 	bool clearRequested = false;
 	Util::ConfirmationPopup clearConfirmation;
+
+	/// Load Preset is global, but every page offers it, so the same page-keyed pattern applies.
+	SceneContextId loadPresetContext;
+	bool loadPresetRequested = false;
+	Util::ConfirmationPopup loadPresetConfirmation;
 
 	/// Shared cache/eviction logic for both copy directions; only what fetches the list differs.
 	template <typename Fetch>
@@ -562,6 +568,18 @@ namespace
 			clearRequested = false;
 		}
 	}
+
+	void DrawLoadPresetConfirmation(const SceneContextId& context)
+	{
+		if (!loadPresetRequested || loadPresetContext != context)
+			return;
+		if (loadPresetConfirmation.Draw()) {
+			SceneSettingsManager::GetSingleton()->ClearAllUserEntries();
+			loadPresetRequested = false;
+		} else if (!loadPresetConfirmation.IsOpen()) {
+			loadPresetRequested = false;
+		}
+	}
 }
 
 void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager::PeriodScope periodScope)
@@ -578,6 +596,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	const char* toggleLabel = pauseTarget ? T(TKEY("scene_page_pause_all"), "Pause All") :
 	                                        T(TKEY("scene_page_resume_all"), "Resume All");
 	const char* copyLabel = T(TKEY("scene_page_copy"), "Copy");
+	const char* loadPresetLabel = T(TKEY("scene_page_load_preset"), "Load Preset");
 	const char* exportLabel = T(TKEY("scene_page_export"), "Export");
 	const char* clearLabel = T(TKEY("scene_page_clear"), "Clear");
 
@@ -587,8 +606,8 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	// An image button is the image plus the same frame padding, so a font-sized icon matches the row.
 	const float clearIconSize = ImGui::GetFontSize();
 	const float clearWidth = hasClearIcon ? clearIconSize + style.FramePadding.x * 2.0f : ButtonWidth(clearLabel);
-	const float width = ButtonWidth(toggleLabel) + ButtonWidth(copyLabel) + ButtonWidth(exportLabel) +
-	                    clearWidth + style.ItemSpacing.x * 3.0f;
+	const float width = ButtonWidth(toggleLabel) + ButtonWidth(copyLabel) + ButtonWidth(loadPresetLabel) +
+	                    ButtonWidth(exportLabel) + clearWidth + style.ItemSpacing.x * 4.0f;
 	const float margin = kRightMargin * Util::GetUIScale();
 	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > width + margin)
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - width - margin);
@@ -621,10 +640,31 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	DrawCopyPopup(context, periodScope);
 
 	ImGui::SameLine();
-	ImGui::BeginDisabled();
-	ImGui::Button(exportLabel);
+	const bool hasUserLayer = manager->HasAnyUserEntries();
+	ImGui::BeginDisabled(!hasUserLayer);
+	if (ImGui::Button(loadPresetLabel)) {
+		loadPresetConfirmation.title = T(TKEY("scene_page_load_preset_title"), "Load preset");
+		loadPresetConfirmation.message = T(TKEY("scene_page_load_preset_message"),
+			"Remove every setting you have authored, in every context, and let the installed preset drive the "
+			"scene?\n\nSettings you removed from the preset come back too. This cannot be undone.");
+		loadPresetConfirmation.confirmLabel = loadPresetLabel;
+		loadPresetConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
+		loadPresetContext = context;
+		loadPresetRequested = true;
+		loadPresetConfirmation.Request();
+	}
 	ImGui::EndDisabled();
-	Util::AddTooltip(T(TKEY("scene_page_export_tooltip"), "Exporting a page as overwrites is coming soon."),
+	Util::AddTooltip(T(TKEY("scene_page_load_preset_tooltip"),
+						  "Clears your own settings everywhere so the installed preset is what applies."),
+		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(!ScenePresetExport::CanExport());
+	if (ImGui::Button(exportLabel))
+		ScenePresetExport::Open(context);
+	ImGui::EndDisabled();
+	Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
+						  "Writes every setting from every context out as an overwrite preset."),
 		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 	ImGui::SameLine();
@@ -638,7 +678,8 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 		auto pageName = manager->GetSceneContextDisplayName(context);
 		clearConfirmation.title = T(TKEY("scene_page_clear_title"), "Clear page");
 		clearConfirmation.message = std::vformat(T(TKEY("scene_page_clear_message"),
-													"Remove all {} settings from {}? Mod overrides are left alone."),
+													"Remove all {} settings from {}? Mod overrides are left alone.\n\n"
+													"Settings you removed come back too."),
 			std::make_format_args(count, pageName));
 		clearConfirmation.confirmLabel = clearLabel;
 		clearConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
@@ -651,7 +692,9 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
 
 	DrawClearConfirmation(context, periodScope);
+	DrawLoadPresetConfirmation(context);
 	DrawCopyPreview();
+	ScenePresetExport::Draw(context);
 
 	ImGui::PopID();
 }

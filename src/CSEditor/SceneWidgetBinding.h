@@ -74,8 +74,10 @@ namespace SceneWidgetBinding
 		Unbound,      // no scene can hold it: greyed for good, never bindable anywhere
 		Unavailable,  // scene-controllable, but not by this scene type: greyed, never bindable here
 		Absent,       // scene-controllable, no entry yet
+		Overwritten,  // no user entry: a mod's overwrite supplies the value
 		Active,       // entry exists and applies
-		Paused        // entry exists and is held back
+		Paused,       // entry exists and is held back
+		Deleted       // a tombstone suppresses every lower layer at this address
 	};
 
 	/// Wraps one intercepted widget call for the duration of that call.
@@ -125,6 +127,9 @@ namespace SceneWidgetBinding
 		void ResolveComponents();
 		/// Derives the state and the mixed flag from the resolved entries.
 		void ResolveState();
+		/// Provenance across every period this control covers, combined "any user wins" like
+		/// ResolveState's anyActive/anyPaused.
+		SceneSettingsManager::SettingLayer ResolveWinningLayer(const std::string& a_settingKey) const;
 
 		void Commit();
 		void DrawGutter();
@@ -133,6 +138,10 @@ namespace SceneWidgetBinding
 		/// Drops every entry this control owns, shared by the gutter's remove button and the
 		/// context menu's "Delete override" item.
 		void DeleteOverride();
+
+		/** @brief Tombstones or clears every covered period of every component this control spans.
+		 *  @param a_tombstoned Whether the address ends up suppressed. */
+		void SetTombstoned(bool a_tombstoned);
 
 		/// Whether a period slot is one this control reads and writes.
 		bool IsCoveredSlot(int a_slot) const;
@@ -167,6 +176,9 @@ namespace SceneWidgetBinding
 		Value value;
 		GutterPolicy policy;
 		State state = State::Unsupported;
+		/// Layer winning at this address, which drives the colour independently of `state`. A paused
+		/// user entry stays Paused so the checkbox has something to resume, but reads as the mod's.
+		SceneSettingsManager::SettingLayer winningLayer = SceneSettingsManager::SettingLayer::None;
 		std::size_t valueSize = 0;
 		/// Widget value = persisted value * widgetScale; only a proxied control scales.
 		float widgetScale = 1.0f;

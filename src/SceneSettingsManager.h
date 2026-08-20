@@ -120,6 +120,11 @@ public:
 		Overwrite  // Loaded from overwrite file
 	};
 
+	/// Layer a fresh capture is taken from. Passing Overwrite here means "resolve the layers beneath
+	/// the overwrites", so ticking the gutter over a mod-supplied value pins the value that would
+	/// apply without the mod rather than the mod's own. Lower user layers still stack.
+	static constexpr EntrySource kCaptureSourceLayer = EntrySource::Overwrite;
+
 	struct SettingEntry
 	{
 		std::string featureShortName;  // Feature's GetShortName()
@@ -130,6 +135,9 @@ public:
 		json originalValue;            // Value at time of creation, for revert
 		json serializedTemplate = json::object();  // Preserved forward-compatible fields
 		bool paused = false;           // Temporarily disabled
+		/// Suppresses every lower layer at this address instead of supplying a value. An explicit
+		/// state, not an empty `value`: the resolve, copy and export paths all read `value` unguarded.
+		bool deleted = false;
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
 		std::filesystem::path sourcePath;                 // For overwrites: exact file path
@@ -177,9 +185,18 @@ public:
 	bool AreAllOverwritesPaused(SceneType type) const;
 	void DeleteAllOverwrites(SceneType type);
 
-	/// Export selected user entries to grouped per-feature overwrite JSON files.
-	void ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName);
-	void ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName);
+	/// Mods supplying overwrite entries anywhere, in discovery order, deduplicated. Loads weather and
+	/// location data first if not already loaded; returns whatever it has if either fails to load.
+	std::vector<std::string> GetOverwriteModNames();
+
+	/// Every file a preset of this name currently owns, across every scene directory.
+	std::vector<std::filesystem::path> FindPresetFiles(const std::string& modName) const;
+
+	/** @brief Bakes the winning values of every context into a preset, replacing its file set.
+	 *  Tombstoned addresses are omitted; a paused user entry lets the mod's value through.
+	 *  @return Whether every file was written. */
+	bool ExportPreset(const std::string& modName);
+
 	void DeleteAllWeatherUserSettings(RE::FormID weatherId);
 
 	// --- Scene Application ---
@@ -483,8 +500,6 @@ public:
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey, std::optional<EntrySource> source = std::nullopt) const;
-	void ExportLocationUserSettingsToOverwrites(LocationTargetType type, const std::string& formKey,
-		const std::vector<size_t>& indices, const std::string& modName);
 	void DeleteAllLocationUserSettings(LocationTargetType type, const std::string& formKey);
 
 	/// Locations and cells share one directory; each target's type comes from its form, not its path.
@@ -661,6 +676,16 @@ public:
 		std::span<const EntryValueUpdate> updates, bool deferSave = false);
 	/// Remove one entry from a context.
 	void RemoveContextSetting(const SceneContextId& context, size_t index);
+
+	/** @brief Suppresses every lower layer at an address by persisting a user tombstone.
+	 *  Never touches a mod's file; an existing user entry becomes the tombstone in place.
+	 *  @return Whether a tombstone now covers the address. */
+	bool TombstoneContextSetting(const SceneContextId& context, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey);
+
+	/// Clears a tombstone at an address, restoring whatever the lower layers supply.
+	void ClearContextTombstone(const SceneContextId& context, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey);
 	/// Toggle the paused state of one context entry.
 	void TogglePauseContextEntry(const SceneContextId& context, size_t index);
 	/// Revert one context entry's value to its originalValue.
@@ -668,6 +693,29 @@ public:
 
 	/// Entries stored for one context, unfiltered by period. Empty when the context holds none.
 	std::span<const SettingEntry> GetContextEntries(const SceneContextId& context) const;
+
+	/// Which layer supplies the winning value at an address in a context.
+	enum class SettingLayer : std::uint8_t
+	{
+		None,       // nothing supplies it: the feature's base applies
+		Overwrite,  // a discovered overwrite file wins
+		User,       // a user entry wins
+		Deleted,    // a user tombstone suppresses every lower layer
+	};
+
+	struct SettingProvenance
+	{
+		SettingLayer layer = SettingLayer::None;
+	};
+
+	/** @brief Names the layer driving one address, for the gutter's colour and the export modal.
+	 *  @return The winning layer. */
+	SettingProvenance GetSettingProvenance(const SceneContextId& context,
+		const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey) const;
+
+	/// Mod name an overwrite entry came from: the filename stem up to the last underscore.
+	static std::string GetOverwriteModName(const SettingEntry& entry);
 
 	/// What a context's user entries amount to, for the page-wide actions that act on all of them.
 	struct ContextEntrySummary
@@ -688,6 +736,13 @@ public:
 	/// as are raw entries this session could not resolve to a loaded feature.
 	void ClearContextEntries(const SceneContextId& context,
 		PeriodScope periodScope = PeriodScope::ActivePeriod);
+
+	/// Whether any user entry exists in any context, tombstones included.
+	bool HasAnyUserEntries() const;
+
+	/** @brief Drops every user entry in every context, tombstones included.
+	 *  Suppressed mod values come back. Unresolved raw entries are left in the document. */
+	void ClearAllUserEntries();
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();

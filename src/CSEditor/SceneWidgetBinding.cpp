@@ -329,6 +329,8 @@ void SceneWidgetBinding::Guard::ResolveState()
 	bool anyActive = false;
 	bool anyPaused = false;
 	bool anyMissing = false;
+	bool anyDeleted = false;
+	bool anyLiveValue = false;  // a covered slot holding a real value: unpaused and not a tombstone
 
 	for (auto& component : components) {
 		component.periodEntries = manager->FindContextUserEntryPerPeriod(
@@ -348,31 +350,87 @@ void SceneWidgetBinding::Guard::ResolveState()
 			}
 
 			const auto& entry = entries[*resolved];
+			// A paused tombstone suppresses nothing, so the state must not claim the value is gone.
+			if (entry.deleted && !entry.paused)
+				anyDeleted = true;
 			if (entry.paused)
 				anyPaused = true;
 			else
 				anyActive = true;
-			if (!reference)
-				reference = &entry.value;
-			else if (*reference != entry.value)
-				mixedAcrossPeriods = true;
+			if (!entry.paused && !entry.deleted)
+				anyLiveValue = true;
+			// A tombstone's value is stale and meaningless; never compare against it.
+			if (!entry.deleted) {
+				if (!reference)
+					reference = &entry.value;
+				else if (*reference != entry.value)
+					mixedAcrossPeriods = true;
+			}
 		}
 	}
 
+	// Nothing left to resolve, and the provenance query below needs a component to key off of.
+	if (components.empty())
+		return;
+
+	// Provenance is a separate axis from state: it says who wins, state says what the user's own
+	// entry is doing. Only the first component is queried; an aggregate shares one address family.
+	winningLayer = ResolveWinningLayer(components.front().settingKey);
+
 	if (!anyActive && !anyPaused) {
-		state = State::Absent;
+		state = winningLayer == SceneSettingsManager::SettingLayer::Overwrite ? State::Overwritten : State::Absent;
 		return;
 	}
 
 	// A partly covered or partly paused control is as mixed as one whose periods hold two values.
-	state = anyActive ? State::Active : State::Paused;
-	mixedAcrossPeriods = mixedAcrossPeriods || anyMissing || (anyActive && anyPaused);
+	state = anyDeleted ? State::Deleted : (anyActive ? State::Active : State::Paused);
+	mixedAcrossPeriods = mixedAcrossPeriods || anyMissing || (anyActive && anyPaused) || (anyDeleted && anyLiveValue);
 
 	for (const auto& component : components) {
 		entryIndex = PrimaryEntry(component);
 		if (entryIndex)
 			break;
 	}
+}
+
+SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveWinningLayer(
+	const std::string& a_settingKey) const
+{
+	using SettingLayer = SceneSettingsManager::SettingLayer;
+	auto* manager = SceneSettingsManager::GetSingleton();
+
+	// Interior and location store one entry with no period; synthesising one would fail
+	// IsValidSceneContext and silently answer None.
+	if (!SceneSettingsManager::IsPeriodicContext(contextId.type))
+		return manager->GetSettingProvenance(contextId, featureShortName, settingPath, a_settingKey).layer;
+
+	bool sawUser = false, sawDeleted = false, sawOverwrite = false;
+	for (int slot = 0; slot < kPeriodCount; ++slot) {
+		if (!IsCoveredSlot(slot))
+			continue;
+		auto slotContext = contextId;
+		slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
+		switch (manager->GetSettingProvenance(slotContext, featureShortName, settingPath, a_settingKey).layer) {
+		case SettingLayer::User:
+			sawUser = true;
+			break;
+		case SettingLayer::Deleted:
+			sawDeleted = true;
+			break;
+		case SettingLayer::Overwrite:
+			sawOverwrite = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	// First match wins: mirrors the "any" semantics ResolveState already uses for anyActive/anyPaused.
+	if (sawUser)
+		return SettingLayer::User;
+	if (sawDeleted)
+		return SettingLayer::Deleted;
+	return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
 }
 
 bool SceneWidgetBinding::Guard::IsCoveredSlot(int a_slot) const
@@ -525,7 +583,8 @@ std::string SceneWidgetBinding::Guard::DescribeStoredValue() const
 	std::string description;
 	for (const auto& component : components) {
 		const auto index = PrimaryEntry(component);
-		if (!index || *index >= entries.size())
+		// A tombstone's retained value supplies nothing, so the menu must not offer it as stored.
+		if (!index || *index >= entries.size() || entries[*index].deleted)
 			continue;
 		if (!description.empty())
 			description += ", ";
@@ -550,6 +609,12 @@ std::vector<SceneSettingsManager::EntryValueUpdate> SceneWidgetBinding::Guard::B
 
 void SceneWidgetBinding::Guard::Commit()
 {
+	// Editing a killed value revives it: the tombstone goes first, or it would block the new entry.
+	if (state == State::Deleted) {
+		SetTombstoned(false);
+		ForgetEntries();
+	}
+
 	if (!HasAllCoveredEntries()) {
 		ValueStorage edited;
 		std::memcpy(edited.bytes, value.data, valueSize);
@@ -594,20 +659,35 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth + margin)
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth - margin);
 
+	const auto& theme = menu->GetTheme();
+	std::optional<ImVec4> frameColor;
 	if (mixedAcrossPeriods) {
-		const auto& mixedColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
-		ImGui::PushStyleColor(ImGuiCol_FrameBg, mixedColor);
-		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, mixedColor);
-		ImGui::PushStyleColor(ImGuiCol_FrameBgActive, mixedColor);
+		// A disagreement about the data outranks a statement about its source.
+		frameColor = theme.StatusPalette.Warning;
+	} else if (winningLayer == SceneSettingsManager::SettingLayer::Overwrite) {
+		frameColor = theme.StatusPalette.InfoColor;
+	} else if (winningLayer == SceneSettingsManager::SettingLayer::User) {
+		frameColor = theme.StatusPalette.SuccessColor;
+	}
+
+	if (frameColor) {
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, *frameColor);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, *frameColor);
+		ImGui::PushStyleColor(ImGuiCol_FrameBgActive, *frameColor);
 	}
 	const bool toggled = ImGui::Checkbox("##SceneOverride", &enabled);
-	if (mixedAcrossPeriods)
+	if (frameColor)
 		ImGui::PopStyleColor(3);
 
 	if (toggled) {
 		auto* manager = SceneSettingsManager::GetSingleton();
-		if (state == State::Absent) {
-			// Ticking an absent control captures the feature's current value as the override.
+		// Any gesture on a killed value means the user wants it back, so it captures like an absent one.
+		if (state == State::Deleted) {
+			SetTombstoned(false);
+			ForgetEntries();
+		}
+		if (state == State::Absent || state == State::Overwritten) {
+			// Ticking captures the feature's current value as the override.
 			// An aggregate fanned over six periods is 24 entries, so it saves once, not per entry.
 			if (EnsureEntries(true))
 				manager->SaveAllUserSettings();
@@ -626,6 +706,12 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	if (mixedAcrossPeriods)
 		tooltip = T(TKEY("scene_override_mixed"),
 			"Values differ across this control. Editing writes the same value to all of them.");
+	else if (state == State::Overwritten)
+		tooltip = T(TKEY("scene_override_from_mod"),
+			"A mod supplies this value. Tick to pin your own, or remove it to suppress the mod's.");
+	else if (state == State::Deleted)
+		tooltip = T(TKEY("scene_override_deleted"),
+			"You removed the mod's value here. Tick or edit to take it back.");
 	else if (state == State::Absent)
 		tooltip = T(TKEY("scene_override_absent"),
 			"No override here. Edit the control, or tick to capture the current value.");
@@ -643,7 +729,15 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	                                    ImVec2(removeIconSize, removeIconSize)) :
 	                                Util::ErrorTextButton(T(TKEY("scene_override_remove"), "Remove"));
 	ImGui::EndDisabled();
-	Util::AddTooltip(T(TKEY("scene_override_remove_tooltip"), "Remove this override from the saved settings."));
+	const char* removeTooltip = nullptr;
+	if (state == State::Overwritten)
+		removeTooltip = T(TKEY("scene_override_remove_mod_tooltip"),
+			"Suppress the mod's value here. The mod's own file is left untouched.");
+	else if (state == State::Deleted)
+		removeTooltip = T(TKEY("scene_override_restore_mod_tooltip"), "Bring the mod's value back here.");
+	else
+		removeTooltip = T(TKEY("scene_override_remove_tooltip"), "Remove this override from the saved settings.");
+	Util::AddTooltip(removeTooltip);
 	if (removeClicked)
 		DeleteOverride();
 
@@ -661,13 +755,19 @@ void SceneWidgetBinding::Guard::DrawContextMenu()
 			ImGui::Separator();
 		}
 
-		if (ImGui::MenuItem(T(TKEY("scene_override_revert"), "Revert to original"))) {
-			for (const auto index : CollectOwnedEntries())
-				manager->RevertContextEntryToDefault(contextId, index);
-			ResolveState();
+		// A tombstone has no value to revert to and nothing left to delete.
+		if (state == State::Deleted) {
+			if (ImGui::MenuItem(T(TKEY("scene_override_restore_mod"), "Restore the mod's value")))
+				DeleteOverride();
+		} else {
+			if (ImGui::MenuItem(T(TKEY("scene_override_revert"), "Revert to original"))) {
+				for (const auto index : CollectOwnedEntries())
+					manager->RevertContextEntryToDefault(contextId, index);
+				ResolveState();
+			}
+			if (ImGui::MenuItem(T(TKEY("scene_override_delete"), "Delete override")))
+				DeleteOverride();
 		}
-		if (ImGui::MenuItem(T(TKEY("scene_override_delete"), "Delete override")))
-			DeleteOverride();
 
 		ImGui::EndPopup();
 	}
@@ -676,12 +776,39 @@ void SceneWidgetBinding::Guard::DrawContextMenu()
 
 void SceneWidgetBinding::Guard::DeleteOverride()
 {
+	// Remove toggles a mod's value between suppressed and restored; its file is never touched.
+	if (state == State::Overwritten || state == State::Deleted) {
+		SetTombstoned(state == State::Overwritten);
+		ResolveState();
+		return;
+	}
+
 	// Removal renumbers the entries behind it, so drop the highest index first.
 	auto owned = CollectOwnedEntries();
 	std::ranges::sort(owned, std::greater{});
 	for (const auto index : owned)
 		SceneSettingsManager::GetSingleton()->RemoveContextSetting(contextId, index);
 	ForgetEntries();
+}
+
+void SceneWidgetBinding::Guard::SetTombstoned(bool a_tombstoned)
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+
+	// The manager is period-scoped, so a flat control has to name each period it covers itself.
+	for (const auto& component : components) {
+		for (int slot = 0; slot < kPeriodCount; ++slot) {
+			if (!IsCoveredSlot(slot))
+				continue;
+			auto slotContext = contextId;
+			if (flatAcrossPeriods)
+				slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
+			if (a_tombstoned)
+				manager->TombstoneContextSetting(slotContext, featureShortName, settingPath, component.settingKey);
+			else
+				manager->ClearContextTombstone(slotContext, featureShortName, settingPath, component.settingKey);
+		}
+	}
 }
 
 bool SceneWidgetBinding::Guard::Finish(bool a_changed)
@@ -716,7 +843,7 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	// Feature code queries the last item after the call, so the control must stay the current one.
 	const auto controlItem = ImGui::GetCurrentContext()->LastItemData;
-	if (state != State::Unsupported && state != State::Absent && !dragging)
+	if (state != State::Unsupported && state != State::Absent && state != State::Overwritten && !dragging)
 		DrawContextMenu();
 	if (state != State::Unsupported && (policy == GutterPolicy::Owner || ClaimGutter(value.data)))
 		DrawGutter();

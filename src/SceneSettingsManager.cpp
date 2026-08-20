@@ -93,6 +93,8 @@ namespace
 	constexpr const char* kFeatureKey = "_feature";
 	constexpr const char* kMetadataKey = "_metadata";
 	constexpr const char* kMetadataDescriptionKey = "description";
+	constexpr const char* kStatusKey = "status";
+	constexpr const char* kStatusDeleted = "deleted";
 	constexpr std::string_view kSceneSettingDisplaySeparator = " / ";
 	constexpr std::string_view kImGuiIdSeparator = "##";
 	/// Vanilla names every location-category keyword LocType<Something>.
@@ -2141,45 +2143,151 @@ static bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
 	return WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
 }
 
-/// Groups the selected user entries by target directory and feature, one overwrite file per group.
-static void ExportUserEntriesToOverwrites(const std::vector<SceneSettingsManager::SettingEntry>& entries,
-	const std::vector<size_t>& indices, const std::filesystem::path& baseDir, const std::string& modName,
-	std::string_view sceneLabel, const json& extraMetadata = json::object())
+std::vector<std::string> SceneSettingsManager::GetOverwriteModNames()
 {
+	// Best-effort: unlike ExportPreset, nothing is written here, so a partial load still returns
+	// whatever overwrites are already known rather than reporting nothing.
+	TryEnsureWeatherDataLoaded();
+	TryEnsureLocationDataLoaded();
+
+	std::vector<std::string> names;
+	const auto collect = [&](const std::vector<SettingEntry>& sourceEntries) {
+		for (const auto& entry : sourceEntries) {
+			if (entry.source != EntrySource::Overwrite)
+				continue;
+			auto name = GetOverwriteModName(entry);
+			if (!name.empty() && std::ranges::find(names, name) == names.end())
+				names.push_back(std::move(name));
+		}
+	};
+
+	for (const auto& [type, sourceEntries] : entries)
+		collect(sourceEntries);
+	for (const auto& [weatherId, config] : weatherSceneConfigs)
+		collect(config.entries);
+	for (const auto& [configKey, config] : locationSceneConfigs)
+		collect(config.entries);
+	return names;
+}
+
+std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const std::string& modName) const
+{
+	std::vector<std::filesystem::path> found;
+	if (modName.empty())
+		return found;
+	const auto prefix = modName + "_";
+
+	const auto sweepDir = [&](const std::filesystem::path& directory) {
+		std::error_code ec;
+		if (!std::filesystem::exists(directory, ec))
+			return;
+		for (const auto& path : GetSortedJsonFiles(directory, "preset files"))
+			if (path.filename().string().starts_with(prefix))
+				found.push_back(path);
+	};
+	const auto childDirectories = [](const std::filesystem::path& root, std::string_view context) {
+		std::error_code ec;
+		return std::filesystem::exists(root, ec) ?
+		           GetSortedDirectoryPaths(root, true, context) :
+		           std::vector<std::filesystem::path>{};
+	};
+
+	sweepDir(GetOverwritesPath(SceneType::InteriorOnly));
+	for (auto period : kPeriods)
+		sweepDir(GetOverwriteDir(GetOverwritesPath(SceneType::TimeOfDay), period));
+	for (const auto& weatherDir : childDirectories(GetWeatherOverwritesDir(), "weather overwrite directories")) {
+		// A flat weather file feeds every period, so the preset has to claim it alongside its per-period files.
+		sweepDir(weatherDir);
+		for (auto period : kPeriods)
+			sweepDir(GetOverwriteDir(weatherDir, period));
+	}
+	for (const auto& locationDir : childDirectories(GetLocationOverwritesDir(), "location overwrite directories"))
+		sweepDir(locationDir);
+	return found;
+}
+
+bool SceneSettingsManager::ExportPreset(const std::string& modName)
+{
+	// Weather and location configs load lazily; baking before they exist would sweep their files and
+	// write nothing back.
+	if (!TryEnsureWeatherDataLoaded() || !TryEnsureLocationDataLoaded()) {
+		logger::error("[SceneSettings] Preset '{}' not exported: weather or location data is not loaded", modName);
+		return false;
+	}
+
 	const auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
 	if (safeModName.empty())
-		return;
+		return false;
 
-	std::map<std::pair<std::filesystem::path, std::string>, std::vector<const SceneSettingsManager::SettingEntry*>> groupedEntries;
-	for (auto index : indices) {
-		if (index >= entries.size() || entries[index].source != SceneSettingsManager::EntrySource::User)
-			continue;
-		const auto& entry = entries[index];
-		groupedEntries[{ GetOverwriteDir(baseDir, entry.period), entry.featureShortName }].push_back(&entry);
+	/// One output file: the type description its metadata carries, and the entries baked into it.
+	struct PresetFile
+	{
+		std::string typeDescription;
+		json extraMetadata = json::object();
+		std::vector<const SettingEntry*> entries;
+	};
+	std::map<std::pair<std::filesystem::path, std::string>, PresetFile> files;
+
+	const auto bakeContext = [&](const SceneContextId& context, const std::vector<SettingEntry>& sourceEntries,
+								 const std::filesystem::path& baseDir, std::string_view sceneLabel,
+								 const json& extraMetadata = json::object()) {
+		const auto directory = GetOverwriteDir(baseDir, context.period);
+		for (const auto& [identity, entry] : BuildEffectiveContextEntries(sourceEntries, context)) {
+			auto& file = files[{ directory, identity.featureShortName }];
+			file.typeDescription = GetOverwriteTypeDescription(sceneLabel, context.period);
+			file.extraMetadata = extraMetadata;
+			file.entries.push_back(entry);
+		}
+	};
+
+	bakeContext({ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count },
+		GetEntries(SceneType::InteriorOnly), GetOverwritesPath(SceneType::InteriorOnly), "Interior Only");
+
+	for (auto period : kPeriods)
+		bakeContext({ .type = SceneContextType::TimeOfDay, .period = period },
+			GetEntries(SceneType::TimeOfDay), GetOverwritesPath(SceneType::TimeOfDay), "Time of Day");
+
+	for (const auto& [weatherId, config] : weatherSceneConfigs) {
+		const auto weatherDir = GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId);
+		for (auto period : kPeriods)
+			bakeContext({ .type = SceneContextType::Weather, .period = period, .weatherId = weatherId },
+				config.entries, weatherDir, "Weather");
 	}
 
-	for (const auto& [group, grouped] : groupedEntries) {
-		const auto& [directory, featureShortName] = group;
-		WriteGroupedOverwriteFile(directory / std::format("{}_{}.json", safeModName, featureShortName),
-			featureShortName, GetOverwriteTypeDescription(sceneLabel, grouped.front()->period), grouped, extraMetadata);
+	for (const auto& [configKey, config] : locationSceneConfigs) {
+		const auto* targetDescription = GetLocationTargetTypeName(config.type);
+		bakeContext({ .type = SceneContextType::Location,
+						.locationType = config.type,
+						.locationFormKey = config.formKey },
+			config.entries, GetLocationOverwritesDir() / config.formKey, targetDescription,
+			json{ { "targetType", targetDescription },
+				{ "targetName", config.name },
+				{ "coc", config.cocCode } });
 	}
-}
 
-void SceneSettingsManager::ExportUserSettingsToOverwrites(SceneType type, const std::vector<size_t>& indices, const std::string& modName)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	ExportUserEntriesToOverwrites(GetEntriesMut(type), indices, GetOverwritesPath(type), modName,
-		type == SceneType::InteriorOnly ? "Interior Only" : "Time of Day");
-}
+	bool wroteAll = true;
+	// The sweep runs only once every output is known, so a failure above costs nothing on disk. A file
+	// that survives it would be merged into rather than replaced, silently reviving a deleted setting.
+	for (const auto& path : FindPresetFiles(safeModName)) {
+		std::error_code ec;
+		std::filesystem::remove(path, ec);
+		if (ec) {
+			logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
+			wroteAll = false;
+		}
+	}
 
-void SceneSettingsManager::ExportWeatherUserSettingsToOverwrites(RE::FormID weatherId, const std::vector<size_t>& indices, const std::string& modName)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return;
-
-	ExportUserEntriesToOverwrites(GetWeatherConfigMut(weatherId).entries, indices,
-		GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId), modName, "Weather");
+	for (const auto& [key, file] : files) {
+		const auto& [directory, featureShortName] = key;
+		const auto path = directory / std::format("{}_{}.json", safeModName, featureShortName);
+		if (!WriteGroupedOverwriteFile(path, featureShortName, file.typeDescription, file.entries,
+				file.extraMetadata)) {
+			logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
+			wroteAll = false;
+		}
+	}
+	logger::info("[SceneSettings] Exported preset '{}' as {} file(s)", safeModName, files.size());
+	return wroteAll;
 }
 
 void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave)
@@ -2785,6 +2893,8 @@ SceneSettingsManager::SettingAddress SceneSettingsManager::GetEntryAddress(const
 bool SceneSettingsManager::IsResolvableEntry(const SettingEntry& entry, SceneType type) const
 {
 	const bool floatsOnly = type == SceneType::TimeOfDay;
+	// A tombstone is resolvable on purpose: suppressing an address means restoring its baseline,
+	// and this gate is what gets that baseline collected.
 	return IsEntryActive(entry) &&
 	       IsSettingAllowedForType(type, entry.featureShortName, entry.settingPath, entry.settingKey) &&
 	       (!floatsOnly || IsNumericValue(entry.value));
@@ -3047,7 +3157,15 @@ void SceneSettingsManager::CollectPeriodValueGroups(
 		for (const auto& entry : sourceEntries) {
 			const auto periodIndex = static_cast<int>(entry.period);
 			if (entry.source != source || periodIndex < 0 || periodIndex >= kPeriodCount ||
-				!IsResolvableEntry(entry, SceneType::TimeOfDay))
+				!IsEntryActive(entry))
+				continue;
+			// A tombstone clears its own period rather than filling it, so the layer beneath shows through.
+			if (entry.deleted) {
+				if (auto valuesIt = values.find(GetEntryAddress(entry)); valuesIt != values.end())
+					valuesIt->second[periodIndex].reset();
+				continue;
+			}
+			if (!IsResolvableEntry(entry, SceneType::TimeOfDay))
 				continue;
 			const auto value = entry.value.get<float>();
 			if (std::isfinite(value))
@@ -3171,6 +3289,14 @@ void SceneSettingsManager::OverlayEntries(ResolvedSettingMap& resolved, const st
 		auto address = GetEntryAddress(entry);
 		if (!baselineSettings.contains(address))
 			continue;
+		// A tombstone supplies nothing. Nulling the slot is how this map already marks an address the
+		// resolve did not fill, so BuildResolvedSettings prunes it and the baseline is restored.
+		if (entry.deleted) {
+			if (transitionDurations)
+				transitionDurations->erase(address);
+			resolved[std::move(address)] = nullptr;
+			continue;
+		}
 		if (transitionDurations && IsNumericValue(entry.value)) {
 			const auto duration = entry.transitionSeconds.value_or(locationTransitionSeconds);
 			(*transitionDurations)[address] = std::clamp(
@@ -3469,6 +3595,12 @@ static json EntryToJson(const SceneSettingsManager::SettingEntry& entry)
 	item["value"] = entry.value;
 	item["originalValue"] = entry.originalValue;
 	item["paused"] = entry.paused;
+	// Only our own status is ours to erase: an unrecognised one belongs to another implementation
+	// round and rides through on the serialized template.
+	if (entry.deleted)
+		item[kStatusKey] = kStatusDeleted;
+	else if (item.value(kStatusKey, std::string{}) == kStatusDeleted)
+		item.erase(kStatusKey);
 	if (entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
 		item["period"] = SceneSettingsManager::GetPeriodName(entry.period);
 	else
@@ -3676,6 +3808,14 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 		return false;
 	}
 	entry.paused = item.value("paused", false);
+	entry.deleted = false;
+	if (auto statusIt = item.find(kStatusKey); statusIt != item.end()) {
+		if (!statusIt->is_string()) {
+			logger::warn("[SceneSettings] {} entry status field is not a string", typeName);
+			return false;
+		}
+		entry.deleted = statusIt->get<std::string>() == kStatusDeleted;
+	}
 	entry.source = SSM::EntrySource::User;
 
 	auto sceneType = allowedSceneType.value_or(requirePeriod ? SSM::SceneType::TimeOfDay : SSM::SceneType::InteriorOnly);
@@ -4285,7 +4425,8 @@ std::optional<float> SceneSettingsManager::ResolveWeatherLowerValue(RE::FormID w
 
 	float lowerValue = GetTimeOfDayPeriodFallbackFloat(baselineValue,
 		address.featureShortName, address.settingPath, address.settingKey, periodIndex);
-	// Only a user entry has anything of the weather layer beneath it.
+	// Only a user entry has the weather overwrite layer beneath it. A capture deliberately passes
+	// the overwrite layer here so it resolves to the value that applies without any mod.
 	if (selectedSource != EntrySource::User)
 		return lowerValue;
 
@@ -4319,7 +4460,7 @@ bool SceneSettingsManager::AddWeatherSetting(RE::FormID weatherId, const std::st
 	if (HasWeatherEntryForPeriod(weatherId, featureShortName, settingPath, settingKey, period, EntrySource::User))
 		return false;
 	SettingAddress address{ featureShortName, settingPath, settingKey };
-	auto lowerValue = ResolveWeatherLowerValue(weatherId, address, period, EntrySource::User);
+	auto lowerValue = ResolveWeatherLowerValue(weatherId, address, period, kCaptureSourceLayer);
 	if (!lowerValue || !ValidateSceneSettingEntry(
 			"Weather", featureShortName, settingPath, settingKey, *lowerValue, true))
 		return false;
@@ -4827,6 +4968,7 @@ std::optional<SceneSettingsManager::ResolvedSettingMap> SceneSettingsManager::Bu
 		if (targetKey == selectedTargetKey) {
 			targetFound = true;
 			// A user entry sits above the overwrite it shadows, so the overwrite is its lower layer.
+			// A capture deliberately passes the overwrite layer here to resolve beneath it instead.
 			if (selectedSource == EntrySource::User && configIt != locationSceneConfigs.end())
 				OverlayEntries(
 					lowerLayers, configIt->second.entries, SceneType::Location, EntrySource::Overwrite);
@@ -4888,7 +5030,7 @@ bool SceneSettingsManager::AddLocationSetting(LocationTargetType type, const std
 		HasLocationEntry(type, formKey, featureShortName, settingPath, settingKey, EntrySource::User))
 		return false;
 	SettingAddress address{ featureShortName, settingPath, settingKey };
-	auto lowerValue = ResolveLocationLowerValue(type, formKey, address, EntrySource::User);
+	auto lowerValue = ResolveLocationLowerValue(type, formKey, address, kCaptureSourceLayer);
 	if (!lowerValue || !ValidateSceneSettingEntry("Location", featureShortName, settingPath, settingKey, *lowerValue, false))
 		return false;
 
@@ -5256,7 +5398,40 @@ SceneSettingsManager::EffectiveContextEntries SceneSettingsManager::BuildEffecti
 		for (const auto& entry : contextEntries)
 			if (entry.source == entrySource && !entry.paused && EntryBelongsToContext(entry, context))
 				effectiveEntries[{ entry.featureShortName, entry.settingPath, entry.settingKey }] = &entry;
+	// A tombstone shadows the overwrite beneath it and then supplies nothing, so the address leaves the
+	// set entirely: neither copy nor export may offer a value the user deleted.
+	std::erase_if(effectiveEntries, [](const auto& item) { return item.second->deleted; });
 	return effectiveEntries;
+}
+
+std::string SceneSettingsManager::GetOverwriteModName(const SettingEntry& entry)
+{
+	const auto stem = std::filesystem::path(entry.sourceFilename).stem().string();
+	const auto lastUnderscore = stem.rfind('_');
+	return lastUnderscore == std::string::npos ? stem : stem.substr(0, lastUnderscore);
+}
+
+SceneSettingsManager::SettingProvenance SceneSettingsManager::GetSettingProvenance(
+	const SceneContextId& context, const std::string& featureShortName,
+	const std::vector<std::string>& settingPath, const std::string& settingKey) const
+{
+	SettingProvenance provenance;
+	if (!IsValidSceneContext(context))
+		return provenance;
+
+	for (const auto& entry : GetContextEntries(context)) {
+		if (!IsEntryActive(entry) || !IsSameSetting(entry, featureShortName, settingPath, settingKey) ||
+			!EntryBelongsToContext(entry, context))
+			continue;
+		if (entry.source == EntrySource::Overwrite) {
+			// Discovery order is the entry order, and the last file discovered wins.
+			provenance.layer = SettingLayer::Overwrite;
+			continue;
+		}
+		// A user entry outranks every overwrite, so it settles the layer outright.
+		provenance.layer = entry.deleted ? SettingLayer::Deleted : SettingLayer::User;
+	}
+	return provenance;
 }
 
 const std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::GetCopyContextEntries(
@@ -5426,6 +5601,52 @@ void SceneSettingsManager::ClearContextEntries(const SceneContextId& context, Pe
 		CommitContextUserEntryMutation(context);
 }
 
+bool SceneSettingsManager::HasAnyUserEntries() const
+{
+	const auto hasUser = [](const std::vector<SettingEntry>& sourceEntries) {
+		return std::any_of(sourceEntries.begin(), sourceEntries.end(),
+			[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+	};
+	return std::any_of(entries.begin(), entries.end(),
+			   [&](const auto& item) { return hasUser(item.second); }) ||
+	       std::any_of(weatherSceneConfigs.begin(), weatherSceneConfigs.end(),
+			   [&](const auto& item) { return hasUser(item.second.entries); }) ||
+	       std::any_of(locationSceneConfigs.begin(), locationSceneConfigs.end(),
+			   [&](const auto& item) { return hasUser(item.second.entries); });
+}
+
+void SceneSettingsManager::ClearAllUserEntries()
+{
+	// Unresolved raw entries stay in the document: they belong to features this session cannot judge.
+	const auto clear = [](std::vector<SettingEntry>& sourceEntries) {
+		return std::erase_if(sourceEntries,
+				   [](const SettingEntry& entry) { return entry.source == EntrySource::User; }) != 0;
+	};
+
+	bool changed = false;
+	for (auto& [type, sourceEntries] : entries)
+		if (IsEntryListSceneType(type) && clear(sourceEntries)) {
+			MarkEntryListUserSettingsModified(type);
+			changed = true;
+		}
+	for (auto& [weatherId, config] : weatherSceneConfigs)
+		if (clear(config.entries)) {
+			PrepareWeatherUserSettingsMutation(weatherId, false);
+			changed = true;
+		}
+	for (auto& [configKey, config] : locationSceneConfigs)
+		if (clear(config.entries)) {
+			locationUserSettingsModified = true;
+			changed = true;
+		}
+
+	if (!changed)
+		return;
+	BumpEntryPresentationRevision();
+	SaveAllUserSettings();
+	ReapplyIfActive();
+}
+
 std::optional<size_t> SceneSettingsManager::FindContextUserEntry(const SceneContextId& context,
 	const std::string& featureShortName, const std::vector<std::string>& settingPath,
 	const std::string& settingKey) const
@@ -5530,6 +5751,20 @@ void SceneSettingsManager::RemoveContextSetting(const SceneContextId& context, s
 {
 	if (!IsValidSceneContext(context))
 		return;
+
+	// A mod's file is never edited from here. Suppressing a mod value goes through
+	// TombstoneContextSetting; the implementations below would strip the key from the mod's own file.
+	const auto contextEntries = GetContextEntries(context);
+	if (index >= contextEntries.size())
+		return;
+	if (contextEntries[index].source != EntrySource::User) {
+		assert(false && "RemoveContextSetting called with an overwrite entry");
+		logger::warn("[SceneSettings] Refusing to remove overwrite entry {} through the context façade",
+			GetSettingLogName(contextEntries[index].featureShortName,
+				contextEntries[index].settingPath, contextEntries[index].settingKey));
+		return;
+	}
+
 	switch (context.type) {
 	case SceneContextType::Interior:
 	case SceneContextType::TimeOfDay:
@@ -5544,6 +5779,64 @@ void SceneSettingsManager::RemoveContextSetting(const SceneContextId& context, s
 	default:
 		break;
 	}
+}
+
+bool SceneSettingsManager::TombstoneContextSetting(const SceneContextId& context,
+	const std::string& featureShortName, const std::vector<std::string>& settingPath,
+	const std::string& settingKey)
+{
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries)
+		return false;
+
+	// A tombstone must not land at an address where an ordinary user entry would be rejected.
+	if (!IsSettingAllowedForType(GetCopyDestinationRules(context.type).sceneType, featureShortName, settingPath, settingKey))
+		return false;
+
+	// An existing user entry becomes the tombstone: two entries at one address would race.
+	if (const auto existing = FindContextUserEntry(context, featureShortName, settingPath, settingKey)) {
+		auto& entry = (*contextEntries)[*existing];
+		entry.deleted = true;
+		entry.paused = false;
+		CommitContextUserEntryMutation(context);
+		return true;
+	}
+
+	if (GetSettingProvenance(context, featureShortName, settingPath, settingKey).layer == SettingLayer::None)
+		return false;
+	// The base is kept for the round trip and for revert; resolution ignores it while deleted. A null
+	// one would not survive a reload, so the address stays as it is rather than losing the tombstone.
+	auto value = GetFeatureSettingValue(featureShortName, settingPath, settingKey);
+	if (value.is_null())
+		return false;
+
+	SettingEntry entry;
+	entry.featureShortName = featureShortName;
+	entry.settingPath = settingPath;
+	entry.settingKey = settingKey;
+	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
+	entry.originalValue = value;
+	entry.value = std::move(value);
+	entry.source = EntrySource::User;
+	entry.deleted = true;
+	entry.period = context.period;
+	contextEntries->push_back(std::move(entry));
+	CommitContextUserEntryMutation(context);
+	return true;
+}
+
+void SceneSettingsManager::ClearContextTombstone(const SceneContextId& context,
+	const std::string& featureShortName, const std::vector<std::string>& settingPath,
+	const std::string& settingKey)
+{
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries)
+		return;
+	const auto existing = FindContextUserEntry(context, featureShortName, settingPath, settingKey);
+	if (!existing || *existing >= contextEntries->size() || !(*contextEntries)[*existing].deleted)
+		return;
+	contextEntries->erase(contextEntries->begin() + static_cast<ptrdiff_t>(*existing));
+	CommitContextUserEntryMutation(context);
 }
 
 void SceneSettingsManager::TogglePauseContextEntry(const SceneContextId& context, size_t index)
@@ -5613,7 +5906,7 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 	for (const auto& entry : *destinationEntries) {
 		if (!EntryCoveredByContext(entry, destination, periodScope))
 			continue;
-		if (entry.source == EntrySource::User)
+		if (entry.source == EntrySource::User && !entry.deleted)
 			destinationUserSettings.try_emplace(
 				SettingIdentity{ entry.featureShortName, entry.settingPath, entry.settingKey }, entry.value);
 		else if (entry.source == EntrySource::Overwrite && !entry.paused)
@@ -6095,12 +6388,15 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 	for (auto& copy : pending) {
 		if (copy.destinationIndex) {
 			auto& destinationEntry = (*destinationEntries)[*copy.destinationIndex];
+			// Any user action on an address, including a copy landing on it, must clear a tombstone rather than leave it suppressing.
+			const bool wasDeleted = destinationEntry.deleted;
 			destinationEntry.value = copy.candidate->value;
+			destinationEntry.deleted = false;
 			if (destination.type == SceneContextType::Location) {
 				destinationEntry.transitionSeconds = copy.transitionSeconds;
 				destinationEntry.retainSerializedTransition = false;
 			}
-			++result.overwritten;
+			wasDeleted ? ++result.copied : ++result.overwritten;
 			continue;
 		}
 		destinationEntries->push_back({
@@ -6178,23 +6474,6 @@ bool SceneSettingsManager::HasLocationEntry(LocationTargetType type, std::string
 		return (!source || entry.source == *source) &&
 		       IsSameSetting(entry, featureShortName, settingPath, settingKey);
 	});
-}
-
-void SceneSettingsManager::ExportLocationUserSettingsToOverwrites(LocationTargetType type,
-	const std::string& formKey, const std::vector<size_t>& indices, const std::string& modName)
-{
-	auto configIt = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (configIt == locationSceneConfigs.end())
-		return;
-
-	const auto* targetDescription = GetLocationTargetTypeName(type);
-	const json metadata = {
-		{ "targetType", targetDescription },
-		{ "targetName", configIt->second.name },
-		{ "coc", configIt->second.cocCode },
-	};
-	ExportUserEntriesToOverwrites(configIt->second.entries, indices,
-		GetLocationOverwritesDir() / configIt->second.formKey, modName, targetDescription, metadata);
 }
 
 void SceneSettingsManager::DiscoverLocationOverwrites()
@@ -6386,7 +6665,8 @@ float SceneSettingsManager::GetTimeOfDayPeriodFallbackFloat(float baseValue, con
 	const auto period = static_cast<TimeOfDayPeriod>(periodIndex);
 
 	for (const auto& entry : GetEntries(SceneType::TimeOfDay)) {
-		if (!IsEntryActive(entry) || entry.period != period ||
+		// A tombstone supplies nothing; skipping it here lets a weather capture fall through to base.
+		if (!IsEntryActive(entry) || entry.period != period || entry.deleted ||
 			!IsSameSetting(entry, featureShortName, settingPath, settingKey))
 			continue;
 		if (!value || (entry.source == EntrySource::User && source != EntrySource::User)) {
