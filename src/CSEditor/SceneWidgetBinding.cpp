@@ -627,6 +627,29 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveProvenanceColor() const
 	return std::nullopt;
 }
 
+const char* SceneWidgetBinding::Guard::ResolveStatusTooltip() const
+{
+	if (mixedAcrossPeriods)
+		return T(TKEY("scene_override_mixed"),
+			"Values differ across this control. Editing writes the same value to all of them.");
+	switch (state) {
+	case State::Overwritten:
+		return T(TKEY("scene_override_from_mod"),
+			"A mod supplies this value. Tick to pin your own, or remove it to suppress the mod's.");
+	case State::Deleted:
+		return T(TKEY("scene_override_deleted"),
+			"You removed the mod's value here. Tick or edit to take it back.");
+	case State::Absent:
+		return T(TKEY("scene_override_absent"),
+			"No override here. Edit the control, or tick to capture the current value.");
+	case State::Paused:
+		return T(TKEY("scene_override_paused"), "Override stored but held back. Tick to apply it.");
+	default:
+		return T(TKEY("scene_override_active"),
+			"Override applies here. Untick to hold it back without losing the value.");
+	}
+}
+
 void SceneWidgetBinding::Guard::Commit()
 {
 	// Editing a killed value revives it: the tombstone goes first, or it would block the new entry.
@@ -713,25 +736,7 @@ void SceneWidgetBinding::Guard::DrawGutter()
 		}
 	}
 
-	const char* tooltip = nullptr;
-	if (mixedAcrossPeriods)
-		tooltip = T(TKEY("scene_override_mixed"),
-			"Values differ across this control. Editing writes the same value to all of them.");
-	else if (state == State::Overwritten)
-		tooltip = T(TKEY("scene_override_from_mod"),
-			"A mod supplies this value. Tick to pin your own, or remove it to suppress the mod's.");
-	else if (state == State::Deleted)
-		tooltip = T(TKEY("scene_override_deleted"),
-			"You removed the mod's value here. Tick or edit to take it back.");
-	else if (state == State::Absent)
-		tooltip = T(TKEY("scene_override_absent"),
-			"No override here. Edit the control, or tick to capture the current value.");
-	else if (state == State::Paused)
-		tooltip = T(TKEY("scene_override_paused"), "Override stored but held back. Tick to apply it.");
-	else
-		tooltip = T(TKEY("scene_override_active"),
-			"Override applies here. Untick to hold it back without losing the value.");
-	Util::AddTooltip(tooltip);
+	Util::AddTooltip(ResolveStatusTooltip());
 
 	ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 	ImGui::BeginDisabled(!hasOverride);
@@ -863,6 +868,11 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 	if (state != State::Unsupported && (policy == GutterPolicy::Owner || ClaimGutter(value.data)))
 		DrawGutter();
 	ImGui::GetCurrentContext()->LastItemData = controlItem;
+
+	// The tint says only that something else holds this value; the gutter's words say what. Drawn
+	// before the feature's own tooltip, which appends to the same window once the call returns.
+	if (ResolveProvenanceColor())
+		Util::AddTooltip(ResolveStatusTooltip());
 
 	// A paused control must never report a change: nothing behind it moved.
 	return state == State::Paused ? false : a_changed;

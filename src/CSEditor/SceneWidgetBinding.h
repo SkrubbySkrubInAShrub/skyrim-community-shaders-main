@@ -135,6 +135,9 @@ namespace SceneWidgetBinding
 		/// Shared by the control's tint and the gutter's toggle so the two never disagree.
 		std::optional<ImVec4> ResolveProvenanceColor() const;
 
+		/// Sentence describing what holds this value, shared by the gutter's toggle and the control.
+		const char* ResolveStatusTooltip() const;
+
 		void Commit();
 		void DrawGutter();
 		void DrawContextMenu();
