@@ -131,6 +131,10 @@ namespace SceneWidgetBinding
 		/// ResolveState's anyActive/anyPaused.
 		SceneSettingsManager::SettingLayer ResolveWinningLayer(const std::string& a_settingKey) const;
 
+		/// Colour standing for where the value comes from, or nothing when the feature's base wins.
+		/// Shared by the control's tint and the gutter's toggle so the two never disagree.
+		std::optional<ImVec4> ResolveProvenanceColor() const;
+
 		void Commit();
 		void DrawGutter();
 		void DrawContextMenu();
@@ -207,5 +211,6 @@ namespace SceneWidgetBinding
 		bool commitDeferred = false;
 		bool disabledOpened = false;
 		bool mixedFlagPushed = false;
+		bool tintPushed = false;
 	};
 }

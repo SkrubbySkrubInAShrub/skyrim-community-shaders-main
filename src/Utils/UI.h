@@ -881,6 +881,15 @@ namespace Util
 	ImVec4 GetPulsingColor(const ImVec4& baseColor, float speed = 4.0f, float minBrightness = 0.7f, float maxBrightness = 1.0f);
 
 	/**
+	 * @brief Tints the next control's frame and border to mark where its value comes from.
+	 * @param color Fully opaque marker color; the frame states get it at reduced alpha.
+	 */
+	void PushTintedFrameStyle(const ImVec4& color);
+
+	/** @brief Pops the style pushed by PushTintedFrameStyle. Always call after the corresponding push. */
+	void PopTintedFrameStyle();
+
+	/**
 	 * @brief Draws the feature search bar with magnifying glass icon.
 	 * @param searchString Reference to the search string to modify
 	 * @param availableWidth The available width for the search bar

@@ -254,11 +254,19 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 		ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
 		mixedFlagPushed = true;
 	}
+
+	// The control itself carries the provenance too, so a slider reads without tracing back to its gutter.
+	if (const auto tint = ResolveProvenanceColor()) {
+		Util::PushTintedFrameStyle(*tint);
+		tintPushed = true;
+	}
 }
 
 SceneWidgetBinding::Guard::~Guard()
 {
 	// Finish always runs on the happy path; this only closes scopes an exception skipped.
+	if (tintPushed)
+		Util::PopTintedFrameStyle();
 	if (mixedFlagPushed)
 		ImGui::PopItemFlag();
 	if (disabledOpened)
@@ -607,6 +615,18 @@ std::vector<SceneSettingsManager::EntryValueUpdate> SceneWidgetBinding::Guard::B
 	return updates;
 }
 
+std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveProvenanceColor() const
+{
+	// A disagreement about the data outranks a statement about its source.
+	if (mixedAcrossPeriods)
+		return Util::Colors::GetWarning();
+	if (winningLayer == SceneSettingsManager::SettingLayer::Overwrite)
+		return Util::Colors::GetInfo();
+	if (winningLayer == SceneSettingsManager::SettingLayer::User)
+		return Util::Colors::GetSuccess();
+	return std::nullopt;
+}
+
 void SceneWidgetBinding::Guard::Commit()
 {
 	// Editing a killed value revives it: the tombstone goes first, or it would block the new entry.
@@ -659,17 +679,8 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth + margin)
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth - margin);
 
-	const auto& theme = menu->GetTheme();
-	std::optional<ImVec4> frameColor;
-	if (mixedAcrossPeriods) {
-		// A disagreement about the data outranks a statement about its source.
-		frameColor = theme.StatusPalette.Warning;
-	} else if (winningLayer == SceneSettingsManager::SettingLayer::Overwrite) {
-		frameColor = theme.StatusPalette.InfoColor;
-	} else if (winningLayer == SceneSettingsManager::SettingLayer::User) {
-		frameColor = theme.StatusPalette.SuccessColor;
-	}
-
+	// The gutter fills solid where the control only tints: it reads as a state marker, not a hint.
+	const auto frameColor = ResolveProvenanceColor();
 	if (frameColor) {
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, *frameColor);
 		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, *frameColor);
@@ -813,6 +824,10 @@ void SceneWidgetBinding::Guard::SetTombstoned(bool a_tombstoned)
 
 bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 {
+	if (tintPushed) {
+		Util::PopTintedFrameStyle();
+		tintPushed = false;
+	}
 	if (mixedFlagPushed) {
 		ImGui::PopItemFlag();
 		mixedFlagPushed = false;
