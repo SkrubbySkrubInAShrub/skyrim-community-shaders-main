@@ -76,6 +76,16 @@ jobs:
                   git config user.name "github-actions[bot]"
                   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+            - name: Require ff_target when dispatched on main
+              # main only ever releases via promotion. Skipping this guard
+              # would let every `if: inputs.ff_target != ''` gate below
+              # (including the dev reconcile) silently no-op, publishing a
+              # release on main without reconciling dev.
+              if: ${{ github.ref_name == 'main' && inputs.ff_target == '' }}
+              run: |
+                  echo "::error::main only releases via promotion — set ff_target to the current dev tip SHA. Dispatching on main with no ff_target is not supported."
+                  exit 1
+
             - name: Validate ff_target (promotion mode)
               id: validate
               if: ${{ inputs.ff_target != '' }}
@@ -122,9 +132,15 @@ jobs:
               run: |
                   set -euo pipefail
                   REMOTE="https://x-access-token:${TOKEN}@github.com/${{ github.repository }}.git"
-                  # FF-only push: --force-with-lease guards against concurrent
-                  # changes; if main moved we abort rather than overwrite.
                   CURRENT_MAIN=$(git rev-parse origin/main)
+                  # --force-with-lease only guards against a concurrent change
+                  # to main's remote tip; it does not require FF_TARGET to
+                  # actually descend from CURRENT_MAIN. Verify that ourselves
+                  # before force-pushing.
+                  if ! git merge-base --is-ancestor "${CURRENT_MAIN}" "${FF_TARGET}"; then
+                    echo "::error::${FF_TARGET} is not a fast-forward of main (${CURRENT_MAIN}) — refusing to force-push a non-fast-forward."
+                    exit 1
+                  fi
                   git push --force-with-lease="main:${CURRENT_MAIN}" "${REMOTE}" "${FF_TARGET}:refs/heads/main"
                   # Re-point our local working tree at the new main tip so
                   # semantic-release runs against the promoted history.
@@ -223,7 +239,7 @@ jobs:
                       printf '%s\n' "${SHIPPED_SHAS[@]}" > /tmp/shipped_shas.txt
                       git log "${MAIN_BEFORE}..${DEV_BEFORE}" --format='%H %s' \
                         | awk 'NR==FNR{s[$1];next} ($1 in s)' /tmp/shipped_shas.txt - \
-                        | grep -oE '#[0-9]+' >> "${KEYS}" || true
+                        | grep -oE '\(#[0-9]+\)$' >> "${KEYS}" || true
                     fi
                   fi
                   sort -u -o "${KEYS}" "${KEYS}"
