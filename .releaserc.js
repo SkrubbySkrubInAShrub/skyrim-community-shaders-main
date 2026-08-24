@@ -1,20 +1,22 @@
 module.exports = {
-  // 'main' is the stable release channel. Patches to the current line land
-  // here directly (cherry-picked from dev) and produce vX.Y.Z. Minors/majors
-  // land here via the dev → main promotion flow in release-semantic.yaml.
+  // 'main' is the stable release channel. It only ever advances by fast-
+  // forwarding to dev's tip during a minor/major promotion (release-
+  // semantic.yaml) — hotfixes never touch it directly, so it can't diverge
+  // from dev between promotions.
   //
   // 'dev' is the integration channel and produces vX.Y.Z-rc.N prereleases.
   //
-  // 'hotfix/X.Y.x' is the maintenance channel for OLDER release lines.
-  // semantic-release validates it as a maintenance branch, which means it is
-  // only valid once 'main' has shipped a release on a newer minor/major than
-  // X.Y. Patches to the current line do NOT use this — use a fix PR to main.
+  // 'hotfix/X.Y.x' is a release branch for ANY line, current or older,
+  // treated uniformly. It has no `range`: release-semantic.yaml prunes every
+  // tag not reachable from the dispatched hotfix branch before invoking
+  // semantic-release, which scopes its version-ordering view to that
+  // branch's own lineage instead of the shared array order `range` would
+  // otherwise require.
   branches: [
     'main',
     { name: 'dev', prerelease: 'rc' },
     {
       name: 'hotfix/+([0-9])?(.{+([0-9]),x}).x',
-      range: '${name.split("/")[1]}',
       channel: '${name.split("/")[1]}',
     },
   ],
