@@ -143,10 +143,12 @@ jobs:
               # breaks a hotfix line older than main's current version. Local
               # to this checkout only — never pushed.
               if: ${{ startsWith(github.ref_name, 'hotfix/') }}
+              env:
+                  REF_NAME: ${{ github.ref_name }}
               run: |
                   set -euo pipefail
                   git fetch origin --tags --force
-                  mapfile -t KEEP < <(git tag --merged "${{ github.ref_name }}")
+                  mapfile -t KEEP < <(git tag --merged "${REF_NAME}")
                   declare -A KEEP_SET
                   for t in "${KEEP[@]}"; do KEEP_SET["$t"]=1; done
                   while read -r t; do
@@ -210,11 +212,11 @@ jobs:
               run: |
                   set -euo pipefail
                   git fetch origin --tags --force '+refs/heads/hotfix/*:refs/remotes/origin/hotfix/*'
-                  HOTFIX_REFS=$(git for-each-ref --format='%(refname)' 'refs/remotes/origin/hotfix/*')
+                  mapfile -t HOTFIX_REFS < <(git for-each-ref --format='%(refname)' 'refs/remotes/origin/hotfix/*')
                   KEYS="$(mktemp)"
                   : > "${KEYS}"
-                  if [[ -n "${HOTFIX_REFS}" ]]; then
-                    mapfile -t SHIPPED_SHAS < <(git log ${HOTFIX_REFS} --format=%B \
+                  if (( ${#HOTFIX_REFS[@]} > 0 )); then
+                    mapfile -t SHIPPED_SHAS < <(git log "${HOTFIX_REFS[@]}" --format=%B \
                       | grep -oE 'cherry picked from commit [0-9a-f]{40}' \
                       | awk '{print $NF}' | sort -u)
                     if (( ${#SHIPPED_SHAS[@]} > 0 )); then
