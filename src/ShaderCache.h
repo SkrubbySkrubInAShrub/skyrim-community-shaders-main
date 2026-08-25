@@ -549,7 +549,7 @@ namespace SIE
 			MTLandLODBlend = 19,
 		};
 
-		enum class LightingShaderFlags : uint32_t
+		enum class LightingShaderFlags
 		{
 			VC = 1 << 0,
 			Skinned = 1 << 1,
@@ -558,7 +558,6 @@ namespace SIE
 			// Community Shaders start
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
-			OIT = 1 << 5,
 			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,
@@ -679,8 +678,7 @@ namespace SIE
 			SkyObject = 1 << 24,
 			MsnSpuSkinned = 1 << 25,
 			MotionVectorsNormals = 1 << 26,
-			Deferred = 1 << 27,
-			OIT = 1 << 28,
+			Deferred = 1 << 27
 		};
 
 		enum class UtilityShaderFlags : uint64_t
@@ -719,11 +717,6 @@ namespace SIE
 
 		// Shader blocking data for developer mode
 		int blockedKeyIndex = -1;  // index in shaderMap; negative value indicates disabled
-		enum class ParticleShaderFlags : uint32_t
-		{
-			OIT = 1UL << 15,
-		};
-
 		std::string blockedKey = "";
 		std::vector<uint32_t> blockedIDs;  // more than one descriptor could be blocked based on shader hash
 

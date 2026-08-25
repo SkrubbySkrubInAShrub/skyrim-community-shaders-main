@@ -18,7 +18,6 @@
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
-#include "Features/OrderIndependentTransparency.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
@@ -75,7 +74,6 @@ void State::Draw()
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
 	auto& csEditor = globals::features::csEditor;
-	auto& oit = globals::features::orderIndependentTransparency;
 	auto& skin = globals::features::skin;
 	auto& truePBR = globals::features::truePBR;
 	auto context = globals::d3d::context;
@@ -120,9 +118,6 @@ void State::Draw()
 			ZoneScopedN("TruePBR::SetShaderResources");
 			truePBR.SetShaderResources(context);
 		}
-
-		if (oit.loaded)
-			oit.PreDrawHack();
 
 		if (permutationData != permutationDataPrevious) {
 			permutationCB->Update(permutationData);
@@ -884,7 +879,6 @@ void State::SetupResources()
 void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor, bool a_forceDeferred)
 {
 	auto deferred = globals::deferred;
-	const auto& oit = globals::features::orderIndependentTransparency;
 
 	if (a_shader.shaderType.get() != RE::BSShader::Type::Utility && a_shader.shaderType.get() != RE::BSShader::Type::ImageSpace) {
 		switch (a_shader.shaderType.get()) {
@@ -919,9 +913,6 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::Deferred;
-
-				if (inWorld && oit.ShouldCapture())
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::LightingShaderFlags::OIT;
 
 				{
 					uint32_t technique = 0x3F & (a_vertexDescriptor >> 24);
@@ -962,9 +953,6 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::Deferred;
-
-				if (inWorld && oit.ShouldCapture())
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::EffectShaderFlags::OIT;
 			}
 			break;
 		case RE::BSShader::Type::DistantTree:
@@ -977,12 +965,6 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 			{
 				if (deferred->deferredPass || a_forceDeferred)
 					a_pixelDescriptor |= 256;
-			}
-			break;
-		case RE::BSShader::Type::Particle:
-			{
-				if (inWorld && oit.ShouldCapture())
-					a_pixelDescriptor |= (uint32_t)SIE::ShaderCache::ParticleShaderFlags::OIT;
 			}
 			break;
 		}

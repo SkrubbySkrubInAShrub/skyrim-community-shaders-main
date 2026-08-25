@@ -39,7 +39,6 @@ struct Effects11;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct ScreenshotFeature;
-struct OrderIndependentTransparency;
 struct Skin;
 
 class State;
@@ -132,7 +131,6 @@ namespace globals
 		extern CSEditor csEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
-		extern OrderIndependentTransparency orderIndependentTransparency;
 		extern Skin skin;
 
 	}
