@@ -609,7 +609,10 @@ namespace
 		if (!loadPresetRequested || loadPresetContext != context)
 			return;
 		if (loadPresetConfirmation.Draw()) {
-			SceneSettingsManager::GetSingleton()->ClearAllUserEntries();
+			auto* manager = SceneSettingsManager::GetSingleton();
+			// An export earlier this session left the mod layer holding what was on disk before it.
+			manager->ReloadOverwrites();
+			manager->ClearAllUserEntries();
 			loadPresetRequested = false;
 		} else if (!loadPresetConfirmation.IsOpen()) {
 			loadPresetRequested = false;

@@ -242,6 +242,10 @@ public:
 
 	void DiscoverOverwrites(SceneType type);
 
+	/// Re-reads every overwrite file from disk, replacing the mod layer. User entries are untouched.
+	/// Picks up files an export just wrote, and drops entries whose file is gone.
+	void ReloadOverwrites();
+
 	/// Discover weather-specific overwrite files from Weather/{SPID}/ folders.
 	void DiscoverWeatherOverwrites();
 

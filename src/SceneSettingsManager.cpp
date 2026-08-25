@@ -4286,6 +4286,35 @@ void SceneSettingsManager::LoadAll()
 	TryEnsureLocationDataLoaded();
 }
 
+void SceneSettingsManager::ReloadOverwrites()
+{
+	// Nothing has been discovered yet, so the first load will read the current files anyway.
+	if (!dataLoaded)
+		return;
+
+	const auto dropOverwrites = [](std::vector<SettingEntry>& sourceEntries) {
+		std::erase_if(sourceEntries,
+			[](const SettingEntry& entry) { return entry.source == EntrySource::Overwrite; });
+	};
+	for (auto& [type, sourceEntries] : entries)
+		dropOverwrites(sourceEntries);
+	for (auto& [weatherId, config] : weatherSceneConfigs)
+		dropOverwrites(config.entries);
+	for (auto& [configKey, config] : locationSceneConfigs)
+		dropOverwrites(config.entries);
+
+	DiscoverOverwrites(SceneType::InteriorOnly);
+	DiscoverOverwrites(SceneType::TimeOfDay);
+	// Discovery for a layer that never loaded would run without its user settings, so it waits.
+	if (weatherDataLoaded)
+		DiscoverWeatherOverwrites();
+	if (locationDataLoaded)
+		DiscoverLocationOverwrites();
+
+	BumpEntryPresentationRevision();
+	ReapplyIfActive();
+}
+
 void SceneSettingsManager::OnDataLoaded()
 {
 	gameDataReady = true;
