@@ -59,7 +59,9 @@ namespace SceneWidgetBinding
 	};
 
 	/// Whether this call owns the gutter. A radio group is several calls against one address, so
-	/// its members defer ownership rather than drawing one toggle per button.
+	/// its members defer ownership rather than drawing one toggle per button. GroupMember has no
+	/// intercepted feature drawing a radio group yet; dropping it would leave a double-gutter bug
+	/// waiting for the first one.
 	enum class GutterPolicy : std::uint8_t
 	{
 		Owner,
@@ -106,12 +108,7 @@ namespace SceneWidgetBinding
 		/// only the layer that owns an address may edit it.
 		bool IsDrivenFromBelow() const { return lowerLayer != SceneSettingsManager::SettingLayer::None; }
 
-		std::optional<size_t> GetEntryIndex() const { return entryIndex; }
 		const SceneSettingsCatalog::SettingMetadata* GetMetadata() const { return metadata; }
-		const SceneSettingsManager::SceneContextId& GetContextId() const { return contextId; }
-
-		/// The resolved entry, or nullptr when none exists. Valid until the manager mutates entries.
-		const SceneSettingsManager::SettingEntry* GetEntry() const;
 
 	private:
 		/// Greys the control for the rest of the call, so an unbindable one cannot edit the base value.

@@ -210,8 +210,7 @@ namespace
 	void StartCopy(const SceneContextId& source, const SceneContextId& destination, const std::string& sourceName,
 		PeriodScope periodScope)
 	{
-		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source, destination,
-			SceneSettingsManager::CopyScope::EntireContext, std::nullopt, periodScope);
+		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source, destination, periodScope);
 		if (std::ranges::none_of(candidates, [](const auto& candidate) { return candidate.conflicts; })) {
 			RunCopy(source, destination, CopyConflictPolicy::SkipExisting, periodScope);
 			return;

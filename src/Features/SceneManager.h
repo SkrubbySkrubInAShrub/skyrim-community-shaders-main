@@ -13,7 +13,6 @@ struct SceneManager : Feature, SceneSettingsManager
 	bool IsAlwaysEnabled() const override { return true; }
 	bool IsDisabledByDefault() const override { return false; }
 	bool UsesMainSettings() const override { return false; }
-	bool HasRestoreDefaults() const override { return false; }
 
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
 	/// Debug view of the resolver's live state until the real Scene Manager UI lands.

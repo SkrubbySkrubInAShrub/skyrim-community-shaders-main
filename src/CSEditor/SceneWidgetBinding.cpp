@@ -385,14 +385,6 @@ float* SceneWidgetBinding::Guard::Float()
 	return static_cast<float*>(Raw());
 }
 
-const SceneSettingsManager::SettingEntry* SceneWidgetBinding::Guard::GetEntry() const
-{
-	if (!entryIndex)
-		return nullptr;
-	const auto entries = SceneSettingsManager::GetSingleton()->GetContextEntries(contextId);
-	return *entryIndex < entries.size() ? &entries[*entryIndex] : nullptr;
-}
-
 void SceneWidgetBinding::Guard::ResolveComponents()
 {
 	// The resolver answers a control's base address with its first component, so an aggregate has

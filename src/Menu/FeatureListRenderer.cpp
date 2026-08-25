@@ -933,14 +933,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
 
 	auto& menu = *globals::menu;
-	if (menu.uiIcons.featureSettingRevert.texture) {
-		if (ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
-			feat->RestoreDefaultSettings();
-		}
-	} else {
-		if (ImGui::Button("R##RestoreDefaults", iconSize)) {
-			feat->RestoreDefaultSettings();
-		}
+	const bool restore = menu.uiIcons.featureSettingRevert.texture ?
+	                         ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize) :
+	                         ImGui::Button("R##RestoreDefaults", iconSize);
+	if (restore) {
+		feat->RestoreDefaultSettings();
+		// Rewrites the base values behind a live scene layer, so the resolver has to re-baseline or
+		// the next resolve restores the pre-default values.
+		globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat);
 	}
 
 	ImGui::PopStyleColor(3);

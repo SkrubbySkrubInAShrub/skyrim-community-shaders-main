@@ -154,6 +154,12 @@ pops every affected setting.
 A duration set on one component of an aggregate control (a colour, a vector) applies to the whole control:
 `SetLocationEntryTransitionSeconds()` expands the selection through `GetCopyGroupKey()` before validating.
 
+**Durations have no UI yet.** `Get/SetLocationTransitionSeconds` and `Get/SetLocationEntryTransitionSeconds`
+are kept and honoured by the resolver, but nothing in `src/CSEditor/` can change a duration: the global stays
+at `kDefaultLocationTransitionSeconds` and per-entry overrides only ever arrive from a loaded
+`SceneManager.json` (upstream's or a hand-edited one). The easing itself is live regardless. A slider pair is
+all that is missing.
+
 ### Resolver caching
 
 The resolver runs every frame, so everything it can precompute is cached and invalidated by revision
@@ -191,7 +197,7 @@ resolve it triggers on destruction does not run while the lock is held.
 ## Generic Scene Copy API
 
 Copies settings between any two scene contexts (a time-of-day period, a weather period, or a location
-target). **Fully implemented, no caller yet**: this is the largest ready-to-hook surface in the manager.
+target). Driven by `ScenePageToolbar`, which puts the From/To submenus on every scene page.
 
 A context is a `SceneContextId`: a `SceneContextType` plus whichever of `period` / `weatherId` /
 `locationType` + `locationFormKey` that type uses. `IsValidSceneContext()` rejects any mixed combination,
@@ -199,12 +205,14 @@ so a malformed context can never reach the mutation path.
 
 | Method | Const | Purpose |
 | ------ | ----- | ------- |
-| `GetCopySources(destination, scope, setting)` | yes | Every context that holds something usable, with a localized label and a compatible-setting count. Excludes the destination itself. Sorted by type, then label. |
-| `GetCopyCandidates(source, destination, scope, setting)` | yes | Per-setting preview: display name, value, `compatible`, `conflicts`. Drives a confirmation dialog. |
-| `CopySettings(source, destination, conflictPolicy, scope, setting)` | no | Performs the copy and returns a `CopyResult` (`copied` / `skipped` / `overwritten` / `incompatible` / `hadConflicts` / `cancelled`). |
+| `GetCopySources(destination)` | yes | Every context that holds something usable, with a localized label and a compatible-setting count. Excludes the destination itself. Sorted by type, then label. |
+| `GetCopyDestinations(source)` | yes | Every context the source can copy into, including pages with nothing authored yet. |
+| `GetCopyCandidates(source, destination, periodScope)` | yes | Per-setting preview: display name, value, `compatible`, `conflicts`. Drives the confirmation dialog. |
+| `CopySettings(source, destination, conflictPolicy)` | no | Performs the copy and returns a `CopyResult` (`copied` / `skipped` / `overwritten` / `incompatible` / `hadConflicts` / `cancelled`). |
 
-`CopyScope::EntireContext` takes everything in the source; `CopyScope::Setting` takes one
-`SettingIdentity` (and, if it names an aggregate component, its whole control).
+A copy always takes the whole source context. The per-setting variant upstream carries (`CopyScope::Setting`
+plus a `SettingIdentity`) was removed: this fork's toolbar is page-scoped, and a single setting is moved by
+editing it on the destination page instead.
 
 **Compatibility.** A setting is copyable when it is in the catalog, allowed for the destination's scene
 type, its value passes `IsSceneSettingValueAllowed`, and the destination has no active `Overwrite` shadowing
@@ -217,6 +225,12 @@ colour behind.
 `CopyConflictPolicy::SkipExisting` leaves the whole conflicting group alone, `OverwriteExisting` replaces
 the value in place (keeping the existing `originalValue`), and `Cancel` aborts the entire operation and
 returns `cancelled` without touching anything.
+
+**`Cancel` is kept without a caller.** The toolbar's conflict modal offers only skip and overwrite. `Cancel`
+stays because "abort" has to be decided over the whole operation, not per period: `CopySettingsAcrossPeriods`
+pre-checks every period before it stages anything, so the policy has to be honoured everywhere a copy is
+staged for a future "cancel on any conflict" prompt to be correct. Removing it would bake the fan-out's
+partial-application semantics into the API.
 
 **Transactionality.** Everything is validated and staged into a pending list first; the destination config
 is only materialized once the copy is known to produce entries, and one `CommitSceneSettingChanges()` at the
@@ -259,13 +273,12 @@ discovered in the generated catalog.
 
 ## Feature-facing contract
 
-`Feature` gained three virtuals in this port (`src/Feature.h`):
+`Feature` gained two virtuals in this port (`src/Feature.h`):
 
 | Virtual | Default | Meaning |
 | ------- | ------- | ------- |
 | `IsAlwaysEnabled()` | `false` | Infrastructure that cannot be disabled at boot. `State` erases it from `disabledFeatures` and refuses toggles. |
 | `UsesMainSettings()` | `true` | Persists through the shared settings JSON; gates override discovery. |
-| `HasRestoreDefaults()` | `true` | Whether the UI offers "Restore Defaults". Currently unread (see [Known gaps](#known-gaps)). |
 
 `Feature::RegisterWeatherVariables()` was **removed**. Features no longer register anything; they just draw
 plain ImGui controls over persisted members.
@@ -283,8 +296,9 @@ someone asks for the UI layer.
 | `src/SceneSettingsUIHooks.{h,cpp}` | ~776 | ImGui interception marking scene-controlled widgets and offering right-click capture. |
 | `src/Features/SceneManagerUI.{h,cpp}` | ~34 | `SceneManager::DrawSettings()` body. |
 
-Correspondingly, `SceneManager` here has **no** `DrawSettings()` and **no** `PostPostLoad()` (upstream's
-called `SceneSettingsUIHooks::Install()`).
+Correspondingly, `SceneManager` here has **no** `PostPostLoad()` (upstream's called
+`SceneSettingsUIHooks::Install()`), and its `DrawSettings()` is a debug view of the resolver's live state
+rather than an authoring panel.
 
 ### Removed from this fork
 
@@ -309,8 +323,17 @@ called `SceneSettingsUIHooks::Install()`).
     `GetCurrentGameHour` / `SetGameHour`, `GetCurrentPeriod`, `Get*RelevantFeatureNames`,
     `GetFeatureDisplayName`, and the `LocationTarget` accessors.
 -   `FeatureListRenderer` shows a scene-controlled indicator and a **Scene Specific Settings** pause toggle
-    per feature (`IsFeaturePaused` / `SetFeaturePaused`).
+    per feature (`IsFeaturePaused` / `SetFeaturePaused`). Its "Restore Defaults" button is the one path that
+    rewrites a feature's base values while the scene layer is live, so it follows the restore with
+    `CaptureExternalFeatureChanges` to re-baseline; without that the next resolve puts the old values back.
 -   `CSEditor` flags a weather that has scene settings via `HasWeatherConfig`.
+-   `src/CSEditor/SceneWidgetInterceptor.cpp` detours the ImGui calls and replays a feature's real
+    `DrawSettings()` bound to a scene context, so entry authoring needs no per-scene tables:
+    `SceneWidgetBinding::Guard` creates, edits, pauses and deletes entries in place.
+    `GutterPolicy::GroupMember` is kept although no intercepted feature currently draws a radio group: it is
+    what stops several calls against one address (`RadioButton`) from each drawing their own gutter toggle,
+    and the alternative to keeping it is a latent double-gutter bug the first time a feature adds one.
+-   `src/CSEditor/ScenePageToolbar.cpp` drives the [copy API](#generic-scene-copy-api) and preset export.
 
 ## Backend ready for UI
 
@@ -319,28 +342,27 @@ touching the manager:
 
 | Surface | Entry points | What a UI still needs to build |
 | ------- | ------------ | ------------------------------ |
-| Entry authoring | `AddSetting`, `AddWeatherSetting`, `AddLocationSetting`, `UpdateEntryValue`, `RemoveSetting`, pause toggles | Add-setting dialogs and per-scene entry tables. Entries can otherwise only be made by hand-editing `SceneManager.json`. |
-| [Generic scene copy](#generic-scene-copy-api) | `GetCopySources`, `GetCopyCandidates`, `CopySettings` | A source picker, a candidate preview listing conflicts, and a conflict-policy prompt. |
-| Location transitions | `GetLocationTransitionSeconds` / `SetLocationTransitionSeconds`, `GetLocationEntryTransitionSeconds` / `SetLocationEntryTransitionSeconds` | A global duration slider and a per-entry override. The setter already expands aggregates and validates the whole edit before applying it. |
-| Location targets | `GetCurrentLocationTargets`, `GetAuthoredLocationTargets`, `AddLocationTarget`, `RemoveLocationTarget`, `IsLocationTargetAuthored` | Partly used by the location windows; the category layer has no UI at all. |
-| Overwrite export | `Export*` | Author-facing "ship this as an overwrite" action. |
-| Debug inspection | `GetDebugSnapshot` | A resolver inspector. The snapshot already flattens entries, resolved values, per-period values and active targets. |
+| [Location transition durations](#location-transitions) | `GetLocationTransitionSeconds` / `SetLocationTransitionSeconds`, `GetLocationEntryTransitionSeconds` / `SetLocationEntryTransitionSeconds` | A global duration slider and a per-entry override. The setter already expands aggregates and validates the whole edit before applying it. |
+| Feature "configured" badge | `HasAnySceneEntriesForFeature` | Answers whether a feature is authored *anywhere*, unlike `HasActiveSettingsForFeature` which answers whether it applies *here*. The seam for a badge that stays lit while the player is somewhere the overrides do not reach. |
+| Location categories | `AddLocationTarget` / `RemoveLocationTarget` for `LocationTargetType::Category` | The location windows author locations and cells; nothing offers the category layer, so a category entry can only come from a loaded document. |
 
 Nothing on this list is a stub: each path validates its input, persists, and reapplies. Treat a missing UI
 as the only missing piece.
 
 ## Known gaps
 
--   **The control resolvers are dead.** `FeatureSceneSettingsAdapters.generated.cpp` compiles and its static
-    initializers call `SceneSettingsCatalog::RegisterControlResolver`, but nothing in `src/` calls
-    `FindSettingForControl` or `GetVirtualAggregateControls` — those were the excluded UI hooks' entry
-    points. The registrations are inert, not broken; they are the seam the UI layer plugs into.
--   **`Feature::HasRestoreDefaults()` is unread.** Nothing in `src/` calls it; the "Restore Defaults" action it
-    gates lives in the excluded UI. Kept as the seam for that layer, same as the control resolvers.
--   Catalog metadata aimed purely at presentation (`displayPath`, `selectorPath`, `AggregatePresentation`,
-    `UnifiedEditMode`, choice display names, `sourceWidget`, `clampNumericInput`, `hdrColor`) is generated
-    and validated but unread at runtime for the same reason. `GetNumericBounds` has no caller yet either,
-    so the implicit `0..1` bounds the generator derives for `ColorEdit` controls are not enforced anywhere.
+-   **`GetVirtualAggregateControls` has no caller.** `SceneWidgetBinding` reaches the generated resolvers
+    through `FindSettingForControl`, but nothing consumes the virtual-aggregate list that lets a resolver
+    describe a control the feature never draws as one widget. The registrations are inert, not broken.
+-   **Numeric bounds are not enforced.** The generator derives bounds (including an implicit `0..1` for
+    `ColorEdit` controls) and validates them at build time, but the manager no longer exposes them: a bound
+    is only ever applied by the feature's own ImGui call, which the interceptor replays verbatim.
+-   Catalog metadata aimed purely at presentation (`AggregatePresentation`, `UnifiedEditMode`, `sourceWidget`,
+    `clampNumericInput`, `hdrColor`, choice display names) is generated, validated and carried on
+    `SettingControlInfo`, but nothing outside the manager reads it: the interceptor replays the feature's own
+    widget instead of rebuilding one. `displayPath` / `selectorPath` are the exception, they name entries.
+-   **Nothing can edit a location transition duration.** See
+    [Location transitions](#location-transitions).
 
 ## Testing
 

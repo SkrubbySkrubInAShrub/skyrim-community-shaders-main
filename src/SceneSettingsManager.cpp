@@ -29,7 +29,6 @@ namespace
 	using SceneSettingControlType = SceneSettingsManager::SettingControlType;
 	using ManagerAggregatePresentation = SceneSettingsManager::AggregatePresentation;
 	using ManagerUnifiedEditMode = SceneSettingsManager::UnifiedEditMode;
-	using ManagerSettingDescriptor = SceneSettingsManager::SettingDescriptor;
 
 	void CombineHash(size_t& signature, size_t value)
 	{
@@ -553,35 +552,6 @@ namespace
 
 		displayValue = transformedValue * GetCatalogNumericDisplayScale(setting);
 		return std::isfinite(displayValue);
-	}
-
-	bool ConvertCatalogNumericDisplayToStored(const SceneSettingsCatalog::SettingMetadata& setting,
-		double displayValue, double& storedValue)
-	{
-		if (!std::isfinite(displayValue))
-			return false;
-		if (setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Generic) {
-			storedValue = displayValue;
-			return true;
-		}
-		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
-			return false;
-
-		const double transformedValue = displayValue / GetCatalogNumericDisplayScale(setting);
-		if (!std::isfinite(transformedValue))
-			return false;
-		switch (setting.numericTransform) {
-		case SceneSettingsCatalog::NumericTransform::Identity:
-			storedValue = transformedValue;
-			break;
-		case SceneSettingsCatalog::NumericTransform::Log2:
-			storedValue = std::exp2(transformedValue);
-			break;
-		default:
-			return false;
-		}
-		return std::isfinite(storedValue) &&
-		       (setting.numericTransform != SceneSettingsCatalog::NumericTransform::Log2 || storedValue > 0.0);
 	}
 
 	const SceneSettingsCatalog::SettingMetadata* FindStoredAllComponent(
@@ -1332,11 +1302,6 @@ bool SceneSettingsManager::IsSceneSettingAllowed(
 	return setting && IsCatalogSettingAllowedByPolicy(*setting);
 }
 
-std::vector<std::string> SceneSettingsManager::GetInteriorRelevantFeatureNames()
-{
-	return GetLoadedCatalogFeatureNames(SceneType::InteriorOnly);
-}
-
 std::vector<std::string> SceneSettingsManager::GetExteriorRelevantFeatureNames()
 {
 	return GetLoadedCatalogFeatureNames(SceneType::TimeOfDay);
@@ -1351,146 +1316,6 @@ std::string SceneSettingsManager::GetFeatureDisplayName(const std::string& featu
 {
 	auto* feature = Feature::FindFeatureByShortName(featureShortName);
 	return feature ? feature->GetDisplayName() : featureShortName;
-}
-
-namespace
-{
-	std::string GetDescriptorLabel(const SceneSettingsManager::SettingControlInfo& info,
-		std::string_view component = {})
-	{
-		std::string leaf = info.displayName;
-		if (!component.empty())
-			leaf += std::format(" ({})", component);
-		if (info.displayPath.empty())
-			return leaf;
-		return std::format("{}: {}", JoinDisplayParts(info.displayPath, {}), leaf);
-	}
-
-	ManagerSettingDescriptor MakeScalarDescriptor(
-		const SceneSettingsCatalog::SettingMetadata& setting, const json& value)
-	{
-		auto info = MakeSettingControlInfo(setting);
-		const auto physicalPath = SplitCatalogPath(setting.settingPath);
-		const auto physicalKey = std::string(setting.settingKey);
-		const auto component = info.controlType == SceneSettingControlType::Scalar ?
-		                           std::string() : info.componentDisplayName;
-		return {
-			.settingPath = physicalPath,
-			.key = physicalKey,
-			.displayName = GetDescriptorLabel(info, component),
-			.displayPath = GetCatalogSelectorPath(setting),
-			.value = value,
-			.controlType = SceneSettingControlType::Scalar,
-			.aggregatePresentation = ManagerAggregatePresentation::Components,
-			.unifiedEditMode = ManagerUnifiedEditMode::None,
-			.members = { { physicalPath, physicalKey, info.componentDisplayName, value,
-				setting.serializedComponent, info.aggregateAll } },
-		};
-	}
-
-	using DescriptorGroupKey = std::tuple<std::string, std::string, std::int8_t, std::uint8_t, SceneSettingControlType>;
-
-	std::vector<ManagerSettingDescriptor> CollectFeatureSceneSettings(
-		const std::string& featureShortName, bool transitionableOnly)
-	{
-		auto* feature = Feature::FindFeatureByShortName(featureShortName);
-		if (!feature)
-			return {};
-
-		SceneSettingsManager::SceneLayerGuard guard;
-		json featureSettings;
-		if (!TrySaveFeatureSettings(*feature, "read settings", featureSettings))
-			return {};
-
-		std::vector<ManagerSettingDescriptor> descriptors;
-		std::map<DescriptorGroupKey, ManagerSettingDescriptor> groups;
-		for (const auto& setting : GetCatalogFeatureSettings(featureShortName)) {
-			if (!IsCatalogSettingAllowedByPolicy(setting))
-				continue;
-			if (transitionableOnly &&
-				!SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable))
-				continue;
-
-			auto settingPath = SplitCatalogPath(setting.settingPath);
-			if (setting.settingKey.empty())
-				continue;
-
-			const auto* value = GetCatalogSerializedValue(featureSettings, setting);
-			if (!value || !IsSceneSettingPrimitive(*value) ||
-				!IsCatalogValueCompatible(setting, *value) ||
-				(transitionableOnly && !IsNumericValue(*value)))
-				continue;
-
-			auto info = MakeSettingControlInfo(setting);
-			if (info.controlType == SceneSettingControlType::Scalar || info.componentCount < 2) {
-				descriptors.push_back(MakeScalarDescriptor(setting, *value));
-				continue;
-			}
-
-			DescriptorGroupKey key{
-				std::string(setting.serializedPath), std::string(setting.serializedKey),
-				info.componentStart, info.componentCount, info.controlType
-			};
-			auto [groupIt, inserted] = groups.try_emplace(key);
-			auto& descriptor = groupIt->second;
-			if (inserted) {
-				descriptor.settingPath = settingPath;
-				descriptor.key = std::string(setting.settingKey);
-				descriptor.displayName = GetDescriptorLabel(info);
-				descriptor.displayPath = GetCatalogSelectorPath(setting);
-				descriptor.value = *value;
-				descriptor.controlType = info.controlType;
-				descriptor.aggregatePresentation = info.aggregatePresentation;
-				descriptor.unifiedEditMode = info.unifiedEditMode;
-			} else {
-				if (descriptor.aggregatePresentation != info.aggregatePresentation)
-					descriptor.aggregatePresentation = ManagerAggregatePresentation::Components;
-				if (descriptor.unifiedEditMode != info.unifiedEditMode)
-					descriptor.unifiedEditMode = ManagerUnifiedEditMode::None;
-			}
-			descriptor.members.push_back({
-				std::move(settingPath), std::string(setting.settingKey), info.componentDisplayName,
-				*value, setting.serializedComponent, info.aggregateAll
-			});
-		}
-
-		for (auto& [key, descriptor] : groups) {
-			const auto expectedCount = std::get<3>(key);
-			const auto expectedStart = std::get<2>(key);
-			std::sort(descriptor.members.begin(), descriptor.members.end(), [](const auto& lhs, const auto& rhs) {
-				return lhs.componentIndex < rhs.componentIndex;
-			});
-			bool complete = descriptor.members.size() == expectedCount;
-			for (size_t index = 0; complete && index < descriptor.members.size(); ++index)
-				complete = descriptor.members[index].componentIndex == expectedStart + index;
-			if (complete) {
-				descriptors.push_back(std::move(descriptor));
-				continue;
-			}
-			for (const auto& member : descriptor.members) {
-				auto* setting = FindAllowedCatalogSetting(
-					featureShortName, member.settingPath, member.key, transitionableOnly);
-				if (setting)
-					descriptors.push_back(MakeScalarDescriptor(*setting, member.value));
-			}
-		}
-
-		std::sort(descriptors.begin(), descriptors.end(), [](const auto& lhs, const auto& rhs) {
-			return std::tie(lhs.displayPath, lhs.displayName, lhs.settingPath, lhs.key) <
-			       std::tie(rhs.displayPath, rhs.displayName, rhs.settingPath, rhs.key);
-		});
-		return descriptors;
-	}
-}
-
-std::vector<SceneSettingsManager::SettingDescriptor> SceneSettingsManager::GetFeatureSceneSettings(const std::string& featureShortName)
-{
-	return CollectFeatureSceneSettings(featureShortName, false);
-}
-
-std::vector<SceneSettingsManager::SettingDescriptor> SceneSettingsManager::GetTransitionableSceneSettings(const std::string& featureShortName)
-{
-	return CollectFeatureSceneSettings(featureShortName, true);
 }
 
 bool SceneSettingsManager::GetSettingControlInfo(const SettingEntry& entry, SettingControlInfo& info)
@@ -1537,97 +1362,6 @@ json SceneSettingsManager::GetFeatureSettingValue(const std::string& featureShor
 	if (GetCatalogSettingValue(*feature, *setting, value))
 		return value;
 	return {};
-}
-
-SceneSettingsManager::SettingType SceneSettingsManager::DetectSettingType(const json& value)
-{
-	if (value.is_boolean())
-		return SettingType::Boolean;
-	if (value.is_number_integer())
-		return SettingType::Integer;
-	if (value.is_number_float())
-		return SettingType::Float;
-	if (value.is_string())
-		return SettingType::String;
-	return SettingType::Unknown;
-}
-
-bool SceneSettingsManager::IsBooleanControlSetting(const SettingEntry& entry)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	return setting && SceneSettingsCatalog::HasFlag(
-		setting->flags, SceneSettingsCatalog::SettingFlag::BooleanControl);
-}
-
-bool SceneSettingsManager::IsInvertedDisplaySetting(const SettingEntry& entry)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	return setting && setting->invertedDisplay;
-}
-
-bool SceneSettingsManager::GetNumericBounds(const SettingEntry& entry, double& minimum, double& maximum)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	if (!setting || setting->editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric ||
-		!setting->hasNumericBounds || !std::isfinite(setting->minimumValue) ||
-		!std::isfinite(setting->maximumValue) || setting->minimumValue > setting->maximumValue)
-		return false;
-	minimum = setting->minimumValue;
-	maximum = setting->maximumValue;
-	return true;
-}
-
-double SceneSettingsManager::GetNumericDisplayScale(const SettingEntry& entry)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	if (!setting || setting->editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
-		return 1.0;
-	return GetCatalogNumericDisplayScale(*setting);
-}
-
-bool SceneSettingsManager::GetNumericDisplayValue(
-	const SettingEntry& entry, double storedValue, double& displayValue)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	return setting && ConvertCatalogNumericStoredToDisplay(*setting, storedValue, displayValue);
-}
-
-bool SceneSettingsManager::GetNumericStoredValue(
-	const SettingEntry& entry, double displayValue, double& storedValue)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	return setting && ConvertCatalogNumericDisplayToStored(*setting, displayValue, storedValue);
-}
-
-size_t SceneSettingsManager::GetSettingChoiceCount(const SettingEntry& entry)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	return setting && setting->editorSemantic == SceneSettingsCatalog::EditorSemantic::Choice ?
-	           setting->choiceCount :
-	           0;
-}
-
-bool SceneSettingsManager::GetSettingChoice(
-	const SettingEntry& entry, size_t index, std::int64_t& value, std::string& displayName)
-{
-	auto* setting = FindAllowedCatalogSetting(
-		entry.featureShortName, entry.settingPath, entry.settingKey);
-	if (!setting || setting->editorSemantic != SceneSettingsCatalog::EditorSemantic::Choice ||
-		index >= setting->choiceCount)
-		return false;
-	const auto& choice = setting->choices[index];
-	value = choice.value;
-	displayName = StripImGuiId(choice.displayName);
-	if (!choice.displayNameKey.empty())
-		displayName = StripImGuiId(T(choice.displayNameKey, displayName.c_str()));
-	return true;
 }
 
 using FeatureSettingsCache = std::map<std::string, json>;
@@ -1938,81 +1672,6 @@ void SceneSettingsManager::RevertEntryToDefault(SceneType type, size_t index)
 	ReapplyIfActive();
 }
 
-void SceneSettingsManager::SetAllOverwritesPaused(SceneType type, bool paused)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	bool changed = false;
-	for (auto& entry : GetEntriesMut(type)) {
-		if (entry.source == EntrySource::Overwrite && entry.paused != paused) {
-			entry.paused = paused;
-			changed = true;
-		}
-	}
-	if (changed)
-		BumpEntryPresentationRevision();
-	ReapplyIfActive();
-}
-
-bool SceneSettingsManager::AreAllOverwritesPaused(SceneType type) const
-{
-	if (!IsEntryListSceneType(type))
-		return false;
-	bool found = false;
-	for (const auto& entry : GetEntries(type)) {
-		if (entry.source != EntrySource::Overwrite)
-			continue;
-		found = true;
-		if (!entry.paused)
-			return false;
-	}
-	return found;
-}
-
-void SceneSettingsManager::DeleteAllOverwrites(SceneType type)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	auto& vec = GetEntriesMut(type);
-
-	std::vector<bool> shouldErase(vec.size(), false);
-	std::map<std::filesystem::path, bool> deleteResults;
-	for (size_t i = 0; i < vec.size(); ++i) {
-		const auto& entry = vec[i];
-		if (entry.source != EntrySource::Overwrite)
-			continue;
-		if (entry.sourceFilename.empty()) {
-			shouldErase[i] = true;
-			continue;
-		}
-		auto filepath = GetSceneOverwritePath(type, entry);
-		auto [resultIt, inserted] = deleteResults.try_emplace(filepath, false);
-		if (inserted) {
-			std::error_code ec;
-			auto removed = std::filesystem::remove(filepath, ec);
-			resultIt->second = removed || !ec;
-			if (!resultIt->second)
-				logger::error("[SceneSettings] Failed to delete overwrite file: {} ({}) - keeping entry", filepath.string(), ec.message());
-		}
-
-		if (resultIt->second)
-			shouldErase[i] = true;
-	}
-	// Erase only entries whose backing files were successfully cleaned up
-	// (iterate in reverse to preserve index validity)
-	bool changed = false;
-	for (size_t i = vec.size(); i-- > 0;) {
-		if (shouldErase[i]) {
-			vec.erase(vec.begin() + static_cast<ptrdiff_t>(i));
-			changed = true;
-		}
-	}
-	if (changed)
-		BumpEntryPresentationRevision();
-
-	ReapplyIfActive();
-}
-
 /// Per-period overwrites live in a period subfolder of their scene's directory.
 static std::filesystem::path GetOverwriteDir(const std::filesystem::path& baseDir,
 	SceneSettingsManager::TimeOfDayPeriod period)
@@ -2288,12 +1947,6 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 	}
 	logger::info("[SceneSettings] Exported preset '{}' as {} file(s)", safeModName, files.size());
 	return wroteAll;
-}
-
-void SceneSettingsManager::UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave)
-{
-	const EntryValueUpdate update{ index, newValue };
-	UpdateEntryValues(type, std::span{ &update, 1 }, deferSave);
 }
 
 void SceneSettingsManager::UpdateEntryValues(
@@ -4386,17 +4039,6 @@ RE::FormID SceneSettingsManager::GetEffectivePreviousWeatherId(const RE::Sky* sk
 
 // --- Per-Weather Scene Settings ---
 
-const SceneSettingsManager::WeatherSceneConfig SceneSettingsManager::kEmptyWeatherConfig{};
-
-const SceneSettingsManager::WeatherSceneConfig& SceneSettingsManager::GetWeatherConfig(RE::FormID weatherId)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return kEmptyWeatherConfig;
-
-	auto it = weatherSceneConfigs.find(weatherId);
-	return (it != weatherSceneConfigs.end()) ? it->second : kEmptyWeatherConfig;
-}
-
 SceneSettingsManager::WeatherSceneConfig& SceneSettingsManager::GetWeatherConfigMut(RE::FormID weatherId)
 {
 	return weatherSceneConfigs[weatherId];
@@ -4545,26 +4187,6 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 	ReapplyIfActive();
 }
 
-void SceneSettingsManager::DeleteAllWeatherUserSettings(RE::FormID weatherId)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return;
-	auto configIt = weatherSceneConfigs.find(weatherId);
-	if (configIt != weatherSceneConfigs.end()) {
-		const auto removed = std::erase_if(configIt->second.entries,
-			[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-		if (removed != 0)
-			BumpEntryPresentationRevision();
-	}
-	PrepareWeatherUserSettingsMutation(weatherId, false);
-	const auto normalizedSpid = NormalizeLocationFormKey(Util::FormIdToSpid(weatherId));
-	for (auto& [rawSpid, rawWeather] : unresolvedWeatherUserSettings.items())
-		if (rawWeather.is_object() && NormalizeLocationFormKey(rawSpid) == normalizedSpid)
-			rawWeather.erase("entries");
-	SaveAllUserSettings();
-	ReapplyIfActive();
-}
-
 void SceneSettingsManager::TogglePauseWeatherEntry(RE::FormID weatherId, size_t index)
 {
 	if (!TryEnsureWeatherDataLoaded())
@@ -4580,12 +4202,6 @@ void SceneSettingsManager::TogglePauseWeatherEntry(RE::FormID weatherId, size_t 
 		SaveAllUserSettings();
 	}
 	ReapplyIfActive();
-}
-
-void SceneSettingsManager::UpdateWeatherEntryValue(RE::FormID weatherId, size_t index, const json& newValue, bool deferSave)
-{
-	const EntryValueUpdate update{ index, newValue };
-	UpdateWeatherEntryValues(weatherId, std::span{ &update, 1 }, deferSave);
 }
 
 void SceneSettingsManager::UpdateWeatherEntryValues(
@@ -4659,16 +4275,6 @@ bool SceneSettingsManager::IsWeatherShowTimeOfDay(RE::FormID weatherId)
 
 	auto it = weatherShowTimeOfDay.find(weatherId);
 	return it != weatherShowTimeOfDay.end() && it->second;
-}
-
-void SceneSettingsManager::SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return;
-
-	weatherShowTimeOfDay[weatherId] = show;
-	PrepareWeatherUserSettingsMutation(weatherId, false);
-	SaveAllUserSettings();
 }
 
 // --- Per-Location Scene Settings ---
@@ -4952,14 +4558,6 @@ const SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::GetLocati
 	return it != locationSceneConfigs.end() ? it->second : kEmptyLocationConfig;
 }
 
-bool SceneSettingsManager::HasLocationConfig(LocationTargetType type, std::string_view formKey) const
-{
-	const auto& config = GetLocationConfig(type, formKey);
-	return std::any_of(config.entries.begin(), config.entries.end(), [&](const auto& entry) {
-		return IsEntryActive(entry);
-	});
-}
-
 std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTargetType type,
 	std::string_view formKey, const SettingAddress& address, EntrySource selectedSource)
 {
@@ -5102,27 +4700,6 @@ void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const 
 	ReapplyIfActive();
 }
 
-void SceneSettingsManager::DeleteAllLocationUserSettings(LocationTargetType type, const std::string& formKey)
-{
-	if (!TryEnsureLocationDataLoaded())
-		return;
-	auto configIt = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (configIt != locationSceneConfigs.end()) {
-		const auto removed = std::erase_if(configIt->second.entries,
-			[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-		if (removed != 0)
-			BumpEntryPresentationRevision();
-	}
-	PrepareLocationUserSettingsMutation(type, formKey, false);
-	const auto* sectionName = GetLocationSectionName(type);
-	auto sectionIt = unresolvedLocationUserSettings.find(sectionName);
-	if (sectionIt != unresolvedLocationUserSettings.end())
-		for (const auto& rawFormKey : MatchingRawLocationKeys(*sectionIt, type, formKey))
-			(*sectionIt)[rawFormKey].erase("entries");
-	SaveAllUserSettings();
-	ReapplyIfActive();
-}
-
 std::vector<std::string> SceneSettingsManager::MatchingRawLocationKeys(const json& section,
 	LocationTargetType type, std::string_view formKey)
 {
@@ -5149,13 +4726,6 @@ void SceneSettingsManager::TogglePauseLocationEntry(LocationTargetType type, con
 		SaveAllUserSettings();
 	}
 	ReapplyIfActive();
-}
-
-void SceneSettingsManager::UpdateLocationEntryValue(LocationTargetType type, const std::string& formKey,
-	size_t index, const json& newValue, bool deferSave)
-{
-	const EntryValueUpdate update{ index, newValue };
-	UpdateLocationEntryValues(type, formKey, std::span{ &update, 1 }, deferSave);
 }
 
 void SceneSettingsManager::UpdateLocationEntryValues(LocationTargetType type, const std::string& formKey,
@@ -5244,12 +4814,6 @@ namespace
 			aggregate ? info.componentStart : -1,
 			aggregate ? info.componentCount : 0,
 			aggregate ? info.controlType : SceneSettingsManager::SettingControlType::Scalar };
-	}
-
-	bool IsValidCopyScope(SceneSettingsManager::CopyScope scope)
-	{
-		return scope == SceneSettingsManager::CopyScope::EntireContext ||
-		       scope == SceneSettingsManager::CopyScope::Setting;
 	}
 
 	bool IsValidCopyConflictPolicy(SceneSettingsManager::CopyConflictPolicy policy)
@@ -5909,12 +5473,10 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 }
 
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopyCandidates(
-	const SceneContextId& source, const SceneContextId& destination, CopyScope scope,
-	const std::optional<SettingIdentity>& selectedSetting, PeriodScope periodScope) const
+	const SceneContextId& source, const SceneContextId& destination, PeriodScope periodScope) const
 {
 	std::vector<CopyCandidate> candidates;
-	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination) || !IsValidCopyScope(scope) ||
-		(scope == CopyScope::Setting && !selectedSetting))
+	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination))
 		return candidates;
 	if (destination.type == SceneContextType::Location &&
 		ResolveLocationTargetChain(destination.locationType, destination.locationFormKey).empty())
@@ -5942,14 +5504,8 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 			destinationOverwriteSettings.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 	}
 
-	const auto selectedGroup = selectedSetting ? std::optional{ GetCopyGroupKey(*selectedSetting) } : std::nullopt;
-	const bool selectedIsAggregate = selectedGroup && std::get<5>(*selectedGroup) != SettingControlType::Scalar;
 	const auto [destinationSceneType, requireNumeric] = GetCopyDestinationRules(destination.type);
 	for (const auto& [identity, entry] : effectiveEntries) {
-		if (scope == CopyScope::Setting && identity != *selectedSetting &&
-			!(selectedIsAggregate && GetCopyGroupKey(identity) == *selectedGroup))
-			continue;
-
 		auto* setting = FindAllowedCatalogSetting(
 			identity.featureShortName, identity.settingPath, identity.settingKey, requireNumeric);
 		auto rejection = CopyRejection::None;
@@ -6001,17 +5557,15 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 }
 
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::GetCopyCandidates(
-	const SceneContextId& source, const SceneContextId& destination, CopyScope scope,
-	const std::optional<SettingIdentity>& setting, PeriodScope periodScope) const
+	const SceneContextId& source, const SceneContextId& destination, PeriodScope periodScope) const
 {
-	return BuildCopyCandidates(source, destination, scope, setting, periodScope);
+	return BuildCopyCandidates(source, destination, periodScope);
 }
 
 std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySources(
-	const SceneContextId& destination, CopyScope scope, const std::optional<SettingIdentity>& setting) const
+	const SceneContextId& destination) const
 {
-	if (!IsValidSceneContext(destination) || !IsValidCopyScope(scope) ||
-		(scope == CopyScope::Setting && !setting))
+	if (!IsValidSceneContext(destination))
 		return {};
 	if (destination.type == SceneContextType::Location &&
 		ResolveLocationTargetChain(destination.locationType, destination.locationFormKey).empty())
@@ -6023,12 +5577,6 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 				EntryBelongsToContext(entry, destination))
 				destinationOverwrites.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 
-	const auto selectedGroup = setting ? std::optional{ GetCopyGroupKey(*setting) } : std::nullopt;
-	const bool selectedIsAggregate = selectedGroup && std::get<5>(*selectedGroup) != SettingControlType::Scalar;
-	const auto isSelected = [&](const SettingIdentity& identity) {
-		return scope == CopyScope::EntireContext || identity == *setting ||
-		       (selectedIsAggregate && GetCopyGroupKey(identity) == *selectedGroup);
-	};
 	const auto [destinationSceneType, requireNumeric] = GetCopyDestinationRules(destination.type);
 	const auto countCompatible = [&](const EffectiveContextEntries& effectiveEntries) {
 		struct GroupCount
@@ -6038,8 +5586,6 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 		};
 		std::map<CopyGroupKey, GroupCount> groups;
 		for (const auto& [identity, entry] : effectiveEntries) {
-			if (!isSelected(identity))
-				continue;
 			auto& group = groups[GetCopyGroupKey(identity)];
 			++group.members;
 			auto* metadata = FindAllowedCatalogSetting(
@@ -6107,10 +5653,9 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 }
 
 std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDestinations(
-	const SceneContextId& source, CopyScope scope, const std::optional<SettingIdentity>& setting) const
+	const SceneContextId& source) const
 {
-	if (!IsValidSceneContext(source) || !IsValidCopyScope(scope) || (scope == CopyScope::Setting && !setting) ||
-		!GetCopyContextEntries(source))
+	if (!IsValidSceneContext(source) || !GetCopyContextEntries(source))
 		return {};
 
 	std::vector<CopySource> destinations;
@@ -6119,7 +5664,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 	const auto addDestination = [&](const SceneContextId& context, std::string displayName) {
 		if (IsSameSceneContext(context, source))
 			return;
-		const auto candidates = BuildCopyCandidates(source, context, scope, setting, PeriodScope::ActivePeriod);
+		const auto candidates = BuildCopyCandidates(source, context, PeriodScope::ActivePeriod);
 		const auto compatibleCount = static_cast<size_t>(
 			std::count_if(candidates.begin(), candidates.end(), [](const auto& candidate) { return candidate.compatible; }));
 		if (compatibleCount != 0)
@@ -6198,12 +5743,11 @@ std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextI
 }
 
 SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(const SceneContextId& source,
-	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, CopyScope scope,
-	const std::optional<SettingIdentity>& setting, bool deferCommit)
+	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, bool deferCommit)
 {
 	CopyResult result;
-	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination) || !IsValidCopyScope(scope) ||
-		!IsValidCopyConflictPolicy(conflictPolicy) || (scope == CopyScope::Setting && !setting))
+	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination) ||
+		!IsValidCopyConflictPolicy(conflictPolicy))
 		return result;
 	if ((source.type == SceneContextType::Weather || destination.type == SceneContextType::Weather) &&
 		!TryEnsureWeatherDataLoaded())
@@ -6212,7 +5756,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 		!TryEnsureLocationDataLoaded())
 		return result;
 
-	const auto candidates = BuildCopyCandidates(source, destination, scope, setting, PeriodScope::ActivePeriod);
+	const auto candidates = BuildCopyCandidates(source, destination, PeriodScope::ActivePeriod);
 	if (candidates.empty())
 		return result;
 	std::map<CopyGroupKey, std::vector<CopyCandidate>> groups;
@@ -6450,10 +5994,9 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 }
 
 SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneContextId& source,
-	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, CopyScope scope,
-	const std::optional<SettingIdentity>& setting)
+	const SceneContextId& destination, CopyConflictPolicy conflictPolicy)
 {
-	return CopySettingsToContext(source, destination, conflictPolicy, scope, setting, false);
+	return CopySettingsToContext(source, destination, conflictPolicy, false);
 }
 
 SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsAcrossPeriods(const SceneContextId& source,
@@ -6465,8 +6008,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsAcrossPeriods
 	CopyResult result;
 	// Cancelling has to be decided over the whole fan-out, or the earlier periods land before a later one refuses.
 	if (conflictPolicy == CopyConflictPolicy::Cancel) {
-		const auto candidates = BuildCopyCandidates(source, destination, CopyScope::EntireContext,
-			std::nullopt, PeriodScope::AllPeriods);
+		const auto candidates = BuildCopyCandidates(source, destination, PeriodScope::AllPeriods);
 		if (std::any_of(candidates.begin(), candidates.end(),
 				[](const auto& candidate) { return candidate.conflicts; })) {
 			result.hadConflicts = true;
@@ -6480,8 +6022,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsAcrossPeriods
 		periodDestination.period = period;
 		if (IsSameSceneContext(periodDestination, source))
 			continue;
-		const auto periodResult = CopySettingsToContext(source, periodDestination, conflictPolicy,
-			CopyScope::EntireContext, std::nullopt, true);
+		const auto periodResult = CopySettingsToContext(source, periodDestination, conflictPolicy, true);
 		result.copied += periodResult.copied;
 		result.skipped += periodResult.skipped;
 		result.overwritten += periodResult.overwritten;

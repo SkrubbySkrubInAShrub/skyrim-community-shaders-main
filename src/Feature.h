@@ -154,9 +154,6 @@ public:
 	/** @brief Whether the feature persists through the shared settings JSON rather than its own store. */
 	virtual bool UsesMainSettings() const { return true; }
 
-	/** @brief Whether the feature exposes a "Restore Defaults" action. */
-	virtual bool HasRestoreDefaults() const { return true; }
-
 	/**
 	 * Whether the feature will show up in the GUI menu
 	 */

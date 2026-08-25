@@ -3,7 +3,7 @@
 #include "SceneSettingsManager.h"
 
 /// Page-wide actions for one scene context: pause or resume it, copy settings between it and
-/// another context (in either direction), export it (reserved), and clear it. The page being
+/// another context (in either direction), export it as a preset, and clear it. The page being
 /// drawn is always one side of the copy; the other side is picked from the From/To submenus.
 namespace ScenePageToolbar
 {

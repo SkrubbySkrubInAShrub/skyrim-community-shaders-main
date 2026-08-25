@@ -168,7 +168,6 @@ public:
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count, bool deferCommit = false);
 	void RemoveSetting(SceneType type, size_t index);
 	void TogglePauseEntry(SceneType type, size_t index);
-	void UpdateEntryValue(SceneType type, size_t index, const json& newValue, bool deferSave = false);
 	/// Validate and update a group of entries before applying any of them.
 	void UpdateEntryValues(SceneType type, std::span<const EntryValueUpdate> updates, bool deferSave = false);
 	void CommitSceneSettingChanges();
@@ -180,10 +179,6 @@ public:
 	bool HasEntryForPeriod(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		TimeOfDayPeriod period, EntrySource source) const;
-
-	void SetAllOverwritesPaused(SceneType type, bool paused);
-	bool AreAllOverwritesPaused(SceneType type) const;
-	void DeleteAllOverwrites(SceneType type);
 
 	/// Mods supplying overwrite entries anywhere, in discovery order, deduplicated. Loads weather and
 	/// location data first if not already loaded; returns whatever it has if either fails to load.
@@ -197,8 +192,6 @@ public:
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const std::string& modName);
 
-	void DeleteAllWeatherUserSettings(RE::FormID weatherId);
-
 	// --- Scene Application ---
 
 	/// Called every frame from State::Draw().
@@ -209,6 +202,9 @@ public:
 
 	/// Check if any scene settings are active for a given feature
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
+	/// Whether a feature has any entry authored anywhere, in effect or not, unlike
+	/// HasActiveSettingsForFeature. No caller yet: the seam for a "configured" badge that stays lit
+	/// when the player is somewhere the overrides do not apply.
 	bool HasAnySceneEntriesForFeature(const std::string& featureShortName) const;
 	bool IsActiveSceneSetting(std::string_view featureShortName,
 		std::string_view settingPath, std::string_view settingKey) const;
@@ -278,11 +274,9 @@ public:
 
 	// --- Feature Metadata ---
 
-	/// Get loaded feature short names with scene-visible settings.
-	static std::vector<std::string> GetInteriorRelevantFeatureNames();
-
 	/// Get loaded feature short names with transitionable settings.
 	static std::vector<std::string> GetExteriorRelevantFeatureNames();
+	/// Superset of the exterior set: the location layer also accepts interior-only settings.
 	static std::vector<std::string> GetLocationRelevantFeatureNames();
 
 	/// Check whether the feature exposes settings supported by the scene type.
@@ -322,37 +316,6 @@ public:
 		Shift,
 	};
 
-	/// One persisted primitive belonging to a logical Scene Manager control.
-	struct SettingDescriptorMember
-	{
-		std::vector<std::string> settingPath;
-		std::string key;
-		std::string componentDisplayName;
-		json value;
-		std::int8_t componentIndex = -1;
-		bool aggregateAll = false;
-	};
-
-	/// Catalog-backed setting presented in the add-setting dialog.
-	struct SettingDescriptor
-	{
-		std::vector<std::string> settingPath;
-		std::string key;
-		std::string displayName;
-		std::vector<std::string> displayPath;
-		json value;
-		SettingControlType controlType = SettingControlType::Scalar;
-		AggregatePresentation aggregatePresentation = AggregatePresentation::Components;
-		UnifiedEditMode unifiedEditMode = UnifiedEditMode::None;
-		std::vector<SettingDescriptorMember> members;
-	};
-
-	/// Get scene-safe setting descriptors for a feature.
-	static std::vector<SettingDescriptor> GetFeatureSceneSettings(const std::string& featureShortName);
-
-	/// Get scene-safe float setting descriptors for time/weather blending.
-	static std::vector<SettingDescriptor> GetTransitionableSceneSettings(const std::string& featureShortName);
-
 	/// Logical-control metadata for one stored scene-setting entry.
 	struct SettingControlInfo
 	{
@@ -380,27 +343,6 @@ public:
 	static json GetFeatureSettingValue(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
-	/// Detect the JSON type of a setting value for UI rendering
-	enum class SettingType
-	{
-		Boolean,
-		Integer,
-		Float,
-		String,
-		Unknown
-	};
-	static SettingType DetectSettingType(const json& value);
-	static bool IsBooleanControlSetting(const SettingEntry& entry);
-	static bool IsInvertedDisplaySetting(const SettingEntry& entry);
-	static bool GetNumericBounds(const SettingEntry& entry, double& minimum, double& maximum);
-	static double GetNumericDisplayScale(const SettingEntry& entry);
-	/// Convert a raw stored numeric setting value to its Scene Manager display value.
-	static bool GetNumericDisplayValue(const SettingEntry& entry, double storedValue, double& displayValue);
-	/// Convert a Scene Manager display value to its raw stored numeric setting value.
-	static bool GetNumericStoredValue(const SettingEntry& entry, double displayValue, double& storedValue);
-	static size_t GetSettingChoiceCount(const SettingEntry& entry);
-	static bool GetSettingChoice(const SettingEntry& entry, size_t index, std::int64_t& value, std::string& displayName);
-
 	// --- Per-Weather Scene Settings ---
 
 	/// Per-weather configuration: all entries are per-period (TOD).
@@ -410,7 +352,6 @@ public:
 		std::vector<SettingEntry> entries;
 	};
 
-	const WeatherSceneConfig& GetWeatherConfig(RE::FormID weatherId);
 	bool HasWeatherConfig(RE::FormID weatherId);
 
 	/// Add a weather setting.  Requires a valid period (all entries are per-period).
@@ -419,7 +360,6 @@ public:
 		bool deferSave = false);
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
 	void TogglePauseWeatherEntry(RE::FormID weatherId, size_t index);
-	void UpdateWeatherEntryValue(RE::FormID weatherId, size_t index, const json& newValue, bool deferSave = false);
 	/// Validate and update weather entries as one mutation.
 	void UpdateWeatherEntryValues(
 		RE::FormID weatherId, std::span<const EntryValueUpdate> updates, bool deferSave = false);
@@ -429,8 +369,8 @@ public:
 		std::optional<EntrySource> source = std::nullopt);
 
 	/// Weather UI preference: show TOD table vs flat view (view-only, data is always per-period).
+	/// Read-only in this build: only a loaded document sets it.
 	bool IsWeatherShowTimeOfDay(RE::FormID weatherId);
-	void SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show);
 
 	static std::filesystem::path GetWeatherOverwritesDir();
 
@@ -488,15 +428,12 @@ public:
 	void RemoveLocationTarget(LocationTargetType type, const std::string& formKey);
 
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
-	bool HasLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	bool AddLocationSetting(LocationTargetType type, const std::string& formKey, const std::string& name,
 		const std::string& cocCode,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey, bool deferSave = false);
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
 	void TogglePauseLocationEntry(LocationTargetType type, const std::string& formKey, size_t index);
-	void UpdateLocationEntryValue(LocationTargetType type, const std::string& formKey, size_t index,
-		const json& newValue, bool deferSave = false);
 	/// Validate and update location entries as one mutation.
 	void UpdateLocationEntryValues(LocationTargetType type, const std::string& formKey,
 		std::span<const EntryValueUpdate> updates, bool deferSave = false);
@@ -504,7 +441,6 @@ public:
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey, std::optional<EntrySource> source = std::nullopt) const;
-	void DeleteAllLocationUserSettings(LocationTargetType type, const std::string& formKey);
 
 	/// Locations and cells share one directory; each target's type comes from its form, not its path.
 	static std::filesystem::path GetLocationOverwritesDir();
@@ -513,6 +449,10 @@ public:
 	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
 	/// Largest accepted typed location transition duration.
 	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
+
+	// The four duration accessors below have no caller yet: nothing in the UI can change a duration, so
+	// the global stays at kDefaultLocationTransitionSeconds and per-entry overrides only arrive from a
+	// loaded document. The resolver honours both regardless. See docs/development/scene-settings-framework.md.
 
 	/// Return the global location float transition duration in seconds.
 	float GetLocationTransitionSeconds() const { return locationTransitionSeconds; }
@@ -569,14 +509,9 @@ public:
 		AllPeriods,
 	};
 
-	/// Amount copied from a source context.
-	enum class CopyScope : std::uint8_t
-	{
-		EntireContext,
-		Setting,
-	};
-
-	/// How an existing destination user setting is handled.
+	/// How an existing destination user setting is handled. Cancel has no caller yet: the conflict
+	/// modal only offers skip and overwrite, but the fan-out across periods depends on it being
+	/// decided over the whole operation, so the policy is honoured everywhere a copy is staged.
 	enum class CopyConflictPolicy : std::uint8_t
 	{
 		SkipExisting,
@@ -631,24 +566,17 @@ public:
 	};
 
 	/// Return non-empty contexts that contain compatible data for a destination.
-	std::vector<CopySource> GetCopySources(const SceneContextId& destination,
-		CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+	std::vector<CopySource> GetCopySources(const SceneContextId& destination) const;
 	/// Return every context a source can copy compatible data into, including pages with no
 	/// settings yet: every weather and known location, not just the ones already authored.
-	std::vector<CopySource> GetCopyDestinations(const SceneContextId& source,
-		CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt) const;
+	std::vector<CopySource> GetCopyDestinations(const SceneContextId& source) const;
 	/// Inspect the settings and conflicts in a proposed copy without mutating state.
 	/// AllPeriods answers for every period at once: a row conflicts if any of them already holds it.
 	std::vector<CopyCandidate> GetCopyCandidates(const SceneContextId& source,
-		const SceneContextId& destination, CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt,
-		PeriodScope periodScope = PeriodScope::ActivePeriod) const;
+		const SceneContextId& destination, PeriodScope periodScope = PeriodScope::ActivePeriod) const;
 	/// Copy settings as one validated mutation and one save/reapply operation.
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
-		CopyConflictPolicy conflictPolicy, CopyScope scope = CopyScope::EntireContext,
-		const std::optional<SettingIdentity>& setting = std::nullopt);
+		CopyConflictPolicy conflictPolicy);
 	/// Copy into every period of a flat page, or into the one period of a normal page, as one save.
 	CopyResult CopySettingsAcrossPeriods(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy, PeriodScope periodScope);
@@ -925,7 +853,6 @@ private:
 
 	// --- Per-Weather Scene storage ---
 	std::map<RE::FormID, WeatherSceneConfig> weatherSceneConfigs;
-	static const WeatherSceneConfig kEmptyWeatherConfig;
 
 	/// UI preference per weather: show TOD table vs flat view (keyed by FormID for fast access).
 	std::map<RE::FormID, bool> weatherShowTimeOfDay;
@@ -1116,12 +1043,10 @@ private:
 	/// One presentation bump, one mark and one save for a mutation spanning a whole context.
 	void CommitContextUserEntryMutation(const SceneContextId& context);
 	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
-		const SceneContextId& destination, CopyScope scope,
-		const std::optional<SettingIdentity>& selectedSetting, PeriodScope periodScope) const;
+		const SceneContextId& destination, PeriodScope periodScope) const;
 	/// Deferring the commit lets a fan-out over the periods land as one save.
 	CopyResult CopySettingsToContext(const SceneContextId& source, const SceneContextId& destination,
-		CopyConflictPolicy conflictPolicy, CopyScope scope,
-		const std::optional<SettingIdentity>& setting, bool deferCommit);
+		CopyConflictPolicy conflictPolicy, bool deferCommit);
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
 	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
 		std::span<const CatalogSceneSettingUpdate> updates);
