@@ -145,7 +145,21 @@ namespace SceneWidgetBinding
 		const char* ResolveStatusTooltip() const;
 
 		void Commit();
-		void DrawGutter();
+		/** @brief Draws the leading marker column.
+		 *  @return Whether it changed which entries exist or whether they apply, so the caller can
+		 *          re-resolve only then instead of on every control every frame. */
+		bool DrawGutter();
+		/// Whether this control can carry a location transition duration, by the same rule the
+		/// document loader applies: a Location page, and every component transitionable.
+		bool SupportsTransition() const;
+		/// The gutter's third slot: the per-entry duration, or a reserved gap that keeps the column straight.
+		void DrawTransitionSlot();
+		/// Takes the feature's SetNextItemWidth aside, since the gutter's own items would consume it
+		/// before the control it was meant for ever ran.
+		void CaptureNextItemWidth();
+		/// Shrinks the control by the space the leading gutter took, so it still fits the panel.
+		void PushCompensatedItemWidth();
+		void PopCompensatedItemWidth();
 		void DrawContextMenu();
 
 		/// Drops every entry this control owns, shared by the gutter's remove button and the
@@ -224,5 +238,12 @@ namespace SceneWidgetBinding
 		bool disabledOpened = false;
 		bool mixedFlagPushed = false;
 		bool tintPushed = false;
+
+		/// Horizontal space the leading gutter took, measured so the control can be shrunk by it.
+		float gutterConsumedWidth = 0.0f;
+		bool itemWidthPushed = false;
+		/// The feature's own SetNextItemWidth, held across the gutter and reapplied trimmed.
+		float capturedNextItemWidth = 0.0f;
+		bool nextItemWidthCaptured = false;
 	};
 }

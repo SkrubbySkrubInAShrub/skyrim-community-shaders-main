@@ -154,11 +154,18 @@ pops every affected setting.
 A duration set on one component of an aggregate control (a colour, a vector) applies to the whole control:
 `SetLocationEntryTransitionSeconds()` expands the selection through `GetCopyGroupKey()` before validating.
 
-**Durations have no UI yet.** `Get/SetLocationTransitionSeconds` and `Get/SetLocationEntryTransitionSeconds`
-are kept and honoured by the resolver, but nothing in `src/CSEditor/` can change a duration: the global stays
-at `kDefaultLocationTransitionSeconds` and per-entry overrides only ever arrive from a loaded
-`SceneManager.json` (upstream's or a hand-edited one). The easing itself is live regardless. A slider pair is
-all that is missing.
+**Durations are edited from the scene editor.** The global duration is a typed field in the location
+page's toolbar (`ScenePageToolbar`), shown only for `SceneContextType::Location`. The per-entry
+override is the third slot of each control's gutter (`SceneWidgetBinding::Guard::DrawTransitionSlot`),
+shown only when the page is a location page and every catalog component the control covers carries
+`SettingFlag::Transitionable`, the same predicate `FindAllowedCatalogSetting` applies when loading a
+document. A gutter field left empty inherits the global; a row with no override yet shows the
+inherited value inert.
+
+Typed values are clamped to `0..kMaxLocationTransitionSeconds`, whereas a value loaded from a
+document that falls outside that range is still rejected and flagged `retainSerializedTransition`.
+The divergence is deliberate: a human typing sees the correction happen, while a document authored by
+another implementation has an intent worth preserving through the round trip.
 
 ### Resolver caching
 
@@ -342,7 +349,6 @@ touching the manager:
 
 | Surface | Entry points | What a UI still needs to build |
 | ------- | ------------ | ------------------------------ |
-| [Location transition durations](#location-transitions) | `GetLocationTransitionSeconds` / `SetLocationTransitionSeconds`, `GetLocationEntryTransitionSeconds` / `SetLocationEntryTransitionSeconds` | A global duration slider and a per-entry override. The setter already expands aggregates and validates the whole edit before applying it. |
 | Feature "configured" badge | `HasAnySceneEntriesForFeature` | Answers whether a feature is authored *anywhere*, unlike `HasActiveSettingsForFeature` which answers whether it applies *here*. The seam for a badge that stays lit while the player is somewhere the overrides do not reach. |
 | Location categories | `AddLocationTarget` / `RemoveLocationTarget` for `LocationTargetType::Category` | The location windows author locations and cells; nothing offers the category layer, so a category entry can only come from a loaded document. |
 
@@ -361,8 +367,6 @@ as the only missing piece.
     `clampNumericInput`, `hdrColor`, choice display names) is generated, validated and carried on
     `SettingControlInfo`, but nothing outside the manager reads it: the interceptor replays the feature's own
     widget instead of rebuilding one. `displayPath` / `selectorPath` are the exception, they name entries.
--   **Nothing can edit a location transition duration.** See
-    [Location transitions](#location-transitions).
 
 ## Testing
 

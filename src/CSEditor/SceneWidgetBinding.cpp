@@ -12,6 +12,7 @@
 
 #include "../I18n/I18n.h"
 #include "Menu.h"
+#include "SceneTransitionField.h"
 #include "SceneWidgetInterceptor.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -27,8 +28,9 @@ namespace
 	/// with a checkbox rather than a table row, so the icon needs to read as the lighter action.
 	constexpr float kRemoveIconScale = 0.75f;
 
-	/// Keeps the gutter off the window's scrollbar/border instead of sitting flush against it.
-	constexpr float kGutterRightMargin = 8.0f;
+	/// A control shrunk to make room for the gutter never goes below this, so a narrow panel keeps
+	/// a slider you can still aim at.
+	constexpr float kMinCompensatedItemWidth = 60.0f;
 
 	constexpr int kPeriodCount = SceneSettingsManager::kPeriodCount;
 
@@ -136,27 +138,21 @@ namespace
 	}
 
 	int gutterFrame = -1;
-	// Keyed by window as well as address: two panels drawing the same feature must each get their
-	// own gutter instead of the second panel finding the first's claim already taken.
+	/// Keyed by window as well as address: two panels drawing the same feature must each get their
+	/// own gutter instead of the second panel finding the first's claim already taken.
 	using GutterKey = std::pair<ImGuiID, const void*>;
 	std::map<GutterKey, int> gutterCalls;
-	std::map<GutterKey, int> previousGutterCalls;
 
-	/// Last call against a (window, address) pair in a frame owns its gutter, so a radio group draws
-	/// a single toggle and draws it past its final button rather than crowding the first. The group
-	/// size only becomes known once a frame has drawn it, so its first frame falls back to the first
-	/// call and settles on the next.
+	/// A leading gutter's owner is the first call against a (window, address) pair in a frame, so a
+	/// radio group draws a single toggle ahead of its first button.
 	bool ClaimGutter(const void* address)
 	{
 		if (const auto frame = ImGui::GetFrameCount(); frame != gutterFrame) {
 			gutterFrame = frame;
-			previousGutterCalls.swap(gutterCalls);
 			gutterCalls.clear();
 		}
 		const GutterKey key{ ImGui::GetCurrentWindow()->ID, address };
-		const auto call = ++gutterCalls[key];
-		const auto previous = previousGutterCalls.find(key);
-		return previous == previousGutterCalls.end() ? call == 1 : call == previous->second;
+		return ++gutterCalls[key] == 1;
 	}
 
 	using SceneContextId = SceneSettingsManager::SceneContextId;
@@ -332,6 +328,17 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	}
 
 	ResolveState();
+
+	// Leading gutter: the marker column reads before the control, and a click lands in the same
+	// frame rather than a frame late.
+	if (policy == GutterPolicy::Owner || ClaimGutter(value.data)) {
+		CaptureNextItemWidth();
+		// Only a gutter that changed the entries makes the resolved state stale.
+		if (DrawGutter())
+			ResolveState();
+	}
+	PushCompensatedItemWidth();
+
 	if (state == State::Paused) {
 		// The greyed control shows what is stored, not what the scene is currently running.
 		StoreHoldingValue();
@@ -363,6 +370,8 @@ SceneWidgetBinding::Guard::~Guard()
 		ImGui::PopItemFlag();
 	if (disabledOpened)
 		ImGui::EndDisabled();
+	if (itemWidthPushed)
+		ImGui::PopItemWidth();
 }
 
 void* SceneWidgetBinding::Guard::Raw()
@@ -813,10 +822,8 @@ void SceneWidgetBinding::Guard::Commit()
 		contextId, BuildEntryValueUpdates(), commitDeferred);
 }
 
-void SceneWidgetBinding::Guard::DrawGutter()
+bool SceneWidgetBinding::Guard::DrawGutter()
 {
-	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-
 	bool enabled = state == State::Active;
 	const bool hasOverride = state != State::Absent;
 
@@ -830,14 +837,7 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	                               removeIconSize :
 	                               ImGui::CalcTextSize(T(TKEY("scene_override_remove"), "Remove")).x +
 	                                   style.FramePadding.x * 2.0f;
-	const float gutterWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
-	const auto margin = kGutterRightMargin * Util::GetUIScale();
-
-	// Anchors the pair to the right edge of the space the control left behind, which inside a table
-	// is its own cell: a table clips each cell to its column, so reaching for the window's right
-	// edge from a cell culls the gutter entirely.
-	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > gutterWidth + margin)
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - gutterWidth - margin);
+	gutterConsumedWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
 
 	// The gutter fills solid where the control only tints: it reads as a state marker, not a hint.
 	const auto frameColor = ResolveProvenanceColor();
@@ -894,7 +894,115 @@ void SceneWidgetBinding::Guard::DrawGutter()
 	if (removeClicked)
 		DeleteOverride();
 
+	// A duration edit changes no entry's existence or paused flag, so it never restates the row.
+	DrawTransitionSlot();
+
 	ImGui::PopID();
+
+	// Hands the row to the control this gutter leads.
+	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+	return toggled || removeClicked;
+}
+
+bool SceneWidgetBinding::Guard::SupportsTransition() const
+{
+	if (contextId.type != SceneSettingsManager::SceneContextType::Location)
+		return false;
+	// Same predicate FindAllowedCatalogSetting applies when loading a document, so the UI's gate and
+	// the loader's gate cannot drift apart.
+	return !components.empty() && std::ranges::all_of(components, [](const Component& component) {
+		return component.setting && SceneSettingsCatalog::HasFlag(
+										 component.setting->flags, SceneSettingsCatalog::SettingFlag::Transitionable);
+	});
+}
+
+void SceneWidgetBinding::Guard::DrawTransitionSlot()
+{
+	if (contextId.type != SceneSettingsManager::SceneContextType::Location)
+		return;
+
+	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+	const float width = SceneTransitionField::GetWidth();
+	gutterConsumedWidth += ImGui::GetStyle().ItemInnerSpacing.x + width;
+
+	// A non-transitionable row still reserves the slot, or the column would zigzag down the page.
+	if (!SupportsTransition()) {
+		ImGui::Dummy(ImVec2(width, ImGui::GetFrameHeight()));
+		return;
+	}
+
+	auto* manager = SceneSettingsManager::GetSingleton();
+	const auto owned = CollectOwnedEntries();
+	// Only an existing entry can carry a duration, so a row without one shows the inherited value inert.
+	const bool editable = !owned.empty() && (state == State::Active || state == State::Paused);
+
+	std::optional<float> seconds;
+	if (editable) {
+		seconds = manager->GetLocationEntryTransitionSeconds(
+			contextId.locationType, contextId.locationFormKey, owned.front());
+	}
+
+	if (SceneTransitionField::Draw("##SceneTransition", seconds,
+			manager->GetLocationTransitionSeconds(), editable)) {
+		// One call for every entry the control owns, so an aggregate lands as a single atomic edit.
+		manager->SetLocationEntryTransitionSeconds(
+			contextId.locationType, contextId.locationFormKey, owned, seconds);
+	}
+
+	Util::AddTooltip(editable ?
+						 T(TKEY("scene_transition_tooltip"),
+							 "Seconds this value takes to ease in and out when the location changes.\n"
+							 "Leave the field empty to follow the page's transition time.") :
+						 T(TKEY("scene_transition_needs_override_tooltip"),
+							 "Enable the override before setting its transition time."),
+		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+}
+
+void SceneWidgetBinding::Guard::CaptureNextItemWidth()
+{
+	auto& nextItem = ImGui::GetCurrentContext()->NextItemData;
+	if (!(nextItem.HasFlags & ImGuiNextItemDataFlags_HasWidth))
+		return;
+
+	// ItemAdd clears the flag, so the gutter's own checkbox would eat a width meant for the control.
+	capturedNextItemWidth = nextItem.Width;
+	nextItemWidthCaptured = true;
+	nextItem.HasFlags &= ~ImGuiNextItemDataFlags_HasWidth;
+}
+
+void SceneWidgetBinding::Guard::PushCompensatedItemWidth()
+{
+	// CaptureNextItemWidth only runs for a gutter that then draws, and drawing always consumes width.
+	assert(!nextItemWidthCaptured || gutterConsumedWidth > 0.0f);
+	if (gutterConsumedWidth <= 0.0f)
+		return;
+
+	// ImGui derives a default item width from window size rather than cursor position, so a control
+	// that keeps its width after a leading gutter runs past the panel's right edge.
+	const float consumed = gutterConsumedWidth + ImGui::GetStyle().ItemInnerSpacing.x;
+	const float minimum = kMinCompensatedItemWidth * Util::GetUIScale();
+
+	// A width is region-relative when negative, and so measures from the post-gutter cursor: it has
+	// already absorbed the gutter and trimming it again would shorten the control twice.
+	if (nextItemWidthCaptured) {
+		ImGui::SetNextItemWidth(capturedNextItemWidth < 0.0f ?
+									capturedNextItemWidth :
+									std::max(capturedNextItemWidth - consumed, minimum));
+		return;
+	}
+	if (ImGui::GetCurrentWindow()->DC.ItemWidth < 0.0f)
+		return;
+
+	ImGui::PushItemWidth(std::max(ImGui::CalcItemWidth() - consumed, minimum));
+	itemWidthPushed = true;
+}
+
+void SceneWidgetBinding::Guard::PopCompensatedItemWidth()
+{
+	if (!itemWidthPushed)
+		return;
+	ImGui::PopItemWidth();
+	itemWidthPushed = false;
 }
 
 void SceneWidgetBinding::Guard::DrawContextMenu()
@@ -978,6 +1086,7 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 		ImGui::EndDisabled();
 		disabledOpened = false;
 	}
+	PopCompensatedItemWidth();
 
 	if (state == State::Unsupported)
 		return a_changed;
@@ -1002,8 +1111,6 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 	const auto controlItem = ImGui::GetCurrentContext()->LastItemData;
 	if (state != State::Unsupported && state != State::Absent && state != State::Overwritten && !dragging)
 		DrawContextMenu();
-	if (state != State::Unsupported && (policy == GutterPolicy::Owner || ClaimGutter(value.data)))
-		DrawGutter();
 	ImGui::GetCurrentContext()->LastItemData = controlItem;
 
 	// The tint says only that something else holds this value; the gutter's words say what. Drawn

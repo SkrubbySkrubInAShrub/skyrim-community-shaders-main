@@ -16,6 +16,7 @@
 #include "EditorWindow.h"
 #include "Menu.h"
 #include "ScenePresetExport.h"
+#include "SceneTransitionField.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
 
@@ -636,6 +637,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	const char* loadPresetLabel = T(TKEY("scene_page_load_preset"), "Load Preset");
 	const char* exportLabel = T(TKEY("scene_page_export"), "Export");
 	const char* clearLabel = T(TKEY("scene_page_clear"), "Clear");
+	const char* transitionLabel = T(TKEY("scene_page_transition"), "Transition");
 
 	const auto& style = ImGui::GetStyle();
 	auto* menu = Menu::GetSingleton();
@@ -643,13 +645,40 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	// An image button is the image plus the same frame padding, so a font-sized icon matches the row.
 	const float clearIconSize = ImGui::GetFontSize();
 	const float clearWidth = hasClearIcon ? clearIconSize + style.FramePadding.x * 2.0f : ButtonWidth(clearLabel);
+	// The global duration only governs the location layer, so it is absent everywhere else.
+	const bool hasTransitionField = context.type == SceneContextType::Location;
+	const float transitionWidth = hasTransitionField ?
+	                                  ImGui::CalcTextSize(transitionLabel).x + style.ItemInnerSpacing.x +
+	                                      SceneTransitionField::GetWidth() + style.ItemSpacing.x :
+	                                  0.0f;
 	const float width = ButtonWidth(toggleLabel) + ButtonWidth(copyLabel) + ButtonWidth(loadPresetLabel) +
-	                    ButtonWidth(exportLabel) + clearWidth + style.ItemSpacing.x * 4.0f;
+	                    ButtonWidth(exportLabel) + clearWidth + transitionWidth + style.ItemSpacing.x * 4.0f;
 	const float margin = kRightMargin * Util::GetUIScale();
 	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > width + margin)
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - width - margin);
 
 	ImGui::PushID("ScenePageToolbar");
+
+	if (hasTransitionField) {
+		// Bare text is top-aligned, which would float it above the framed row it labels.
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(transitionLabel);
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+
+		// The global has no layer above it, so it is always set: emptying restores the default
+		// rather than clearing to nullopt, which the resolver could not use.
+		std::optional<float> seconds = manager->GetLocationTransitionSeconds();
+		if (SceneTransitionField::Draw("##ScenePageTransition", seconds,
+				SceneSettingsManager::kDefaultLocationTransitionSeconds, true)) {
+			manager->SetLocationTransitionSeconds(
+				seconds.value_or(SceneSettingsManager::kDefaultLocationTransitionSeconds));
+		}
+		Util::AddTooltip(T(TKEY("scene_page_transition_tooltip"),
+			"Seconds every value on this page takes to ease in and out when the location changes.\n"
+			"A single setting can override this from its own transition field."));
+
+		ImGui::SameLine();
+	}
 
 	ImGui::BeginDisabled(!hasEntries);
 	if (ImGui::Button(toggleLabel))

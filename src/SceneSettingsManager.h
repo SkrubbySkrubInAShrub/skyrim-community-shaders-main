@@ -450,10 +450,6 @@ public:
 	/// Largest accepted typed location transition duration.
 	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
 
-	// The four duration accessors below have no caller yet: nothing in the UI can change a duration, so
-	// the global stays at kDefaultLocationTransitionSeconds and per-entry overrides only arrive from a
-	// loaded document. The resolver honours both regardless. See docs/development/scene-settings-framework.md.
-
 	/// Return the global location float transition duration in seconds.
 	float GetLocationTransitionSeconds() const { return locationTransitionSeconds; }
 	/// Set and persist the global location float transition duration.
