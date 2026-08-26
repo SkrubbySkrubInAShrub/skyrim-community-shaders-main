@@ -346,6 +346,8 @@
     "cs_editor.scene_override_from_mod_below": "A mod supplies this value from a scene layer below this one. Tick to pin your own here.",
     "cs_editor.scene_override_from_user_below": "Your override on a scene layer below this one supplies this value. Tick to pin one here too.",
     "cs_editor.scene_override_mixed": "Values differ across this control. Editing writes the same value to all of them.",
+    "cs_editor.scene_override_outranked_by_mod": "A mod's value on a scene layer above this one wins here. Anything set on this page only applies where that one does not.",
+    "cs_editor.scene_override_outranked_by_user": "Your override on a scene layer above this one wins here. Anything set on this page only applies where that one does not.",
     "cs_editor.scene_override_paused": "Override stored but held back. Tick to apply it.",
     "cs_editor.scene_override_remove": "Remove",
     "cs_editor.scene_override_remove_mod_tooltip": "Suppress the mod's value here. The mod's own file is left untouched.",

@@ -104,10 +104,6 @@ namespace SceneWidgetBinding
 
 		State GetState() const { return state; }
 
-		/// Whether a layer beneath this page supplies the value, which is what greys the control:
-		/// only the layer that owns an address may edit it.
-		bool IsDrivenFromBelow() const { return lowerLayer != SceneSettingsManager::SettingLayer::None; }
-
 		const SceneSettingsCatalog::SettingMetadata* GetMetadata() const { return metadata; }
 
 	private:
@@ -136,6 +132,21 @@ namespace SceneWidgetBinding
 		/// Highest layer beneath this page supplying the address, once this page supplies nothing
 		/// itself. None when the layers below leave the feature's base in place.
 		SceneSettingsManager::SettingLayer ResolveLowerLayer(const std::string& a_settingKey) const;
+
+		/// Highest layer resolving after this page that supplies the address, so whatever this control
+		/// shows never reaches the scene here. None when this page has the last word.
+		SceneSettingsManager::SettingLayer ResolveUpperLayer(const std::string& a_settingKey) const;
+
+		/// Whether a layer stands for a value that reaches the scene, rather than a tombstone or nothing.
+		static bool SuppliesValue(SceneSettingsManager::SettingLayer a_layer)
+		{
+			return a_layer == SceneSettingsManager::SettingLayer::Overwrite ||
+			       a_layer == SceneSettingsManager::SettingLayer::User;
+		}
+
+		/// Bit per period slot this control reads. A page with no period of its own reads the period
+		/// running now, since that is the only one of a periodic layer that reaches the scene.
+		std::uint8_t CoveredPeriodMask() const;
 
 		/// Colour standing for where the value comes from, or nothing when the feature's base wins.
 		/// Shared by the control's tint and the gutter's toggle so the two never disagree.
@@ -207,8 +218,11 @@ namespace SceneWidgetBinding
 		/// user entry stays Paused so the checkbox has something to resume, but reads as the mod's.
 		SceneSettingsManager::SettingLayer winningLayer = SceneSettingsManager::SettingLayer::None;
 		/// Layer beneath this page supplying the address, resolved only when this page supplies
-		/// nothing: it colours the control the same way and greys it.
+		/// nothing. This page outranks it, so it only names the value's origin in the tooltip.
 		SceneSettingsManager::SettingLayer lowerLayer = SceneSettingsManager::SettingLayer::None;
+		/// Layer resolving after this page that outranks what the control shows. Resolved only once
+		/// the control shows a value at all, so a non-None value means "this loses here".
+		SceneSettingsManager::SettingLayer upperLayer = SceneSettingsManager::SettingLayer::None;
 		std::size_t valueSize = 0;
 		/// Widget value = persisted value * widgetScale; only a proxied control scales.
 		float widgetScale = 1.0f;
