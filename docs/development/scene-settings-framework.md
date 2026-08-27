@@ -5,8 +5,9 @@ Catalog-backed system that overrides feature settings by **interior**, **time of
 
 **Provenance:** ported from `Dlizzio/open-shaders` branch `feat/scene-manager` (upstream range
 `06eaa584a..1119234f9`), squashed into `feat(scene-manager): port scene settings framework`, then
-re-synced against upstream **rev3** (location categories, location transitions, resolver caching, the
-generic scene copy API). The port is **backend only**: upstream's authoring UI was never taken, and
+re-synced against upstream **rev4** (location regions replacing rev3's categories, instant apply across a
+loading screen, apply verification, the cached apply document; rev3 brought location transitions, resolver
+caching and the generic scene copy API). The port is **backend only**: upstream's authoring UI was never taken, and
 Community Shaders branding was kept throughout. This fork grows its own editor in `src/CSEditor/`. See
 [What was dropped](#what-was-dropped) and [Known gaps](#known-gaps) before assuming a missing piece is a
 bug.
@@ -75,14 +76,23 @@ Current catalog on this fork: **325 entries**, 298 of them scene-controllable ac
 
 There is no per-setting writer and no pointer patching. `ApplyCatalogSceneSettings()`:
 
-1.  `feature.SaveSettings(json)` to snapshot the feature's own serialization
-2.  walk the catalog's serialized address and overwrite the primitives, rejecting type mismatches
-3.  clamp each written value into its control's range (see [Numeric bounds](#numeric-bounds))
+1.  take the feature's `featureApplyDocuments` entry, seeding it from `feature.SaveSettings(json)` on first use
+2.  resolve every catalog address up front and reject the whole batch on a type mismatch, before mutating
+3.  overwrite the primitives, clamping each into its control's range (see [Numeric bounds](#numeric-bounds))
 4.  `feature.LoadSettings(json)` to push the whole block back
-5.  on exception, reload the original snapshot
+5.  on exception, roll the originals back into the document and reload it
+
+The document is **kept between applies**, so a per-frame location transition costs no `SaveSettings` and no
+full copy. That is also why validation precedes mutation: a rejected update must leave nothing behind. If
+even the rollback throws, the cached document is dropped so the next apply re-snapshots.
 
 `baselineSettings` holds the pre-override value so a setting that leaves scope is restored rather than left
 stuck. Failed applies back off (`kApplyRetryDelay`, 2s) and log once per signature instead of every frame.
+
+**An accepted apply is verified.** A feature that silently clamps or discards what it was handed still
+reports success, so `ScheduleApplyVerification()` records the batch and `VerifyPendingApplies()` reads it
+back the following frame. A feature that did not retain the values loses its applied entries and its cached
+document, and backs off like an outright failure.
 
 **Consequence:** a feature's `SaveSettings`/`LoadSettings` pair is the contract. A setting that is not
 round-trippable through them cannot be scene-controlled, no matter what its UI looks like.
@@ -119,7 +129,7 @@ location transition, and `false` in `RestoreAppliedSettings()`.
 `BuildResolvedSettings()` overlays in order, later winning per setting address:
 
 ```
-interior  →  time of day  →  weather  →  location (category → location → cell)
+interior  →  time of day  →  weather  →  location (region → location → cell)
 ```
 
 Within a layer, `EntrySource::Overwrite` (mod-shipped files) is overlaid first and `EntrySource::User`
@@ -132,7 +142,7 @@ address always wins. `SettingsUser.json` remains the baseline beneath all of thi
 -   **Weather** — per-weather configs are always stored per period; floats blend across
     `Sky::currentWeatherPct` between the outgoing and incoming weather.
 -   **Location**: see [Location targets](#location-targets); the chain resolves broadest to narrowest, so a
-    cell entry wins over the location that contains it, which wins over the category that classifies it.
+    cell entry wins over the location that contains it, which wins over the region that contains them both.
 -   Writes smaller than `kBlendEpsilon` (1e-3) are skipped so blending does not spam `LoadSettings`.
 
 **Divergence from upstream, deliberate:** upstream overlays `User` first and `Overwrite` second, so a
@@ -146,21 +156,21 @@ A location resolves to a **chain** of targets, broadest first, built by `BuildLo
 
 | `LocationTargetType` | Source | Notes |
 | -------------------- | ------ | ----- |
-| `Category` | `LocType*` keywords on every `BGSLocation` in the parent chain | Name is the keyword editor ID with the `LocType` prefix stripped and prettified. Deduplicated by keyword FormID. |
+| `Region` | The `TESRegion` covering an **exterior** cell | `Sky::region` when the player is in that cell, since it knows which of the overlapping regions won; otherwise the cell's first non-null `GetRegionList()` entry. Interiors contribute no region. |
 | `Location` | The `BGSLocation` chain, walked through `parentLoc` and reversed | Cycle-guarded by a visited FormID set. |
 | `Cell` | The player's parent cell | Its `editorId` is the coc code. |
 
-`GetCurrentLocationTargets()` caches the player's chain by location + cell FormID.
+`GetCurrentLocationTargets()` caches the player's chain by location + cell + region FormID; the region is
+part of the key because overlapping regions can change winner without the cell changing.
 `ResolveLocationTargetChain(type, formKey)` answers the same question for an **arbitrary** target: it
 reuses the player's chain when the target is in it, otherwise it looks the form up through
-`Util::ParseSpid` / `Util::SpidToFormId` and rebuilds. A `Category` has no standalone chain (it only exists
-through the locations that carry it), so an off-chain category resolves to empty.
+`Util::ParseSpid` / `Util::SpidToFormId` and rebuilds. A region is reached through the cells it covers, so
+off-chain it resolves to a chain of itself.
 
-The editor's Add list is the whole chain, so every link the player is standing in, categories included, is
-authorable in one click. There is deliberately no picker for a target the player is *not* standing in: an
-off-chain category has no chain to resolve, so such an entry can only arrive from a loaded document.
+The editor's Add list is the whole chain, so every link the player is standing in, the region included, is
+authorable in one click. There is deliberately no picker for a target the player is *not* standing in.
 
-Persisted under `location.categories` / `location.locations` / `location.cells` in `SceneManager.json` and
+Persisted under `location.regions` / `location.locations` / `location.cells` in `SceneManager.json` and
 under `Locations/<form key>/` for overwrites.
 
 ### Location transitions
@@ -174,9 +184,10 @@ pops every affected setting.
 -   Time comes from `globals::state->timer`, so transitions freeze with the game rather than the wall clock.
 -   Easing is smoothstep (`t * t * (3 - 2t)`). `StartLocationTransitions()` retargets from the **live** eased
     value, so reversing direction mid-transition never snaps.
--   Only a location **context change** animates. Editing a value in place snaps to it: `ResolveAndApply()`
-    passes `locationContextChanged` as the `animateChanges` flag, while `locationOverridesDirty` alone just
-    reconciles the targets.
+-   Only **walking** between exterior cells of one worldspace animates (`walkedBetweenWorldspaceCells`).
+    Editing a value in place snaps to it, and so does arriving from a loading screen: `OnLoadingTransition()`
+    resolves with `allowLocationTransitions = false` so the destination's values are already in place when
+    the player sees it. `locationOverridesDirty` alone just reconciles the targets.
 -   In-flight transitions are grouped into per-feature `LocationTransitionBatch`es so one `LoadSettings` call
     covers every animating setting of a feature. A failing batch logs once and backs off by signature.
 -   `RestoreAppliedSettings()` clears all transitions first, so tearing the scene layer down cannot leave a
@@ -210,7 +221,8 @@ counter rather than rebuilt:
 | `configuredFeatureNamesCache` | `configuredFeatureNamesRevision` | Which features have any scene entry at all. |
 | `cachedLocationOverrides` | `locationOverridesDirty` | The resolved location layer, rebuilt only when the target chain or an entry moved. |
 | `resolvedSettingsScratch` | reused every resolve | The resolved map itself, so the per-frame path does not reallocate. |
-| `cachedLocationTargets` | location/cell FormID change | The player's target chain. |
+| `cachedLocationTargets` | location/cell/region FormID change | The player's target chain. |
+| `featureApplyDocuments` | `InvalidateFeatureSnapshot()` | The settings JSON each apply mutates in place, so a transition frame never re-serializes the feature. |
 
 **Divergence from upstream, deliberate:** upstream bumps `sceneValueRevision` at ~22 call sites and sets
 `locationOverridesDirty` at ~9. This fork funnels both through `MarkSceneValuesDirty()`, called from

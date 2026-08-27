@@ -199,8 +199,8 @@ public:
 	/// Called every frame from State::Draw().
 	void Update();
 
-	/// Called by MenuOpenCloseEventHandler when a cell transition is detected.
-	void OnCellTransition();
+	/// Called by MenuOpenCloseEventHandler once a loading screen closes.
+	void OnLoadingTransition();
 
 	/// Check if any scene settings are active for a given feature
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
@@ -347,10 +347,10 @@ public:
 
 	// --- Per-Location Scene Settings ---
 
-	/// Broadest to narrowest: a category groups locations by their LocType keyword.
+	/// Broadest to narrowest: a region bounds its locations to one stretch of a worldspace.
 	enum class LocationTargetType
 	{
-		Category,
+		Region,
 		Location,
 		Cell
 	};
@@ -785,7 +785,7 @@ private:
 	/// A permanently locked file (MO2 VFS, antivirus, read-only install) must not log every retry forever.
 	static constexpr int kMaxDeferredSaveRetries = 5;
 
-	std::atomic<bool> queuedCellTransition = false;
+	std::atomic<bool> queuedLoadingTransition = false;
 
 	/// Float epsilon - changes smaller than this skip the LoadSettings call.
 	static constexpr float kBlendEpsilon = 1e-3f;
@@ -852,6 +852,16 @@ private:
 	std::map<std::string, ApplyFailureState> applyFailures;
 	std::map<std::string, ApplyFailureState> transitionApplyFailures;
 	static constexpr auto kApplyRetryDelay = std::chrono::seconds(2);
+	/// An apply a feature accepted, to be read back next frame. A feature that silently clamps or
+	/// discards what it was handed reports success, so the scene layer would otherwise believe it.
+	struct PendingApplyVerification
+	{
+		std::uint32_t appliedFrame = 0;
+		std::vector<CatalogSceneSettingUpdate> updates;
+		size_t signature = 0;
+		bool transition = false;
+	};
+	std::map<std::string, PendingApplyVerification> pendingApplyVerifications;
 	bool resolverDirty = true;
 	bool resolverSuspended = false;
 	bool activeEntryCacheDirty = true;
@@ -860,6 +870,7 @@ private:
 	bool lastResolvedInterior = false;
 	RE::FormID lastResolvedLocationId = 0;
 	RE::FormID lastResolvedCellId = 0;
+	RE::FormID lastResolvedWorldspaceId = 0;
 	float lastResolvedHour = -1.0f;
 	RE::FormID lastResolvedCurrentWeatherId = 0;
 	RE::FormID lastResolvedPreviousWeatherId = 0;
@@ -867,6 +878,7 @@ private:
 	mutable RE::FormID cachedPreviousWeatherId = 0;
 	mutable RE::FormID cachedTargetLocationId = 0;
 	mutable RE::FormID cachedTargetCellId = 0;
+	mutable RE::FormID cachedTargetRegionId = 0;
 	mutable bool locationTargetsCached = false;
 	mutable std::vector<LocationTarget> cachedLocationTargets;
 
@@ -902,6 +914,9 @@ private:
 
 	/// Feature settings as they were before the scene layer, so baselines cost one SaveSettings each.
 	std::map<std::string, json> featureBaseSnapshots;
+	/// The document each apply mutates in place, so a per-frame transition costs no SaveSettings
+	/// and no full copy of the feature's settings.
+	std::map<std::string, json> featureApplyDocuments;
 	std::set<std::string> appliedFeatureNames;
 	mutable std::set<std::string> configuredFeatureNamesCache;
 	mutable std::uint64_t configuredFeatureNamesRevision = std::numeric_limits<std::uint64_t>::max();
@@ -957,7 +972,10 @@ private:
 	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
 
 	// --- Central runtime resolver ---
-	void ResolveAndApply(bool force = false);
+	/** @brief Resolves the current scene and pushes it to the features.
+	 *  @param allowLocationTransitions Cleared across a loading screen so the new location's values
+	 *         are already in place when the player arrives instead of easing in afterwards. */
+	void ResolveAndApply(bool force = false, bool allowLocationTransitions = true);
 	bool HasActiveSceneEntriesCached();
 	/// @param interior Passed down from the caller's resolve, which already sampled it.
 	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations, bool interior);
@@ -1022,8 +1040,14 @@ private:
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
 	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
 		std::span<const CatalogSceneSettingUpdate> updates);
-	static bool ApplyCatalogSceneSettings(
+	bool ApplyCatalogSceneSettings(
 		Feature& feature, const std::vector<CatalogSceneSettingUpdate>& updates);
+	/** @brief Queues a read-back of an accepted apply.
+	 *  @param transition Selects which failure map a rejected apply backs off in. */
+	void ScheduleApplyVerification(std::string_view featureShortName,
+		const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition);
+	/// Drops any queued apply the feature did not actually keep, and backs that feature off.
+	void VerifyPendingApplies();
 
 	// --- Location float transitions ---
 	/// Seconds on the game clock, so transitions freeze with the game rather than the wall clock.

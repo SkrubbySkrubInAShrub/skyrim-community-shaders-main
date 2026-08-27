@@ -94,8 +94,6 @@ namespace
 	constexpr const char* kStatusDeleted = "deleted";
 	constexpr std::string_view kSceneSettingDisplaySeparator = " / ";
 	constexpr std::string_view kImGuiIdSeparator = "##";
-	/// Vanilla names every location-category keyword LocType<Something>.
-	constexpr std::string_view kLocationCategoryPrefix = "LocType";
 
 	bool IsSceneSettingPrimitive(const json& value)
 	{
@@ -1114,39 +1112,115 @@ bool SceneSettingsManager::ApplyCatalogSceneSettings(
 	if (updates.empty())
 		return true;
 
-	json originalSettings;
-	if (!TrySaveFeatureSettings(feature, "snapshot settings", originalSettings))
-		return false;
+	const auto featureShortName = feature.GetShortName();
+	auto documentIt = featureApplyDocuments.find(featureShortName);
+	if (documentIt == featureApplyDocuments.end()) {
+		json settingsDocument;
+		if (!TrySaveFeatureSettings(feature, "snapshot settings", settingsDocument))
+			return false;
+		documentIt = featureApplyDocuments.emplace(featureShortName, std::move(settingsDocument)).first;
+	}
+	auto& settingsDocument = documentIt->second;
 
-	auto candidateSettings = originalSettings;
+	// Resolved up front: the document outlives this call, so a rejected update must not have touched it.
+	std::vector<const SceneSettingsCatalog::SettingMetadata*> catalogSettings;
+	std::vector<json*> targetValues;
+	catalogSettings.reserve(updates.size());
+	targetValues.reserve(updates.size());
 	for (const auto& update : updates) {
-		auto* setting = FindAllowedCatalogSetting(
-			feature.GetShortName(), update.settingPath, update.key);
-		auto* currentValue = setting ? GetCatalogSerializedValue(candidateSettings, *setting) : nullptr;
+		auto* setting = FindAllowedCatalogSetting(featureShortName, update.settingPath, update.key);
+		auto* currentValue = setting ? GetCatalogSerializedValue(settingsDocument, *setting) : nullptr;
 		if (!currentValue || !IsSceneSettingPrimitive(*currentValue) ||
 			!IsSceneSettingPrimitive(update.value) ||
 			!IsCompatibleSceneSettingValue(*currentValue, update.value))
 			return false;
-		*currentValue = update.value;
-		if (update.clampToControlRange && ClampCatalogNumericValue(*setting, *currentValue))
-			WarnOnceAboutClampedSceneSetting(feature.GetShortName(), *setting, update.value, *currentValue);
+		catalogSettings.push_back(setting);
+		targetValues.push_back(currentValue);
+	}
+
+	std::vector<json> originalValues;
+	originalValues.reserve(updates.size());
+	for (size_t index = 0; index < updates.size(); ++index) {
+		auto& targetValue = *targetValues[index];
+		originalValues.push_back(std::move(targetValue));
+		targetValue = updates[index].value;
+		if (updates[index].clampToControlRange &&
+			ClampCatalogNumericValue(*catalogSettings[index], targetValue))
+			WarnOnceAboutClampedSceneSetting(
+				featureShortName, *catalogSettings[index], updates[index].value, targetValue);
 	}
 
 	try {
-		feature.LoadSettings(candidateSettings);
+		feature.LoadSettings(settingsDocument);
 		return true;
 	} catch (const std::exception& e) {
-		logger::warn("[SceneSettings] Failed to apply settings for {}: {}", feature.GetShortName(), e.what());
+		logger::warn("[SceneSettings] Failed to apply settings for {}: {}", featureShortName, e.what());
 	} catch (...) {
-		logger::warn("[SceneSettings] Failed to apply settings for {}", feature.GetShortName());
+		logger::warn("[SceneSettings] Failed to apply settings for {}", featureShortName);
 	}
 
 	try {
-		feature.LoadSettings(originalSettings);
+		for (size_t index = 0; index < updates.size(); ++index)
+			*targetValues[index] = std::move(originalValues[index]);
+		feature.LoadSettings(settingsDocument);
 	} catch (...) {
-		logger::error("[SceneSettings] Failed to restore {} after an apply error", feature.GetShortName());
+		featureApplyDocuments.erase(featureShortName);
+		logger::error("[SceneSettings] Failed to restore {} after an apply error", featureShortName);
 	}
 	return false;
+}
+
+void SceneSettingsManager::ScheduleApplyVerification(std::string_view featureShortName,
+	const std::vector<CatalogSceneSettingUpdate>& updates, size_t signature, bool transition)
+{
+	pendingApplyVerifications[std::string(featureShortName)] = {
+		.appliedFrame = lastUpdateFrame,
+		.updates = updates,
+		.signature = signature,
+		.transition = transition,
+	};
+}
+
+void SceneSettingsManager::VerifyPendingApplies()
+{
+	for (auto verificationIt = pendingApplyVerifications.begin();
+		verificationIt != pendingApplyVerifications.end();) {
+		const auto& [featureShortName, verification] = *verificationIt;
+		// Give the feature the frame it was handed the values in before reading them back.
+		if (verification.appliedFrame == lastUpdateFrame) {
+			++verificationIt;
+			continue;
+		}
+
+		bool retained = false;
+		json actualSettings;
+		auto* feature = Feature::FindFeatureByShortName(featureShortName);
+		if (feature && TrySaveFeatureSettings(*feature, "verify applied settings", actualSettings))
+			retained = std::all_of(verification.updates.begin(), verification.updates.end(),
+				[&](const auto& update) {
+					auto* setting = FindAllowedCatalogSetting(
+						featureShortName, update.settingPath, update.key);
+					const auto* actual = setting ?
+					                         GetCatalogSerializedValue(actualSettings, *setting) :
+					                         nullptr;
+					return actual && ResolvedValuesEqual(*actual, update.value);
+				});
+
+		if (!retained) {
+			logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
+				featureShortName);
+			featureApplyDocuments.erase(featureShortName);
+			for (const auto& update : verification.updates)
+				appliedSettings.erase({ featureShortName, update.settingPath, update.key });
+			PruneAppliedFeatureName(featureShortName);
+			auto& failure = (verification.transition ? transitionApplyFailures : applyFailures)[featureShortName];
+			failure.signature = verification.signature;
+			failure.retryAfter = std::chrono::steady_clock::now() + kApplyRetryDelay;
+			failure.warningLogged = true;
+			resolverDirty = true;
+		}
+		verificationIt = pendingApplyVerifications.erase(verificationIt);
+	}
 }
 
 static std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type, const SceneSettingsManager::SettingEntry& entry);
@@ -1955,10 +2029,10 @@ RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::Proces
 	RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
 {
 	if (a_event && a_event->menuName == RE::LoadingMenu::MENU_NAME && !a_event->opening) {
-		// Defer cell transition to next frame - cell data isn't available yet.
+		// Defer the transition to next frame - cell data isn't available yet.
 		// The sink outlives the manager, so a menu close during shutdown must find no singleton.
 		if (auto* manager = GetSingleton())
-			manager->queuedCellTransition.store(true, std::memory_order_relaxed);
+			manager->queuedLoadingTransition.store(true, std::memory_order_relaxed);
 	}
 
 	return RE::BSEventNotifyControl::kContinue;
@@ -1975,19 +2049,19 @@ void SceneSettingsManager::Update()
 			return;
 		lastUpdateFrame = frame;
 	}
+	VerifyPendingApplies();
 	FlushDeferredSceneChanges();
 
-	if (queuedCellTransition.exchange(false, std::memory_order_relaxed)) {
-		OnCellTransition();
-	}
-
-	ResolveAndApply();
+	if (queuedLoadingTransition.exchange(false, std::memory_order_relaxed))
+		OnLoadingTransition();
+	else
+		ResolveAndApply();
 }
 
-void SceneSettingsManager::OnCellTransition()
+void SceneSettingsManager::OnLoadingTransition()
 {
 	resolverDirty = true;
-	ResolveAndApply(true);
+	ResolveAndApply(true, false);
 }
 
 void SceneSettingsManager::ReapplyIfActive()
@@ -2134,7 +2208,7 @@ void SceneSettingsManager::ResumeSceneLayer()
 	ResolveAndApply(true);
 }
 
-void SceneSettingsManager::ResolveAndApply(bool force)
+void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransitions)
 {
 	if (resolverSuspended || sceneLayerSuspendDepth > 0)
 		return;
@@ -2171,9 +2245,18 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	auto* location = player->GetCurrentLocation();
 	if (!location)
 		location = cell->GetLocation();
+	const auto* worldspace = player->GetWorldspace();
 	const auto locationId = location ? location->GetFormID() : 0;
 	const auto cellId = cell->GetFormID();
-	const bool locationContextChanged = locationId != lastResolvedLocationId || cellId != lastResolvedCellId;
+	const auto worldspaceId = worldspace ? worldspace->GetFormID() : 0;
+	const bool cellChanged = cellId != lastResolvedCellId;
+	const bool locationContextChanged = locationId != lastResolvedLocationId || cellChanged;
+	// Only walking between exterior cells of one worldspace eases; anything behind a loading screen
+	// has to be in place by the time the player sees it.
+	const bool walkedBetweenWorldspaceCells = allowLocationTransitions && cellChanged &&
+	                                          !interior && !lastResolvedInterior &&
+	                                          lastResolvedCellId != 0 &&
+	                                          worldspaceId != 0 && worldspaceId == lastResolvedWorldspaceId;
 
 	if (!interior)
 		TryEnsureWeatherDataLoaded();
@@ -2199,8 +2282,8 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	const bool reconcileLocationTransitions = locationContextChanged || locationOverridesDirty;
 	auto& resolved = BuildResolvedSettings(reconcileLocationTransitions, interior);
 	if (reconcileLocationTransitions) {
-		// Only crossing a location boundary animates; editing a value in place snaps to it.
-		StartLocationTransitions(resolved, transitionTime, locationContextChanged);
+		// Editing a value in place snaps to it, as does arriving from a loading screen.
+		StartLocationTransitions(resolved, transitionTime, walkedBetweenWorldspaceCells);
 		locationOverridesDirty = false;
 	}
 	for (const auto& [address, transition] : activeLocationTransitions)
@@ -2211,6 +2294,7 @@ void SceneSettingsManager::ResolveAndApply(bool force)
 	lastResolvedInterior = interior;
 	lastResolvedLocationId = locationId;
 	lastResolvedCellId = cellId;
+	lastResolvedWorldspaceId = worldspaceId;
 	lastResolvedHour = hour;
 	lastResolvedCurrentWeatherId = weather.currentWeatherId;
 	lastResolvedPreviousWeatherId = weather.previousWeatherId;
@@ -2375,6 +2459,7 @@ bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 			continue;
 		}
 		transitionApplyFailures.erase(featureShortName);
+		ScheduleApplyVerification(featureShortName, batch.updates, batch.signature, true);
 		appliedAny = true;
 
 		bool restoredSetting = false;
@@ -2626,7 +2711,7 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 			updates.push_back({ update.address->settingPath, update.address->settingKey, *update.value,
 				!update.restore });
 
-		// Hashed lazily: an apply that never fails never pays for the signature.
+		// Memoized: the backoff check, the failure record and the verification all want the same hash.
 		std::optional<size_t> signature;
 		const auto getSignature = [&]() {
 			if (!signature) {
@@ -2667,6 +2752,7 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 			continue;
 		}
 		applyFailures.erase(featureShortName);
+		ScheduleApplyVerification(featureShortName, updates, getSignature(), false);
 		restoreFailureWarnings.erase(featureShortName);
 
 		bool restoredSetting = false;
@@ -2732,6 +2818,8 @@ void SceneSettingsManager::RestoreAppliedSettings()
 		}
 		restoreFailureWarnings.erase(featureShortName);
 		restoreRetryAfter.erase(featureShortName);
+		// The restore deliberately undoes whatever the last apply put there.
+		pendingApplyVerifications.erase(featureShortName);
 
 		for (const auto& item : pending) {
 			appliedSettings.erase(item.address);
@@ -2977,12 +3065,16 @@ void SceneSettingsManager::InvalidateFeatureSnapshot(std::string_view featureSho
 	locationOverridesDirty = true;
 	if (featureShortName.empty()) {
 		featureBaseSnapshots.clear();
+		featureApplyDocuments.clear();
+		pendingApplyVerifications.clear();
 		std::erase_if(baselineSettings,
 			[&](const auto& item) { return !appliedSettings.contains(item.first); });
 		return;
 	}
 	const auto featureName = std::string(featureShortName);
 	featureBaseSnapshots.erase(featureName);
+	featureApplyDocuments.erase(featureName);
+	pendingApplyVerifications.erase(featureName);
 	std::erase_if(baselineSettings, [&](const auto& item) {
 		return item.first.featureShortName == featureName && !appliedSettings.contains(item.first);
 	});
@@ -3686,8 +3778,8 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 		unresolvedLocationUserSettings[sectionName] = std::move(preservedSection);
 	};
 
-	for (const auto type :
-		{ LocationTargetType::Category, LocationTargetType::Location, LocationTargetType::Cell })
+	for (const auto type : { LocationTargetType::Region, LocationTargetType::Location,
+			 LocationTargetType::Cell })
 		loadSection(GetLocationSectionName(type), type);
 }
 
@@ -4130,8 +4222,8 @@ std::string SceneSettingsManager::GetLocationConfigKey(LocationTargetType type, 
 const char* SceneSettingsManager::GetLocationSectionName(LocationTargetType type)
 {
 	switch (type) {
-	case LocationTargetType::Category:
-		return "categories";
+	case LocationTargetType::Region:
+		return "regions";
 	case LocationTargetType::Location:
 		return "locations";
 	case LocationTargetType::Cell:
@@ -4144,8 +4236,8 @@ const char* SceneSettingsManager::GetLocationSectionName(LocationTargetType type
 const char* SceneSettingsManager::GetLocationTargetTypeName(LocationTargetType type)
 {
 	switch (type) {
-	case LocationTargetType::Category:
-		return "Category";
+	case LocationTargetType::Region:
+		return "Region";
 	case LocationTargetType::Location:
 		return "Location";
 	case LocationTargetType::Cell:
@@ -4159,7 +4251,7 @@ namespace
 {
 	bool IsValidLocationTargetType(SceneSettingsManager::LocationTargetType type)
 	{
-		return type == SceneSettingsManager::LocationTargetType::Category ||
+		return type == SceneSettingsManager::LocationTargetType::Region ||
 		       type == SceneSettingsManager::LocationTargetType::Location ||
 		       type == SceneSettingsManager::LocationTargetType::Cell;
 	}
@@ -4170,6 +4262,13 @@ namespace
 		if (const char* fullName = form->GetFullName(); fullName && fullName[0] != '\0')
 			return std::string(fullName);
 		return Util::GetFormDisplayName(form->GetFormID());
+	}
+
+	/// Regions carry no full name, so their editor ID is the only readable label they have.
+	std::string GetRegionTargetName(const RE::TESRegion* region)
+	{
+		auto name = Util::PrettifyIdentifier(Util::GetFormEditorID(region));
+		return name.empty() ? Util::GetFormDisplayName(region->GetFormID()) : name;
 	}
 
 	/// Build the broadest-to-narrowest target chain for a location and the cell that resolved it.
@@ -4186,26 +4285,29 @@ namespace
 		std::reverse(locationChain.begin(), locationChain.end());
 
 		std::vector<SceneSettingsManager::LocationTarget> targets;
-		// Categories are the broadest layer, so they resolve before the locations that carry them.
-		std::set<RE::FormID> seenCategories;
-		for (auto* current : locationChain) {
-			for (auto* keyword : current->GetKeywords()) {
-				if (!keyword)
-					continue;
-				const auto editorId = Util::GetFormEditorID(keyword);
-				if (!editorId.starts_with(kLocationCategoryPrefix) ||
-					!seenCategories.insert(keyword->GetFormID()).second)
-					continue;
-				auto categoryName = Util::PrettifyIdentifier(editorId.substr(kLocationCategoryPrefix.size()));
-				if (categoryName.empty())
-					categoryName = editorId;
+		// The sky knows which of an exterior cell's overlapping regions actually won, but only for the
+		// cell the player is standing in; anywhere else the cell's own first region is the best guess.
+		if (cell && cell->IsExteriorCell()) {
+			RE::TESRegion* region = nullptr;
+			if (auto* player = RE::PlayerCharacter::GetSingleton();
+				player && player->GetParentCell() == cell && globals::game::sky)
+				region = globals::game::sky->region;
+			if (!region) {
+				if (auto* regions = cell->GetRegionList(false)) {
+					auto regionIt = std::find_if(regions->begin(), regions->end(),
+						[](auto* candidate) { return candidate != nullptr; });
+					if (regionIt != regions->end())
+						region = *regionIt;
+				}
+			}
+			if (region) {
 				targets.push_back({
-					.type = LocationTargetType::Category,
-					.formKey = Util::GetFormFileKey(keyword),
-					.name = std::move(categoryName),
-					.editorId = editorId,
+					.type = LocationTargetType::Region,
+					.formKey = Util::GetFormFileKey(region),
+					.name = GetRegionTargetName(region),
+					.editorId = Util::GetFormEditorID(region),
 					.cocCode = cocCode,
-					.formId = keyword->GetFormID(),
+					.formId = region->GetFormID(),
 				});
 			}
 		}
@@ -4255,13 +4357,22 @@ namespace
 				}))
 				return currentTargets;
 		}
-		// A category only exists through the locations that carry it, so it has no standalone chain.
-		if (type == SceneSettingsManager::LocationTargetType::Category)
-			return {};
-
 		auto* form = ResolveLocationTargetForm(formKey);
 		if (!form)
 			return {};
+		// A region is reached through the cells it covers, so away from them it is a chain of itself.
+		if (type == SceneSettingsManager::LocationTargetType::Region) {
+			auto* region = form->As<RE::TESRegion>();
+			if (!region)
+				return {};
+			return { {
+				.type = SceneSettingsManager::LocationTargetType::Region,
+				.formKey = Util::GetFormFileKey(region),
+				.name = GetRegionTargetName(region),
+				.editorId = Util::GetFormEditorID(region),
+				.formId = region->GetFormID(),
+			} };
+		}
 		if (type == SceneSettingsManager::LocationTargetType::Location)
 			return BuildLocationTargetChain(form->As<RE::BGSLocation>(), nullptr);
 		auto* cell = form->As<RE::TESObjectCELL>();
@@ -4277,6 +4388,7 @@ const std::vector<SceneSettingsManager::LocationTarget>& SceneSettingsManager::G
 	if (!player || !cell) {
 		cachedTargetLocationId = 0;
 		cachedTargetCellId = 0;
+		cachedTargetRegionId = 0;
 		locationTargetsCached = false;
 		cachedLocationTargets.clear();
 		return cachedLocationTargets;
@@ -4287,10 +4399,16 @@ const std::vector<SceneSettingsManager::LocationTarget>& SceneSettingsManager::G
 		location = cell->GetLocation();
 	const auto locationId = location ? location->GetFormID() : 0;
 	const auto cellId = cell->GetFormID();
-	if (locationTargetsCached && cachedTargetLocationId == locationId && cachedTargetCellId == cellId)
+	// Regions overlap within a cell, so the winning one can change without the cell changing.
+	const auto regionId = cell->IsExteriorCell() && globals::game::sky && globals::game::sky->region ?
+	                          globals::game::sky->region->GetFormID() :
+	                          0;
+	if (locationTargetsCached && cachedTargetLocationId == locationId &&
+		cachedTargetCellId == cellId && cachedTargetRegionId == regionId)
 		return cachedLocationTargets;
 
 	cachedLocationTargets = BuildLocationTargetChain(location, cell);
+	cachedTargetRegionId = regionId;
 	cachedTargetLocationId = locationId;
 	cachedTargetCellId = cellId;
 	locationTargetsCached = true;
@@ -4601,8 +4719,8 @@ namespace
 	const char* GetCopyLocationTypeName(SceneSettingsManager::LocationTargetType type)
 	{
 		switch (type) {
-		case SceneSettingsManager::LocationTargetType::Category:
-			return T("feature.scene_manager.location.target_category", "Category");
+		case SceneSettingsManager::LocationTargetType::Region:
+			return T("feature.scene_manager.location.target_region", "Region");
 		case SceneSettingsManager::LocationTargetType::Location:
 			return T("feature.scene_manager.location.target_location", "Location");
 		case SceneSettingsManager::LocationTargetType::Cell:
@@ -5908,18 +6026,14 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 	if (const auto formId = Util::SpidToFormId(formKey); formId != 0) {
 		canonicalFormKey = Util::FormIdToSpid(formId);
 		if (auto* form = RE::TESForm::LookupByID(formId)) {
-			if (form->GetFormType() == RE::FormType::Keyword) {
-				if (!Util::GetFormEditorID(form).starts_with(kLocationCategoryPrefix)) {
-					logger::warn("[SceneSettings] Location overwrite target '{}' is not a LocType category", formKey);
-					return;
-				}
-				resolvedType = LocationTargetType::Category;
-			} else if (form->GetFormType() == RE::FormType::Location)
+			if (form->GetFormType() == RE::FormType::Region)
+				resolvedType = LocationTargetType::Region;
+			else if (form->GetFormType() == RE::FormType::Location)
 				resolvedType = LocationTargetType::Location;
 			else if (form->GetFormType() == RE::FormType::Cell)
 				resolvedType = LocationTargetType::Cell;
 			else {
-				logger::warn("[SceneSettings] Location overwrite target '{}' is not a category, location, or cell", formKey);
+				logger::warn("[SceneSettings] Location overwrite target '{}' is not a region, location, or cell", formKey);
 				return;
 			}
 			resolvedName = Util::GetFormDisplayName(formId);
@@ -5953,8 +6067,8 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 					!ReadOptionalStringField(*metadataIt, "targetName", metadataName, metadataContext) ||
 					!ReadOptionalStringField(*metadataIt, "coc", metadataCocCode, metadataContext))
 					continue;
-				if (targetType == "Category")
-					metadataType = LocationTargetType::Category;
+				if (targetType == "Region")
+					metadataType = LocationTargetType::Region;
 				else if (targetType == "Location")
 					metadataType = LocationTargetType::Location;
 				else if (targetType == "Cell")

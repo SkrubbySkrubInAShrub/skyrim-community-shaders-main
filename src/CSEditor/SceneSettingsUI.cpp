@@ -350,8 +350,8 @@ namespace
 	const char* GetLocationTypeLabel(SceneSettingsManager::LocationTargetType type)
 	{
 		switch (type) {
-		case SceneSettingsManager::LocationTargetType::Category:
-			return T(TKEY("location_type_category"), "Category");
+		case SceneSettingsManager::LocationTargetType::Region:
+			return T(TKEY("location_type_region"), "Region");
 		case SceneSettingsManager::LocationTargetType::Cell:
 			return T(TKEY("location_type_cell"), "Cell");
 		default:
