@@ -126,16 +126,17 @@ namespace SceneWidgetBinding
 		/// Derives the state and the mixed flag from the resolved entries.
 		void ResolveState();
 		/// Provenance across every period this control covers, combined "any user wins" like
-		/// ResolveState's anyActive/anyPaused.
-		SceneSettingsManager::SettingLayer ResolveWinningLayer(const std::string& a_settingKey) const;
+		/// ResolveState's anyActive/anyPaused. An aggregate shares one address family, so `identity`
+		/// answering for its first component answers for all of them.
+		SceneSettingsManager::SettingLayer ResolveWinningLayer() const;
 
 		/// Highest layer beneath this page supplying the address, once this page supplies nothing
 		/// itself. None when the layers below leave the feature's base in place.
-		SceneSettingsManager::SettingLayer ResolveLowerLayer(const std::string& a_settingKey) const;
+		SceneSettingsManager::SettingLayer ResolveLowerLayer() const;
 
 		/// Highest layer resolving after this page that supplies the address, so whatever this control
 		/// shows never reaches the scene here. None when this page has the last word.
-		SceneSettingsManager::SettingLayer ResolveUpperLayer(const std::string& a_settingKey) const;
+		SceneSettingsManager::SettingLayer ResolveUpperLayer() const;
 
 		/// Whether a layer stands for a value that reaches the scene, rather than a tombstone or nothing.
 		static bool SuppliesValue(SceneSettingsManager::SettingLayer a_layer)
@@ -258,9 +259,9 @@ namespace SceneWidgetBinding
 		SceneSettingsManager::SceneContextId contextId;
 		std::optional<size_t> entryIndex;
 
-		// Resolved once so the commit path does not re-split the catalog address every frame.
-		std::string featureShortName;
-		std::vector<std::string> settingPath;
+		/// Feature, path and the first component's key. Resolved once so neither the commit path nor
+		/// the layer queries rebuild the catalog address per control per frame.
+		SceneSettingsManager::SettingIdentity identity;
 		std::vector<Component> components;
 
 		/// Period slot the armed context edits; 0 for a context that has no periods.

@@ -2013,6 +2013,14 @@ void SceneSettingsManager::MarkDeferredSceneChanges()
 	deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveDelay;
 }
 
+void SceneSettingsManager::HoldDeferredSceneChanges()
+{
+	// Only ever pushes an existing deadline out, so grabbing a control without moving it cannot
+	// schedule a save of its own.
+	if (deferredSceneChangesPending)
+		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveDelay;
+}
+
 void SceneSettingsManager::FlushDeferredSceneChanges()
 {
 	if (!deferredSceneChangesPending || std::chrono::steady_clock::now() < deferredSceneChangesDeadline)
@@ -5214,30 +5222,6 @@ std::optional<size_t> SceneSettingsManager::FindContextUserEntry(const SceneCont
 	return std::nullopt;
 }
 
-std::array<std::optional<size_t>, SceneSettingsManager::kPeriodCount>
-SceneSettingsManager::FindContextUserEntryPerPeriod(const SceneContextId& context,
-	const std::string& featureShortName, const std::vector<std::string>& settingPath,
-	const std::string& settingKey) const
-{
-	std::array<std::optional<size_t>, kPeriodCount> indices{};
-	if (!IsValidSceneContext(context))
-		return indices;
-
-	const bool periodic = context.type == SceneContextType::TimeOfDay ||
-	                      context.type == SceneContextType::Weather;
-	const auto contextEntries = GetContextEntries(context);
-	for (size_t index = 0; index < contextEntries.size(); ++index) {
-		const auto& entry = contextEntries[index];
-		if (entry.source != EntrySource::User || entry.featureShortName != featureShortName ||
-			entry.settingPath != settingPath || entry.settingKey != settingKey)
-			continue;
-		const auto slot = periodic ? static_cast<int>(entry.period) : 0;
-		if (slot >= 0 && slot < kPeriodCount)
-			indices[static_cast<size_t>(slot)] = index;
-	}
-	return indices;
-}
-
 std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContextId& context,
 	const std::string& featureShortName, const std::vector<std::string>& settingPath,
 	const std::string& settingKey, bool deferSave)
@@ -5289,8 +5273,11 @@ void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& contex
 	if (userEntriesChanged)
 		MarkContextUserSettingsModified(context, false);
 
-	// Only values moved, so the presentation caches still hold; ReapplyIfActive marks the value caches.
+	// Only values moved, so the presentation caches still hold. The value caches must still go: a
+	// resolve landing mid-drag (a weather lerp or hour tick) would otherwise re-apply the pre-edit
+	// number over the value the control is dragging.
 	if (deferSave) {
+		MarkSceneValuesDirty();
 		MarkDeferredSceneChanges();
 		return;
 	}

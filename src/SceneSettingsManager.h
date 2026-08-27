@@ -545,11 +545,6 @@ public:
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey) const;
 
-	/// Per-period user entry indices for one setting. Contexts without periods populate index 0 only.
-	std::array<std::optional<size_t>, kPeriodCount> FindContextUserEntryPerPeriod(
-		const SceneContextId& context, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
-
 	/// Add a user entry capturing the feature's current base value. Returns its index.
 	std::optional<size_t> AddContextSetting(const SceneContextId& context,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
@@ -558,6 +553,9 @@ public:
 	/// Validate and update a group of context entries before applying any of them.
 	void UpdateContextEntryValues(const SceneContextId& context,
 		std::span<const EntryValueUpdate> updates, bool deferSave = false);
+	/// Keeps a deferred save out of reach for another delay, so a drag held still does not write the
+	/// file mid-gesture. Nothing pending means nothing to hold.
+	void HoldDeferredSceneChanges();
 	/// Remove one entry from a context.
 	void RemoveContextSetting(const SceneContextId& context, size_t index);
 

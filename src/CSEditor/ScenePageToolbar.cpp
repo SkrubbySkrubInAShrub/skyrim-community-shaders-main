@@ -152,19 +152,38 @@ namespace
 		return entries;
 	}
 
+	/// Whether a cached list would survive the family filter, for a caller that only needs to know
+	/// whether the popup has anything to offer rather than what.
+	bool HasUsableEntries(const std::vector<CopySource>& entries, const SceneContextId& context,
+		PeriodScope periodScope)
+	{
+		if (periodScope != PeriodScope::AllPeriods)
+			return !entries.empty();
+		return std::ranges::any_of(entries,
+			[&](const auto& entry) { return !IsSamePeriodicFamily(entry.context, context); });
+	}
+
+	const std::vector<CopySource>& GetCachedSources(const SceneContextId& context, bool forceRefresh)
+	{
+		return GetCachedCopyList(sourceCaches, context, forceRefresh,
+			[](auto* manager, const auto& ctx) { return manager->GetCopySources(ctx); });
+	}
+
+	const std::vector<CopySource>& GetCachedDestinations(const SceneContextId& context, bool forceRefresh)
+	{
+		return GetCachedCopyList(destinationCaches, context, forceRefresh,
+			[](auto* manager, const auto& ctx) { return manager->GetCopyDestinations(ctx); });
+	}
+
 	std::vector<CopySource> GetCopySources(const SceneContextId& context, PeriodScope periodScope, bool forceRefresh)
 	{
-		const auto& cached = GetCachedCopyList(sourceCaches, context, forceRefresh,
-			[](auto* manager, const auto& ctx) { return manager->GetCopySources(ctx); });
-		return FilterSamePeriodicFamily(cached, context, periodScope);
+		return FilterSamePeriodicFamily(GetCachedSources(context, forceRefresh), context, periodScope);
 	}
 
 	std::vector<CopySource> GetCopyDestinations(
 		const SceneContextId& context, PeriodScope periodScope, bool forceRefresh)
 	{
-		const auto& cached = GetCachedCopyList(destinationCaches, context, forceRefresh,
-			[](auto* manager, const auto& ctx) { return manager->GetCopyDestinations(ctx); });
-		return FilterSamePeriodicFamily(cached, context, periodScope);
+		return FilterSamePeriodicFamily(GetCachedDestinations(context, forceRefresh), context, periodScope);
 	}
 
 	/// Heading the source list groups under, matching the type-first order GetCopySources returns.
@@ -687,8 +706,8 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 
 	ImGui::SameLine();
 	// The lists are rebuilt on open, so what they offer is never a frame behind the page.
-	const bool hasSources = !GetCopySources(context, periodScope, false).empty();
-	const bool hasDestinations = !GetCopyDestinations(context, periodScope, false).empty();
+	const bool hasSources = HasUsableEntries(GetCachedSources(context, false), context, periodScope);
+	const bool hasDestinations = HasUsableEntries(GetCachedDestinations(context, false), context, periodScope);
 	ImGui::BeginDisabled(!hasSources && !hasDestinations);
 	if (ImGui::Button(copyLabel)) {
 		GetCopySources(context, periodScope, true);

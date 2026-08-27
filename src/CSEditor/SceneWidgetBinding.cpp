@@ -164,6 +164,22 @@ namespace
 	using PeriodLayers = std::array<SettingLayer, kPeriodCount>;
 	using LayerIndex = std::map<SceneSettingsManager::SettingIdentity, PeriodLayers>;
 
+	/// One collected stack per page per frame. Which layers sit under or over a page depends on the
+	/// live scene rather than on the control, so every widget on the page shares one build.
+	template <auto Collect>
+	const std::vector<SceneContextId>& GetFrameContextStack(const SceneContextId& a_page)
+	{
+		static std::map<SceneContextId, std::vector<SceneContextId>> cache;
+		static int cachedFrame = -1;
+
+		if (const auto frame = ImGui::GetFrameCount(); frame != cachedFrame) {
+			cachedFrame = frame;
+			cache.clear();
+		}
+		const auto found = cache.find(a_page);
+		return found != cache.end() ? found->second : cache.emplace(a_page, Collect(a_page)).first->second;
+	}
+
 	/// The layers a page sits on top of, highest first: weather resolves over time of day, and a
 	/// location over whichever stack is running. Interior and the exterior stack never resolve at the
 	/// same time, so the live cell picks the one a location sits on, exactly as the resolver does.
@@ -190,6 +206,11 @@ namespace
 			break;
 		}
 		return lower;
+	}
+
+	const std::vector<SceneContextId>& GetLowerContexts(const SceneContextId& a_page)
+	{
+		return GetFrameContextStack<CollectLowerContexts>(a_page);
 	}
 
 	/// Fills one feature's rows from a context, highest-ranking source last so a user entry shadows
@@ -231,6 +252,36 @@ namespace
 			if (!manager->IsFeaturePaused(a_feature))
 				CollectContextLayers(a_context, a_feature, layers);
 			return layers;
+		});
+	}
+
+	/// Where one feature's user entries sit in a context, per period. Same walk and same lifetime as
+	/// the layer index: an entry's position only moves when the entries themselves do.
+	using PeriodEntries = std::array<std::optional<size_t>, kPeriodCount>;
+	using UserEntryIndex = std::map<SceneSettingsManager::SettingIdentity, PeriodEntries>;
+
+	const UserEntryIndex& GetContextUserEntryIndex(const SceneContextId& a_context, const std::string& a_feature)
+	{
+		static std::map<std::pair<SceneContextId, std::string>,
+			SceneSettingsManager::RevisionCache<UserEntryIndex>>
+			cache;
+
+		auto* manager = SceneSettingsManager::GetSingleton();
+		return cache[{ a_context, a_feature }].Get(manager->GetEntryPresentationRevision(), [&] {
+			UserEntryIndex index;
+			// An aperiodic context stores one entry with no period of its own, so it fills slot 0.
+			const bool periodic = SceneSettingsManager::IsPeriodicContext(a_context.type);
+			const auto entries = manager->GetContextEntries(a_context);
+			for (size_t position = 0; position < entries.size(); ++position) {
+				const auto& entry = entries[position];
+				if (entry.source != SceneSettingsManager::EntrySource::User ||
+					entry.featureShortName != a_feature)
+					continue;
+				if (const auto slot = periodic ? static_cast<size_t>(entry.period) : 0;
+					slot < static_cast<size_t>(kPeriodCount))
+					index[{ entry.featureShortName, entry.settingPath, entry.settingKey }][slot] = position;
+			}
+			return index;
 		});
 	}
 
@@ -289,21 +340,9 @@ namespace
 		return upper;
 	}
 
-	int upperContextFrame = -1;
-	std::map<SceneContextId, std::vector<SceneContextId>> upperContexts;
-
-	/// The stack above a page depends on the live scene, not on the control, so every control on the
-	/// page shares one list per frame rather than rebuilding it per widget.
 	const std::vector<SceneContextId>& GetUpperContexts(const SceneContextId& a_page)
 	{
-		if (const auto frame = ImGui::GetFrameCount(); frame != upperContextFrame) {
-			upperContextFrame = frame;
-			upperContexts.clear();
-		}
-		const auto found = upperContexts.find(a_page);
-		return found != upperContexts.end() ?
-		           found->second :
-		           upperContexts.emplace(a_page, CollectUpperContexts(a_page)).first->second;
+		return GetFrameContextStack<CollectUpperContexts>(a_page);
 	}
 
 	/// One bit per period slot, so the layer walk can be told which periods to read without being
@@ -418,8 +457,8 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	}
 
 	contextId = context->contextId;
-	featureShortName = std::string{ metadata->featureShortName };
-	settingPath = SceneSettingsManager::SplitSettingPath(metadata->settingPath);
+	identity.featureShortName = std::string{ metadata->featureShortName };
+	identity.settingPath = SceneSettingsManager::SplitSettingPath(metadata->settingPath);
 
 	// Interior and Location store one entry with no period, so only a periodic context can fan out.
 	const bool periodic = SceneSettingsManager::IsPeriodicContext(contextId.type);
@@ -515,7 +554,7 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 		// Siblings share featureShortName/settingPath (see MakeAggregateKey), so the guard's own
 		// resolved values apply to every component here; only settingKey varies.
 		if (!SceneSettingsManager::IsSettingAllowedForType(
-				sceneType, featureShortName, settingPath, std::string{ setting->settingKey }))
+				sceneType, identity.featureShortName, identity.settingPath, std::string{ setting->settingKey }))
 			continue;
 
 		const auto slot = setting->aggregateCount <= 1 ?
@@ -527,6 +566,10 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 		components.push_back(
 			Component{ setting, std::string{ setting->settingKey }, static_cast<std::uint8_t>(slot), {} });
 	}
+
+	// The layer queries speak for the whole aggregate through its first component's address.
+	if (!components.empty())
+		identity.settingKey = components.front().settingKey;
 }
 
 void SceneWidgetBinding::Guard::ResolveState()
@@ -545,9 +588,15 @@ void SceneWidgetBinding::Guard::ResolveState()
 	bool anyDeleted = false;
 	bool anyLiveValue = false;  // a covered slot holding a real value: unpaused and not a tombstone
 
+	// Every component shares the guard's feature and path, so one key swap per component walks the
+	// index the whole page already built.
+	const auto& userEntries = GetContextUserEntryIndex(contextId, identity.featureShortName);
+	auto lookup = identity;
+
 	for (auto& component : components) {
-		component.periodEntries = manager->FindContextUserEntryPerPeriod(
-			contextId, featureShortName, settingPath, component.settingKey);
+		lookup.settingKey = component.settingKey;
+		const auto found = userEntries.find(lookup);
+		component.periodEntries = found != userEntries.end() ? found->second : PeriodEntries{};
 
 		const json* reference = nullptr;
 		for (int slot = 0; slot < kPeriodCount; ++slot) {
@@ -587,16 +636,15 @@ void SceneWidgetBinding::Guard::ResolveState()
 		return;
 
 	// Provenance is a separate axis from state: it says who wins, state says what the user's own
-	// entry is doing. Only the first component is queried; an aggregate shares one address family.
-	const auto& settingKey = components.front().settingKey;
-	winningLayer = ResolveWinningLayer(settingKey);
+	// entry is doing.
+	winningLayer = ResolveWinningLayer();
 
 	if (!anyActive && !anyPaused) {
 		state = winningLayer == SceneSettingsManager::SettingLayer::Overwrite ? State::Overwritten : State::Absent;
 		// Nothing in this context holds the address, so a layer under this page may be driving it and
 		// the page has to say so. A tombstone here already suppressed everything below.
 		if (winningLayer == SceneSettingsManager::SettingLayer::None)
-			lowerLayer = ResolveLowerLayer(settingKey);
+			lowerLayer = ResolveLowerLayer();
 	} else {
 		// A partly covered or partly paused control is as mixed as one whose periods hold two values.
 		state = anyDeleted ? State::Deleted : (anyActive ? State::Active : State::Paused);
@@ -612,14 +660,12 @@ void SceneWidgetBinding::Guard::ResolveState()
 	// A control showing a value can lose it, and an empty one still has to say when the number in its
 	// box belongs to a layer above. A tombstone or a paused entry applies either way, so neither asks.
 	if (SuppliesValue(winningLayer) || state == State::Absent)
-		upperLayer = ResolveUpperLayer(settingKey);
+		upperLayer = ResolveUpperLayer();
 }
 
-SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveWinningLayer(
-	const std::string& a_settingKey) const
+SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveWinningLayer() const
 {
-	return FoldContextLayer(contextId, featureShortName,
-		{ featureShortName, settingPath, a_settingKey }, CoveredPeriodMask());
+	return FoldContextLayer(contextId, identity.featureShortName, identity, CoveredPeriodMask());
 }
 
 std::uint8_t SceneWidgetBinding::Guard::CoveredPeriodMask() const
@@ -636,14 +682,12 @@ std::uint8_t SceneWidgetBinding::Guard::CoveredPeriodMask() const
 	return mask;
 }
 
-SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer(
-	const std::string& a_settingKey) const
+SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer() const
 {
-	const SceneSettingsManager::SettingIdentity identity{ featureShortName, settingPath, a_settingKey };
 	const auto periods = CoveredPeriodMask();
 
-	for (const auto& lower : CollectLowerContexts(contextId)) {
-		switch (FoldContextLayer(lower, featureShortName, identity, periods)) {
+	for (const auto& lower : GetLowerContexts(contextId)) {
+		switch (FoldContextLayer(lower, identity.featureShortName, identity, periods)) {
 		case SettingLayer::User:
 			return SettingLayer::User;
 		// A tombstone suppresses the layers under it and then supplies nothing itself, so this page
@@ -659,17 +703,15 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer(
 	return SettingLayer::None;
 }
 
-SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveUpperLayer(
-	const std::string& a_settingKey) const
+SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveUpperLayer() const
 {
-	const SceneSettingsManager::SettingIdentity identity{ featureShortName, settingPath, a_settingKey };
 	const auto periods = CoveredPeriodMask();
 
 	// Highest first: the topmost supplier is the one that reaches the scene, and a tombstone up there
 	// suppresses everything beneath it, this page included.
 	const auto& upper = GetUpperContexts(contextId);
 	for (auto context = upper.rbegin(); context != upper.rend(); ++context)
-		if (const auto layer = FoldContextLayer(*context, featureShortName, identity, periods);
+		if (const auto layer = FoldContextLayer(*context, identity.featureShortName, identity, periods);
 			layer != SettingLayer::None)
 			return layer;
 	return SettingLayer::None;
@@ -711,8 +753,8 @@ std::optional<size_t> SceneWidgetBinding::Guard::DisplayEntry(const Component& a
 	for (size_t index = 0; index < entries.size(); ++index) {
 		const auto& entry = entries[index];
 		if (entry.source != SceneSettingsManager::EntrySource::Overwrite || entry.paused || entry.deleted ||
-			entry.featureShortName != featureShortName || entry.settingPath != settingPath ||
-			entry.settingKey != a_component.settingKey)
+			entry.featureShortName != identity.featureShortName ||
+			entry.settingPath != identity.settingPath || entry.settingKey != a_component.settingKey)
 			continue;
 		// A period past the last slot spans every one of them, as the layer index reads it too.
 		if (const auto slot = static_cast<int>(entry.period);
@@ -757,8 +799,8 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 	ForEachCoveredSlot([&](const Component& a_component, int a_slot, const SceneContextId& a_slotContext) {
 		if (a_component.periodEntries[static_cast<size_t>(a_slot)])
 			return;
-		const auto created = manager->AddContextSetting(a_slotContext, featureShortName,
-			settingPath, a_component.settingKey, a_deferSave);
+		const auto created = manager->AddContextSetting(a_slotContext, identity.featureShortName,
+			identity.settingPath, a_component.settingKey, a_deferSave);
 		added = added || created.has_value();
 	});
 
@@ -1214,9 +1256,11 @@ void SceneWidgetBinding::Guard::SetTombstoned(bool a_tombstoned)
 
 	ForEachCoveredSlot([&](const Component& a_component, int, const SceneContextId& a_slotContext) {
 		if (a_tombstoned)
-			manager->TombstoneContextSetting(a_slotContext, featureShortName, settingPath, a_component.settingKey);
+			manager->TombstoneContextSetting(a_slotContext, identity.featureShortName,
+				identity.settingPath, a_component.settingKey);
 		else
-			manager->ClearContextTombstone(a_slotContext, featureShortName, settingPath, a_component.settingKey);
+			manager->ClearContextTombstone(a_slotContext, identity.featureShortName,
+				identity.settingPath, a_component.settingKey);
 	});
 }
 
@@ -1254,6 +1298,9 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 		commitDeferred = false;
 		Commit();
 	}
+	// A drag held still would otherwise outlive the debounce and write the file mid-gesture.
+	if (dragging)
+		SceneSettingsManager::GetSingleton()->HoldDeferredSceneChanges();
 
 	// Feature code queries the last item after the call, so the control must stay the current one.
 	const auto controlItem = ImGui::GetCurrentContext()->LastItemData;
