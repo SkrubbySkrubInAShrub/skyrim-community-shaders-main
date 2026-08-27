@@ -192,13 +192,23 @@ namespace SceneWidgetBinding
 		/// The entry a component displays: the armed period's, or the first period holding one.
 		std::optional<size_t> PrimaryEntry(const Component& a_component) const;
 
+		/// The entry supplying what this page would apply at a component's address: its own user entry,
+		/// or the overwrite standing in when it has none.
+		std::optional<size_t> DisplayEntry(const Component& a_component) const;
+
 		/// Every entry this control owns, across components and periods.
 		std::vector<size_t> CollectOwnedEntries() const;
 
 		/// Drops the resolved entries once they are deleted, so the rest of the frame reads Absent.
 		void ForgetEntries();
 
-		/// Loads the stored override into the holding storage the paused control is bound to.
+		/// Points the control at this page's own value whenever the live member carries another layer's.
+		void BindDisplayValue();
+
+		/// Storage the control was bound to, and so the one an edit landed in.
+		const void* BoundData() const;
+
+		/// Loads what this page would apply into the holding storage the bound control reads.
 		void StoreHoldingValue();
 		void WriteHoldingComponent(const Component& a_component, const json& a_stored);
 
@@ -243,10 +253,13 @@ namespace SceneWidgetBinding
 		/// The periods and components this control spans do not agree on a value or on coverage.
 		bool mixedAcrossPeriods = false;
 
-		/// Captured unconditionally so entry creation can restore the base before it is snapshotted.
+		/// What the control showed before the call, so entry creation can restore it before the manager
+		/// snapshots the member. Re-seeded from `holding` once a layer above shadows this page.
 		ValueStorage preCall;
-		/// Storage the paused control is bound to, so no write reaches the feature member.
+		/// Storage a displaced control is bound to, so no write reaches the feature member.
 		ValueStorage holding;
+		/// Whether the control was bound to `holding` rather than the caller's storage.
+		bool boundToHolding = false;
 
 		bool commitDeferred = false;
 		bool disabledOpened = false;

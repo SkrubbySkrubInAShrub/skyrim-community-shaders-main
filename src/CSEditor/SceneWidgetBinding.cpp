@@ -445,22 +445,22 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	}
 
 	ResolveState();
+	BindDisplayValue();
 
 	// Leading gutter: the marker column reads before the control, and a click lands in the same
 	// frame rather than a frame late.
 	if (policy == GutterPolicy::Owner || ClaimGutter(value.data)) {
 		CaptureNextItemWidth();
 		// Only a gutter that changed the entries makes the resolved state stale.
-		if (DrawGutter())
+		if (DrawGutter()) {
 			ResolveState();
+			BindDisplayValue();
+		}
 	}
 	PushCompensatedItemWidth();
 
-	if (state == State::Paused) {
-		// The greyed control shows what is stored, not what the scene is currently running.
-		StoreHoldingValue();
+	if (state == State::Paused)
 		OpenDisabled();
-	}
 	if (mixedAcrossPeriods && value.kind == Kind::Bool) {
 		// Only Checkbox honours the flag; every other kind gets the tinted gutter instead.
 		ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
@@ -489,7 +489,12 @@ SceneWidgetBinding::Guard::~Guard()
 
 void* SceneWidgetBinding::Guard::Raw()
 {
-	return state == State::Paused ? static_cast<void*>(holding.bytes) : value.data;
+	return const_cast<void*>(BoundData());
+}
+
+const void* SceneWidgetBinding::Guard::BoundData() const
+{
+	return boundToHolding ? static_cast<const void*>(holding.bytes) : value.data;
 }
 
 bool* SceneWidgetBinding::Guard::Bool()
@@ -735,6 +740,30 @@ std::optional<size_t> SceneWidgetBinding::Guard::PrimaryEntry(const Component& a
 	return std::nullopt;
 }
 
+std::optional<size_t> SceneWidgetBinding::Guard::DisplayEntry(const Component& a_component) const
+{
+	if (const auto owned = PrimaryEntry(a_component))
+		return owned;
+
+	// No user entry, so an overwrite in this context is what the page would apply. The last one
+	// discovered wins, exactly as GetSettingProvenance folds them.
+	std::optional<size_t> overwrite;
+	const auto entries = SceneSettingsManager::GetSingleton()->GetContextEntries(contextId);
+	for (size_t index = 0; index < entries.size(); ++index) {
+		const auto& entry = entries[index];
+		if (entry.source != SceneSettingsManager::EntrySource::Overwrite || entry.paused || entry.deleted ||
+			entry.featureShortName != featureShortName || entry.settingPath != settingPath ||
+			entry.settingKey != a_component.settingKey)
+			continue;
+		// A period past the last slot spans every one of them, as the layer index reads it too.
+		if (const auto slot = static_cast<int>(entry.period);
+			slot >= 0 && slot < kPeriodCount && !IsCoveredSlot(slot))
+			continue;
+		overwrite = index;
+	}
+	return overwrite;
+}
+
 std::vector<size_t> SceneWidgetBinding::Guard::CollectOwnedEntries() const
 {
 	std::vector<size_t> owned;
@@ -758,6 +787,13 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
 
+	// AddContextSetting snapshots the feature member, so what the control showed before the call has
+	// to be back in it: an edit under way would otherwise be recorded as the entry's original, and a
+	// shadowed control would capture the value that beat it rather than its own.
+	ValueStorage live;
+	std::memcpy(live.bytes, value.data, valueSize);
+	std::memcpy(value.data, preCall.bytes, valueSize);
+
 	bool added = false;
 	for (const auto& component : components) {
 		for (int slot = 0; slot < kPeriodCount; ++slot) {
@@ -772,10 +808,29 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 		}
 	}
 
+	std::memcpy(value.data, live.bytes, valueSize);
+
 	// Insertion renumbers the entries behind it, so nothing may reuse the indices resolved earlier.
 	if (added)
 		ResolveState();
 	return entryIndex.has_value();
+}
+
+void SceneWidgetBinding::Guard::BindDisplayValue()
+{
+	// A paused entry is not running, and one a layer above shadows never reaches the scene, so in
+	// both cases the member carries someone else's value. The control has to show what this page
+	// would apply instead of the value that beat it.
+	const bool shadowed = upperLayer != SceneSettingsManager::SettingLayer::None && SuppliesValue(winningLayer);
+	boundToHolding = state == State::Paused || shadowed;
+	if (!boundToHolding)
+		return;
+
+	StoreHoldingValue();
+	// Entry creation snapshots the member, so a shadowed control's baseline has to be what it showed.
+	// A paused one never creates an entry, and its preCall is still the value the scene is running.
+	if (shadowed)
+		std::memcpy(preCall.bytes, holding.bytes, valueSize);
 }
 
 void SceneWidgetBinding::Guard::StoreHoldingValue()
@@ -785,7 +840,7 @@ void SceneWidgetBinding::Guard::StoreHoldingValue()
 
 	const auto entries = SceneSettingsManager::GetSingleton()->GetContextEntries(contextId);
 	for (const auto& component : components) {
-		const auto index = PrimaryEntry(component);
+		const auto index = DisplayEntry(component);
 		if (index && *index < entries.size())
 			WriteHoldingComponent(component, entries[*index].value);
 	}
@@ -822,10 +877,14 @@ void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_compone
 
 json SceneWidgetBinding::Guard::ReadEditedValue(const Component& a_component) const
 {
+	// The edit landed wherever the control was bound, which is not the caller's storage once the
+	// member was carrying another layer's value.
+	const auto* edited = BoundData();
+
 	if (value.kind == Kind::Bool) {
 		// A checkbox over an int-backed member (uint flags cast to bool*) persists as an integer, or
 		// validation rejects the edit and the entry keeps the base value the scene then re-applies.
-		const bool checked = *static_cast<const bool*>(value.data);
+		const bool checked = *static_cast<const bool*>(edited);
 		return a_component.setting->valueType == SceneSettingsCatalog::ValueType::Integer ?
 		           json(static_cast<std::int64_t>(checked)) :
 		           json(checked);
@@ -834,14 +893,14 @@ json SceneWidgetBinding::Guard::ReadEditedValue(const Component& a_component) co
 	double number = 0.0;
 	switch (value.kind) {
 	case Kind::Int:
-		number = *static_cast<const int*>(value.data);
+		number = *static_cast<const int*>(edited);
 		break;
 	case Kind::Float:
 	case Kind::FloatVector:
-		number = static_cast<const float*>(value.data)[a_component.widgetComponent];
+		number = static_cast<const float*>(edited)[a_component.widgetComponent];
 		break;
 	case Kind::Scalar:
-		number = GetScalarTraits(value.scalarType).read(value.data);
+		number = GetScalarTraits(value.scalarType).read(edited);
 		break;
 	default:
 		return {};
@@ -955,18 +1014,10 @@ void SceneWidgetBinding::Guard::Commit()
 		ForgetEntries();
 	}
 
-	if (!HasAllCoveredEntries()) {
-		ValueStorage edited;
-		std::memcpy(edited.bytes, value.data, valueSize);
-		// The base must be back in the member before the manager snapshots its baseline, or the
-		// edit itself is recorded as the feature's default.
-		std::memcpy(value.data, preCall.bytes, valueSize);
-		if (!EnsureEntries(true)) {
-			// Nothing will hold the edit, so keeping it would silently rewrite the feature's base.
-			state = State::Unsupported;
-			return;
-		}
-		std::memcpy(value.data, edited.bytes, valueSize);
+	// Nothing will hold the edit, so keeping it would silently rewrite the feature's base.
+	if (!HasAllCoveredEntries() && !EnsureEntries(true)) {
+		state = State::Unsupported;
+		return;
 	}
 
 	SceneSettingsManager::GetSingleton()->UpdateContextEntryValues(
