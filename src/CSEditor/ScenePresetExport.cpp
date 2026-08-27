@@ -1,10 +1,8 @@
 #include "ScenePresetExport.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <format>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -33,23 +31,12 @@ namespace
 
 	/// GetOverwriteModNames() walks every entry in every scene context, so the list is cached like the
 	/// copy source/destination lists next door until the entries it counts change.
-	struct ModListCache
-	{
-		std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
-		bool valid = false;
-		std::vector<std::string> names;
-	};
-	ModListCache modListCache;
+	SceneSettingsManager::RevisionCache<std::vector<std::string>> modListCache;
 
 	const std::vector<std::string>& GetCachedModNames(SceneSettingsManager* manager)
 	{
-		const auto revision = manager->GetEntryPresentationRevision();
-		if (!modListCache.valid || modListCache.revision != revision) {
-			modListCache.names = manager->GetOverwriteModNames();
-			modListCache.revision = revision;
-			modListCache.valid = true;
-		}
-		return modListCache.names;
+		return modListCache.Get(manager->GetEntryPresentationRevision(),
+			[manager] { return manager->GetOverwriteModNames(); });
 	}
 
 	std::string presetName;

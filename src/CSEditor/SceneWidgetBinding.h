@@ -185,6 +185,23 @@ namespace SceneWidgetBinding
 		bool IsCoveredSlot(int a_slot) const;
 		bool HasAllCoveredEntries() const;
 
+		/** @brief Runs a_visit over every component and covered period slot, with the context that
+		 *  slot's entry lives in. The manager is period-scoped, so a control writing every period at
+		 *  once has to name each one itself. */
+		template <typename Visitor>
+		void ForEachCoveredSlot(Visitor&& a_visit) const
+		{
+			for (const auto& component : components)
+				for (int slot = 0; slot < SceneSettingsManager::kPeriodCount; ++slot) {
+					if (!IsCoveredSlot(slot))
+						continue;
+					auto slotContext = contextId;
+					if (flatAcrossPeriods)
+						slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
+					a_visit(component, slot, slotContext);
+				}
+		}
+
 		/** @brief Creates the entries the covered periods are still missing.
 		 *  @return Whether the control owns at least one entry afterwards. */
 		bool EnsureEntries(bool a_deferSave);

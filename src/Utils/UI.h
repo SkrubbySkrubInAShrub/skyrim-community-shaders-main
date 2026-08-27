@@ -173,6 +173,10 @@ namespace Util
 	 */
 	void SetTooltipPositionNearMouse(float estimatedHeight, float estimatedWidth = 0.0f);
 
+	/// Hover flags for a greyed control, which is exactly the one that has to explain why it is greyed.
+	inline constexpr ImGuiHoveredFlags kTooltipWhenDisabled =
+		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
+
 	/**
 	 * Shows a positioned tooltip with wrapped text when the previous item is hovered.
 	 * Uses SetTooltipPositionNearMouse for viewport-aware placement.

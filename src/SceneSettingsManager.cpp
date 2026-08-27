@@ -1566,49 +1566,6 @@ bool SceneSettingsManager::HasDuplicateEntry(SceneType type, const std::string& 
 	return HasEntryFromSource(type, featureShortName, settingPath, settingKey, source);
 }
 
-bool SceneSettingsManager::AddSetting(SceneType type, const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
-	TimeOfDayPeriod period, bool deferCommit)
-{
-	if (!IsEntryListSceneType(type) ||
-		!IsSettingAllowedForType(type, featureShortName, settingPath, settingKey))
-		return false;
-
-	const bool requireNumeric = type == SceneType::TimeOfDay;
-	if (requireNumeric) {
-		// Reject invalid period values (Count is the sentinel, not a real period)
-		if (period == TimeOfDayPeriod::Count || static_cast<int>(period) < 0 || static_cast<int>(period) >= kPeriodCount) {
-			logger::warn("[SceneSettings] Rejecting TOD setting with invalid period: {}", GetSettingLogName(featureShortName, settingPath, settingKey));
-			return false;
-		}
-	}
-	if (!ValidateSceneSettingEntry(GetSceneTypeName(type), featureShortName, settingPath, settingKey, value, requireNumeric))
-		return false;
-
-	if (HasDuplicateEntry(type, featureShortName, settingPath, settingKey, EntrySource::User, period))
-		return false;
-
-	auto& vec = GetEntriesMut(type);
-
-	SettingEntry entry;
-	entry.featureShortName = featureShortName;
-	entry.settingPath = settingPath;
-	entry.settingKey = settingKey;
-	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
-	entry.value = value;
-	entry.originalValue = entry.value;
-	entry.source = EntrySource::User;
-	entry.period = period;
-	vec.push_back(std::move(entry));
-	BumpEntryPresentationRevision();
-	MarkEntryListUserSettingsModified(type);
-	if (deferCommit)
-		MarkDeferredSceneChanges();
-	else
-		CommitSceneSettingChanges();
-	return true;
-}
-
 void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 {
 	if (!IsEntryListSceneType(type))
@@ -1628,43 +1585,6 @@ void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
 
 	vec.erase(vec.begin() + static_cast<ptrdiff_t>(index));
 	BumpEntryPresentationRevision();
-	if (entry.source == EntrySource::User) {
-		MarkEntryListUserSettingsModified(type);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
-}
-
-void SceneSettingsManager::TogglePauseEntry(SceneType type, size_t index)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	auto& vec = GetEntriesMut(type);
-	if (index < vec.size()) {
-		vec[index].paused = !vec[index].paused;
-		BumpEntryPresentationRevision();
-		if (vec[index].source == EntrySource::User) {
-			MarkEntryListUserSettingsModified(type);
-			SaveAllUserSettings();
-		}
-		ReapplyIfActive();
-	}
-}
-
-void SceneSettingsManager::RevertEntryToDefault(SceneType type, size_t index)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	auto& vec = GetEntriesMut(type);
-	if (index >= vec.size())
-		return;
-	auto& entry = vec[index];
-	if (entry.originalValue.is_null() ||
-		!ValidateSceneSettingEntry(GetSceneTypeName(type), entry.featureShortName,
-			entry.settingPath, entry.settingKey, entry.originalValue, type == SceneType::TimeOfDay))
-		return;
-
-	entry.value = entry.originalValue;
 	if (entry.source == EntrySource::User) {
 		MarkEntryListUserSettingsModified(type);
 		SaveAllUserSettings();
@@ -1947,33 +1867,6 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 	}
 	logger::info("[SceneSettings] Exported preset '{}' as {} file(s)", safeModName, files.size());
 	return wroteAll;
-}
-
-void SceneSettingsManager::UpdateEntryValues(
-	SceneType type, std::span<const EntryValueUpdate> updates, bool deferSave)
-{
-	if (!IsEntryListSceneType(type))
-		return;
-	auto& vec = GetEntriesMut(type);
-	const bool requireNumeric = type == SceneType::TimeOfDay;
-	bool userEntriesChanged = false;
-	if (!ApplyEntryValueUpdates(
-			GetSceneTypeName(type), vec, updates, requireNumeric, userEntriesChanged))
-		return;
-
-	if (userEntriesChanged)
-		MarkEntryListUserSettingsModified(type);
-
-	// Mirrors AddSetting/CommitSceneSettingChanges: a deferred commit defers the resolve along with
-	// the save, so a palette drop or a settled edit doesn't force a synchronous ResolveAndApply
-	// mid-DrawSettings for every feature holding an active scene override.
-	if (deferSave) {
-		MarkDeferredSceneChanges();
-		return;
-	}
-	if (userEntriesChanged)
-		SaveAllUserSettings();
-	ReapplyIfActive();
 }
 
 void SceneSettingsManager::CommitSceneSettingChanges()
@@ -3283,6 +3176,16 @@ static void AppendRawEntries(json& arr, const std::vector<json>& rawEntries)
 		arr.push_back(raw);
 }
 
+/** @brief Writes serialized entries into a keyed section, keeping whatever it already listed.
+ *  Entries this build could not resolve stay in the document rather than being written over. */
+static void MergeSectionEntries(json& section, json userEntries)
+{
+	if (auto entriesIt = section.find("entries"); entriesIt != section.end() && entriesIt->is_array())
+		for (const auto& rawEntry : *entriesIt)
+			userEntries.push_back(rawEntry);
+	section["entries"] = std::move(userEntries);
+}
+
 static bool ShouldSerializeUserSection(const json& data, std::string_view key, bool expectObject, bool modified)
 {
 	auto it = data.find(std::string(key));
@@ -3347,13 +3250,9 @@ void SceneSettingsManager::SaveAllUserSettings()
 			}
 
 			json weatherEntry = hasRaw ? *rawIt : json::object();
-			if (!userEntries.empty()) {
-				if (auto entriesIt = weatherEntry.find("entries");
-					entriesIt != weatherEntry.end() && entriesIt->is_array())
-					for (const auto& rawEntry : *entriesIt)
-						userEntries.push_back(rawEntry);
-				weatherEntry["entries"] = std::move(userEntries);
-			}
+			// A weather with no entries of its own leaves whatever the document listed untouched.
+			if (!userEntries.empty())
+				MergeSectionEntries(weatherEntry, std::move(userEntries));
 			if (hasShowPreference)
 				weatherEntry["showTimeOfDay"] = showIt->second;
 			weatherObj[spid] = std::move(weatherEntry);
@@ -3377,15 +3276,11 @@ void SceneSettingsManager::SaveAllUserSettings()
 				section = json::object();
 			auto& rawConfig = section[config.formKey];
 			json locationEntry = rawConfig.is_object() ? rawConfig : json::object();
-			if (auto entriesIt = locationEntry.find("entries");
-				entriesIt != locationEntry.end() && entriesIt->is_array())
-				for (const auto& rawEntry : *entriesIt)
-					userEntries.push_back(rawEntry);
+			MergeSectionEntries(locationEntry, std::move(userEntries));
 			locationEntry["type"] = GetLocationTargetTypeName(config.type);
 			locationEntry["name"] = config.name;
 			locationEntry["editorId"] = config.editorId;
 			locationEntry["coc"] = config.cocCode;
-			locationEntry["entries"] = std::move(userEntries);
 			rawConfig = std::move(locationEntry);
 		}
 		data["location"] = std::move(locationObj);
@@ -3574,53 +3469,44 @@ void SceneSettingsManager::LoadAllUserSettings()
 		userSettingsDocumentWritable = true;
 		FeatureSettingsCache featureSettingsCache;
 
-		// Interior Only
-		if (data.contains("interiorOnly") && data["interiorOnly"].is_array()) {
-			auto& vec = GetEntriesMut(SceneType::InteriorOnly);
-			int loaded = 0;
-			for (const auto& item : data["interiorOnly"]) {
-				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, false, "InteriorOnly", std::nullopt, false,
-						&featureSettingsCache)) {
-					unresolvedUserEntries[SceneType::InteriorOnly].push_back(item);
-					continue;
-				}
-				if (HasDuplicateEntry(SceneType::InteriorOnly, entry.featureShortName, entry.settingPath,
-						entry.settingKey, EntrySource::User, entry.period)) {
-					unresolvedUserEntries[SceneType::InteriorOnly].push_back(item);
-					continue;
-				}
-				vec.push_back(std::move(entry));
-				loaded++;
+		struct EntryListSection
+		{
+			const char* key;
+			const char* typeName;
+			SceneType type;
+			/// TimeOfDay entries carry a period; interior ones do not.
+			bool requirePeriod;
+		};
+		for (const auto& [sectionKey, typeName, sceneType, requirePeriod] : {
+				 EntryListSection{ "interiorOnly", "InteriorOnly", SceneType::InteriorOnly, false },
+				 EntryListSection{ "timeOfDay", "TimeOfDay", SceneType::TimeOfDay, true },
+			 }) {
+			auto sectionIt = data.find(sectionKey);
+			if (sectionIt == data.end())
+				continue;
+			if (!sectionIt->is_array()) {
+				logger::warn("[SceneSettings] Preserving non-array {} section", sectionKey);
+				continue;
 			}
-			if (loaded > 0)
-				logger::info("[SceneSettings] Loaded {} InteriorOnly user settings", loaded);
-		} else if (data.contains("interiorOnly"))
-			logger::warn("[SceneSettings] Preserving non-array interiorOnly section");
 
-		// Time of Day
-		if (data.contains("timeOfDay") && data["timeOfDay"].is_array()) {
-			auto& vec = GetEntriesMut(SceneType::TimeOfDay);
+			auto& vec = GetEntriesMut(sceneType);
+			auto& unresolved = unresolvedUserEntries[sceneType];
 			int loaded = 0;
-			for (const auto& item : data["timeOfDay"]) {
+			for (const auto& item : *sectionIt) {
 				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, true, "TimeOfDay", std::nullopt, false,
-						&featureSettingsCache)) {
-					unresolvedUserEntries[SceneType::TimeOfDay].push_back(item);
-					continue;
-				}
-				if (HasDuplicateEntry(SceneType::TimeOfDay, entry.featureShortName, entry.settingPath,
+				if (!LoadEntryFromJson(item, entry, requirePeriod, typeName, std::nullopt, false,
+						&featureSettingsCache) ||
+					HasDuplicateEntry(sceneType, entry.featureShortName, entry.settingPath,
 						entry.settingKey, EntrySource::User, entry.period)) {
-					unresolvedUserEntries[SceneType::TimeOfDay].push_back(item);
+					unresolved.push_back(item);
 					continue;
 				}
 				vec.push_back(std::move(entry));
 				loaded++;
 			}
 			if (loaded > 0)
-				logger::info("[SceneSettings] Loaded {} TimeOfDay user settings", loaded);
-		} else if (data.contains("timeOfDay"))
-			logger::warn("[SceneSettings] Preserving non-array timeOfDay section");
+				logger::info("[SceneSettings] Loaded {} {} user settings", loaded, typeName);
+		}
 
 		// Weather and location are loaded lazily once game data is available.
 
@@ -4116,48 +4002,6 @@ std::optional<float> SceneSettingsManager::ResolveWeatherLowerValue(RE::FormID w
 	return lowerValue;
 }
 
-bool SceneSettingsManager::AddWeatherSetting(RE::FormID weatherId, const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
-	bool deferSave)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return false;
-	if (!IsSettingAllowedForType(SceneType::TimeOfDay, featureShortName, settingPath, settingKey))
-		return false;
-
-	// All weather entries are per-period
-	if (period == TimeOfDayPeriod::Count || static_cast<int>(period) < 0 || static_cast<int>(period) >= kPeriodCount)
-		return false;
-	if (HasWeatherEntryForPeriod(weatherId, featureShortName, settingPath, settingKey, period, EntrySource::User))
-		return false;
-	SettingAddress address{ featureShortName, settingPath, settingKey };
-	auto lowerValue = ResolveWeatherLowerValue(weatherId, address, period, kCaptureSourceLayer);
-	if (!lowerValue || !ValidateSceneSettingEntry(
-			"Weather", featureShortName, settingPath, settingKey, *lowerValue, true))
-		return false;
-
-	auto& config = GetWeatherConfigMut(weatherId);
-
-	SettingEntry entry;
-	entry.featureShortName = featureShortName;
-	entry.settingPath = settingPath;
-	entry.settingKey = settingKey;
-	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
-	entry.value = *lowerValue;
-	entry.originalValue = *lowerValue;
-	entry.source = EntrySource::User;
-	entry.period = period;
-	config.entries.push_back(std::move(entry));
-	BumpEntryPresentationRevision();
-	PrepareWeatherUserSettingsMutation(weatherId, true);
-	if (deferSave)
-		MarkDeferredSceneChanges();
-	else
-		SaveAllUserSettings();
-	ReapplyIfActive();
-	return true;
-}
-
 void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t index)
 {
 	if (!TryEnsureWeatherDataLoaded())
@@ -4184,69 +4028,6 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 	}
 	if (it->second.entries.size() != previousSize)
 		BumpEntryPresentationRevision();
-	ReapplyIfActive();
-}
-
-void SceneSettingsManager::TogglePauseWeatherEntry(RE::FormID weatherId, size_t index)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return;
-
-	auto it = weatherSceneConfigs.find(weatherId);
-	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
-		return;
-	it->second.entries[index].paused = !it->second.entries[index].paused;
-	BumpEntryPresentationRevision();
-	if (it->second.entries[index].source == EntrySource::User) {
-		PrepareWeatherUserSettingsMutation(weatherId, false);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
-}
-
-void SceneSettingsManager::UpdateWeatherEntryValues(
-	RE::FormID weatherId, std::span<const EntryValueUpdate> updates, bool deferSave)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return;
-
-	auto it = weatherSceneConfigs.find(weatherId);
-	if (it == weatherSceneConfigs.end())
-		return;
-	bool userEntriesChanged = false;
-	if (!ApplyEntryValueUpdates(
-			"Weather", it->second.entries, updates, true, userEntriesChanged))
-		return;
-	if (userEntriesChanged) {
-		PrepareWeatherUserSettingsMutation(weatherId, false);
-		if (deferSave)
-			MarkDeferredSceneChanges();
-		else
-			SaveAllUserSettings();
-	}
-	ReapplyIfActive();
-}
-
-void SceneSettingsManager::RevertWeatherEntryToDefault(RE::FormID weatherId, size_t index)
-{
-	if (!TryEnsureWeatherDataLoaded())
-		return;
-
-	auto it = weatherSceneConfigs.find(weatherId);
-	if (it == weatherSceneConfigs.end() || index >= it->second.entries.size())
-		return;
-	auto& entry = it->second.entries[index];
-	SettingAddress address{ entry.featureShortName, entry.settingPath, entry.settingKey };
-	auto lowerValue = ResolveWeatherLowerValue(weatherId, address, entry.period, entry.source);
-	if (!lowerValue || !ValidateSceneSettingEntry(
-			"Weather", entry.featureShortName, entry.settingPath, entry.settingKey, *lowerValue, true))
-		return;
-	entry.value = *lowerValue;
-	entry.originalValue = *lowerValue;
-	if (entry.source == EntrySource::User) {
-		PrepareWeatherUserSettingsMutation(weatherId, false);
-		SaveAllUserSettings();
-	}
 	ReapplyIfActive();
 }
 
@@ -4648,38 +4429,6 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 	}
 }
 
-bool SceneSettingsManager::AddLocationSetting(LocationTargetType type, const std::string& formKey,
-	const std::string& name, const std::string& cocCode, const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey, bool deferSave)
-{
-	if (!TryEnsureLocationDataLoaded() || formKey.empty() ||
-		!IsSettingAllowedForType(SceneType::Location, featureShortName, settingPath, settingKey) ||
-		HasLocationEntry(type, formKey, featureShortName, settingPath, settingKey, EntrySource::User))
-		return false;
-	SettingAddress address{ featureShortName, settingPath, settingKey };
-	auto lowerValue = ResolveLocationLowerValue(type, formKey, address, kCaptureSourceLayer);
-	if (!lowerValue || !ValidateSceneSettingEntry("Location", featureShortName, settingPath, settingKey, *lowerValue, false))
-		return false;
-
-	auto& config = EnsureAuthoredLocationConfig(type, formKey, name, cocCode);
-	config.entries.push_back({
-		.featureShortName = featureShortName,
-		.settingPath = settingPath,
-		.settingKey = settingKey,
-		.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey),
-		.value = *lowerValue,
-		.originalValue = *lowerValue,
-		.source = EntrySource::User,
-	});
-	BumpEntryPresentationRevision();
-	PrepareLocationUserSettingsMutation(type, formKey, true);
-	if (deferSave)
-		MarkDeferredSceneChanges();
-	else
-		CommitSceneSettingChanges();
-	return true;
-}
-
 void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index)
 {
 	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
@@ -4712,60 +4461,6 @@ std::vector<std::string> SceneSettingsManager::MatchingRawLocationKeys(const jso
 			GetLocationConfigKey(type, CanonicalizeResolvedLocationFormKey(rawFormKey)) == targetKey)
 			keys.push_back(rawFormKey);
 	return keys;
-}
-
-void SceneSettingsManager::TogglePauseLocationEntry(LocationTargetType type, const std::string& formKey, size_t index)
-{
-	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (it == locationSceneConfigs.end() || index >= it->second.entries.size())
-		return;
-	it->second.entries[index].paused = !it->second.entries[index].paused;
-	BumpEntryPresentationRevision();
-	if (it->second.entries[index].source == EntrySource::User) {
-		PrepareLocationUserSettingsMutation(type, formKey, false);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
-}
-
-void SceneSettingsManager::UpdateLocationEntryValues(LocationTargetType type, const std::string& formKey,
-	std::span<const EntryValueUpdate> updates, bool deferSave)
-{
-	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (it == locationSceneConfigs.end())
-		return;
-	bool userEntriesChanged = false;
-	if (!ApplyEntryValueUpdates(
-			"Location", it->second.entries, updates, false, userEntriesChanged))
-		return;
-	if (userEntriesChanged) {
-		PrepareLocationUserSettingsMutation(type, formKey, false);
-		if (deferSave)
-			MarkDeferredSceneChanges();
-		else
-			SaveAllUserSettings();
-	}
-	ReapplyIfActive();
-}
-
-void SceneSettingsManager::RevertLocationEntryToDefault(LocationTargetType type, const std::string& formKey, size_t index)
-{
-	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (it == locationSceneConfigs.end() || index >= it->second.entries.size())
-		return;
-	auto& entry = it->second.entries[index];
-	SettingAddress address{ entry.featureShortName, entry.settingPath, entry.settingKey };
-	auto lowerValue = ResolveLocationLowerValue(type, formKey, address, entry.source);
-	if (!lowerValue || !ValidateSceneSettingEntry(
-			"Location", entry.featureShortName, entry.settingPath, entry.settingKey, *lowerValue, false))
-		return;
-	entry.value = *lowerValue;
-	entry.originalValue = *lowerValue;
-	if (entry.source == EntrySource::User) {
-		PrepareLocationUserSettingsMutation(type, formKey, false);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
 }
 
 void SceneSettingsManager::SetLocationTransitionSeconds(float seconds, bool deferSave)
@@ -5062,26 +4757,31 @@ namespace
 		           SceneSettingsManager::SceneType::TimeOfDay;
 	}
 
-	/// What a copy destination validates against: the layer it lands on and whether it blends.
-	struct CopyDestinationRules
+	/// What a context validates an entry against: the layer it lands in, whether that layer blends,
+	/// and the name its validation logs carry.
+	struct SceneContextRules
 	{
 		SceneSettingsManager::SceneType sceneType;
 		bool requireNumeric;
+		const char* label;
 	};
 
-	/// Mirrors the entry-add path each context type takes, so a copy never offers what AddSetting rejects.
-	CopyDestinationRules GetCopyDestinationRules(SceneSettingsManager::SceneContextType type)
+	/// One rule set per context type, so an add, a copy and a tombstone all judge an address alike.
+	SceneContextRules GetSceneContextRules(SceneSettingsManager::SceneContextType type)
 	{
 		using SceneContextType = SceneSettingsManager::SceneContextType;
 		using SceneType = SceneSettingsManager::SceneType;
 		switch (type) {
 		case SceneContextType::Interior:
-			return { SceneType::InteriorOnly, false };
+			return { SceneType::InteriorOnly, false, "InteriorOnly" };
 		case SceneContextType::Location:
-			return { SceneType::Location, false };
+			return { SceneType::Location, false, "Location" };
+		case SceneContextType::Weather:
+			// Weather stores into the time-of-day layer but names itself in its own logs.
+			return { SceneType::TimeOfDay, true, "Weather" };
 		default:
-			// Time of day and weather both blend over a period, so both demand transitionable floats.
-			return { SceneType::TimeOfDay, true };
+			// A periodic layer blends across the period, so it only takes transitionable floats.
+			return { SceneType::TimeOfDay, true, "TimeOfDay" };
 		}
 	}
 }
@@ -5126,24 +4826,103 @@ std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::GetContex
 	}
 }
 
-void SceneSettingsManager::CommitContextUserEntryMutation(const SceneContextId& context)
+std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::EnsureContextEntriesMut(
+	const SceneContextId& context)
 {
-	BumpEntryPresentationRevision();
+	if (!IsValidSceneContext(context))
+		return nullptr;
+	switch (context.type) {
+	case SceneContextType::Weather:
+		if (!TryEnsureWeatherDataLoaded())
+			return nullptr;
+		return &GetWeatherConfigMut(context.weatherId).entries;
+	case SceneContextType::Location: {
+		if (!TryEnsureLocationDataLoaded())
+			return nullptr;
+		// Adding the first setting authors the target, so the page survives a reload with no settings.
+		const auto& existing = GetLocationConfig(context.locationType, context.locationFormKey);
+		const auto name = existing.name;
+		const auto cocCode = existing.cocCode;
+		auto& config = EnsureAuthoredLocationConfig(context.locationType, context.locationFormKey,
+			name, cocCode);
+		return &config.entries;
+	}
+	default:
+		return GetContextEntriesMut(context);
+	}
+}
+
+void SceneSettingsManager::MarkContextUserSettingsModified(const SceneContextId& context,
+	bool replaceMalformedEntries)
+{
 	switch (context.type) {
 	case SceneContextType::Interior:
 	case SceneContextType::TimeOfDay:
 		MarkEntryListUserSettingsModified(ContextSceneType(context.type));
 		break;
 	case SceneContextType::Weather:
-		PrepareWeatherUserSettingsMutation(context.weatherId, true);
+		PrepareWeatherUserSettingsMutation(context.weatherId, replaceMalformedEntries);
 		break;
 	case SceneContextType::Location:
-		PrepareLocationUserSettingsMutation(context.locationType, context.locationFormKey, true);
+		PrepareLocationUserSettingsMutation(context.locationType, context.locationFormKey,
+			replaceMalformedEntries);
 		break;
 	default:
 		break;
 	}
-	CommitSceneSettingChanges();
+}
+
+void SceneSettingsManager::CommitContextUserEntryMutation(const SceneContextId& context, bool deferSave,
+	bool replaceMalformedEntries)
+{
+	BumpEntryPresentationRevision();
+	MarkContextUserSettingsModified(context, replaceMalformedEntries);
+	// A deferred edit holds the resolve with the save, so a drag does not run ResolveAndApply
+	// mid-DrawSettings for every feature holding an active scene override.
+	if (deferSave)
+		MarkDeferredSceneChanges();
+	else
+		CommitSceneSettingChanges();
+}
+
+std::optional<json> SceneSettingsManager::CaptureContextValue(const SceneContextId& context,
+	const SettingAddress& address)
+{
+	switch (context.type) {
+	case SceneContextType::Weather:
+		// Weather and location stack on lower layers, so a capture pins what applies without the mods.
+		if (const auto lower = ResolveWeatherLowerValue(context.weatherId, address, context.period,
+				kCaptureSourceLayer))
+			return json(*lower);
+		return std::nullopt;
+	case SceneContextType::Location:
+		return ResolveLocationLowerValue(context.locationType, context.locationFormKey, address,
+			kCaptureSourceLayer);
+	default: {
+		// The entry lists sit directly on the feature's own value.
+		auto value = GetFeatureSettingValue(address.featureShortName, address.settingPath,
+			address.settingKey);
+		return value.is_null() ? std::nullopt : std::optional{ std::move(value) };
+	}
+	}
+}
+
+std::optional<json> SceneSettingsManager::ResolveContextEntryDefault(const SceneContextId& context,
+	const SettingEntry& entry)
+{
+	switch (context.type) {
+	case SceneContextType::Weather:
+		// Re-resolved rather than remembered: the layers under the entry can have moved since.
+		if (const auto lower = ResolveWeatherLowerValue(context.weatherId, GetEntryAddress(entry),
+				entry.period, entry.source))
+			return json(*lower);
+		return std::nullopt;
+	case SceneContextType::Location:
+		return ResolveLocationLowerValue(context.locationType, context.locationFormKey,
+			GetEntryAddress(entry), entry.source);
+	default:
+		return entry.originalValue.is_null() ? std::nullopt : std::optional{ entry.originalValue };
+	}
 }
 
 SceneSettingsManager::ContextEntrySummary SceneSettingsManager::GetContextUserEntrySummary(
@@ -5288,56 +5067,58 @@ std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContext
 	if (!IsValidSceneContext(context))
 		return std::nullopt;
 
-	bool added = false;
-	switch (context.type) {
-	case SceneContextType::Interior:
-	case SceneContextType::TimeOfDay: {
-		// AddSetting takes the value; the others capture it themselves.
-		const auto value = GetFeatureSettingValue(featureShortName, settingPath, settingKey);
-		if (value.is_null())
-			return std::nullopt;
-		added = AddSetting(ContextSceneType(context.type), featureShortName, settingPath, settingKey,
-			value, context.period, deferSave);
-		break;
-	}
-	case SceneContextType::Weather:
-		added = AddWeatherSetting(context.weatherId, featureShortName, settingPath, settingKey,
-			context.period, deferSave);
-		break;
-	case SceneContextType::Location: {
-		const auto& config = GetLocationConfig(context.locationType, context.locationFormKey);
-		added = AddLocationSetting(context.locationType, context.locationFormKey, config.name,
-			config.cocCode, featureShortName, settingPath, settingKey, deferSave);
-		break;
-	}
-	default:
+	const auto rules = GetSceneContextRules(context.type);
+	if (!IsSettingAllowedForType(rules.sceneType, featureShortName, settingPath, settingKey) ||
+		FindContextUserEntry(context, featureShortName, settingPath, settingKey))
 		return std::nullopt;
-	}
 
-	if (!added)
+	auto value = CaptureContextValue(context, { featureShortName, settingPath, settingKey });
+	if (!value || !ValidateSceneSettingEntry(rules.label, featureShortName, settingPath, settingKey,
+					  *value, rules.requireNumeric))
 		return std::nullopt;
+
+	auto* contextEntries = EnsureContextEntriesMut(context);
+	if (!contextEntries)
+		return std::nullopt;
+
+	SettingEntry entry;
+	entry.featureShortName = featureShortName;
+	entry.settingPath = settingPath;
+	entry.settingKey = settingKey;
+	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
+	entry.originalValue = *value;
+	entry.value = std::move(*value);
+	entry.source = EntrySource::User;
+	entry.period = context.period;
+	contextEntries->push_back(std::move(entry));
+
+	CommitContextUserEntryMutation(context, deferSave);
 	return FindContextUserEntry(context, featureShortName, settingPath, settingKey);
 }
 
 void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& context,
 	std::span<const EntryValueUpdate> updates, bool deferSave)
 {
-	if (!IsValidSceneContext(context))
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries)
 		return;
-	switch (context.type) {
-	case SceneContextType::Interior:
-	case SceneContextType::TimeOfDay:
-		UpdateEntryValues(ContextSceneType(context.type), updates, deferSave);
-		break;
-	case SceneContextType::Weather:
-		UpdateWeatherEntryValues(context.weatherId, updates, deferSave);
-		break;
-	case SceneContextType::Location:
-		UpdateLocationEntryValues(context.locationType, context.locationFormKey, updates, deferSave);
-		break;
-	default:
-		break;
+
+	const auto rules = GetSceneContextRules(context.type);
+	bool userEntriesChanged = false;
+	if (!ApplyEntryValueUpdates(rules.label, *contextEntries, updates, rules.requireNumeric,
+			userEntriesChanged))
+		return;
+	if (userEntriesChanged)
+		MarkContextUserSettingsModified(context, false);
+
+	// Only values moved, so the presentation caches still hold; ReapplyIfActive marks the value caches.
+	if (deferSave) {
+		MarkDeferredSceneChanges();
+		return;
 	}
+	if (userEntriesChanged)
+		SaveAllUserSettings();
+	ReapplyIfActive();
 }
 
 void SceneSettingsManager::RemoveContextSetting(const SceneContextId& context, size_t index)
@@ -5383,7 +5164,7 @@ bool SceneSettingsManager::TombstoneContextSetting(const SceneContextId& context
 		return false;
 
 	// A tombstone must not land at an address where an ordinary user entry would be rejected.
-	if (!IsSettingAllowedForType(GetCopyDestinationRules(context.type).sceneType, featureShortName, settingPath, settingKey))
+	if (!IsSettingAllowedForType(GetSceneContextRules(context.type).sceneType, featureShortName, settingPath, settingKey))
 		return false;
 
 	// An existing user entry becomes the tombstone: two entries at one address would race.
@@ -5434,42 +5215,40 @@ void SceneSettingsManager::ClearContextTombstone(const SceneContextId& context,
 
 void SceneSettingsManager::TogglePauseContextEntry(const SceneContextId& context, size_t index)
 {
-	if (!IsValidSceneContext(context))
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries || index >= contextEntries->size())
 		return;
-	switch (context.type) {
-	case SceneContextType::Interior:
-	case SceneContextType::TimeOfDay:
-		TogglePauseEntry(ContextSceneType(context.type), index);
-		break;
-	case SceneContextType::Weather:
-		TogglePauseWeatherEntry(context.weatherId, index);
-		break;
-	case SceneContextType::Location:
-		TogglePauseLocationEntry(context.locationType, context.locationFormKey, index);
-		break;
-	default:
-		break;
+
+	auto& entry = (*contextEntries)[index];
+	entry.paused = !entry.paused;
+	BumpEntryPresentationRevision();
+	if (entry.source == EntrySource::User) {
+		MarkContextUserSettingsModified(context, false);
+		SaveAllUserSettings();
 	}
+	ReapplyIfActive();
 }
 
 void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& context, size_t index)
 {
-	if (!IsValidSceneContext(context))
+	auto* contextEntries = GetContextEntriesMut(context);
+	if (!contextEntries || index >= contextEntries->size())
 		return;
-	switch (context.type) {
-	case SceneContextType::Interior:
-	case SceneContextType::TimeOfDay:
-		RevertEntryToDefault(ContextSceneType(context.type), index);
-		break;
-	case SceneContextType::Weather:
-		RevertWeatherEntryToDefault(context.weatherId, index);
-		break;
-	case SceneContextType::Location:
-		RevertLocationEntryToDefault(context.locationType, context.locationFormKey, index);
-		break;
-	default:
-		break;
+
+	auto& entry = (*contextEntries)[index];
+	const auto rules = GetSceneContextRules(context.type);
+	const auto defaultValue = ResolveContextEntryDefault(context, entry);
+	if (!defaultValue || !ValidateSceneSettingEntry(rules.label, entry.featureShortName,
+							  entry.settingPath, entry.settingKey, *defaultValue, rules.requireNumeric))
+		return;
+
+	entry.value = *defaultValue;
+	entry.originalValue = entry.value;
+	if (entry.source == EntrySource::User) {
+		MarkContextUserSettingsModified(context, false);
+		SaveAllUserSettings();
 	}
+	ReapplyIfActive();
 }
 
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopyCandidates(
@@ -5504,17 +5283,17 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 			destinationOverwriteSettings.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 	}
 
-	const auto [destinationSceneType, requireNumeric] = GetCopyDestinationRules(destination.type);
+	const auto destinationRules = GetSceneContextRules(destination.type);
 	for (const auto& [identity, entry] : effectiveEntries) {
 		auto* setting = FindAllowedCatalogSetting(
-			identity.featureShortName, identity.settingPath, identity.settingKey, requireNumeric);
+			identity.featureShortName, identity.settingPath, identity.settingKey, destinationRules.requireNumeric);
 		auto rejection = CopyRejection::None;
 		if (!setting)
 			rejection = CopyRejection::NotInCatalog;
-		else if (!IsSettingAllowedForType(destinationSceneType, identity.featureShortName,
+		else if (!IsSettingAllowedForType(destinationRules.sceneType, identity.featureShortName,
 					 identity.settingPath, identity.settingKey))
 			rejection = CopyRejection::NotAllowedInLayer;
-		else if (!IsSceneSettingValueAllowed(entry->value, *setting, entry->value, requireNumeric))
+		else if (!IsSceneSettingValueAllowed(entry->value, *setting, entry->value, destinationRules.requireNumeric))
 			rejection = CopyRejection::ValueRejected;
 		else if (destinationOverwriteSettings.contains(identity))
 			rejection = CopyRejection::BlockedByOverwrite;
@@ -5577,7 +5356,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 				EntryBelongsToContext(entry, destination))
 				destinationOverwrites.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 
-	const auto [destinationSceneType, requireNumeric] = GetCopyDestinationRules(destination.type);
+	const auto destinationRules = GetSceneContextRules(destination.type);
 	const auto countCompatible = [&](const EffectiveContextEntries& effectiveEntries) {
 		struct GroupCount
 		{
@@ -5589,11 +5368,11 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 			auto& group = groups[GetCopyGroupKey(identity)];
 			++group.members;
 			auto* metadata = FindAllowedCatalogSetting(
-				identity.featureShortName, identity.settingPath, identity.settingKey, requireNumeric);
+				identity.featureShortName, identity.settingPath, identity.settingKey, destinationRules.requireNumeric);
 			if (!destinationOverwrites.contains(identity) && metadata &&
-				IsSettingAllowedForType(destinationSceneType, identity.featureShortName,
+				IsSettingAllowedForType(destinationRules.sceneType, identity.featureShortName,
 					identity.settingPath, identity.settingKey) &&
-				IsSceneSettingValueAllowed(entry->value, *metadata, entry->value, requireNumeric))
+				IsSceneSettingValueAllowed(entry->value, *metadata, entry->value, destinationRules.requireNumeric))
 				++group.compatible;
 		}
 		size_t count = 0;

@@ -1,7 +1,6 @@
 #include "ScenePageToolbar.h"
 
 #include <algorithm>
-#include <cstdint>
 #include <format>
 #include <functional>
 #include <map>
@@ -54,10 +53,8 @@ namespace
 	/// cached until the entries it counts change. The dropdown recomputes on open, so a stale count never picks.
 	struct CopyListCache
 	{
-		std::uint64_t revision = 0;
+		SceneSettingsManager::RevisionCache<std::vector<CopySource>> entries;
 		int lastUsedFrame = 0;
-		bool valid = false;
-		std::vector<CopySource> entries;
 	};
 	std::map<SceneContextId, CopyListCache> sourceCaches;
 	std::map<SceneContextId, CopyListCache> destinationCaches;
@@ -78,15 +75,37 @@ namespace
 	};
 	CopyFlow copyFlow;
 
-	/// The page a pending clear belongs to, so only that page's toolbar draws the confirmation.
-	SceneContextId clearContext;
-	bool clearRequested = false;
-	Util::ConfirmationPopup clearConfirmation;
+	/// A confirmation one page asked for. Clear belongs to its page and Load Preset is global, but
+	/// every page offers both, so each is keyed to the page that asked and only that page draws it.
+	struct PageConfirmation
+	{
+		void Request(const SceneContextId& a_page)
+		{
+			context = a_page;
+			requested = true;
+			popup.Request();
+		}
 
-	/// Load Preset is global, but every page offers it, so the same page-keyed pattern applies.
-	SceneContextId loadPresetContext;
-	bool loadPresetRequested = false;
-	Util::ConfirmationPopup loadPresetConfirmation;
+		/** @brief Runs a_confirmed on the requesting page once accepted, and drops the request as
+		 *  soon as the popup is gone, however it went. */
+		template <typename Action>
+		void Draw(const SceneContextId& a_page, Action&& a_confirmed)
+		{
+			if (!requested || context != a_page)
+				return;
+			if (popup.Draw())
+				a_confirmed();
+			else if (popup.IsOpen())
+				return;
+			requested = false;
+		}
+
+		Util::ConfirmationPopup popup;
+		SceneContextId context;
+		bool requested = false;
+	};
+	PageConfirmation clearConfirmation;
+	PageConfirmation loadPresetConfirmation;
 
 	/// Shared cache/eviction logic for both copy directions; only what fetches the list differs.
 	template <typename Fetch>
@@ -102,12 +121,8 @@ namespace
 
 		auto& cache = caches[context];
 		cache.lastUsedFrame = frame;
-		if (forceRefresh || !cache.valid || cache.revision != revision) {
-			cache.entries = fetch(manager, context);
-			cache.revision = revision;
-			cache.valid = true;
-		}
-		return cache.entries;
+		return cache.entries.Get(
+			revision, [&] { return fetch(manager, context); }, forceRefresh);
 	}
 
 	/// Whether two contexts are different periods of the same otherwise-identical weather or global
@@ -385,6 +400,17 @@ namespace
 		return widest;
 	}
 
+	/// Labels a leaf list's rows ahead of drawing them, since its child has to be sized from them first.
+	template <typename Rows, typename Label>
+	std::vector<std::string> CollectRowLabels(const Rows& rows, Label rowLabel)
+	{
+		std::vector<std::string> labels;
+		labels.reserve(rows.size());
+		for (const auto& row : rows)
+			labels.push_back(rowLabel(row));
+		return labels;
+	}
+
 	/// Scrollable wrapper for leaf lists that can still grow long: individual weather scenes, locations.
 	/// Typing while one is open jumps to the first entry starting with what was typed.
 	void DrawScrollableChild(std::span<const std::string> rowLabels, const std::function<void()>& drawItems)
@@ -415,11 +441,9 @@ namespace
 
 		auto* manager = SceneSettingsManager::GetSingleton();
 		if (!tree.weather.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Weather))) {
-			std::vector<std::string> rowLabels;
-			rowLabels.reserve(tree.weather.size());
-			for (const auto& group : tree.weather)
-				rowLabels.push_back(FormatCopyLabel(group.displayName, group.periods.front()->settingCount));
-
+			const auto rowLabels = CollectRowLabels(tree.weather, [](const auto& group) {
+				return FormatCopyLabel(group.displayName, group.periods.front()->settingCount);
+			});
 			DrawScrollableChild(rowLabels, [&] {
 				for (const auto& group : tree.weather) {
 					const auto* firstPeriod = group.periods.front();
@@ -442,11 +466,9 @@ namespace
 		}
 
 		if (!tree.location.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Location))) {
-			std::vector<std::string> rowLabels;
-			rowLabels.reserve(tree.location.size());
-			for (const auto* entry : tree.location)
-				rowLabels.push_back(FormatCopyLabel(entry->displayName, entry->settingCount));
-
+			const auto rowLabels = CollectRowLabels(tree.location, [](const auto* entry) {
+				return FormatCopyLabel(entry->displayName, entry->settingCount);
+			});
 			DrawScrollableChild(rowLabels, [&] {
 				for (const auto* entry : tree.location) {
 					DrawCopyMenuItem(entry->displayName, entry->settingCount, *entry, onPick);
@@ -469,7 +491,7 @@ namespace
 		// submenu stuck open when the disabled entry is hovered.
 		const bool fromOpen = ImGui::BeginMenu(T(TKEY("scene_page_copy_from"), "From"), !sources.empty());
 		Util::AddTooltip(T(TKEY("scene_page_copy_from_tooltip"), "Copies another context's settings into this page."),
-			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+			Util::kTooltipWhenDisabled);
 		if (fromOpen) {
 			DrawCopyTree(BuildCopyTree(sources), [&](const CopySource& source) {
 				StartCopy(source.context, context, source.displayName, periodScope);
@@ -481,7 +503,7 @@ namespace
 		const auto destinations = GetCopyDestinations(context, periodScope, false);
 		const bool toOpen = ImGui::BeginMenu(T(TKEY("scene_page_copy_to"), "To"), !destinations.empty());
 		Util::AddTooltip(T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
-			ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+			Util::kTooltipWhenDisabled);
 		if (toOpen) {
 			const auto sourceName = manager->GetSceneContextDisplayName(context);
 			DrawCopyTree(BuildCopyTree(destinations), [&](const CopySource& destination) {
@@ -591,33 +613,6 @@ namespace
 		if (!ImGui::IsPopupOpen(title))
 			copyFlow = {};
 	}
-
-	void DrawClearConfirmation(const SceneContextId& context, PeriodScope periodScope)
-	{
-		if (!clearRequested || clearContext != context)
-			return;
-		if (clearConfirmation.Draw()) {
-			SceneSettingsManager::GetSingleton()->ClearContextEntries(context, periodScope);
-			clearRequested = false;
-		} else if (!clearConfirmation.IsOpen()) {
-			clearRequested = false;
-		}
-	}
-
-	void DrawLoadPresetConfirmation(const SceneContextId& context)
-	{
-		if (!loadPresetRequested || loadPresetContext != context)
-			return;
-		if (loadPresetConfirmation.Draw()) {
-			auto* manager = SceneSettingsManager::GetSingleton();
-			// An export earlier this session left the mod layer holding what was on disk before it.
-			manager->ReloadOverwrites();
-			manager->ClearAllUserEntries();
-			loadPresetRequested = false;
-		} else if (!loadPresetConfirmation.IsOpen()) {
-			loadPresetRequested = false;
-		}
-	}
 }
 
 void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager::PeriodScope periodScope)
@@ -688,7 +683,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 						 T(TKEY("scene_page_pause_all_tooltip"),
 							 "Holds back every override on this page without losing its value.") :
 						 T(TKEY("scene_page_resume_all_tooltip"), "Applies every override on this page again."),
-		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::kTooltipWhenDisabled);
 
 	ImGui::SameLine();
 	// The lists are rebuilt on open, so what they offer is never a frame behind the page.
@@ -702,27 +697,25 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	}
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_copy_tooltip"), "Copies settings between this page and another context."),
-		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::kTooltipWhenDisabled);
 	DrawCopyPopup(context, periodScope);
 
 	ImGui::SameLine();
 	const bool hasUserLayer = manager->HasAnyUserEntries();
 	ImGui::BeginDisabled(!hasUserLayer);
 	if (ImGui::Button(loadPresetLabel)) {
-		loadPresetConfirmation.title = T(TKEY("scene_page_load_preset_title"), "Load preset");
-		loadPresetConfirmation.message = T(TKEY("scene_page_load_preset_message"),
+		loadPresetConfirmation.popup.title = T(TKEY("scene_page_load_preset_title"), "Load preset");
+		loadPresetConfirmation.popup.message = T(TKEY("scene_page_load_preset_message"),
 			"Remove every setting you have authored, in every context, and let the installed preset drive the "
 			"scene?\n\nSettings you removed from the preset come back too. This cannot be undone.");
-		loadPresetConfirmation.confirmLabel = loadPresetLabel;
-		loadPresetConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
-		loadPresetContext = context;
-		loadPresetRequested = true;
-		loadPresetConfirmation.Request();
+		loadPresetConfirmation.popup.confirmLabel = loadPresetLabel;
+		loadPresetConfirmation.popup.cancelLabel = T(TKEY("cancel"), "Cancel");
+		loadPresetConfirmation.Request(context);
 	}
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_load_preset_tooltip"),
 						  "Clears your own settings everywhere so the installed preset is what applies."),
-		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::kTooltipWhenDisabled);
 
 	ImGui::SameLine();
 	ImGui::BeginDisabled(!ScenePresetExport::CanExport());
@@ -731,7 +724,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
 						  "Writes every setting from every context out as an overwrite preset."),
-		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::kTooltipWhenDisabled);
 
 	ImGui::SameLine();
 	ImGui::BeginDisabled(!hasEntries);
@@ -742,23 +735,25 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	if (clearClicked) {
 		auto count = summary.total;
 		auto pageName = manager->GetSceneContextDisplayName(context);
-		clearConfirmation.title = T(TKEY("scene_page_clear_title"), "Clear page");
-		clearConfirmation.message = std::vformat(T(TKEY("scene_page_clear_message"),
-													"Remove all {} settings from {}? Mod overrides are left alone.\n\n"
-													"Settings you removed come back too."),
+		clearConfirmation.popup.title = T(TKEY("scene_page_clear_title"), "Clear page");
+		clearConfirmation.popup.message = std::vformat(T(TKEY("scene_page_clear_message"),
+														  "Remove all {} settings from {}? Mod overrides are left alone.\n\n"
+														  "Settings you removed come back too."),
 			std::make_format_args(count, pageName));
-		clearConfirmation.confirmLabel = clearLabel;
-		clearConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
-		clearContext = context;
-		clearRequested = true;
-		clearConfirmation.Request();
+		clearConfirmation.popup.confirmLabel = clearLabel;
+		clearConfirmation.popup.cancelLabel = T(TKEY("cancel"), "Cancel");
+		clearConfirmation.Request(context);
 	}
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_clear_tooltip"), "Removes every override this page holds."),
-		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::kTooltipWhenDisabled);
 
-	DrawClearConfirmation(context, periodScope);
-	DrawLoadPresetConfirmation(context);
+	clearConfirmation.Draw(context, [&] { manager->ClearContextEntries(context, periodScope); });
+	loadPresetConfirmation.Draw(context, [manager] {
+		// An export earlier this session left the mod layer holding what was on disk before it.
+		manager->ReloadOverwrites();
+		manager->ClearAllUserEntries();
+	});
 	DrawCopyPreview();
 	ScenePresetExport::Draw(context);
 

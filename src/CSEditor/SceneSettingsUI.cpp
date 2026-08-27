@@ -220,7 +220,7 @@ namespace
 			ImGui::EndDisabled();
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
 				"Shows whether interior settings are being edited. Follows the cell the player is in."),
-				ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+				Util::kTooltipWhenDisabled);
 		} else {
 			// Enabling re-couples the bar to live time, so it always lands on the current period.
 			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &weatherTimeOfDayEnabled) && weatherTimeOfDayEnabled) {
@@ -467,7 +467,7 @@ namespace
 			ImGui::EndDisabled();
 			if (authored)
 				Util::AddTooltip(T(TKEY("location_already_added"), "Already on your list."),
-					ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+					Util::kTooltipWhenDisabled);
 
 			ImGui::PopID();
 		}

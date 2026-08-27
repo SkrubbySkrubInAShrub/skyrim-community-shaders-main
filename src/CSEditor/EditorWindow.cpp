@@ -1101,7 +1101,7 @@ void EditorWindow::RenderUI()
 				ImGui::BeginDisabled();
 				ImGui::MenuItem(T(TKEY("edit_current_cell_lighting"), "Edit Current Cell Lighting"));
 				ImGui::EndDisabled();
-				Util::AddTooltip(T(TKEY("interior_only_available"), "Only available in interior cells"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+				Util::AddTooltip(T(TKEY("interior_only_available"), "Only available in interior cells"), Util::kTooltipWhenDisabled);
 			}
 
 			ImGui::Separator();
@@ -1127,7 +1127,7 @@ void EditorWindow::RenderUI()
 			}
 			if (hdrActive) {
 				ImGui::EndDisabled();
-				Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+				Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), Util::kTooltipWhenDisabled);
 			}
 			if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
 			}

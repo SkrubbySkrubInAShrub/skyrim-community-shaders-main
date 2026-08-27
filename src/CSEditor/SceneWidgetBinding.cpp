@@ -220,26 +220,18 @@ namespace
 	/// the same entries, and the walk is the whole context, so it is cached until the entries change.
 	const LayerIndex& GetContextLayerIndex(const SceneContextId& a_context, const std::string& a_feature)
 	{
-		struct CachedIndex
-		{
-			bool built = false;
-			std::uint64_t revision = 0;
-			LayerIndex layers;
-		};
-		static std::map<std::pair<SceneContextId, std::string>, CachedIndex> cache;
+		static std::map<std::pair<SceneContextId, std::string>,
+			SceneSettingsManager::RevisionCache<LayerIndex>>
+			cache;
 
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto revision = manager->GetEntryPresentationRevision();
-		auto& cached = cache[{ a_context, a_feature }];
-		if (!cached.built || cached.revision != revision) {
-			cached.built = true;
-			cached.revision = revision;
-			cached.layers.clear();
+		return cache[{ a_context, a_feature }].Get(manager->GetEntryPresentationRevision(), [&] {
+			LayerIndex layers;
 			// Nothing a paused feature holds applies, so its every context reads as empty.
 			if (!manager->IsFeaturePaused(a_feature))
-				CollectContextLayers(a_context, a_feature, cached.layers);
-		}
-		return cached.layers;
+				CollectContextLayers(a_context, a_feature, layers);
+			return layers;
+		});
 	}
 
 	/// The location targets resolving after a page: the whole running chain, or for a location page
@@ -626,41 +618,8 @@ void SceneWidgetBinding::Guard::ResolveState()
 SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveWinningLayer(
 	const std::string& a_settingKey) const
 {
-	using SettingLayer = SceneSettingsManager::SettingLayer;
-	auto* manager = SceneSettingsManager::GetSingleton();
-
-	// Interior and location store one entry with no period; synthesising one would fail
-	// IsValidSceneContext and silently answer None.
-	if (!SceneSettingsManager::IsPeriodicContext(contextId.type))
-		return manager->GetSettingProvenance(contextId, featureShortName, settingPath, a_settingKey).layer;
-
-	bool sawUser = false, sawDeleted = false, sawOverwrite = false;
-	for (int slot = 0; slot < kPeriodCount; ++slot) {
-		if (!IsCoveredSlot(slot))
-			continue;
-		auto slotContext = contextId;
-		slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
-		switch (manager->GetSettingProvenance(slotContext, featureShortName, settingPath, a_settingKey).layer) {
-		case SettingLayer::User:
-			sawUser = true;
-			break;
-		case SettingLayer::Deleted:
-			sawDeleted = true;
-			break;
-		case SettingLayer::Overwrite:
-			sawOverwrite = true;
-			break;
-		default:
-			break;
-		}
-	}
-
-	// First match wins: mirrors the "any" semantics ResolveState already uses for anyActive/anyPaused.
-	if (sawUser)
-		return SettingLayer::User;
-	if (sawDeleted)
-		return SettingLayer::Deleted;
-	return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
+	return FoldContextLayer(contextId, featureShortName,
+		{ featureShortName, settingPath, a_settingKey }, CoveredPeriodMask());
 }
 
 std::uint8_t SceneWidgetBinding::Guard::CoveredPeriodMask() const
@@ -795,18 +754,13 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 	std::memcpy(value.data, preCall.bytes, valueSize);
 
 	bool added = false;
-	for (const auto& component : components) {
-		for (int slot = 0; slot < kPeriodCount; ++slot) {
-			if (!IsCoveredSlot(slot) || component.periodEntries[static_cast<size_t>(slot)])
-				continue;
-			auto slotContext = contextId;
-			if (flatAcrossPeriods)
-				slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
-			const auto created = manager->AddContextSetting(slotContext, featureShortName,
-				settingPath, component.settingKey, a_deferSave);
-			added = added || created.has_value();
-		}
-	}
+	ForEachCoveredSlot([&](const Component& a_component, int a_slot, const SceneContextId& a_slotContext) {
+		if (a_component.periodEntries[static_cast<size_t>(a_slot)])
+			return;
+		const auto created = manager->AddContextSetting(a_slotContext, featureShortName,
+			settingPath, a_component.settingKey, a_deferSave);
+		added = added || created.has_value();
+	});
 
 	std::memcpy(value.data, live.bytes, valueSize);
 
@@ -1157,7 +1111,7 @@ void SceneWidgetBinding::Guard::DrawTransitionSlot()
 							 "Leave the field empty to follow the page's transition time.") :
 						 T(TKEY("scene_transition_needs_override_tooltip"),
 							 "Enable the override before setting its transition time."),
-		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::kTooltipWhenDisabled);
 }
 
 void SceneWidgetBinding::Guard::CaptureNextItemWidth()
@@ -1258,20 +1212,12 @@ void SceneWidgetBinding::Guard::SetTombstoned(bool a_tombstoned)
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
 
-	// The manager is period-scoped, so a flat control has to name each period it covers itself.
-	for (const auto& component : components) {
-		for (int slot = 0; slot < kPeriodCount; ++slot) {
-			if (!IsCoveredSlot(slot))
-				continue;
-			auto slotContext = contextId;
-			if (flatAcrossPeriods)
-				slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
-			if (a_tombstoned)
-				manager->TombstoneContextSetting(slotContext, featureShortName, settingPath, component.settingKey);
-			else
-				manager->ClearContextTombstone(slotContext, featureShortName, settingPath, component.settingKey);
-		}
-	}
+	ForEachCoveredSlot([&](const Component& a_component, int, const SceneContextId& a_slotContext) {
+		if (a_tombstoned)
+			manager->TombstoneContextSetting(a_slotContext, featureShortName, settingPath, a_component.settingKey);
+		else
+			manager->ClearContextTombstone(a_slotContext, featureShortName, settingPath, a_component.settingKey);
+	});
 }
 
 bool SceneWidgetBinding::Guard::Finish(bool a_changed)
@@ -1317,10 +1263,8 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	// The tint says only that something else holds this value; the gutter's words say what. Drawn
 	// before the feature's own tooltip, which appends to the same window once the call returns.
-	// A greyed control is exactly the one that has to explain itself, so hovering it has to answer
-	// even while disabled.
 	if (ResolveProvenanceColor())
-		Util::AddTooltip(ResolveStatusTooltip(), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		Util::AddTooltip(ResolveStatusTooltip(), Util::kTooltipWhenDisabled);
 
 	// A paused control must never report a change: nothing behind it moved.
 	return state == State::Paused ? false : a_changed;

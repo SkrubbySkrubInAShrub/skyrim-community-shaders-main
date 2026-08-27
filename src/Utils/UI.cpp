@@ -90,7 +90,7 @@ namespace Util
 	HoverTooltipWrapper::HoverTooltipWrapper() :
 		previousFont(nullptr)
 	{
-		hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		hovered = ImGui::IsItemHovered(kTooltipWhenDisabled);
 		if (hovered) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);

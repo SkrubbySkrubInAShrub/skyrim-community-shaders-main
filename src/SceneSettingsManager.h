@@ -157,28 +157,30 @@ public:
 
 	// --- Generic Entry Management (scene-type agnostic) ---
 
-	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
 	/// Monotonic revision for entry structure and pause state used by presentation caches.
 	std::uint64_t GetEntryPresentationRevision() const { return entryPresentationRevision; }
-	bool HasEntryFromSource(SceneType type, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const;
-	/// Add a setting.  For TimeOfDay entries, specify the target period.
-	bool AddSetting(SceneType type, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
-		TimeOfDayPeriod period = TimeOfDayPeriod::Count, bool deferCommit = false);
-	void RemoveSetting(SceneType type, size_t index);
-	void TogglePauseEntry(SceneType type, size_t index);
-	/// Validate and update a group of entries before applying any of them.
-	void UpdateEntryValues(SceneType type, std::span<const EntryValueUpdate> updates, bool deferSave = false);
-	void CommitSceneSettingChanges();
 
-	/// Revert an entry's value to its originalValue (captured at creation).
-	void RevertEntryToDefault(SceneType type, size_t index);
+	/// A value derived from the entry lists by a walk too costly to repeat per frame.
+	template <typename T>
+	struct RevisionCache
+	{
+		/** @brief The cached value, rebuilt through build once the entries it reflects have moved on.
+		 *  @param force Rebuilds regardless, for a caller whose value depends on more than the entries. */
+		template <typename Build>
+		const T& Get(std::uint64_t currentRevision, Build&& build, bool force = false)
+		{
+			if (force || !valid || revision != currentRevision) {
+				value = build();
+				revision = currentRevision;
+				valid = true;
+			}
+			return value;
+		}
 
-	/// Check if an entry already exists for a specific period (TimeOfDay)
-	bool HasEntryForPeriod(const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey,
-		TimeOfDayPeriod period, EntrySource source) const;
+		std::uint64_t revision = 0;
+		bool valid = false;
+		T value{};
+	};
 
 	/// Mods supplying overwrite entries anywhere, in discovery order, deduplicated. Loads weather and
 	/// location data first if not already loaded; returns whatever it has if either fails to load.
@@ -354,20 +356,6 @@ public:
 
 	bool HasWeatherConfig(RE::FormID weatherId);
 
-	/// Add a weather setting.  Requires a valid period (all entries are per-period).
-	bool AddWeatherSetting(RE::FormID weatherId, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
-		bool deferSave = false);
-	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
-	void TogglePauseWeatherEntry(RE::FormID weatherId, size_t index);
-	/// Validate and update weather entries as one mutation.
-	void UpdateWeatherEntryValues(
-		RE::FormID weatherId, std::span<const EntryValueUpdate> updates, bool deferSave = false);
-	void RevertWeatherEntryToDefault(RE::FormID weatherId, size_t index);
-	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
-		std::optional<EntrySource> source = std::nullopt);
-
 	/// Weather UI preference: show TOD table vs flat view (view-only, data is always per-period).
 	/// Read-only in this build: only a loaded document sets it.
 	bool IsWeatherShowTimeOfDay(RE::FormID weatherId);
@@ -426,21 +414,6 @@ public:
 
 	/// Drop a target from the user's list, discarding the settings they authored for it.
 	void RemoveLocationTarget(LocationTargetType type, const std::string& formKey);
-
-	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
-	bool AddLocationSetting(LocationTargetType type, const std::string& formKey, const std::string& name,
-		const std::string& cocCode,
-		const std::string& featureShortName, const std::vector<std::string>& settingPath,
-		const std::string& settingKey, bool deferSave = false);
-	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
-	void TogglePauseLocationEntry(LocationTargetType type, const std::string& formKey, size_t index);
-	/// Validate and update location entries as one mutation.
-	void UpdateLocationEntryValues(LocationTargetType type, const std::string& formKey,
-		std::span<const EntryValueUpdate> updates, bool deferSave = false);
-	void RevertLocationEntryToDefault(LocationTargetType type, const std::string& formKey, size_t index);
-	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
-		const std::string& featureShortName, const std::vector<std::string>& settingPath,
-		const std::string& settingKey, std::optional<EntrySource> source = std::nullopt) const;
 
 	/// Locations and cells share one directory; each target's type comes from its form, not its path.
 	static std::filesystem::path GetLocationOverwritesDir();
@@ -962,6 +935,10 @@ private:
 	bool TryEnsureLocationDataLoaded();
 	void LoadWeatherData();
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
+	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
+	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
+		std::optional<EntrySource> source = std::nullopt);
 	RE::FormID GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const;
 	WeatherBlend GetWeatherBlend() const;
 	float GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
@@ -1036,8 +1013,22 @@ private:
 		const std::vector<SettingEntry>& contextEntries, const SceneContextId& context);
 	const std::vector<SettingEntry>* GetCopyContextEntries(const SceneContextId& context) const;
 	std::vector<SettingEntry>* GetContextEntriesMut(const SceneContextId& context);
-	/// One presentation bump, one mark and one save for a mutation spanning a whole context.
-	void CommitContextUserEntryMutation(const SceneContextId& context);
+	/// As GetContextEntriesMut, but a weather or location context that has no config yet gets one.
+	std::vector<SettingEntry>* EnsureContextEntriesMut(const SceneContextId& context);
+	/** @brief Marks the user document section a context is stored in as needing a rewrite.
+	 *  @param replaceMalformedEntries Repairs a raw "entries" value that is not an array, which only
+	 *         a mutation about to append to it needs. */
+	void MarkContextUserSettingsModified(const SceneContextId& context, bool replaceMalformedEntries);
+	/** @brief One presentation bump, one mark and one save for a mutation spanning a whole context.
+	 *  @param deferSave Holds the save and the resolve until the edit settles. */
+	void CommitContextUserEntryMutation(const SceneContextId& context, bool deferSave = false,
+		bool replaceMalformedEntries = true);
+	/// The value a fresh entry pins: the layers beneath the context, or the feature's own value where
+	/// the context stacks on nothing.
+	std::optional<json> CaptureContextValue(const SceneContextId& context, const SettingAddress& address);
+	/// The value an entry reverts to: what it was created with, or, where the entry stacks on lower
+	/// layers, whatever those supply now.
+	std::optional<json> ResolveContextEntryDefault(const SceneContextId& context, const SettingEntry& entry);
 	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
 		const SceneContextId& destination, PeriodScope periodScope) const;
 	/// Deferring the commit lets a fan-out over the periods land as one save.
@@ -1063,6 +1054,11 @@ private:
 	void ClearLocationTransitions();
 
 	// --- Per-Location helpers ---
+	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
+	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
+	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
+		const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey, std::optional<EntrySource> source = std::nullopt) const;
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);
 	/// User-document section holding the targets of this type.
 	static const char* GetLocationSectionName(LocationTargetType type);
@@ -1081,7 +1077,16 @@ private:
 		bool replaceMalformedEntries);
 
 	// --- Helpers ---
+	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
+	void RemoveSetting(SceneType type, size_t index);
+	void CommitSceneSettingChanges();
+	bool HasEntryFromSource(SceneType type, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const;
+	/// Check if an entry already exists for a specific period (TimeOfDay)
+	bool HasEntryForPeriod(const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey,
+		TimeOfDayPeriod period, EntrySource source) const;
 	void BumpEntryPresentationRevision();
 	/// Entry values changed: drop the per-period caches and re-resolve the location layer.
 	void MarkSceneValuesDirty();
