@@ -4626,18 +4626,6 @@ namespace SceneSettingsCatalog
 \t\tstd::size_t choiceCount;
 \t};
 
-\tstruct VirtualAggregateControlMetadata
-\t{
-\t\tstd::string_view featureShortName;
-\t\tstd::string_view serializedPath;
-\t\tstd::string_view serializedKey;
-\t\tAggregateSemantic aggregateSemantic;
-\t\tstd::int8_t aggregateStart;
-\t\tstd::uint8_t aggregateCount;
-\t\tstd::string_view pushId;
-\t\tstd::string_view itemLabel;
-\t};
-
 \tconstexpr bool IsSceneControllable(const SettingMetadata& setting)
 \t{
 \t\treturn HasFlag(setting.flags, SettingFlag::SceneControllable) &&
@@ -4645,7 +4633,6 @@ namespace SceneSettingsCatalog
 \t}
 
 \tstd::span<const SettingMetadata> GetSettings();
-\tstd::span<const VirtualAggregateControlMetadata> GetVirtualAggregateControls();
 \t/// ImGui entry points SceneWidgetInterceptor must detour to cover every scene-controllable control.
 \tstd::span<const std::string_view> GetRequiredInterceptorEntryPoints();
 \tconst SettingMetadata* FindSetting(std::string_view featureShortName, std::string_view settingPath, std::string_view settingKey);
@@ -4696,20 +4683,6 @@ namespace SceneSettingsCatalog
         )
     joined_rows = "\n".join(rows)
     joined_choice_arrays = "\n".join(choice_arrays)
-    virtual_controls = sorted({
-        (e["feature"], e["serializedPath"], e["serializedKey"],
-         e["aggregateSemantic"], e["aggregateStart"], e["aggregateCount"],
-         push_id, item_label)
-        for e in entries
-        for push_id, item_label in e.get("virtualControls", ())
-    })
-    virtual_rows = "\n".join(
-        f'\t\t{{ "{cpp_escape(feature)}", "{cpp_escape(serialized_path)}", '
-        f'"{cpp_escape(serialized_key)}", SceneSettingsCatalog::AggregateSemantic::{semantic}, '
-        f'{start}, {count}, "{cpp_escape(push_id)}", "{cpp_escape(item_label)}" }},'
-        for feature, serialized_path, serialized_key, semantic, start, count,
-        push_id, item_label
-        in virtual_controls)
     includes = "\n".join(f'#include "{cpp_escape(include_path)}"' for include_path in sorted({e["include"] for e in entries}))
     feature_blocks = []
     for feature_short in sorted({e["feature"] for e in entries}):
@@ -4771,9 +4744,6 @@ namespace
 \tstatic constexpr std::array<SceneSettingsCatalog::SettingMetadata, {len(entries)}> kSceneSettings = {{{{
 {joined_rows}
 \t}}}};
-\tstatic constexpr std::array<SceneSettingsCatalog::VirtualAggregateControlMetadata, {len(virtual_controls)}> kVirtualAggregateControls = {{{{
-{virtual_rows}
-\t}}}};
 \tstatic constexpr std::array<std::string_view, {len(entry_points)}> kRequiredInterceptorEntryPoints = {{{{
 {entry_point_rows}
 \t}}}};
@@ -4784,11 +4754,6 @@ namespace SceneSettingsCatalog
 \tstd::span<const SettingMetadata> GetSettings()
 \t{{
 \t\treturn kSceneSettings;
-\t}}
-
-\tstd::span<const VirtualAggregateControlMetadata> GetVirtualAggregateControls()
-\t{{
-\t\treturn kVirtualAggregateControls;
 \t}}
 
 \tstd::span<const std::string_view> GetRequiredInterceptorEntryPoints()

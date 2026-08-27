@@ -849,6 +849,8 @@ private:
 		std::vector<std::string> settingPath;
 		std::string key;
 		json value;
+		/// A restore carries the feature's own baseline, which is not the scene layer's to bound.
+		bool clampToControlRange = true;
 	};
 
 	using ResolvedSettingMap = std::map<SettingAddress, json>;

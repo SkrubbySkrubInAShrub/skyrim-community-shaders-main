@@ -554,6 +554,81 @@ namespace
 		return std::isfinite(displayValue);
 	}
 
+	bool ConvertCatalogNumericDisplayToStored(const SceneSettingsCatalog::SettingMetadata& setting,
+		double displayValue, double& storedValue)
+	{
+		if (!std::isfinite(displayValue))
+			return false;
+		if (setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Generic) {
+			storedValue = displayValue;
+			return true;
+		}
+		if (setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
+			return false;
+
+		const double transformedValue = displayValue / GetCatalogNumericDisplayScale(setting);
+		switch (setting.numericTransform) {
+		case SceneSettingsCatalog::NumericTransform::Identity:
+			storedValue = transformedValue;
+			break;
+		case SceneSettingsCatalog::NumericTransform::Log2:
+			storedValue = std::exp2(transformedValue);
+			break;
+		default:
+			return false;
+		}
+		return std::isfinite(storedValue);
+	}
+
+	/// Applying a value bypasses the ImGui call that would have bounded it, so a document authored
+	/// elsewhere can push a control past its range. Bounds are in display space and both transforms are
+	/// monotonic, so the range converts once rather than every value round-tripping.
+	bool ClampCatalogNumericValue(const SceneSettingsCatalog::SettingMetadata& setting, json& value)
+	{
+		if (!setting.hasNumericBounds || !value.is_number() ||
+			setting.editorSemantic != SceneSettingsCatalog::EditorSemantic::Numeric)
+			return false;
+
+		double minimum = 0.0;
+		double maximum = 0.0;
+		if (!ConvertCatalogNumericDisplayToStored(setting, setting.minimumValue, minimum) ||
+			!ConvertCatalogNumericDisplayToStored(setting, setting.maximumValue, maximum) ||
+			minimum >= maximum)
+			return false;
+
+		const double storedValue = value.get<double>();
+		if (!std::isfinite(storedValue) || (storedValue >= minimum && storedValue <= maximum))
+			return false;
+
+		if (!value.is_number_integer()) {
+			value = std::clamp(storedValue, minimum, maximum);
+			return true;
+		}
+		// An integer control cannot land on a fractional bound, so its range is the whole numbers inside.
+		const double lowest = std::ceil(minimum);
+		const double highest = std::floor(maximum);
+		if (lowest > highest)
+			return false;
+		value = static_cast<std::int64_t>(std::clamp(storedValue, lowest, highest));
+		return true;
+	}
+
+	/// An out-of-range entry re-applies every frame its scene is active, so the report is one-shot.
+	void WarnOnceAboutClampedSceneSetting(std::string_view featureShortName,
+		const SceneSettingsCatalog::SettingMetadata& setting, const json& authored, const json& clamped)
+	{
+		static std::set<size_t> reported;
+		size_t signature = std::hash<std::string_view>{}(featureShortName);
+		CombineHash(signature, std::hash<std::string_view>{}(setting.settingPath));
+		CombineHash(signature, std::hash<std::string_view>{}(setting.settingKey));
+		if (!reported.insert(signature).second)
+			return;
+
+		logger::warn("[SceneSettings] {}.{} clamped from {} to {} on apply; the value is outside the range "
+					 "its control allows. The scene entry keeps the authored value.",
+			featureShortName, setting.settingKey, authored.dump(), clamped.dump());
+	}
+
 	const SceneSettingsCatalog::SettingMetadata* FindStoredAllComponent(
 		const SceneSettingsCatalog::SettingMetadata& setting)
 	{
@@ -1071,6 +1146,8 @@ bool SceneSettingsManager::ApplyCatalogSceneSettings(
 			!IsCompatibleSceneSettingValue(*currentValue, update.value))
 			return false;
 		*currentValue = update.value;
+		if (update.clampToControlRange && ClampCatalogNumericValue(*setting, *currentValue))
+			WarnOnceAboutClampedSceneSetting(feature.GetShortName(), *setting, update.value, *currentValue);
 	}
 
 	try {
@@ -2384,7 +2461,8 @@ void SceneSettingsManager::RebuildLocationTransitionBatches()
 			batch.signature = std::hash<std::string_view>{}(address.featureShortName);
 		batch.addresses.push_back(address);
 		batch.transitions.push_back(&transition);
-		batch.updates.push_back({ address.settingPath, address.settingKey, transition.startValue });
+		batch.updates.push_back({ address.settingPath, address.settingKey, transition.startValue,
+			!transition.restoreAtEnd });
 		for (const auto& segment : address.settingPath)
 			CombineHash(batch.signature, std::hash<std::string_view>{}(segment));
 		CombineHash(batch.signature, std::hash<std::string_view>{}(address.settingKey));
@@ -2564,7 +2642,8 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 		std::vector<CatalogSceneSettingUpdate> updates;
 		updates.reserve(pending.size());
 		for (const auto& update : pending)
-			updates.push_back({ update.address->settingPath, update.address->settingKey, *update.value });
+			updates.push_back({ update.address->settingPath, update.address->settingKey, *update.value,
+				!update.restore });
 
 		// Hashed lazily: an apply that never fails never pays for the signature.
 		std::optional<size_t> signature;
@@ -2644,7 +2723,7 @@ void SceneSettingsManager::RestoreAppliedSettings()
 		auto baselineIt = baselineSettings.find(address);
 		if (baselineIt != baselineSettings.end())
 			updatesByFeature[address.featureShortName].push_back({
-				address, { address.settingPath, address.settingKey, baselineIt->second } });
+				address, { address.settingPath, address.settingKey, baselineIt->second, false } });
 	}
 
 	for (const auto& [featureShortName, pending] : updatesByFeature) {

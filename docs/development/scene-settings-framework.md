@@ -7,10 +7,9 @@ Catalog-backed system that overrides feature settings by **interior**, **time of
 `06eaa584a..1119234f9`), squashed into `feat(scene-manager): port scene settings framework`, then
 re-synced against upstream **rev3** (location categories, location transitions, resolver caching, the
 generic scene copy API). The port is **backend only**: upstream's authoring UI was never taken, and
-Community Shaders branding was kept throughout. This fork grows its own editor in `src/CSEditor/`, so
-several backend APIs are complete and waiting for a caller. See
-[Backend ready for UI](#backend-ready-for-ui) and [What was dropped](#what-was-dropped) before assuming a
-missing piece is a bug.
+Community Shaders branding was kept throughout. This fork grows its own editor in `src/CSEditor/`. See
+[What was dropped](#what-was-dropped) and [Known gaps](#known-gaps) before assuming a missing piece is a
+bug.
 
 **On-disk compatibility with upstream is a hard requirement:** a `SceneManager.json` authored in
 open-shaders must load in Community Shaders with every setting honored, and vice versa. Any divergence
@@ -59,7 +58,7 @@ This makes the framework **feature-agnostic**: a feature exposes scene-controlla
 persisting them and drawing them with a recognized ImGui call. There is no registration API and no
 per-feature code to write. This is what replaced the deleted `WeatherVariableRegistry`.
 
-Current catalog on this fork: **326 entries**, 299 of them scene-controllable across 28 features.
+Current catalog on this fork: **325 entries**, 298 of them scene-controllable across 28 features.
 
 ## Runtime flow
 
@@ -78,14 +77,42 @@ There is no per-setting writer and no pointer patching. `ApplyCatalogSceneSettin
 
 1.  `feature.SaveSettings(json)` to snapshot the feature's own serialization
 2.  walk the catalog's serialized address and overwrite the primitives, rejecting type mismatches
-3.  `feature.LoadSettings(json)` to push the whole block back
-4.  on exception, reload the original snapshot
+3.  clamp each written value into its control's range (see [Numeric bounds](#numeric-bounds))
+4.  `feature.LoadSettings(json)` to push the whole block back
+5.  on exception, reload the original snapshot
 
 `baselineSettings` holds the pre-override value so a setting that leaves scope is restored rather than left
 stuck. Failed applies back off (`kApplyRetryDelay`, 2s) and log once per signature instead of every frame.
 
 **Consequence:** a feature's `SaveSettings`/`LoadSettings` pair is the contract. A setting that is not
 round-trippable through them cannot be scene-controlled, no matter what its UI looks like.
+
+### Numeric bounds
+
+Applying a value goes JSON patch → `LoadSettings` → shader constants, which never runs the ImGui call that
+would otherwise bound it. Every in-app path already produces in-range values (the interceptor replays the
+feature's own clamping widget, blending lerps between two valid endpoints, a copy moves a value that was
+valid at its source), so the exposure is the on-disk contract: `IsSceneSettingValueAllowed` gates the
+*type* of a value, not its range, and a hand-edited or foreign `SceneManager.json` can carry anything.
+
+`ClampCatalogNumericValue()` closes that in `ApplyCatalogSceneSettings()`, the one place any scene value
+reaches a feature. It covers `EditorSemantic::Numeric` entries carrying `hasNumericBounds` (207 of the
+current catalog's 325). Bounds are authored in **display** space, so the range is converted once through
+`ConvertCatalogNumericDisplayToStored()` rather than round-tripping every value; both transforms are
+monotonic, so the min stays the min. An integer-typed value clamps to the whole numbers inside the range,
+since an integer control cannot land on a fractional bound.
+
+**Only the applied copy is clamped.** The scene entry keeps the value it was authored with, so a document
+written by another implementation survives the round trip, the same intent-preserving trade the
+[location transitions](#location-transitions) make with `retainSerializedTransition`. A clamp is reported
+once per address (`WarnOnceAboutClampedSceneSetting`), because an out-of-range entry re-applies every frame
+its scene is active.
+
+**Restores are never clamped.** `CatalogSceneSettingUpdate::clampToControlRange` travels per update rather
+than per call, because the resolver batches scene values and baseline restores into one apply. A baseline is
+the feature's own pre-override value; clamping it would rewrite user data that was already live before the
+scene layer engaged. The flag is `!update.restore` in the resolver, `!transition.restoreAtEnd` for a
+location transition, and `false` in `RestoreAppliedSettings()`.
 
 ### Precedence and blending
 
@@ -128,6 +155,10 @@ A location resolves to a **chain** of targets, broadest first, built by `BuildLo
 reuses the player's chain when the target is in it, otherwise it looks the form up through
 `Util::ParseSpid` / `Util::SpidToFormId` and rebuilds. A `Category` has no standalone chain (it only exists
 through the locations that carry it), so an off-chain category resolves to empty.
+
+The editor's Add list is the whole chain, so every link the player is standing in, categories included, is
+authorable in one click. There is deliberately no picker for a target the player is *not* standing in: an
+off-chain category has no chain to resolve, so such an entry can only arrive from a loaded document.
 
 Persisted under `location.categories` / `location.locations` / `location.cells` in `SceneManager.json` and
 under `Locations/<form key>/` for overwrites.
@@ -233,11 +264,15 @@ colour behind.
 the value in place (keeping the existing `originalValue`), and `Cancel` aborts the entire operation and
 returns `cancelled` without touching anything.
 
-**`Cancel` is kept without a caller.** The toolbar's conflict modal offers only skip and overwrite. `Cancel`
-stays because "abort" has to be decided over the whole operation, not per period: `CopySettingsAcrossPeriods`
-pre-checks every period before it stages anything, so the policy has to be honoured everywhere a copy is
-staged for a future "cancel on any conflict" prompt to be correct. Removing it would bake the fan-out's
-partial-application semantics into the API.
+**`Cancel` is kept without a caller, and deliberately so.** The toolbar aborts a copy by dismissing the
+preview before anything is staged, not by passing `CopyConflictPolicy::Cancel`: `StartCopy` builds the
+candidate list over the same `PeriodScope` the copy will use, so the modal already shows every conflict the
+fan-out would hit, and dismissing it is the same observable outcome for less noise (routing the button
+through the policy would fire a "0 copied, 0 overwritten" toast for an action the user just cancelled).
+`Cancel` stays because "abort" has to be decided over the whole operation, not per period:
+`CopySettingsAcrossPeriods` pre-checks every period before it stages anything. Removing it would bake the
+fan-out's partial-application semantics into the API and leave any future non-interactive caller with no way
+to ask for all-or-nothing.
 
 **Transactionality.** Everything is validated and staged into a pending list first; the destination config
 is only materialized once the copy is known to produce entries, and one `CommitSceneSettingChanges()` at the
@@ -330,9 +365,14 @@ rather than an authoring panel.
     `GetCurrentGameHour` / `SetGameHour`, `GetCurrentPeriod`, `Get*RelevantFeatureNames`,
     `GetFeatureDisplayName`, and the `LocationTarget` accessors.
 -   `FeatureListRenderer` shows a scene-controlled indicator and a **Scene Specific Settings** pause toggle
-    per feature (`IsFeaturePaused` / `SetFeaturePaused`). Its "Restore Defaults" button is the one path that
-    rewrites a feature's base values while the scene layer is live, so it follows the restore with
-    `CaptureExternalFeatureChanges` to re-baseline; without that the next resolve puts the old values back.
+    per feature (`IsFeaturePaused` / `SetFeaturePaused`). The row is keyed on
+    `HasAnySceneEntriesForFeature`, which answers whether the feature is authored *anywhere*, so it stays
+    visible and pausable while the player is somewhere the overrides do not reach; it is marked *not active
+    here* in that state. `HasActiveSettingsForFeature` answers the narrower "is it applying right now" and
+    is what still gates disabling the feature's own controls and its **Apply Override** button. Its
+    "Restore Defaults" button is the one path that rewrites a feature's base values while the scene layer
+    is live, so it follows the restore with `CaptureExternalFeatureChanges` to re-baseline; without that the
+    next resolve puts the old values back.
 -   `CSEditor` flags a weather that has scene settings via `HasWeatherConfig`.
 -   `src/CSEditor/SceneWidgetInterceptor.cpp` detours the ImGui calls and replays a feature's real
     `DrawSettings()` bound to a scene context, so entry authoring needs no per-scene tables:
@@ -342,31 +382,24 @@ rather than an authoring panel.
     and the alternative to keeping it is a latent double-gutter bug the first time a feature adds one.
 -   `src/CSEditor/ScenePageToolbar.cpp` drives the [copy API](#generic-scene-copy-api) and preset export.
 
-## Backend ready for UI
-
-Complete, tested-by-construction backend with no caller in `src/`. Anything here can be wired up without
-touching the manager:
-
-| Surface | Entry points | What a UI still needs to build |
-| ------- | ------------ | ------------------------------ |
-| Feature "configured" badge | `HasAnySceneEntriesForFeature` | Answers whether a feature is authored *anywhere*, unlike `HasActiveSettingsForFeature` which answers whether it applies *here*. The seam for a badge that stays lit while the player is somewhere the overrides do not reach. |
-| Location categories | `AddLocationTarget` / `RemoveLocationTarget` for `LocationTargetType::Category` | The location windows author locations and cells; nothing offers the category layer, so a category entry can only come from a loaded document. |
-
-Nothing on this list is a stub: each path validates its input, persists, and reapplies. Treat a missing UI
-as the only missing piece.
-
 ## Known gaps
 
--   **`GetVirtualAggregateControls` has no caller.** `SceneWidgetBinding` reaches the generated resolvers
-    through `FindSettingForControl`, but nothing consumes the virtual-aggregate list that lets a resolver
-    describe a control the feature never draws as one widget. The registrations are inert, not broken.
--   **Numeric bounds are not enforced.** The generator derives bounds (including an implicit `0..1` for
-    `ColorEdit` controls) and validates them at build time, but the manager no longer exposes them: a bound
-    is only ever applied by the feature's own ImGui call, which the interceptor replays verbatim.
+-   **Bounds are enforced on apply, not on input.** [Numeric bounds](#numeric-bounds) clamps a value on its
+    way into a feature, so nothing out of range reaches a shader constant. A value typed past the range in a
+    widget that does not clamp (`clampNumericInput` records which ones) is still stored as typed; only the
+    scene layer's own writes are bounded.
 -   Catalog metadata aimed purely at presentation (`AggregatePresentation`, `UnifiedEditMode`, `sourceWidget`,
-    `clampNumericInput`, `hdrColor`, choice display names) is generated, validated and carried on
-    `SettingControlInfo`, but nothing outside the manager reads it: the interceptor replays the feature's own
-    widget instead of rebuilding one. `displayPath` / `selectorPath` are the exception, they name entries.
+    `hdrColor`, choice display names) is generated, validated and carried on `SettingControlInfo`, but
+    nothing outside the manager reads it: the interceptor replays the feature's own widget instead of
+    rebuilding one. `displayPath` / `selectorPath` are the exception, they name entries.
+
+**`GetVirtualAggregateControls` was removed, deliberately.** The generator used to emit a
+`VirtualAggregateControlMetadata` array describing controls a feature never draws as one widget. Consuming
+it would mean the editor synthesizing a widget that does not exist in the feature's own panel, which breaks
+the invariant the whole interceptor rests on: a scene page shows the feature's real `DrawSettings()`,
+replayed. Virtual aggregates stay a **parser** concept feeding `UnifiedEditMode`; they are no longer part of
+the generated C++ surface. Do not re-add the emission without a caller that justifies the second rendering
+path.
 
 ## Testing
 
@@ -374,7 +407,7 @@ as the only missing piece.
 python -m unittest tests.test_scene_settings_catalog_generator tests.test_scene_settings_policy
 ```
 
-74 tests. Neither suite runs in CI; run them after touching the generator or the policy lists.
+76 tests. Neither suite runs in CI; run them after touching the generator or the policy lists.
 
 The generator can be run standalone to inspect its output:
 

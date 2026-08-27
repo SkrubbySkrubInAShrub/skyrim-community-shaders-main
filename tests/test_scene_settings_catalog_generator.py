@@ -1369,8 +1369,9 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertIn("UnifiedEditMode unifiedEditMode;", header)
         self.assertNotIn("bool supportsUnifiedEdit;", header)
         self.assertIn("Generic,", header)
-        self.assertIn("struct VirtualAggregateControlMetadata", header)
-        self.assertIn("GetVirtualAggregateControls", header)
+        # Virtual aggregates stay a parser concept feeding unifiedEditMode; they are not emitted.
+        self.assertNotIn("struct VirtualAggregateControlMetadata", header)
+        self.assertNotIn("GetVirtualAggregateControls", header)
         self.assertIn(repr(180.0 / math.pi), source)
 
     def test_generated_find_setting_uses_sorted_catalog(self):
