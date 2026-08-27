@@ -303,21 +303,6 @@ public:
 		Color,
 	};
 
-	/// Visual treatment used for a logical aggregate setting.
-	enum class AggregatePresentation : std::uint8_t
-	{
-		Components,
-		ColorPicker,
-	};
-
-	/// Interaction used to edit all components of a logical aggregate.
-	enum class UnifiedEditMode : std::uint8_t
-	{
-		None,
-		Always,
-		Shift,
-	};
-
 	/// Logical-control metadata for one stored scene-setting entry.
 	struct SettingControlInfo
 	{
@@ -331,8 +316,6 @@ public:
 		std::int8_t componentStart = -1;
 		std::uint8_t componentCount = 0;
 		bool aggregateAll = false;
-		AggregatePresentation aggregatePresentation = AggregatePresentation::Components;
-		UnifiedEditMode unifiedEditMode = UnifiedEditMode::None;
 	};
 
 	/// Get the logical ImGui control represented by a scalar scene setting.

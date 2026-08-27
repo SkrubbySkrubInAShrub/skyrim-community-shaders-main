@@ -137,7 +137,6 @@ class NumericControlFlow:
     maximum_expression: str
     semantic: str
     presentation: str
-    supports_unified_edit: bool
     source_widget: str
     clamp_numeric_input: bool
     hdr_color: bool
@@ -183,8 +182,6 @@ class ControlBinding:
     choices: tuple[tuple[int, str, str], ...] = ()
     component_labels: tuple[LocalizedText, ...] = ()
     aggregate_all: bool = False
-    virtual_control: tuple[str, str] | None = None
-    supports_unified_edit: bool = False
     source_widget: str = ""
     clamp_numeric_input: bool = False
     hdr_color: bool = False
@@ -1472,26 +1469,6 @@ def control_group_semantic(control_kind: str) -> str:
     return "Numeric" if control_component_count(control_kind) > 1 else "None"
 
 
-def control_aggregate_presentation(control_kind: str) -> str:
-    if control_kind.startswith(("ColorEdit", "ProjectedColorEditor")):
-        return "ColorPicker"
-    return "Components"
-
-
-def control_supports_unified_edit(control_kind: str) -> bool:
-    return control_kind.startswith("ShiftSliderFloat")
-
-
-def resolve_unified_edit_mode(
-        binding: ControlBinding | None,
-        virtual_controls: tuple[tuple[str, str], ...]) -> str:
-    if virtual_controls:
-        return "Always"
-    if binding and binding.supports_unified_edit:
-        return "Shift"
-    return "None"
-
-
 def resolve_editor_semantic(
         binding: ControlBinding | None,
         value_type: str,
@@ -1788,7 +1765,7 @@ def _summarize_numeric_control_flow(
         controls.add(NumericControlFlow(
             storage[0], storage[1], storage[2], args[0].strip(),
             bounds[0].strip(), bounds[1].strip(), semantic,
-            "ColorPicker" if is_color_editor else "Components", False,
+            "ColorPicker" if is_color_editor else "Components",
             control_source_widget(control_kind),
             control_clamps_numeric_input(control_kind, flags_expression),
             control_is_hdr_color(control_kind, flags_expression)))
@@ -1811,7 +1788,7 @@ def _summarize_numeric_control_flow(
             continue
         controls.add(NumericControlFlow(
             storage[0], storage[1], storage[2], args[0].strip(),
-            args[2].strip(), args[3].strip(), "Numeric", "Components", True,
+            args[2].strip(), args[3].strip(), "Numeric", "Components",
             control_source_widget(control_kind),
             control_clamps_numeric_input(control_kind, flags_expression), False))
 
@@ -1838,7 +1815,7 @@ def _summarize_numeric_control_flow(
                 substitute_helper_parameters(flow.item_label, arguments),
                 substitute_helper_parameters(flow.minimum_expression, arguments),
                 substitute_helper_parameters(flow.maximum_expression, arguments),
-                flow.semantic, flow.presentation, flow.supports_unified_edit,
+                flow.semantic, flow.presentation,
                 flow.source_widget, flow.clamp_numeric_input, flow.hdr_color))
 
     cache[identity] = tuple(sorted(controls, key=lambda value: (
@@ -2018,15 +1995,13 @@ def _infer_indirect_numeric_bindings(
                                 rf"([^;]*\b{re.escape(value_alias)}\b[^;]*)\s*;",
                                 mask_cpp_source(body[:position]))
                             if derived and item_label and item_label.startswith("##"):
-                                layouts.add((slice_start, flow.component_count, -1, item_label,
+                                layouts.add((slice_start, flow.component_count, -1,
                                              flow.semantic, flow.presentation,
-                                             flow.supports_unified_edit,
                                              minimum, maximum, flow.source_widget,
                                              flow.clamp_numeric_input, flow.hdr_color))
                         elif scalar[1] + 1 == slice_start:
-                            layouts.add((scalar[1], flow.component_count + 1, scalar[1], "",
+                            layouts.add((scalar[1], flow.component_count + 1, scalar[1],
                                          flow.semantic, flow.presentation,
-                                         flow.supports_unified_edit,
                                          minimum, maximum, flow.source_widget,
                                          flow.clamp_numeric_input, flow.hdr_color))
 
@@ -2034,16 +2009,15 @@ def _infer_indirect_numeric_bindings(
                     raise ValueError(f"ambiguous indirect numeric layout {name}")
                 if not layouts:
                     continue
-                (aggregate_start, aggregate_count, aggregate_all, virtual_label,
-                 semantic, presentation, supports_unified_edit,
+                (aggregate_start, aggregate_count, aggregate_all,
+                 semantic, presentation,
                  minimum, maximum, source_widget, clamp_numeric_input,
                  hdr_color) = next(iter(layouts))
                 binding_candidates.setdefault(name, set()).add((
                     record_type, record_parameter, pointer_field, aggregate_start,
                     aggregate_count, semantic, presentation, aggregate_all,
-                    next(iter(push_fields)), next(iter(label_fields)), minimum,
-                    maximum, virtual_label, vector_components,
-                    supports_unified_edit, source_widget,
+                    next(iter(label_fields)), minimum,
+                    maximum, vector_components, source_widget,
                     clamp_numeric_input, hdr_color))
 
     bindings = {}
@@ -2115,8 +2089,6 @@ def collect_indirect_numeric_projections(paths: list[Path]):
     collected_labels = {}
     collected_components = {}
     collected_aggregate_all = {}
-    collected_virtual_controls = {}
-    collected_unified_edit = {}
 
     texts = {path: read_text(path) for path in paths}
     source_functions = collect_source_functions(paths)
@@ -2165,9 +2137,8 @@ def collect_indirect_numeric_projections(paths: list[Path]):
             binding = wrapper_summary[2]
             (record_type, _, pointer_field, aggregate_start, aggregate_count,
              aggregate_semantic, aggregate_presentation, aggregate_all,
-             push_id_field, display_label_field, minimum_field, maximum_field,
-             virtual_item_label, components, supports_unified_edit,
-             source_widget, clamp_numeric_input, hdr_color) = binding
+             display_label_field, minimum_field, maximum_field,
+             components, source_widget, clamp_numeric_input, hdr_color) = binding
             provider_type, rows = providers[provider_name]
             if provider_type != record_type:
                 continue
@@ -2206,20 +2177,9 @@ def collect_indirect_numeric_projections(paths: list[Path]):
                     clamp_numeric_input, hdr_color)
                 label_identity = (owner, (field, components[aggregate_start]))
                 collected_labels.setdefault(label_identity, set()).add(label_metadata)
-                if supports_unified_edit:
-                    collected_unified_edit.setdefault(label_identity, set()).add(True)
                 if aggregate_all >= 0:
                     component_identity = (owner, (field, components[aggregate_all]))
                     collected_aggregate_all.setdefault(component_identity, set()).add(True)
-
-                if virtual_item_label:
-                    push_id = parse_cpp_string_expression(
-                        values.get(push_id_field, ""))
-                    if not push_id:
-                        raise ValueError(f"unresolved indirect control id in {provider_name}")
-                    virtual_identity = (owner, (field,))
-                    collected_virtual_controls.setdefault(virtual_identity, set()).add(
-                        (push_id, virtual_item_label))
 
     def finalize(mapping, description):
         result = {}
@@ -2233,8 +2193,6 @@ def collect_indirect_numeric_projections(paths: list[Path]):
         finalize(collected_labels, "indirect numeric projection"),
         finalize(collected_components, "indirect numeric component"),
         finalize(collected_aggregate_all, "indirect aggregate component"),
-        finalize(collected_virtual_controls, "virtual aggregate control"),
-        finalize(collected_unified_edit, "unified aggregate control"),
     )
 
 
@@ -3384,7 +3342,6 @@ def _project_standard_controls(
         return ControlBinding(
             owner, setting_path, label, category, kind,
             minimum, maximum, scale, "Identity", tuple(choices),
-            supports_unified_edit=control_supports_unified_edit(kind),
             source_widget=control_source_widget(kind),
             clamp_numeric_input=control_clamps_numeric_input(
                 kind, flags_expression),
@@ -3734,7 +3691,6 @@ def _project_standard_controls(
                 binding.control_kind, binding.minimum, binding.maximum,
                 binding.display_scale, binding.numeric_transform, choices,
                 binding.component_labels, binding.aggregate_all,
-                binding.virtual_control, binding.supports_unified_edit,
                 binding.source_widget, binding.clamp_numeric_input,
                 binding.hdr_color)
         else:
@@ -3763,14 +3719,13 @@ def _collect_reversible_numeric_bindings(
         if len(direct_controls) == 1:
             direct = direct_controls[0]
             if direct.group(1).startswith(("Slider", "Drag", "Input")):
-                numeric_controls.append((direct, direct.group(1), 1, False))
+                numeric_controls.append((direct, direct.group(1), 1))
         numeric_controls.extend(
-            (control, f"ShiftSliderFloat{control.group(1)}",
-             int(control.group(1)), True)
+            (control, f"ShiftSliderFloat{control.group(1)}", int(control.group(1)))
             for control in SHIFT_UNIFIED_CONTROL_RE.finditer(function.masked_body))
 
         function_summaries = set()
-        for control, control_kind, component_count, supports_unified_edit in numeric_controls:
+        for control, control_kind, component_count in numeric_controls:
             close = find_matching_paren(function.body, control.end() - 1)
             args = split_args(function.body[control.end():close]) if close >= 0 else []
             storage_index = control_storage_argument_index(control_kind)
@@ -3813,7 +3768,7 @@ def _collect_reversible_numeric_bindings(
             function_summaries.add((
                 component_count, proven[0][0], label, control_kind,
                 minimum, maximum, display_scale, proven[0][1],
-                supports_unified_edit, control_source_widget(control_kind),
+                control_source_widget(control_kind),
                 control_clamps_numeric_input(control_kind, flags_expression),
                 control_is_hdr_color(control_kind, flags_expression)))
         if function_summaries:
@@ -3841,7 +3796,7 @@ def _collect_reversible_numeric_bindings(
                 if len(matching) != 1:
                     continue
                 (_, parameter_index, label, control_kind, minimum, maximum,
-                 display_scale, transform, supports_unified_edit, source_widget,
+                 display_scale, transform, source_widget,
                  clamp_numeric_input, hdr_color) = matching[0]
                 if parameter_index >= len(args):
                     continue
@@ -3856,7 +3811,6 @@ def _collect_reversible_numeric_bindings(
                     function.owner, path, label,
                     LocalizedText(category, category_key), control_kind,
                     minimum, maximum, display_scale, transform,
-                    supports_unified_edit=supports_unified_edit,
                     source_widget=source_widget,
                     clamp_numeric_input=clamp_numeric_input,
                     hdr_color=hdr_color)
@@ -3894,8 +3848,8 @@ def collect_control_index(
                 target.pop(identity)
                 conflicts.add(identity)
 
-    (indirect_labels, indirect_components, aggregate_all, virtual_controls,
-     unified_edit) = collect_indirect_numeric_projections(paths)
+    (indirect_labels, indirect_components,
+     aggregate_all) = collect_indirect_numeric_projections(paths)
     indirect_bindings = {}
     for identity, metadata in indirect_labels.items():
         kind = metadata[4]
@@ -3915,8 +3869,6 @@ def collect_control_index(
             metadata[5], metadata[6], metadata[7],
             component_labels=component_labels,
             aggregate_all=bool(aggregate_all.get(identity)),
-            virtual_control=virtual_controls.get((identity[0], base_path)),
-            supports_unified_edit=bool(unified_edit.get(identity)),
             source_widget=metadata[8],
             clamp_numeric_input=metadata[9],
             hdr_color=metadata[10])
@@ -4067,7 +4019,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                   component_label: str = "",
                   component_label_key: str = "",
                   aggregate_all: bool = False,
-                  virtual_controls: tuple[tuple[str, str], ...] = (),
                   force_hidden: bool = False,
                   aggregate_semantic: str = "None",
                   aggregate_start: int = -1,
@@ -4132,10 +4083,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         maximum = binding.maximum if binding else None
         display_scale = binding.display_scale if binding else 1.0
         numeric_transform = binding.numeric_transform if binding else "Identity"
-        discovered_virtual_controls = (
-            (binding.virtual_control,) if binding and binding.virtual_control else ())
-        virtual_controls = tuple(dict.fromkeys((
-            *virtual_controls, *discovered_virtual_controls)))
         editor_semantic = resolve_editor_semantic(
             binding, value_type, force_hidden)
 
@@ -4217,9 +4164,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             "componentDisplayNameKey": component_label_key,
             "aggregateAll": aggregate_all,
             "aggregateSemantic": aggregate_semantic,
-            "aggregatePresentation": control_aggregate_presentation(control_kind),
-            "unifiedEditMode": resolve_unified_edit_mode(
-                binding, virtual_controls),
             "aggregateStart": aggregate_start,
             "aggregateCount": aggregate_count,
             "type": value_type,
@@ -4241,7 +4185,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             "componentClass": context.component_class,
             "componentType": context.component_type,
             "componentContainer": context.component_container,
-            "virtualControls": virtual_controls,
         })
 
     def emit_type(
@@ -4313,8 +4256,6 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                     component_label_key=component_display.key,
                     aggregate_all=bool(
                         binding and binding.aggregate_all and component_index == aggregate_start),
-                    virtual_controls=(binding.virtual_control,)
-                    if grouped and binding and binding.virtual_control else (),
                     force_hidden=binding is None,
                     aggregate_semantic=aggregate_semantic,
                     aggregate_start=aggregate_start,
@@ -4541,19 +4482,6 @@ namespace SceneSettingsCatalog
 \t\tColor,
 \t};
 
-\tenum class AggregatePresentation : std::uint8_t
-\t{
-\t\tComponents,
-\t\tColorPicker,
-\t};
-
-\tenum class UnifiedEditMode : std::uint8_t
-\t{
-\t\tNone,
-\t\tAlways,
-\t\tShift,
-\t};
-
 \tenum class NumericTransform : std::uint8_t
 \t{
 \t\tIdentity,
@@ -4580,13 +4508,6 @@ namespace SceneSettingsCatalog
 \t\treturn (static_cast<std::uint32_t>(flags) & static_cast<std::uint32_t>(flag)) != 0;
 \t}
 
-\tstruct ChoiceMetadata
-\t{
-\t\tstd::int64_t value;
-\t\tstd::string_view displayName;
-\t\tstd::string_view displayNameKey;
-\t};
-
 \tstruct SettingMetadata
 \t{
 \t\tstd::string_view featureShortName;
@@ -4606,8 +4527,6 @@ namespace SceneSettingsCatalog
 \t\tstd::string_view componentDisplayNameKey;
 \t\tbool aggregateAll;
 \t\tAggregateSemantic aggregateSemantic;
-\t\tAggregatePresentation aggregatePresentation;
-\t\tUnifiedEditMode unifiedEditMode;
 \t\tstd::int8_t aggregateStart;
 \t\tstd::uint8_t aggregateCount;
 \t\tValueType valueType;
@@ -4622,7 +4541,7 @@ namespace SceneSettingsCatalog
 \t\tbool clampNumericInput;
 \t\tbool hdrColor;
 \t\tbool invertedDisplay;
-\t\tconst ChoiceMetadata* choices;
+\t\tconst std::int64_t* choices;
 \t\tstd::size_t choiceCount;
 \t};
 
@@ -4649,11 +4568,9 @@ namespace SceneSettingsCatalog
         choice_count = 0
         if choices:
             choice_name = f"kSceneSettingChoices{index}"
-            choice_rows = ",\n".join(
-                f'\t\t{{ {value}, "{cpp_escape(label)}", "{cpp_escape(label_key)}" }}'
-                for value, label, label_key in choices)
+            choice_rows = ",\n".join(f"\t\t{value}" for value, _, _ in choices)
             choice_arrays.append(
-                f"\tstatic constexpr std::array<SceneSettingsCatalog::ChoiceMetadata, {len(choices)}> {choice_name} = {{{{\n"
+                f"\tstatic constexpr std::array<std::int64_t, {len(choices)}> {choice_name} = {{{{\n"
                 f"{choice_rows}\n\t}}}};")
             choice_pointer = f"{choice_name}.data()"
             choice_count = len(choices)
@@ -4667,8 +4584,6 @@ namespace SceneSettingsCatalog
             f'"{cpp_escape(e.get("componentDisplayNameKey", ""))}", '
             f'{str(e.get("aggregateAll", False)).lower()}, '
             f'SceneSettingsCatalog::AggregateSemantic::{e["aggregateSemantic"]}, '
-            f'SceneSettingsCatalog::AggregatePresentation::{e.get("aggregatePresentation", "Components")}, '
-            f'SceneSettingsCatalog::UnifiedEditMode::{e.get("unifiedEditMode", "None")}, '
             f'{e["aggregateStart"]}, {e["aggregateCount"]}, '
             f'SceneSettingsCatalog::ValueType::{e["type"]}, {e["flags"]}, '
             f'SceneSettingsCatalog::EditorSemantic::{e["editorSemantic"]}, '

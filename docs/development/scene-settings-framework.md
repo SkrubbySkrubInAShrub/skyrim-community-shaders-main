@@ -226,8 +226,9 @@ skipped until the pending values actually change.
 `SceneSettingsManager::SceneLayerGuard` is an RAII suspend of the scene layer. Anything that reads or writes
 a feature's *base* settings must hold one, otherwise it captures an overridden value as if it were the user's
 choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
-exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, two internal manager
-paths, and six DevBench bridge endpoints. Add one to any new code path that serializes feature settings.
+exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, one internal manager
+path (`GetFeatureSettingValue`), and six DevBench bridge endpoints. Add one to any new code path that
+serializes feature settings.
 
 In `State::SaveToJson` / `State::LoadFromJson` the guard is declared **before** `m_mutex` is taken, so the
 resolve it triggers on destruction does not run while the lock is held.
@@ -307,7 +308,7 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
     the `ExponentialHeightFog` volumetric entries, which shape the froxel grid and its history buffers.
     Scene overrides travel through `SaveSettings` → JSON patch → `LoadSettings`, which never re-runs the
     allocation those settings size, so blending them mid-frame is not something the feature can honor.
--   `kLocationFeatureWhitelist` (5) and `kTimeOfDayFeatureWhitelist` (7) — which features those scene types
+-   `kLocationFeatureWhitelist` (4) and `kTimeOfDayFeatureWhitelist` (7) — which features those scene types
     may target.
 
 When adding a feature to a whitelist, run `tests/test_scene_settings_policy.py`; it fails if a name is not
@@ -388,18 +389,18 @@ rather than an authoring panel.
     way into a feature, so nothing out of range reaches a shader constant. A value typed past the range in a
     widget that does not clamp (`clampNumericInput` records which ones) is still stored as typed; only the
     scene layer's own writes are bounded.
--   Catalog metadata aimed purely at presentation (`AggregatePresentation`, `UnifiedEditMode`, `sourceWidget`,
-    `hdrColor`, choice display names) is generated, validated and carried on `SettingControlInfo`, but
-    nothing outside the manager reads it: the interceptor replays the feature's own widget instead of
-    rebuilding one. `displayPath` / `selectorPath` are the exception, they name entries.
+-   Presentation metadata that survives into the generated C++ (`sourceWidget`, `hdrColor`,
+    `clampNumericInput`) is emitted but unread: the interceptor replays the feature's own widget instead of
+    rebuilding one. It stays because `validate_entries` uses it, `sourceWidget` against
+    `SOURCE_WIDGET_ENTRY_POINTS` and the other two to enforce colour-metadata invariants.
+    `displayPath` / `selectorPath` are read, they name entries.
 
-**`GetVirtualAggregateControls` was removed, deliberately.** The generator used to emit a
-`VirtualAggregateControlMetadata` array describing controls a feature never draws as one widget. Consuming
-it would mean the editor synthesizing a widget that does not exist in the feature's own panel, which breaks
-the invariant the whole interceptor rests on: a scene page shows the feature's real `DrawSettings()`,
-replayed. Virtual aggregates stay a **parser** concept feeding `UnifiedEditMode`; they are no longer part of
-the generated C++ surface. Do not re-add the emission without a caller that justifies the second rendering
-path.
+**Presentation-only concepts do not belong in the generated C++.** `AggregatePresentation`,
+`UnifiedEditMode`, choice display names and `GetVirtualAggregateControls` were each generated without a
+consumer and have been removed. Consuming any of them would mean the editor synthesizing a widget that does
+not exist in the feature's own panel, which breaks the invariant the whole interceptor rests on: a scene
+page shows the feature's real `DrawSettings()`, replayed. Do not re-add an emission without a caller that
+justifies the second rendering path.
 
 ## Testing
 
@@ -407,7 +408,8 @@ path.
 python -m unittest tests.test_scene_settings_catalog_generator tests.test_scene_settings_policy
 ```
 
-76 tests. Neither suite runs in CI; run them after touching the generator or the policy lists.
+74 tests. Both suites run in CI via `.github/workflows/pr-python-tests.yaml`, on any PR touching `src/**`,
+the generator, or `tests/**`. Run them locally after touching the generator or the policy lists.
 
 The generator can be run standalone to inspect its output:
 

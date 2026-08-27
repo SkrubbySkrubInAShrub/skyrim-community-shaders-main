@@ -255,17 +255,6 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             (2, 2, "Numeric"),
         ])
 
-    def test_aggregate_presentation_is_independent_from_color_semantics(self):
-        self.assertEqual(
-            GENERATOR.control_group_semantic("ProjectedColor3"), "Color")
-        self.assertEqual(
-            GENERATOR.control_aggregate_presentation("ProjectedColor3"),
-            "Components")
-        for control_kind in ("ColorEdit3", "ProjectedColorEditor4"):
-            self.assertEqual(
-                GENERATOR.control_aggregate_presentation(control_kind),
-                "ColorPicker")
-
     def test_projected_numeric_helper_projects_local_component_labels(self):
         helper_source = """
         constexpr int TupleSize = 3;
@@ -476,8 +465,7 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             feature_path = Path(directory) / "Example.cpp"
             helper_path.write_text(helper_source, encoding="utf-8")
             feature_path.write_text(feature_source, encoding="utf-8")
-            (labels, components, aggregate_all, virtual_controls,
-             unified_edit) = (
+            labels, components, aggregate_all = (
                 GENERATOR.collect_indirect_numeric_projections(
                     [feature_path, helper_path]))
             opaque_projection = GENERATOR.collect_indirect_numeric_projections(
@@ -488,19 +476,10 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             "feature.example.derived_group", "ProjectedColor3", -1.0, 2.0, 1.0,
             "DragFloat", False, False))
         self.assertEqual(components, {})
-        self.assertEqual(
-            virtual_controls[("Example", ("derived",))],
-            ("DerivedId", "##All"))
 
         self.assertEqual(labels[("Example", ("stored", "x"))][4], "ProjectedColor4")
-        self.assertEqual(
-            GENERATOR.control_aggregate_presentation(
-                labels[("Example", ("stored", "x"))][4]),
-            "Components")
         self.assertTrue(aggregate_all[("Example", ("stored", "x"))])
-        self.assertNotIn(("Example", ("stored",)), virtual_controls)
-        self.assertEqual(unified_edit, {})
-        self.assertEqual(opaque_projection, ({}, {}, {}, {}, {}))
+        self.assertEqual(opaque_projection, ({}, {}, {}))
 
     def test_indirect_numeric_projection_supports_each_vector_arity(self):
         template = r'''
@@ -530,18 +509,14 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             with self.subTest(arity=arity), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "Sample.cpp"
                 path.write_text(template.replace("@N@", str(arity)), encoding="utf-8")
-                (labels, components, aggregate_all, virtual_controls,
-                 unified_edit) = (
+                labels, components, aggregate_all = (
                     GENERATOR.collect_indirect_numeric_projections([path]))
             self.assertEqual(labels[("Sample", ("value", "x"))][4],
                              f"ProjectedNumeric{arity}")
             self.assertEqual(components, {})
             self.assertEqual(aggregate_all, {})
-            self.assertEqual(unified_edit, {})
-            self.assertEqual(virtual_controls[("Sample", ("value",))],
-                             ("Token", "##Combined"))
 
-    def test_indirect_shift_slider_projection_preserves_unified_edit(self):
+    def test_indirect_shift_slider_projects_vector_numeric(self):
         source = r'''
         struct Values { float3 value; };
         struct Row { const char* token; const char* text;
@@ -568,12 +543,9 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "Sample.cpp"
             path.write_text(source, encoding="utf-8")
-            (labels, _, _, _, unified_edit) = (
-                GENERATOR.collect_indirect_numeric_projections([path]))
+            labels, _, _ = GENERATOR.collect_indirect_numeric_projections([path])
 
-        identity = ("Sample", ("value", "x"))
-        self.assertEqual(labels[identity][4], "ProjectedNumeric3")
-        self.assertTrue(unified_edit[identity])
+        self.assertEqual(labels[("Sample", ("value", "x"))][4], "ProjectedNumeric3")
 
     def test_indirect_numeric_projection_rejects_conflicting_rows(self):
         source = r'''
@@ -802,7 +774,7 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             index.match(("Other", "Settings"), ("amount",)).binding,
             generic)
 
-    def test_shift_slider_projects_unified_edit_metadata_through_helper(self):
+    def test_shift_slider_projects_metadata_through_helper(self):
         source = """
         #define I18N_KEY_PREFIX "feature.example."
         using PanelSettings = Example::PanelSettings;
@@ -823,8 +795,6 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         binding = index.bindings[("PanelSettings", ("vector", "x"))]
         self.assertEqual(binding.control_kind, "ShiftSliderFloat3")
         self.assertEqual((binding.minimum, binding.maximum), (-2.0, 4.0))
-        self.assertTrue(GENERATOR.control_supports_unified_edit(
-            binding.control_kind))
 
     def test_member_selector_choices_label_returned_member_contexts(self):
         source = r'''
@@ -1200,7 +1170,7 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertAlmostEqual(angle["maximum"], math.pi / 2.0)
         self.assertAlmostEqual(angle["displayScale"], 180.0 / math.pi)
 
-    def test_transformed_shift_slider_helper_preserves_unified_edit(self):
+    def test_transformed_shift_slider_helper_preserves_numeric_transform(self):
         source = """
         #define I18N_KEY_PREFIX "feature.example."
         bool EditExposure(float* values)
@@ -1228,21 +1198,6 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(binding.control_kind, "ShiftSliderFloat3")
         self.assertEqual(binding.numeric_transform, "Log2")
         self.assertEqual((binding.minimum, binding.maximum), (0.0625, 16.0))
-        self.assertTrue(binding.supports_unified_edit)
-        self.assertEqual(
-            GENERATOR.resolve_unified_edit_mode(binding, ()), "Shift")
-        self.assertEqual(
-            GENERATOR.resolve_unified_edit_mode(
-                binding, (("Exposure", "##All"),)),
-            "Always")
-
-    def test_virtual_all_controls_use_always_unified_edit(self):
-        virtual_entries = [
-            entry for entry in self.entries if entry["virtualControls"]
-        ]
-        self.assertTrue(all(
-            entry["unifiedEditMode"] == "Always"
-            for entry in virtual_entries))
 
     def test_catalog_satisfies_the_build_time_minimum(self):
         GENERATOR.validate_entries(self.entries, *CMAKE_CATALOG_FLOORS)
@@ -1363,15 +1318,7 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertIn("std::string_view displayPathKeys;", header)
         self.assertIn("std::string_view componentDisplayName;", header)
         self.assertIn("bool aggregateAll;", header)
-        self.assertIn("enum class AggregatePresentation", header)
-        self.assertIn("AggregatePresentation aggregatePresentation;", header)
-        self.assertIn("enum class UnifiedEditMode", header)
-        self.assertIn("UnifiedEditMode unifiedEditMode;", header)
-        self.assertNotIn("bool supportsUnifiedEdit;", header)
         self.assertIn("Generic,", header)
-        # Virtual aggregates stay a parser concept feeding unifiedEditMode; they are not emitted.
-        self.assertNotIn("struct VirtualAggregateControlMetadata", header)
-        self.assertNotIn("GetVirtualAggregateControls", header)
         self.assertIn(repr(180.0 / math.pi), source)
 
     def test_generated_find_setting_uses_sorted_catalog(self):

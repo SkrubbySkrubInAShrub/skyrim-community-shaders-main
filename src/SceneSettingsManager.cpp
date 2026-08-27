@@ -27,8 +27,6 @@
 namespace
 {
 	using SceneSettingControlType = SceneSettingsManager::SettingControlType;
-	using ManagerAggregatePresentation = SceneSettingsManager::AggregatePresentation;
-	using ManagerUnifiedEditMode = SceneSettingsManager::UnifiedEditMode;
 
 	void CombineHash(size_t& signature, size_t value)
 	{
@@ -743,22 +741,6 @@ namespace
 		if (info.controlType != SceneSettingControlType::Scalar) {
 			info.componentStart = setting.aggregateStart;
 			info.componentCount = setting.aggregateCount;
-			info.aggregatePresentation =
-				info.controlType == SceneSettingControlType::Color &&
-						setting.aggregatePresentation == SceneSettingsCatalog::AggregatePresentation::ColorPicker ?
-					ManagerAggregatePresentation::ColorPicker :
-					ManagerAggregatePresentation::Components;
-			switch (setting.unifiedEditMode) {
-			case SceneSettingsCatalog::UnifiedEditMode::Always:
-				info.unifiedEditMode = ManagerUnifiedEditMode::Always;
-				break;
-			case SceneSettingsCatalog::UnifiedEditMode::Shift:
-				info.unifiedEditMode = ManagerUnifiedEditMode::Shift;
-				break;
-			default:
-				info.unifiedEditMode = ManagerUnifiedEditMode::None;
-				break;
-			}
 		}
 		return info;
 	}
@@ -1490,9 +1472,8 @@ static bool IsSceneSettingValueAllowed(const json& featureValue,
 	if (setting.choiceCount > 0) {
 		if (!value.is_number_integer())
 			return false;
-		const auto choiceValue = value.get<std::int64_t>();
-		if (std::none_of(setting.choices, setting.choices + setting.choiceCount,
-				[&](const auto& choice) { return choice.value == choiceValue; }))
+		const auto* const choicesEnd = setting.choices + setting.choiceCount;
+		if (std::find(setting.choices, choicesEnd, value.get<std::int64_t>()) == choicesEnd)
 			return false;
 	}
 
