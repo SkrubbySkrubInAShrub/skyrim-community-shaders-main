@@ -114,7 +114,6 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 				continue;
 			}
 
-			constexpr size_t MAX_OVERRIDE_FILE_SIZE = 1024 * 1024;  // 1MB
 			if (fileSize > MAX_OVERRIDE_FILE_SIZE) {
 				logger::info("Skipping overly large override file ({}KB): {}", fileSize / 1024, entry.path().string());
 				continue;
