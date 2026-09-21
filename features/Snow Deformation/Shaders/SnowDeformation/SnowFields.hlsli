@@ -10,9 +10,10 @@
 // (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
-// UndulationAmp/Scale, UndulationFieldWindow, BorderStyle), DeformationMap
+// UndulationAmp/Scale, UndulationFieldWindow, BorderStyle, TrampleStyle,
+// GridOrigin, DeformMapOrigin), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
-// (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17),
+// (t14), ExtentFieldMap (t56), ExclusionFieldMap (t15), the frost patterns (t16/t17),
 // UndulationFieldMap (t29), SnowSampler
 // (PS) and the TerrainVariation include - all declared before this include.
 // Deliberately NOT shared: the deformation .x samplers (the landscape
@@ -100,6 +101,37 @@ float BermFieldBaked(float2 gridLocal)
 	float s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Trample extent (ExtentCS in BermFieldCS.hlsl): one texel per 8x8 PHYSICAL
+// map tile, centred on physical texel index 8T+3.5, so the read goes
+// world -> logical texel -> physical -> tile. Unbound reads 0 = trail.
+float TrampleExtent(float2 worldXY)
+{
+	float2 uv = (GridToDeformOffset + worldXY - GridOrigin) * DeformInvWorldSize;
+	float inside = (all(uv >= 0.0) && all(uv <= 1.0)) ? 1.0 : 0.0;
+
+	float2 tiles;
+	ExtentFieldMap.GetDimensions(tiles.x, tiles.y);
+	float2 q = (uv * tiles * 8.0 - 0.5 + float2(DeformMapOrigin) - 3.5) / 8.0;
+	float2 qf = floor(q);
+	float2 f = q - qf;
+	int2 mask = int2(tiles) - 1;
+	int2 q0 = int2(qf) & mask;
+	int2 q1 = (int2(qf) + 1) & mask;
+
+	float s00 = ExtentFieldMap.Load(int3(q0.x, q0.y, 0));
+	float s10 = ExtentFieldMap.Load(int3(q1.x, q0.y, 0));
+	float s01 = ExtentFieldMap.Load(int3(q0.x, q1.y, 0));
+	float s11 = ExtentFieldMap.Load(int3(q1.x, q1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) * inside;
+}
+
+// 0 = trail, 1 = trampled field. TrampleStyle.yz bracket the extent.
+float TrampleField(float2 worldXY)
+{
+	return smoothstep(TrampleStyle.y, TrampleStyle.z, TrampleExtent(worldXY));
 }
 
 // Churn lump noise; the caller passes its size knob (ChurnSizeScale /
@@ -398,6 +430,14 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
 	float d = saturate(deformation);
 
+	// Trampled ground is a packed surface, not stacked prints: no cut-wall
+	// vocabulary, and a floor raised toward the surface that SCALES the
+	// carve instead of clamping it, so fins and overlaps survive as relief.
+	float field = 0.0;
+	[branch] if (TrampleStyle.x > 0.001 && d > 0.001)
+		field = TrampleField(worldXY);
+	float cutT = depthT * (1.0 - field);
+
 	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
 	// 8-unit raggedness, HEIGHT-BLEND-PLAN - reused, not reinvented),
 	// applied to the carve value inside the rim band only.
@@ -409,13 +449,16 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 		float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
 		              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
 		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
-		d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
+		d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * cutT);
 	}
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
-	float floorDepth = min(uncarvedDepth, uncarvedDepth * saturate(BorderStyle.y));
+	float floorFrac = saturate(BorderStyle.y);
+	float floorDepth = min(uncarvedDepth, uncarvedDepth * floorFrac);
 	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
+	float packedFrac = lerp(floorFrac, 1.0, saturate(TrampleStyle.x));
+	profile = lerp(profile, uncarvedDepth * (1.0 - d * (1.0 - packedFrac)), field);
 
 	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on
 	// the carve skirt, peaking at d ~ 0.1 and gone by mid-wall. Berm
@@ -427,7 +470,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	[branch] if (RimStyle.x > 0.001)
 	{
 		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
-		profile += RimStyle.x * uncarvedDepth * hump * depthT;
+		profile += RimStyle.x * uncarvedDepth * hump * cutT;
 	}
 	return profile;
 }

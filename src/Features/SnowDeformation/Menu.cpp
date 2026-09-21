@@ -765,6 +765,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTeeth = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
+		ImGui::SliderFloat(T(TKEY("trampled_floor"), "Trampled Ground"), &settings.TrampledFloor, 0.0f, 1.0f, "%.2f");
+		if (auto _ttTrample = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trampled_floor_tooltip"), "Where many trails overlap into a trampled area, the snow reads as packed ground instead of stacked trenches: the floor rises toward the surface, the cut walls and rim teeth give way to a gentle ramp, and the fins and overlaps inside survive as low bumps. A single trail is never touched. The value is how far the packed floor rises from the trench floor toward the surface; 0 = off."));
+
 		ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
 
 		ImGui::SliderFloat(T(TKEY("bow_wave_height"), "Bow Wave Height"), &settings.BowWaveHeight, 0.0f, 1.5f, "%.2f");
@@ -1821,6 +1825,14 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_wall_debug"), "Wall Material Debug"), &shellWallDebug);
 			if (auto _ttWallDbg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_wall_debug_tooltip"), "Renders the shell's raw snow texture unlit, on the real geometry - no sun, shadows, glints or marches; red wash = how much the side projection owns the pixel. Strafe past a trench wall in this view: if the wall still shifts HERE the texture path is guilty; if this view is rock-solid, a lighting term is."));
+
+			ImGui::Checkbox(T(TKEY("shell_trample_debug"), "Trampled Area View"), &shellTrampleDebug);
+			if (auto _ttTrampleDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_trample_debug_tooltip"), "Landscape shell only, on the real geometry: how trampled the ground around each pixel reads. Blue = a lone trail or open snow, red = worked in every direction, green = how much of the trampled-ground shape is applied there. The two white contours are the ends of the bracket below. A single trail must stay blue with no green; the middle of a trampled area must go red and green."));
+			ImGui::SliderFloat(T(TKEY("trample_start"), "Trampled Area: Starts At"), &debugTrampleStart, 0.0f, 0.9f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("trample_full"), "Trampled Area: Full At"), &debugTrampleFull, 0.05f, 1.0f, "%.2f");
+			if (auto _ttTrampleBr = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trample_bracket_tooltip"), "Tuning aid, not saved: the extent readings between which the shape moves from trail to trampled ground. Raise Starts At until no lone trail shows green in the view above."));
 
 			ImGui::Checkbox(T(TKEY("shell_edge_height_debug"), "Edge Height Debug"), &shellEdgeHeightDebug);
 			if (auto _ttEdgeDbg = Util::HoverTooltipWrapper())

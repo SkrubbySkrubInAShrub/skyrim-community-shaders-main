@@ -1030,7 +1030,7 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
 	RefreshShellGridPlacement(cbData);
-	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : (shellEdgeHeightDebug ? 6u : 0u)))));
+	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : (shellEdgeHeightDebug ? 6u : (shellTrampleDebug ? 7u : 0u))))));
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 4);
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
@@ -1116,6 +1116,14 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.RimTeeth, 0.0f, 1.0f),
 		std::clamp(settings.BermClods, 0.0f, 6.0f),
 		GetAccumulationDepthScale() };
+	// The extent field is baked from the berm field; without that bake it is
+	// stale, so the class switch goes off with it.
+	const bool extentLive = !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture;
+	const float trampleStart = std::clamp(debugTrampleStart, 0.0f, 0.98f);
+	cbData.TrampleStyle = { extentLive ? std::clamp(settings.TrampledFloor, 0.0f, 1.0f) : 0.0f,
+		trampleStart,
+		std::clamp(debugTrampleFull, trampleStart + 0.01f, 1.0f),
+		0.0f };
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
 	// The retired crisp-grain pair: the landscape half now carries the A/B
@@ -1455,6 +1463,11 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	context->PSSetShaderResources(14, 1, &bermSRV);
+	// Trample extent (t56): CarveProfile reads it, so it goes wherever the
+	// berm field does.
+	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
+	context->VSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
+	context->PSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
 	// Blood detail tiles (t66-t69): cell index, pigment atlas, (t68 retired with the soak), clock blocks.
@@ -1645,6 +1658,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(8, 1, &csHeightSRV);
 		context->CSSetShaderResources(11, 2, objectCapSRVs);
 		context->CSSetShaderResources(14, 1, &bermSRV);
+		context->CSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 		context->CSSetShaderResources(15, 1, &exclusionSRV);
 		context->CSSetShaderResources(29, 1, &undulationSRV);
 		ID3D11SamplerState* csSampler = shellSnowSampler.get();
@@ -1664,6 +1678,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(8, 1, nullCSSRVs);
 		context->CSSetShaderResources(11, 2, nullCSSRVs);
 		context->CSSetShaderResources(13, 3, nullCSSRVs);
+		context->CSSetShaderResources(kExtentFieldSlot, 1, nullCSSRVs);
 		context->CSSetShaderResources(24, 1, &nullCSSRVs[0]);
 		context->CSSetShaderResources(26, 1, &nullCSSRVs[1]);
 		context->CSSetShaderResources(29, 1, nullCSSRVs);
@@ -1709,6 +1724,7 @@ void SnowDeformation::DrawShell()
 			context->DSSetShaderResources(8, 1, &dsHeightSRV);
 			context->DSSetShaderResources(11, 2, objectCapSRVs);
 			context->DSSetShaderResources(14, 1, &bermSRV);
+			context->DSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 			context->DSSetShaderResources(15, 1, &exclusionSRV);
 			context->DSSetShaderResources(29, 1, &undulationSRV);
 			ID3D11ShaderResourceView* dsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
@@ -1891,6 +1907,10 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);
 	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
+	// The extent field is a compute target next Prepass.
+	context->PSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
+	context->VSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
+	context->DSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
@@ -2054,6 +2074,8 @@ void SnowDeformation::RunLODProbePass()
 			// ShellSurfaceZ's berm term reads the bake at t14.
 			ID3D11ShaderResourceView* csBermSRV = GetBermFieldSRV();
 			context->CSSetShaderResources(14, 1, &csBermSRV);
+			ID3D11ShaderResourceView* csExtentSRV = GetExtentFieldSRV();
+			context->CSSetShaderResources(kExtentFieldSlot, 1, &csExtentSRV);
 			ID3D11ShaderResourceView* csExclusionSRV = GetExclusionFieldSRV();
 			context->CSSetShaderResources(15, 1, &csExclusionSRV);
 			ID3D11UnorderedAccessView* probeUAV = lodProbeUAV.get();
@@ -2069,6 +2091,7 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(0, 6, nullSRVs);
 			context->CSSetShaderResources(11, 2, nullSRVs);
 			context->CSSetShaderResources(14, 1, nullSRVs);
+			context->CSSetShaderResources(kExtentFieldSlot, 1, nullSRVs);
 			context->CSSetShaderResources(15, 1, nullSRVs);
 			context->CSSetShaderResources(13, 1, nullSRVs);
 			context->CSSetShaderResources(27, 1, nullSRVs);

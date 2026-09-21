@@ -219,6 +219,9 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook2;
 	// xy spare; z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
+	// Trampled ground: x = packed-floor raise (0 = off), yz = the extent
+	// bracket trail -> field, w spare. Consumed inside CarveProfile.
+	float4 TrampleStyle;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -319,6 +322,8 @@ Texture2D<float3> LandMasksCopy : register(t10);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
+// Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
+Texture2D<float> ExtentFieldMap : register(t56);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);
@@ -3198,6 +3203,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		         dbgAbove < 8.0 ? float3(1.0, 0.5, 0.05) :
 		                          float3(0.9, 0.05, 0.05);
 		[flatten] if (abs(dbgAbove - 1.5) < 0.1)
+			preLit = float3(1.0, 1.0, 1.0);
+	}
+	else if (ShellDebugData == 7)
+	{
+		// Trampled-area view, real surface: blue -> red = raw extent 0 -> 1,
+		// green = the field factor CarveProfile applies, white lines = the
+		// two ends of the bracket.
+		float dbgExtent = TrampleExtent(GridOrigin + gridLocal);
+		preLit = float3(dbgExtent, TrampleField(GridOrigin + gridLocal) * 0.8, 1.0 - dbgExtent) * 0.6;
+		[flatten] if (abs(dbgExtent - TrampleStyle.y) < 0.006 || abs(dbgExtent - TrampleStyle.z) < 0.006)
 			preLit = float3(1.0, 1.0, 1.0);
 	}
 	else if (ShellDebugData == 3)

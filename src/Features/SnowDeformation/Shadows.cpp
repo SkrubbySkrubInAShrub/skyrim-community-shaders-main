@@ -504,6 +504,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// is meant to match.
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
+	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
+	context->VSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 	// Same for the wide exclusion field at t15: caster geometry must sink into
 	// the clearings, or a melted camp still casts full-depth snow shadows.
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
@@ -670,6 +672,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// t14 was not saved (nothing else in the frame uses it); clear it.
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
+		context->VSSetShaderResources(kExtentFieldSlot, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
 		context->VSSetShaderResources(13, 1, &nullBermSRV);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);

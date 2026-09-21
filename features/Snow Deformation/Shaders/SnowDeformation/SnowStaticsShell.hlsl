@@ -193,6 +193,8 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook;
 	float4 BloodLook2;
 	float4 BloodLook3;  // landscape shell only (SnowShell.hlsl)
+	// Trampled ground (see SnowShell.hlsl); consumed inside CarveProfile.
+	float4 TrampleStyle;
 }
 
 cbuffer StaticCB : register(b1)
@@ -325,6 +327,8 @@ int3 DeformTexel(int2 t, int2 dims)
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
+// Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
+Texture2D<float> ExtentFieldMap : register(t56);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);

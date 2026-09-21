@@ -119,6 +119,7 @@
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
+	X(TrampledFloor) \
 	X(RimLip) \
 	X(RimTeeth) \
 	X(BermClods) \
@@ -262,6 +263,21 @@ void SnowDeformation::CreateDeformationTextures()
 	bermFieldTexture = new Texture2D(texDesc, "SnowDeformation::BermField");
 	bermFieldTexture->CreateSRV(srvDesc);
 	bermFieldTexture->CreateUAV(uavDesc);
+
+	// Trample extent: one texel per 8x8 map tile.
+	{
+		D3D11_TEXTURE2D_DESC extentDesc = texDesc;
+		extentDesc.Width = extentDesc.Height = deformMapDim / 8;
+		extentDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC extentSrvDesc = srvDesc;
+		extentSrvDesc.Format = extentDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC extentUavDesc = uavDesc;
+		extentUavDesc.Format = extentDesc.Format;
+		delete extentFieldTexture;
+		extentFieldTexture = new Texture2D(extentDesc, "SnowDeformation::ExtentField");
+		extentFieldTexture->CreateSRV(extentSrvDesc);
+		extentFieldTexture->CreateUAV(extentUavDesc);
+	}
 
 	CreateBloodTextures(texDesc);
 
@@ -1272,6 +1288,7 @@ void SnowDeformation::Prepass()
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationEvolve");
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
 		globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
+		globals::profiler->MarkPassSkipped("SnowDeformation::ExtentField");
 	}
 
 	// Evolve's own gate, inside a running frame: when its last full run
@@ -1505,6 +1522,7 @@ void SnowDeformation::Prepass()
 		// bermHeal forces to execute) rebuilds exactly what was missed.
 		if (shellBermBakeDisabled || !bermFieldTexture) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
+			globals::profiler->MarkPassSkipped("SnowDeformation::ExtentField");
 		} else {
 			globals::profiler->BeginPass("SnowDeformation::BermField");
 			ID3D11UnorderedAccessView* nullUav = nullptr;
@@ -1542,6 +1560,22 @@ void SnowDeformation::Prepass()
 				context->DispatchIndirect(bermArgsBuffer.get(), 0);
 			}
 			globals::profiler->EndPass();
+
+			// Trample extent, whole field, from the berm bake just finished
+			// (which leaves u0 so it can be read).
+			if (auto* extentCS = extentFieldTexture ? GetExtentFieldCS() : nullptr) {
+				globals::profiler->BeginPass("SnowDeformation::ExtentField");
+				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				ID3D11ShaderResourceView* extentSrc = bermFieldTexture->srv.get();
+				context->CSSetShaderResources(2, 1, &extentSrc);
+				ID3D11UnorderedAccessView* extentUav = extentFieldTexture->uav.get();
+				context->CSSetUnorderedAccessViews(1, 1, &extentUav, nullptr);
+				context->CSSetShader(extentCS, nullptr, 0);
+				const uint extentGroups = (deformMapDim / 8 + 7) / 8;
+				context->Dispatch(extentGroups, extentGroups, 1);
+				context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
+				globals::profiler->EndPass();
+			}
 
 			// Consumed: the next frame's marks start clean. (Drop the scan's
 			// SRV bind first so the clear sees no aliased view.)
@@ -1725,6 +1759,15 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationScanBermCS()
 		deformationScanBermCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanBermCS"));
 	}
 	return deformationScanBermCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetExtentFieldCS()
+{
+	if (!extentFieldCS) {
+		logger::debug("Compiling BermFieldCS:ExtentCS");
+		extentFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0", "ExtentCS"));
+	}
+	return extentFieldCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetBermFieldTiledCS()
@@ -1943,6 +1986,9 @@ void SnowDeformation::ClearShaderCache()
 	if (bermFieldCS)
 		bermFieldCS->Release();
 	bermFieldCS = nullptr;
+	if (extentFieldCS)
+		extentFieldCS->Release();
+	extentFieldCS = nullptr;
 	if (exclusionFieldCS)
 		exclusionFieldCS->Release();
 	exclusionFieldCS = nullptr;

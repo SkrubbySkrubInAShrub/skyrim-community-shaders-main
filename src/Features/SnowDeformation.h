@@ -556,6 +556,8 @@ public:
 		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
+		/** @brief Trampled ground: how far a trampled area's floor rises from the trench floor toward the surface (fraction of the remaining depth). 0 = off, every carve keeps the trail profile. */
+		float TrampledFloor = 0.4f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
 		/** @brief Bow wave: crest height as a fraction of local snow depth. 0 = off. */
@@ -858,6 +860,13 @@ public:
 	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0]->srv.get(); }
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
+
+	/** @brief Trample extent: one texel per 8x8 map tile (physical layout), how two-dimensional the worked ground around it is. Rebuilt whole from the berm field whenever the berm bake runs; CarveProfile reads it at t56 to pick trail or trampled-field shape. */
+	Texture2D* extentFieldTexture = nullptr;
+	/** @brief SRV of the trample extent field; null before SetupResources. */
+	ID3D11ShaderResourceView* GetExtentFieldSRV() const { return extentFieldTexture ? extentFieldTexture->srv.get() : nullptr; }
+	/** @brief Shell SRV slot of the trample extent field, bound wherever the berm field (t14) is. */
+	static constexpr UINT kExtentFieldSlot = 56;
 
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
 	/** @brief Blood map beside the deformation map: same dim, same toroidal origin. R8G8B8A8 sRGB: rgb = pigment, a = concentration. */
@@ -1358,6 +1367,9 @@ public:
 	/** @brief Returns the berm field bake compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetBermFieldCS();
 	ID3D11ComputeShader* bermFieldCS = nullptr;
+	/** @brief Returns the trample extent bake (BermFieldCS.hlsl:ExtentCS), compiling it on first use. */
+	ID3D11ComputeShader* GetExtentFieldCS();
+	ID3D11ComputeShader* extentFieldCS = nullptr;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Draws the ImGui settings UI, including the debug view of the deformation map. Implemented in SnowDeformation/Menu.cpp. */
@@ -1568,8 +1580,11 @@ public:
 		float4 BloodLook2;
 		/** @brief Blood detail tiles: xy spare (the retired soak), z = the tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
+		/** @brief Trampled ground: x = Settings::TrampledFloor (0 when the extent bake is not live), yz = the extent bracket trail -> field, w spare. Consumed inside CarveProfile. Appended last; mirror in both shells. */
+		float4 TrampleStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
+	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");
 
 	/**
 	 * @brief Per-light shadow data for shadow-casting local lights (t38), indexed by the light's shadow-mask channel.
@@ -1827,6 +1842,11 @@ public:
 	bool shellWallDebug = false;
 	/** @brief Edge height view (ShellDebugData 6): rendered sheet height above the terrain data, banded black/green/yellow/orange/red at 0.5/2/4/8 units, white = 1.5 (the alpha's keep height). Real surface, real discards. */
 	bool shellEdgeHeightDebug = false;
+	/** @brief Trampled-area view (ShellDebugData 7): blue -> red = raw extent, green = the field factor CarveProfile applies, white = the bracket ends. Real surface. */
+	bool shellTrampleDebug = false;
+	/** @brief Extent bracket trail -> field (TrampleStyle.yz). Runtime tuning aids, not serialised. */
+	float debugTrampleStart = 0.20f;
+	float debugTrampleFull = 0.50f;
 	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */
 	bool shellExclusionDebug = false;
 
