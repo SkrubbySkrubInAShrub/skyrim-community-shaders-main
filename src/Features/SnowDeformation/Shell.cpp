@@ -1348,12 +1348,29 @@ void SnowDeformation::DrawShell()
 		preSkinNormalsCopySRV = nullptr;
 	}
 
+	// Only the loaded square is asked: the shell ends at its seam, and land
+	// past it never loads, so a test over the whole span never settles. A
+	// loaded cell still baking opens the gate at once; bare must hold for
+	// kShellGateBareFrames before the grid draw and its dependents (bake,
+	// stats, depth sync) are skipped. The CB upload above stays - the
+	// statics and the caster read it.
+	{
+		int sqMinX, sqMinY, sqMaxX, sqMaxY;
+		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
+		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
+		                       kSnowGateUnknown;
+		shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
+	}
+	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+
 	// Main depth before any snow draw: DepthSync syncs the pixels the snow
 	// passes (shell, skins, patch) move nearer than this copy. Targets are
-	// unbound around the copy like the masks copy above.
+	// unbound around the copy like the masks copy above. Not for LOD-batch
+	// coats alone: they lie on their mesh, past anything Terrain Blending
+	// softened.
 	shellPrepassThisFrame = false;
 	preSnowDepthThisFrame = false;
-	{
+	if (shellGround || capturedLoaded > 0 || (settings.VolumeSnow && !capturedStatics.empty())) {
 		auto preDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 		if (preDepthSRV && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV) {
 			winrt::com_ptr<ID3D11Resource> depthRes;
@@ -1628,20 +1645,6 @@ void SnowDeformation::DrawShell()
 			tessHS = GetShellHS(false);
 	}
 	const bool tessellate = tessVS && tessHS && tessDS;
-	// Only the loaded square is asked: the shell ends at its seam, and land
-	// past it never loads, so a test over the whole span never settles. A
-	// loaded cell still baking opens the gate at once; bare must hold for
-	// kShellGateBareFrames before the grid draw and its dependents (bake,
-	// stats, depth sync) are skipped. The CB upload above stays - the
-	// statics and the caster read it.
-	{
-		int sqMinX, sqMinY, sqMaxX, sqMaxY;
-		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
-		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
-		                       kSnowGateUnknown;
-		shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
-	}
-	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	if (!shellGround)
 		globals::profiler->MarkPassSkipped("SnowDeformation::ShellVertexBake");
 	if (shellGround && tessellate && bake) {

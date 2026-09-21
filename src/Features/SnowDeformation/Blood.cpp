@@ -352,6 +352,10 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 
 void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 {
+	// The overlay lifts decals over coats on loaded objects; with none, the
+	// game's own draw is already the visible one and the copies buy nothing.
+	if (capturedLoaded == 0 && capturedLoadedPrev == 0)
+		return;
 	auto* geometry = a_capture.geometry.get();
 	const BloodCapture& capture = a_capture;
 	// Every frame, once per geometry (the hook sees a decal once per pass
@@ -1274,8 +1278,10 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodRectPrevValid = bloodRectFrameValid;
 	bloodRectFrameValid = false;
 	decalMasksLast = 0;
-	if (bloodOverlays.empty())
+	if (bloodOverlays.empty()) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::BloodOverlay");
 		return;
+	}
 	const size_t decals = bloodOverlays.size();
 	std::vector<BloodCapture> masked;
 	for (auto& overlay : bloodOverlays)

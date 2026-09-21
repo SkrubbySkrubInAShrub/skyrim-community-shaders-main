@@ -1151,6 +1151,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed;
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex });
+	capturedRoads += road ? 1u : 0u;
+	capturedLoaded += lodBatch ? 0u : 1u;
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -3153,8 +3155,12 @@ void SnowDeformation::DrawCapturedStatics()
 	}
 	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
 	// The cover always draws (minimum coat); sliders never disable it.
-	if (capturedStatics.empty())
+	if (capturedStatics.empty()) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::StaticsShell");
+		globals::profiler->MarkPassSkipped("SnowDeformation::BloodOverlay");
+		globals::profiler->MarkPassSkipped("SnowDeformation::TrenchPatch");
 		return;
+	}
 	// Not on the world map: skins strobed there as the panning camera
 	// crossed capture gates, and a skin without the shell beside it only
 	// mismatches the map. Mirrors the recolor gate in GetCommonSettingsGPU.
@@ -3935,8 +3941,13 @@ void SnowDeformation::DrawCapturedStatics()
 	// writes its own class depth into the skin-depth raster, so a class at
 	// 0 produces dead patch texels for its objects only. Roads are the one
 	// class with depth, so the gate is theirs (the old > 1 threshold
-	// silently disabled the whole patch at depth 1).
-	if (patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f && !GroundShellsSuspended()) {
+	// silently disabled the whole patch at depth 1). Both road rasters are
+	// rebuilt from this frame's captures, so no road captured = every patch
+	// vertex killed.
+	const bool patchWanted = patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f && !GroundShellsSuspended();
+	if (patchWanted && capturedRoads == 0)
+		globals::profiler->MarkPassSkipped("SnowDeformation::TrenchPatch");
+	if (patchWanted && capturedRoads > 0) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
 		// Tessellated patch: quad patches with trench-aware factors, so the
 		// object trenches pick up the same wall smoothness and rim relief as

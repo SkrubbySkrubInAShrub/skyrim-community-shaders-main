@@ -2105,6 +2105,11 @@ public:
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
 	std::vector<CapturedSnowStatic> capturedStatics;
+	/** @brief This frame's road captures: none leaves the trench patch nothing to stand on. */
+	uint32_t capturedRoads = 0;
+	/** @brief This frame's loaded (non-LOD) captures, and last frame's: the decal hook runs before the list is whole. */
+	uint32_t capturedLoaded = 0;
+	uint32_t capturedLoadedPrev = 0;
 	/** @brief The engine's live water bodies (TESWaterSystem::waterObjects, gathered each Prepass by GatherWaterObjects): cell planes and placed bodies, culled or not. Rasterised top-down into the water window, then cleared. */
 	struct CapturedWater
 	{
