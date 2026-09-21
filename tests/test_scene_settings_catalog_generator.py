@@ -94,6 +94,23 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         })
         self.assertEqual(members["VR"]["settings"], "Settings")
 
+    def test_feature_type_aliases_resolve_to_their_underlying_struct(self):
+        source = """
+        struct AliasFeature : Feature {
+            struct RealType { float value = 0.0f; };
+            using AliasedType = RealType;
+            struct Settings { AliasedType aliased{}; } settings;
+            std::string GetShortName() { return "Alias"; }
+            std::string GetName() { return "Alias Feature"; }
+        };
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "AliasFeature.h"
+            path.write_text(source, encoding="utf-8")
+            features = GENERATOR.collect_features([path])
+            aliases = GENERATOR.collect_feature_type_aliases([path], features)
+        self.assertEqual(aliases["AliasFeature"]["AliasedType"], "RealType")
+
     def test_feature_names_resolve_constants_wrappers_and_helpers(self):
         source = """
         struct Example : Feature {
