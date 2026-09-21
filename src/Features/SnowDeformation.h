@@ -557,9 +557,9 @@ public:
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
-		float FreshSnowSoftness = 0.7f;
+		float FreshSnowSoftness = 1.0f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
-		float FreshSnowSettleHours = 48.0f;
+		float FreshSnowSettleHours = 24.0f;
 		/** @brief Trampled ground: multiplier on TrenchFloorFraction where trails overlap into a trampled area (0.5 = the floor sits half as high there). 1 = off. */
 		float TrampledFloorLowering = 0.5f;
 		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
