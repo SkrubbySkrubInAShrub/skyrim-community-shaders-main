@@ -765,6 +765,16 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTeeth = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
+		ImGui::SeparatorText(T(TKEY("snow_condition_group"), "Snow Condition"));
+
+		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
+		if (auto _ttFresh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, new trenches get sloped sides instead of sharp walls, the ridge beside them shrinks, and the rim loses its lip and teeth. As the snow settles over the following days, the look you set with Trench Wall Sharpness, Berm Height, Rim Lip and Rim Teeth comes back. Trenches keep the walls they were cut with. 0 = off, the snow is always firm."));
+
+		ImGui::SliderFloat(T(TKEY("fresh_snow_settle"), "Fresh Snow Settles In"), &settings.FreshSnowSettleHours, 6.0f, 168.0f, "%.0f game hours");
+		if (auto _ttSettle = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("fresh_snow_settle_tooltip"), "How long clear weather takes to turn loose new snow fully firm. About two game hours of heavy snowfall makes it fully fresh again; lighter snow takes longer."));
+
 		ImGui::SeparatorText(T(TKEY("trampled_group"), "Trampled Ground"));
 
 		ImGui::SliderFloat(T(TKEY("trampled_floor_lowering"), "Floor Lowering"), &settings.TrampledFloorLowering, 0.0f, 1.0f, "%.2fx");
@@ -2047,6 +2057,11 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_accumulation"), "Snow Accumulation"))) {
+			WrapTextF("Snow freshness: %.3f live (0 firm .. 1 fresh), softness applied %.3f", snowFreshness.load(std::memory_order_relaxed), GetSnowSoftness());
+			ImGui::SliderFloat(T(TKEY("freshness_override"), "Snow Freshness Override"), &debugFreshnessOverride, -1.0f, 1.0f, debugFreshnessOverride < 0.0f ? "live" : "%.2f");
+			if (auto _ttFreshOv = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("freshness_override_tooltip"), "Not saved. Below 0 the weather drives the snow's freshness; at 0 or above this value replaces it, so firm (0) and fresh (1) can be compared on the spot without waiting for a storm. The ridge and rim change at once; wall steepness only shows on trenches cut after the change."));
+
 			{
 				// The rate is spelled out because the exit test is "does the number
 				// do what the plan's table says", which needs the arithmetic

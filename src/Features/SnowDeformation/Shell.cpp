@@ -1108,12 +1108,14 @@ void SnowDeformation::DrawShell()
 		std::max(settings.FrostPatternStrength, 0.0f),
 		std::max(settings.FrostPatternScale, 4.0f),
 		frostPatternNormalSRV ? 1.0f : 0.0f };
-	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
+	// Fresh snow compacts instead of being thrown: little berm, no cut rim.
+	const float snowSoftness = GetSnowSoftness();
+	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f) * std::lerp(1.0f, 0.35f, snowSoftness);
 	// .w claims RimStyle's documented spare rather than growing ShellCB: the
 	// buffer is hand-mirrored across two shaders and the statics pass binds
 	// this same b0, so one component serves both shells with nothing moving.
-	cbData.RimStyle = { std::clamp(settings.RimLip, 0.0f, 0.3f),
-		std::clamp(settings.RimTeeth, 0.0f, 1.0f),
+	cbData.RimStyle = { std::clamp(settings.RimLip, 0.0f, 0.3f) * (1.0f - snowSoftness),
+		std::clamp(settings.RimTeeth, 0.0f, 1.0f) * (1.0f - snowSoftness),
 		std::clamp(settings.BermClods, 0.0f, 6.0f),
 		GetAccumulationDepthScale() };
 	// The extent field is baked from the berm field; without that bake it is

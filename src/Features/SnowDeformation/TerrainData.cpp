@@ -1189,6 +1189,7 @@ void SnowDeformation::PostPostLoad()
 	CoSave::GetSingleton()->Install();
 	RegisterTrenchCoSave();
 	RegisterAccumulationCoSave();
+	RegisterSnowConditionCoSave();
 	RegisterItemSinkCoSave();
 }
 

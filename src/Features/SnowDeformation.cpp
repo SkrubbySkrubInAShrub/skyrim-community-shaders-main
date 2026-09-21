@@ -120,6 +120,8 @@
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
+	X(FreshSnowSoftness) \
+	X(FreshSnowSettleHours) \
 	X(TrampledFloorLowering) \
 	X(TrampledFlattening) \
 	X(TrampleStart) \
@@ -1069,7 +1071,10 @@ void SnowDeformation::Prepass()
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
 	// Sharpness is a percent slider; 100% clamps just below the degenerate
 	// smoothstep(1, 1, x) edge.
-	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f, 0.0f, 0.98f);
+	// Fresh snow cannot hold a cut: walls stamped while it is loose slope
+	// across most of the print. Stamp-time, so a trench keeps the wall it
+	// was cut with until firmer traffic re-cuts it.
+	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f * std::lerp(1.0f, 0.3f, GetSnowSoftness()), 0.0f, 0.98f);
 	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
 
 	float deltaTime = *globals::game::deltaTime;
@@ -1159,6 +1164,7 @@ void SnowDeformation::Prepass()
 	// the store before anything reads it.
 	TickTrenchClock();
 	TickAccumulation();
+	TickSnowCondition();
 	SweepTrenchStore();
 	DrainTrenchBands();
 	FlushDepartingTrenches(scroll, perFrameData.ClearMap != 0);

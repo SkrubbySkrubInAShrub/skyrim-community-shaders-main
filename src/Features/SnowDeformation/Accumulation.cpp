@@ -142,3 +142,66 @@ void SnowDeformation::RegisterAccumulationCoSave()
 			gameClockUnarm.store(true, std::memory_order_release);
 		});
 }
+
+// ---- Snow condition: freshness ----
+// One global scalar beside the accumulated layer: 0 = settled firm snow (the
+// authored trench look), 1 = loose new snow. Co-save record 'SNFR'.
+// Research in TRENCH-MORPHOLOGY-RESEARCH.md (P4), rationale in CODE-NOTES.md.
+
+void SnowDeformation::TickSnowCondition()
+{
+	if (gameClock.reversed)
+		return;
+	const float elapsed = gameClock.elapsedHours;
+	if (elapsed <= 0.0f)
+		return;
+
+	// The accumulator's held weather: exterior intensity, frozen indoors.
+	const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
+	const float freshen = intensity / kFreshenHours;
+	const float settle = settings.FreshSnowSettleHours > 0.01f ?
+	                         (1.0f - intensity) / settings.FreshSnowSettleHours :
+	                         0.0f;
+	const float current = snowFreshness.load(std::memory_order_relaxed);
+	snowFreshness.store(std::clamp(current + elapsed * (freshen - settle), 0.0f, 1.0f), std::memory_order_relaxed);
+}
+
+float SnowDeformation::GetSnowSoftness() const
+{
+	const float freshness = debugFreshnessOverride >= 0.0f ? debugFreshnessOverride : snowFreshness.load(std::memory_order_relaxed);
+	return std::clamp(freshness, 0.0f, 1.0f) * std::clamp(settings.FreshSnowSoftness, 0.0f, 1.0f);
+}
+
+void SnowDeformation::RegisterSnowConditionCoSave()
+{
+	CoSave::GetSingleton()->Register(
+		kFreshRecord, kFreshRecordVersion,
+		[this](const SKSE::SerializationInterface* a_intfc) {
+			if (!a_intfc->OpenRecord(kFreshRecord, kFreshRecordVersion)) {
+				logger::warn("[SNOW DEFORMATION] could not open the snow freshness co-save record");
+				return;
+			}
+			const float value = snowFreshness.load(std::memory_order_relaxed);
+			if (!a_intfc->WriteRecordData(&value, sizeof(value)))
+				logger::warn("[SNOW DEFORMATION] snow freshness co-save write failed");
+		},
+		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) {
+			if (a_version != kFreshRecordVersion || a_length != sizeof(float)) {
+				logger::warn("[SNOW DEFORMATION] snow freshness co-save is version {} / {} bytes; dropped", a_version, a_length);
+				return;
+			}
+			float value = 0.0f;
+			if (a_intfc->ReadRecordData(&value, sizeof(value)) != sizeof(value) || !std::isfinite(value)) {
+				logger::warn("[SNOW DEFORMATION] snow freshness co-save unreadable; dropped");
+				return;
+			}
+			snowFreshness.store(std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
+			gameClockUnarm.store(true, std::memory_order_release);
+			logger::info("[SNOW DEFORMATION] snow freshness restored at {:.3f}", value);
+		},
+		[this]() {
+			snowFreshness.store(0.0f, std::memory_order_relaxed);
+			gameClockUnarm.store(true, std::memory_order_release);
+		});
+}
+

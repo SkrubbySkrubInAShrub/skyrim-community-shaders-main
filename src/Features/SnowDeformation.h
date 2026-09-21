@@ -556,6 +556,10 @@ public:
 		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
+		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
+		float FreshSnowSoftness = 0.7f;
+		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
+		float FreshSnowSettleHours = 48.0f;
 		/** @brief Trampled ground: multiplier on TrenchFloorFraction where trails overlap into a trampled area (0.5 = the floor sits half as high there). 1 = off. */
 		float TrampledFloorLowering = 0.5f;
 		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
@@ -3809,6 +3813,22 @@ protected:
 	float GetAccumulationDepthScale() const;
 	/** @brief Claims 'SNAC' on the co-save channel. */
 	void RegisterAccumulationCoSave();
+
+	/** @brief Co-save record for the snow freshness scalar; its own type so the accumulation record's version is untouched. */
+	static constexpr uint32_t kFreshRecord = 'SNFR';
+	static constexpr uint32_t kFreshRecordVersion = 1;
+	/** @brief Game hours of reference snowfall that take firm snow to fully fresh. */
+	static constexpr float kFreshenHours = 2.0f;
+	/** @brief Snow freshness, 0-1: 0 = settled and firm (the authored trench look), 1 = loose new snow. Rises with snowfall, settles in clear weather. Atomic for the co-save writer, like snowAccumulation. */
+	std::atomic<float> snowFreshness{ 0.0f };
+	/** @brief Debug: >= 0 replaces the live freshness (not serialised). */
+	float debugFreshnessOverride = -1.0f;
+	/** @brief Advances freshness off the shared clock and the accumulator's held weather; call after TickAccumulation. */
+	void TickSnowCondition();
+	/** @brief Freshness x Settings::FreshSnowSoftness, 0-1: what the three levers ease by. */
+	float GetSnowSoftness() const;
+	/** @brief Claims 'SNFR' on the co-save channel. */
+	void RegisterSnowConditionCoSave();
 	/** @brief Writes the scalar. */
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	/** @brief Reads it back, refusing a version this build does not know. */
