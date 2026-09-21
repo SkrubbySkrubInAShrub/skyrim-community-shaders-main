@@ -9,6 +9,7 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
+#include "Features/FeatureOverwrites.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
@@ -258,6 +259,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::remoteControl,
 		&globals::features::csEditor,
 		&globals::features::sceneManager,
+		&globals::features::featureOverwrites,
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
 		&globals::features::effects11,

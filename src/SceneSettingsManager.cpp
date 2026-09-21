@@ -8,6 +8,7 @@
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/Game.h"
+#include "Utils/SettingsCatalog.h"
 
 #include <algorithm>
 #include <array>
@@ -93,7 +94,8 @@ namespace
 	constexpr const char* kStatusKey = "status";
 	constexpr const char* kStatusDeleted = "deleted";
 	constexpr std::string_view kSceneSettingDisplaySeparator = " / ";
-	constexpr std::string_view kImGuiIdSeparator = "##";
+
+	using namespace Util::Settings;
 
 	bool IsSceneSettingPrimitive(const json& value)
 	{
@@ -160,11 +162,6 @@ namespace
 			return false;
 		}
 		return true;
-	}
-
-	std::string StripImGuiId(std::string_view label)
-	{
-		return std::string(label.substr(0, label.find(kImGuiIdSeparator)));
 	}
 
 	std::vector<std::filesystem::path> GetSortedDirectoryPaths(
@@ -377,31 +374,6 @@ namespace
 		return displayName;
 	}
 
-	std::vector<std::string> SplitCatalogPath(std::string_view path)
-	{
-		std::vector<std::string> parts;
-		size_t start = 0;
-		while (start < path.size()) {
-			auto end = path.find('/', start);
-			auto part = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
-			if (!part.empty()) {
-				std::string decoded(part);
-				for (size_t pos = 0; (pos = decoded.find('~', pos)) != std::string::npos;) {
-					if (pos + 1 < decoded.size() && decoded[pos + 1] == '1')
-						decoded.replace(pos, 2, "/");
-					else if (pos + 1 < decoded.size() && decoded[pos + 1] == '0')
-						decoded.replace(pos, 2, "~");
-					++pos;
-				}
-				parts.push_back(std::move(decoded));
-			}
-			if (end == std::string_view::npos)
-				break;
-			start = end + 1;
-		}
-		return parts;
-	}
-
 	/// Writes into a caller-owned buffer so repeated lookups can reuse one allocation.
 	void ToCatalogPath(const std::vector<std::string>& path, std::string& out)
 	{
@@ -422,39 +394,6 @@ namespace
 					out += ch;
 			}
 		}
-	}
-
-	bool IsStructuralDisplayPart(std::string_view part)
-	{
-		std::string normalized;
-		normalized.reserve(part.size());
-		for (const char ch : part)
-			if (std::isalnum(static_cast<unsigned char>(ch)))
-				normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-		return normalized == "settings" || normalized == "values" || normalized == "baseline";
-	}
-
-	std::string NormalizeDisplayPart(std::string part)
-	{
-		part = StripImGuiId(part);
-		if (!part.empty() && std::all_of(part.begin(), part.end(), [](const char ch) {
-				return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
-			}))
-			part = Util::PrettifyIdentifier(part);
-		return part;
-	}
-
-	std::vector<std::string> GetCatalogDisplayPath(const SceneSettingsCatalog::SettingMetadata& setting)
-	{
-		auto parts = SplitCatalogPath(setting.displayPath.empty() ? setting.settingPath : setting.displayPath);
-		const auto keys = SplitCatalogPath(setting.displayPathKeys);
-		for (size_t index = 0; index < parts.size(); ++index) {
-			if (index < keys.size() && keys[index] != "-")
-				parts[index] = T(keys[index], parts[index].c_str());
-			parts[index] = NormalizeDisplayPart(std::move(parts[index]));
-		}
-		std::erase_if(parts, [](const auto& part) { return part.empty() || IsStructuralDisplayPart(part); });
-		return parts;
 	}
 
 	std::vector<std::string> GetCatalogSelectorPath(const SceneSettingsCatalog::SettingMetadata& setting)
@@ -507,18 +446,6 @@ namespace
 			}
 		}
 		return parts;
-	}
-
-	std::string GetCatalogLeafDisplayName(const SceneSettingsCatalog::SettingMetadata& setting)
-	{
-		if (setting.displayName.empty() && setting.displayNameKey.empty() &&
-			setting.editorSemantic == SceneSettingsCatalog::EditorSemantic::Choice)
-			return T("feature.scene_manager.selection", "Selection");
-
-		auto displayName = StripImGuiId(setting.displayName.empty() ? setting.settingKey : setting.displayName);
-		if (!setting.displayNameKey.empty())
-			displayName = StripImGuiId(T(setting.displayNameKey, displayName.c_str()));
-		return displayName;
 	}
 
 	double GetCatalogNumericDisplayScale(const SceneSettingsCatalog::SettingMetadata& setting)

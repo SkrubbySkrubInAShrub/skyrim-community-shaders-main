@@ -1,12 +1,17 @@
 #include "SettingsOverrideManager.h"
 
+#include "Feature.h"
 #include "FeatureIssues.h"
 #include "Util.h"
+#include "Utils/FileSystem.h"
+#include "Utils/SettingsCatalog.h"
 
 #include <algorithm>
 #include <ctime>
+#include <format>
 #include <fstream>
 #include <iomanip>
+#include <ranges>
 #include <regex>
 #include <sstream>
 
@@ -22,6 +27,27 @@ namespace
 		std::ostringstream oss;
 		oss << std::hex << hash;
 		return oss.str();
+	}
+
+	constexpr size_t MAX_OVERRIDE_FILE_SIZE = 1024 * 1024;
+
+	/** @brief Parses an override file without the discovery-time filename and sanitization passes. */
+	bool ReadOverrideDocument(const std::filesystem::path& path, json& document)
+	{
+		std::error_code ec;
+		const auto size = std::filesystem::file_size(path, ec);
+		if (ec || size == 0 || size > MAX_OVERRIDE_FILE_SIZE) {
+			return false;
+		}
+
+		try {
+			std::ifstream input(path);
+			input >> document;
+			return document.is_object();
+		} catch (const std::exception& e) {
+			logger::error("Could not read override file {}: {}", path.string(), e.what());
+			return false;
+		}
 	}
 }
 
@@ -392,7 +418,6 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 		}
 
 		// Limit file size to 1MB to prevent abuse
-		constexpr size_t MAX_OVERRIDE_FILE_SIZE = 1024 * 1024;
 		if (fileSize > MAX_OVERRIDE_FILE_SIZE) {
 			logger::info("Override file too large ({}KB, max 1MB): {}", fileSize / 1024, filePath.string());
 			return nullptr;
@@ -1210,4 +1235,98 @@ json SettingsOverrideManager::GetMergedOverrideSettings(const std::string& featu
 	json merged = baseSettings;
 	ApplyOverrides(featureName, merged);
 	return merged;
+}
+
+bool SettingsOverrideManager::IsApplicable(const OverrideInfo& info) const
+{
+	if (info.isGlobal) {
+		return true;
+	}
+
+	const auto* feature = Feature::FindFeatureByShortName(info.featureName);
+	return feature && feature->UsesMainSettings();
+}
+
+bool SettingsOverrideManager::DeleteFile(const std::string& filePath)
+{
+	// Only files this manager discovered are eligible, which keeps deletion inside the overrides directory.
+	const auto found = std::ranges::find(overrides, filePath, &OverrideInfo::filePath);
+	if (found == overrides.end() || !IsApplicable(*found)) {
+		return false;
+	}
+
+	std::error_code ec;
+	if (!std::filesystem::remove(filePath, ec) || ec) {
+		logger::error("Could not delete override file {}: {}", filePath, ec.message());
+		return false;
+	}
+
+	logger::info("Deleted override file {}", filePath);
+	RefreshOverrides();
+	// Drops the .user file if that feature no longer has any override backing it.
+	CleanupStaleUserOverrides();
+	return true;
+}
+
+bool SettingsOverrideManager::ExportSettings(const std::string& modName, const std::string& featureName,
+	std::span<const std::string> settingPaths, const json& featureSettings)
+{
+	const auto safeName = Util::FileHelpers::SanitizeFileName(modName);
+	auto* feature = Feature::FindFeatureByShortName(featureName);
+	if (safeName.empty() || settingPaths.empty() || !feature || !feature->UsesMainSettings()) {
+		return false;
+	}
+
+	const auto available = Util::Settings::GetExportSettings(featureName, featureSettings);
+	for (const auto& path : settingPaths) {
+		if (std::ranges::find(available, path, &Util::Settings::ExportSetting::path) == available.end()) {
+			logger::error("Cannot export unknown setting '{}' of {}", path, featureName);
+			return false;
+		}
+	}
+
+	const auto selected = Util::Settings::SelectSettingPaths(featureSettings, { settingPaths.begin(), settingPaths.end() });
+	if (selected.empty()) {
+		return false;
+	}
+
+	const auto destination = GetOverridesDirectory() / std::format("{}_{}.json", safeName, featureName);
+
+	// Merge into an existing file of the same name so repeated exports accumulate rather than truncate,
+	// reading it raw so any _metadata the author wrote survives.
+	json document = json::object();
+	std::error_code ec;
+	if (std::filesystem::exists(destination, ec) && !ReadOverrideDocument(destination, document)) {
+		logger::error("Refusing to overwrite unreadable override file {}", destination.string());
+		return false;
+	}
+	document.update(selected, true);
+
+	if (!ValidateOverrideFormat(document, destination.string()) || !ValidateJsonDataTypes(document, "", destination.string())) {
+		return false;
+	}
+
+	try {
+		Util::FileHelpers::EnsureDirectoryExists(GetOverridesDirectory());
+
+		std::ofstream file(destination);
+		if (!file.is_open()) {
+			logger::error("Could not create override file {}", destination.string());
+			return false;
+		}
+
+		file << document.dump(2);
+		file.flush();
+		if (file.fail()) {
+			logger::error("Failed to write override file {}", destination.string());
+			return false;
+		}
+	} catch (const std::exception& e) {
+		logger::error("Error exporting override file {}: {}", destination.string(), e.what());
+		return false;
+	}
+
+	logger::info("Exported {} setting(s) of {} to {}", selected.size(), featureName, destination.string());
+	RefreshOverrides();
+	return true;
 }

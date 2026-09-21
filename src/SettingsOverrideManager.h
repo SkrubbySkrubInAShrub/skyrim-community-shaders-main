@@ -3,6 +3,7 @@
 #include <ctime>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -205,6 +206,31 @@ public:
 	 * @return Settings with all overrides applied
 	 */
 	json GetMergedOverrideSettings(const std::string& featureName, const json& baseSettings);
+
+	/**
+	 * @brief Reports whether an override can reach a loaded feature that persists settings
+	 * @param info The override to test
+	 */
+	bool IsApplicable(const OverrideInfo& info) const;
+
+	/**
+	 * @brief Deletes a discovered override file and drops any user file it orphaned
+	 * Live values are left untouched; the override simply stops applying on the next load.
+	 * @param filePath Path of a file present in GetOverrides()
+	 * @return True if the file was deleted
+	 */
+	bool DeleteFile(const std::string& filePath);
+
+	/**
+	 * @brief Writes selected feature settings to a shippable override file, merging into an existing one
+	 * @param modName Mod name used for the file prefix; sanitized before use
+	 * @param featureName The short name of the feature being exported
+	 * @param settingPaths JSON pointers into featureSettings, as reported by Util::Settings::GetExportSettings
+	 * @param featureSettings The feature's current settings JSON
+	 * @return True if the override file was written
+	 */
+	bool ExportSettings(const std::string& modName, const std::string& featureName,
+		std::span<const std::string> settingPaths, const json& featureSettings);
 
 private:
 	SettingsOverrideManager() = default;
