@@ -163,9 +163,8 @@ static const float kExtentRadius[EXTENT_RADII] = { 40.0, 84.0, 128.0 };
 
 // Point tap of the baked berm field in LOGICAL texel space; zero outside the
 // window, like Tap.
-float ExtentTap(float2 texel, int2 dims)
+float ExtentTap(int2 t, int2 dims)
 {
-	int2 t = int2(round(texel));
 	float v = 0.0;
 	if (all(t >= 0) && all(t < dims))
 		v = BermFieldIn.Load(DeformTexel(t, dims));
@@ -184,7 +183,9 @@ void ExtentCS(uint3 dtid : SV_DispatchThreadID)
 	float invTexel = 1.0 / max(TexelSize, 1e-4);
 	// Tiles are PHYSICAL (they never move on a scroll); the taps are a world
 	// rule, so they run in logical space from the tile's centre.
-	float2 centre = float2((int2(dtid.xy) * 8 + 4 - MapOrigin) & (dims - 1)) - 0.5;
+	// Integer centre plus integer offsets: a tap rounded AFTER the scroll is
+	// added flips on exact ties as MapOrigin changes parity.
+	int2 centre = (int2(dtid.xy) * 8 + 4 - MapOrigin) & (dims - 1);
 
 	float extent = 1.0;
 	[unroll] for (uint a = 0; a < EXTENT_AXES; a++)
@@ -192,7 +193,7 @@ void ExtentCS(uint3 dtid : SV_DispatchThreadID)
 		float along = 0.0;
 		[unroll] for (uint r = 0; r < EXTENT_RADII; r++)
 		{
-			float2 off = kExtentAxis[a] * (kExtentRadius[r] * invTexel);
+			int2 off = int2(floor(kExtentAxis[a] * (kExtentRadius[r] * invTexel) + 0.5));
 			along += ExtentTap(centre + off, dims) + ExtentTap(centre - off, dims);
 		}
 		extent = min(extent, along / (2.0 * EXTENT_RADII));

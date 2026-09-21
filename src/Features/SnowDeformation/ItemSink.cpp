@@ -359,7 +359,8 @@ void SnowDeformation::ItemSinkUpdate()
 		picks.resize(kItemSinkMax);
 
 	const bool enabled = settings.ItemSink;
-	const float trenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
+	const float trenchFloorBase = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
+	const float trampledFloor = std::clamp(settings.TrampledFloorLowering, 0.0f, 1.0f);
 	const float embedShare = std::clamp(settings.ItemEmbedPercent, 0.0f, 100.0f) * 0.01f;
 	const float roundFloor = std::clamp(settings.ItemMinRoundness, 0.0f, 1.0f);
 	const float roundFull = std::max(0.5f, roundFloor + 0.05f);
@@ -463,6 +464,11 @@ void SnowDeformation::ItemSinkUpdate()
 			if (state.offsetRoot != body.root)
 				state.offsetRoot = tagged ? body.root : nullptr;
 		}
+
+		// Trampled ground draws a lower trench floor; the item rests on that one.
+		if (((frame + pick.key) & 7) == 0 || fresh)
+			state.trampleField = SampleTrampleField(body.world.x, body.world.y);
+		const float trenchFloor = trenchFloorBase * std::lerp(1.0f, trampledFloor, state.trampleField);
 
 		const float weight = Smooth((std::log(std::max(measure, 1e-4f)) - std::log(kMeasureFloat)) / (std::log(kMeasureFull) - std::log(kMeasureFloat)));
 		const float sink = weight * (1.0f - trenchFloor);

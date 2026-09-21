@@ -9,6 +9,7 @@
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
+#include <DirectXPackedVector.h>
 #include <dxgi1_4.h>
 
 // Settings serialisation, written out rather than generated.
@@ -278,6 +279,20 @@ void SnowDeformation::CreateDeformationTextures()
 		extentFieldTexture = new Texture2D(extentDesc, "SnowDeformation::ExtentField");
 		extentFieldTexture->CreateSRV(extentSrvDesc);
 		extentFieldTexture->CreateUAV(extentUavDesc);
+
+		D3D11_TEXTURE2D_DESC stagingDesc = extentDesc;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.BindFlags = 0;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (uint i = 0; i < kExtentReadSlots; i++) {
+			extentStaging[i] = nullptr;
+			extentStagingPending[i] = false;
+			if (SUCCEEDED(globals::d3d::device->CreateTexture2D(&stagingDesc, nullptr, extentStaging[i].put())))
+				Util::SetResourceName(extentStaging[i].get(), "SnowDeformation::ExtentFieldStaging");
+		}
+		std::scoped_lock mirrorLock(extentMirrorLock);
+		extentMirrorMeta = {};
+		extentMirror.clear();
 	}
 
 	CreateBloodTextures(texDesc);
@@ -709,6 +724,63 @@ void SnowDeformation::ApplyRangeSettings()
 	}
 
 	rangeInitApplied = true;
+}
+
+void SnowDeformation::PollExtentReadback(ID3D11DeviceContext* a_context)
+{
+	for (uint i = 0; i < kExtentReadSlots; i++) {
+		if (!extentStagingPending[i] || !extentStaging[i])
+			continue;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		const HRESULT hr = a_context->Map(extentStaging[i].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+		if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
+			continue;
+		extentStagingPending[i] = false;
+		if (FAILED(hr))
+			continue;
+		const uint32_t tiles = extentStagingMeta[i].tiles;
+		{
+			std::scoped_lock lock(extentMirrorLock);
+			extentMirror.resize((size_t)tiles * tiles);
+			for (uint32_t y = 0; y < tiles; y++) {
+				const auto* row = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(mapped.pData) + (size_t)y * mapped.RowPitch);
+				for (uint32_t x = 0; x < tiles; x++)
+					extentMirror[(size_t)y * tiles + x] = DirectX::PackedVector::XMConvertHalfToFloat(row[x]);
+			}
+			extentMirrorMeta = extentStagingMeta[i];
+		}
+		a_context->Unmap(extentStaging[i].get(), 0);
+	}
+}
+
+// Mirrors TrampleExtent + TrampleField in SnowFields.hlsli.
+float SnowDeformation::SampleTrampleField(float a_worldX, float a_worldY)
+{
+	if (shellBermBakeDisabled)
+		return 0.0f;
+	std::scoped_lock lock(extentMirrorLock);
+	const uint32_t tiles = extentMirrorMeta.tiles;
+	if (tiles == 0 || extentMirror.size() != (size_t)tiles * tiles)
+		return 0.0f;
+	const float dim = float(tiles * 8);
+	const float tx = (a_worldX - extentMirrorMeta.windowOrigin.x) / extentMirrorMeta.texel - 0.5f;
+	const float ty = (a_worldY - extentMirrorMeta.windowOrigin.y) / extentMirrorMeta.texel - 0.5f;
+	if (tx < -0.5f || ty < -0.5f || tx > dim - 0.5f || ty > dim - 0.5f)
+		return 0.0f;
+	const float qx = (tx + float(extentMirrorMeta.mapOrigin.x) - 4.0f) / 8.0f;
+	const float qy = (ty + float(extentMirrorMeta.mapOrigin.y) - 4.0f) / 8.0f;
+	const float fx0 = std::floor(qx);
+	const float fy0 = std::floor(qy);
+	const int mask = int(tiles) - 1;
+	const int x0 = int(fx0) & mask, x1 = (int(fx0) + 1) & mask;
+	const int y0 = int(fy0) & mask, y1 = (int(fy0) + 1) & mask;
+	const float fx = qx - fx0, fy = qy - fy0;
+	auto at = [&](int x, int y) { return extentMirror[(size_t)y * tiles + x]; };
+	const float extent = std::lerp(std::lerp(at(x0, y0), at(x1, y0), fx), std::lerp(at(x0, y1), at(x1, y1), fx), fy);
+	const float start = std::clamp(debugTrampleStart, 0.0f, 0.98f);
+	const float full = std::clamp(debugTrampleFull, start + 0.01f, 1.0f);
+	const float t = std::clamp((extent - start) / (full - start), 0.0f, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
 }
 
 void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
@@ -1176,6 +1248,7 @@ void SnowDeformation::Prepass()
 	// byte-identically - so neither runs. Any doubt (readback not in yet,
 	// inputs active since the verdict) keeps them running.
 	PollDeformActivity(context);
+	PollExtentReadback(context);
 
 	// Stamps are "quiet" when the SET is unchanged since the last executed
 	// dispatch, not when it is empty - planted feet stamp every frame, so a
@@ -1579,6 +1652,21 @@ void SnowDeformation::Prepass()
 				context->Dispatch(extentGroups, extentGroups, 1);
 				context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
 				globals::profiler->EndPass();
+
+				// CPU copy for ItemSink, every eighth bake.
+				if (extentReadCountdown == 0) {
+					for (uint i = 0; i < kExtentReadSlots; i++) {
+						if (extentStagingPending[i] || !extentStaging[i])
+							continue;
+						context->CopyResource(extentStaging[i].get(), extentFieldTexture->resource.get());
+						extentStagingMeta[i] = { perFrameData.WindowOrigin, perFrameData.MapOrigin, perFrameData.TexelSize, deformMapDim / 8 };
+						extentStagingPending[i] = true;
+						extentReadCountdown = 8;
+						break;
+					}
+				} else {
+					extentReadCountdown--;
+				}
 			}
 
 			// Consumed: the next frame's marks start clean. (Drop the scan's

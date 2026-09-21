@@ -104,7 +104,7 @@ float BermFieldBaked(float2 gridLocal)
 }
 
 // Trample extent (ExtentCS in BermFieldCS.hlsl): one texel per 8x8 PHYSICAL
-// map tile, centred on physical texel index 8T+3.5, so the read goes
+// map tile, centred on physical texel index 8T+4, so the read goes
 // world -> logical texel -> physical -> tile. Unbound reads 0 = trail.
 float TrampleExtent(float2 worldXY)
 {
@@ -113,7 +113,7 @@ float TrampleExtent(float2 worldXY)
 
 	float2 tiles;
 	ExtentFieldMap.GetDimensions(tiles.x, tiles.y);
-	float2 q = (uv * tiles * 8.0 - 0.5 + float2(DeformMapOrigin) - 3.5) / 8.0;
+	float2 q = (uv * tiles * 8.0 - 0.5 + float2(DeformMapOrigin) - 4.0) / 8.0;
 	float2 qf = floor(q);
 	float2 f = q - qf;
 	int2 mask = int2(tiles) - 1;
@@ -158,10 +158,14 @@ float ChurnNoiseScaled(float2 worldXY, float sizeScale)
 // frequencies - the two-scale contrast of RDR2's O3.
 static const float kClodSizeScale = 1.5;
 
-// The trench-floor half flattens in trampled ground; the berm half does not.
+// Trampled ground flattens the churn by how far INTO the trench a point is:
+// the floor takes the full scale, the berm outside it none. Scaling the
+// trench half alone does nothing - the berm field reads full across a
+// trampled area and wins the max.
 float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
 {
-	return max(smoothstep(0.05, 0.5, deformation) * TrampleScales(worldXY, deformation).y, BermShape(bermDeform));
+	float trench = smoothstep(0.05, 0.5, deformation);
+	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleScales(worldXY, deformation).y, trench);
 }
 
 // ---- Deformation surface-state readers (spell marks). One bilinear tap;

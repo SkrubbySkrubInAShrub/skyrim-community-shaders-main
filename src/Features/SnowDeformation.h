@@ -870,6 +870,28 @@ public:
 	/** @brief Shell SRV slot of the trample extent field, bound wherever the berm field (t14) is. */
 	static constexpr UINT kExtentFieldSlot = 56;
 
+	/** @brief What an extent readback was baked under; tiles are physical, so the pair stays self-consistent after later scrolls. */
+	struct ExtentMirrorMeta
+	{
+		float2 windowOrigin = { 0, 0 };
+		DirectX::XMINT2 mapOrigin = { 0, 0 };
+		float texel = 1.0f;
+		uint32_t tiles = 0;
+	};
+	static constexpr uint kExtentReadSlots = 2;
+	winrt::com_ptr<ID3D11Texture2D> extentStaging[kExtentReadSlots];
+	bool extentStagingPending[kExtentReadSlots] = {};
+	ExtentMirrorMeta extentStagingMeta[kExtentReadSlots];
+	uint32_t extentReadCountdown = 0;
+	/** @brief CPU copy of the extent field for ItemSink, a few frames old. Guarded by extentMirrorLock. */
+	std::mutex extentMirrorLock;
+	std::vector<float> extentMirror;
+	ExtentMirrorMeta extentMirrorMeta;
+	/** @brief Render thread: maps any finished extent readback into the mirror. */
+	void PollExtentReadback(ID3D11DeviceContext* a_context);
+	/** @brief The trampled-area factor (0 trail .. 1 trampled) the shells apply at a world XY, from the mirror; 0 when there is none. Any thread. */
+	float SampleTrampleField(float a_worldX, float a_worldY);
+
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
 	/** @brief Blood map beside the deformation map: same dim, same toroidal origin. R8G8B8A8 sRGB: rgb = pigment, a = concentration. */
 	Texture2D* bloodMapTexture = nullptr;
@@ -4135,6 +4157,8 @@ protected:
 		RE::NiPoint3 restPos;
 		/** @brief Trench store read on a ring around the item, refreshed every 8th frame. */
 		float carveAround = 0.0f;
+		/** @brief Trampled-area factor at the item, refreshed with carveAround: it rests on the floor the shells draw there. */
+		float trampleField = 0.0f;
 		/** @brief Under where today's snow would put it: it stops printing, or its own trench would keep the snow off it. */
 		bool buried = false;
 		bool wasAsleep = false;
