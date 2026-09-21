@@ -224,22 +224,6 @@ cbuffer ShellCB : register(b0)
 	float4 TrampleStyle;
 }
 
-// Bow wave: the crest a moving body pushes ahead of and beside its legs.
-// Its own buffer, not a ShellCB row - ShellCB is hand-mirrored across two
-// shaders and this is landscape-only. Rebuilt every frame from current
-// position and velocity, so it emits nothing and needs no per-wave age; the
-// berm the module already draws is the settle.
-cbuffer BowWaveCB : register(b1)
-{
-	/// x = live wave count, y = height scale (fraction of local depth),
-	/// z = reach scale on the push radius, w = forward bias 0-1
-	float4 BowWaveParams;
-	/// x = chunkiness 0-1 (how far the crest breaks into lumps), yzw spare
-	float4 BowWaveLook;
-	// The per-wave position/shape arrays are gone: DeformationUpdateCS MAXes
-	// the crest into the map's deposit channel and the shell reads that field,
-	// so the buffer carries only the look knobs.
-}
 
 Texture2D<float4> TerrainWindow : register(t0);
 // Drawn water's height per terrain texel, MAX of the bodies touching it,
@@ -577,29 +561,6 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
-// Deposit (.w) sample: snow standing ABOVE the untouched surface, written by
-// the bow wave in DeformationUpdateCS and PERSISTENT - it stays on the ground
-// it was shouldered onto instead of following the feet that made it. Plain
-// bilinear is enough: the field is smooth by construction (a crest is tens of
-// units across) and the chunk detail is added analytically at pixel rate
-// below, not stored here.
-float SampleDeposit(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).w;
-	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).w;
-	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).w;
-	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).w;
-	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
-}
 
 // B-spline bicubic sample of the deformation map, built from four bilinear
 // taps at fractional offsets. Smooth value and gradient: plain bilinear
@@ -1166,42 +1127,6 @@ float3 SampleTerrainShaped(float2 gridLocal)
 	return result;
 }
 
-// Bow wave height at a world point, as a fraction of local snow depth.
-// The shape is not computed here: DeformationUpdateCS MAXes the crest into the
-// map's deposit channel, so this reads a persistent field and deposited snow
-// stays on the ground it was pushed onto. Only the chunk detail is analytic,
-// since the map is ~6.8 units per texel and the lumps want to be finer.
-float BowWaveHeight(float2 worldXY, float2 gridLocal, float deformation, float uncarvedDepth)
-{
-	[branch] if (BowWaveParams.y < 0.001)
-		return 0.0;
-
-	float crest = SampleDeposit(gridLocal);
-	[branch] if (crest < 0.002)
-		return 0.0;
-
-	// CHUNKS: many small mountains standing up out of the pushed snow, over
-	// the WHOLE deposit rather than a thin leading band - the round-3 band was
-	// so narrow that the lumps read as occasional hills instead of a field of
-	// broken snow. Additive ridged noise at two fine octaves, powered
-	// into isolated peaks, WORLD-anchored so the lumps belong to the ground
-	// like the deposit itself does.
-	[branch] if (BowWaveLook.x > 0.001)
-	{
-		const float n1 = ChurnNoiseScaled(worldXY, kClodSizeScale * 0.26);
-		const float n2 = ChurnNoiseScaled(worldXY + 71.3, kClodSizeScale * 0.11);
-		const float peaks = pow(saturate(n1 * 0.55 + n2 * 0.45 + 0.5), 1.9);
-		// Rides the deposit's shoulder, so chunks never float on flat ground.
-		// The floor sits low because the wipe owns trail cleanliness; a
-		// 0.30-0.70 floor eats most of the lumps, since typical pile values
-		// are 0.4-0.7.
-		crest += peaks * smoothstep(0.12, 0.45, crest) * BowWaveLook.x * 1.4;
-	}
-
-	// Un-dug snow only, and scaled by what is locally there to push.
-	return crest * BowWaveParams.y * uncarvedDepth *
-	       saturate(1.0 - deformation) * BermDepthGate(uncarvedDepth);
-}
 
 // The shell surface: per-texture-class snow depth carved by deformation.
 // Class depths blend by their baked weights on the CPU (window rebuild),
@@ -1406,7 +1331,6 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// raising Berm Height raised the whole trench with it.
 			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal) +
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
-			depth += BowWaveHeight(GridOrigin + gridLocal, gridLocal, deformation, uncarved);
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
@@ -2546,19 +2470,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float cYP = ChurnNoise(worldXYPS + float2(0.0, cStep));
 		float cYN = ChurnNoise(worldXYPS - float2(0.0, cStep));
 		gradZ += float2(cXP - cXN, cYP - cYN) / (2.0 * cStep) * ChurnHeightAmp * churnW;
-	}
-
-	// Bow wave gradient (same field the VS displaces by). Wide step: the
-	// crest is tens of units across, and a short step reads its smooth
-	// flanks as noise.
-	[branch] if (BowWaveParams.y > 0.001)
-	{
-		const float wStep = 6.0;
-		float wXP = BowWaveHeight(worldXYPS + float2(wStep, 0.0), gridLocal + float2(wStep, 0.0), pixelCarve, pixelDepth);
-		float wXN = BowWaveHeight(worldXYPS - float2(wStep, 0.0), gridLocal - float2(wStep, 0.0), pixelCarve, pixelDepth);
-		float wYP = BowWaveHeight(worldXYPS + float2(0.0, wStep), gridLocal + float2(0.0, wStep), pixelCarve, pixelDepth);
-		float wYN = BowWaveHeight(worldXYPS - float2(0.0, wStep), gridLocal - float2(0.0, wStep), pixelCarve, pixelDepth);
-		gradZ += float2(wXP - wXN, wYP - wYN) / (2.0 * wStep);
 	}
 
 	// P6 clod gradient (same field the VS displaces by; centre-weighted

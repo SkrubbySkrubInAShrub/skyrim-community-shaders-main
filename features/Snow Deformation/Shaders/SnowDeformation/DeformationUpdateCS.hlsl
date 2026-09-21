@@ -13,12 +13,12 @@
 //   RingCS   - writes the ring of texels whose world assignment changed
 //              (tile-store inject or pristine zero). Dispatch sized to the
 //              ring, so a walking-speed scroll costs a few thousand threads.
-//   EvolveCS - the world acting on the map: wind-biased refill, melt/crust/
-//              deposit decay, unsupported-snow slump. The only pass that
+//   EvolveCS - the world acting on the map: wind-biased refill, melt/crust
+//              decay, unsupported-snow slump. The only pass that
 //              reads NEIGHBOUR texels, so it reads a snapshot copy taken
 //              after RingCS and writes the map in place.
-//   StampCS  - actors acting on the map: stamp capsules and bow-wave
-//              deposits, read-modify-write on the texel EvolveCS just wrote.
+//   StampCS  - actors acting on the map: stamp capsules, read-modify-write
+//              on the texel EvolveCS just wrote.
 //              Per-texel only, so it can later be tile-dispatched over the
 //              stamps' bounding boxes.
 //
@@ -52,17 +52,8 @@
 //         < 0  scorch, which keeps its berm and darkens the shell.
 //       Berm reads x - max(y, 0); scorch reads max(-y, 0).
 //   .z  crust: refrozen snow, resists carving and shades as ice.
-//   .w  deposit: snow standing above the untouched surface. MAXed in every
-//       frame at the crest's current position, so shouldered ground stays
-//       shouldered after the walker leaves. Decays on BowWaveSettle and to
-//       the refill. The ImGui map preview blends by alpha and so reads
-//       deposit as transparency.
-
-// Bow-wave crests to deposit this frame. Mirrors kMaxBowWaves in
-// SnowDeformation.h and MAX_BOW_WAVES in SnowShell.hlsl - the SHAPE is
-// evaluated identically in both places, so what the shell draws is what the
-// map remembers.
-#define MAX_DEPOSIT_WAVES 16
+//   .w  FREE. Held the bow wave's deposit until that feature was retired
+//       (2026-09-21); written zero now, and nothing reads it.
 
 #define MAX_STAMPS 256
 
@@ -246,12 +237,6 @@ cbuffer PerFrame : register(b0)
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 
-	// x = live count, y = reach scale, z = forward bias, w = settle seconds
-	// (how long a deposit lying INSIDE a trench holds; out on untouched snow
-	// a deposit is permanent until refill buries it).
-	float4 DepositParams;
-	float4 DepositPosDir[MAX_DEPOSIT_WAVES];   // xy world pos (the foot), zw unit travel direction
-	float4 DepositShape[MAX_DEPOSIT_WAVES];    // x push radius, y strength, zw previous foot position
 
 	// Rasterized prop contact (SnowContactCapture.hlsl): the field's world
 	// centre, half-extent and texel dim (0 = no field this frame), and the
@@ -348,7 +333,7 @@ int2 TorusPhys(int2 logical, int2 dims)
 // Raw layout mirrored in SnowDeformation.cpp: [0] flag, [4] count,
 // [8]/[12] complemented min X/Y (min as InterlockedMax of 65535-coord, so an
 // all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
-// per-channel counts (depth, melt/scorch, crust/deposit), [36] delta sum,
+// per-channel counts (depth, melt/scorch, crust), [36] delta sum,
 // [40] evolve-only flag (EvolveCS changed something - its idle gate's own
 // verdict, meaningful only on frames evolve ran), [44] evolve tile count and
 // [48] berm tile count (the dispatch census). Both passes OR into the same
@@ -372,7 +357,7 @@ groupshared uint gDeltaSum;
 groupshared uint gNonZero;
 
 // Debug: per-texel activity, painted only while the menu view is open.
-// R = depth, G = melt/scorch, B = crust or deposit; brightness = how far past
+// R = depth, G = melt/scorch, B = crust; brightness = how far past
 // stored precision the change is. Max-composed: the CPU clears it once per
 // frame and each executed pass folds its own delta in.
 RWTexture2D<float4> ActivityView : register(u2);
@@ -504,7 +489,7 @@ float SlumpTap(int2 p, int2 dims)
 	const int2 logical = int2(rect.x + (int)(id % (uint)rect.z), rect.y + (int)(id / (uint)rect.z));
 
 	// Arriving ground is not pristine: the tile store remembers what was dug
-	// there. Everything else - melt, crust, deposit - is not stored, exactly
+	// there. Everything else - melt, crust - is not stored, exactly
 	// as the old scroll path's out-of-window seed behaved.
 	float depth = 0.0;
 	[branch] if (InjectValid)
@@ -569,7 +554,6 @@ bool EvolveTexel(uint2 phys)
 	// melt basin from a dug trench.
 	float melted = carried.y;
 	float crust = carried.z;
-	float deposit = carried.w;
 
 	{
 		// Wind-biased refill: recovery scales with the intact snow a few
@@ -607,20 +591,6 @@ bool EvolveTexel(uint2 phys)
 		// so it is also the one a night spent waiting would otherwise skip
 		// entirely - the glaze was still there in the morning.
 		crust = max(crust - refill - CrustThaw * GameDeltaTime, 0.0);
-		// SETTLE IS A TRENCH CLOCK, NOT A WAVE CLOCK.
-		// Snow shouldered onto untouched cover has been MOVED, and moving
-		// itself back is not something snow does - so out there the only
-		// thing that takes a deposit away is refill, i.e. fresh snowfall
-		// burying it, exactly as it buries the trench beside it. That is why
-		// the wave now stays when the walker stops.
-		//
-		// Inside the trench the deposit is spoil lying on ground that has
-		// ALREADY been carved, and that is what was thickening the trench's
-		// own spiky edges; there the settle clock clears it fast. One field,
-		// two lifetimes, told apart by whether the ground under it was dug.
-		// Fixed 0.35 s: the Settle slider is RETIRED.
-		const float dugHere = saturate(deformation * 3.0);
-		deposit = max(deposit - refill - dugHere * DeltaTime / 0.35, 0.0);
 
 		// Unsupported-snow slump: see the SLUMP_* block up top for the
 		// design. Runs on the snapshot, like the drift fetch above, and
@@ -674,10 +644,9 @@ bool EvolveTexel(uint2 phys)
 		}
 	}
 
-	// Alpha is written as 1, not 0, on the debug side only. Nothing reads the
-	// map's .w as alpha except the ImGui preview, which the deposit channel
-	// claimed; see TrenchDebugCS for the honest view.
-	float4 result = float4(deformation, melted, crust, deposit);
+	// .w is FREE since the bow wave was retired; see TrenchDebugCS for the
+	// map view, which never read it anyway.
+	float4 result = float4(deformation, melted, crust, 0.0);
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
@@ -787,7 +756,7 @@ bool EvolveTexel(uint2 phys)
 	TileArgs.Store3(0, uint3(min(count, 1024u), (count + 1023u) / 1024u, 1u));
 }
 
-// Actors acting on the map: stamp capsules and bow-wave deposits, RMW on the
+// Actors acting on the map: stamp capsules, RMW on the
 // texel EvolveCS wrote this frame (or the standing map on frames where the
 // world had nothing to do). Every term is a function of the texel's own
 // value - no neighbour reads - which is what lets this pass run in place and
@@ -851,7 +820,6 @@ bool StampTexel(uint2 phys)
 	float deformation = carried.x;
 	float melted = carried.y;
 	float crust = carried.z;
-	float deposit = carried.w;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
@@ -1106,99 +1074,8 @@ bool StampTexel(uint2 phys)
 		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
 	crustNow = saturate(crustNow);
 
-	// Bow-wave deposit. The SAME crescent the shell draws, MAXed in at
-	// wherever the crest stands this frame: max, not accumulate, so passing
-	// twice does not build a wall, and so the field records the high-water
-	// mark of what was shouldered rather than a running total.
-	[branch] if (DepositParams.x > 0.5)
-	{
-		float crest = 0.0;
-		// How much of the OLD deposit this frame's crest region owns. The
-		// crest is the current state of the snow it is pushing, so wherever
-		// it reaches, whatever was written there before is stale and must go
-		// before the new value is laid down. This is what tells a WAVE from a
-		// TRENCH: ground the crest has already swept over is
-		// walked ground - trench - and gets cleared, while ground it has not
-		// reached yet keeps the pile that was pushed onto it. Without it the
-		// crest wrote its ring at every step and never took any of it back,
-		// so the whole corridor kept a thin deposit and the chunk noise stood
-		// that up as a row of icicles along the path.
-		float wipe = 0.0;
-		const uint waveCount = (uint)DepositParams.x;
-		[loop] for (uint w = 0; w < waveCount; w++)
-		{
-			// CAPSULE, not a point: the crest hugs the swept path
-			// the foot actually took this frame - the same segStart -> tip
-			// capsule the trench stamps use.
-			const float2 tipPos = DepositPosDir[w].xy;
-			const float2 prevPos = DepositShape[w].zw;
-			const float2 fwd = DepositPosDir[w].zw;
-			const float2 sideDir = float2(-fwd.y, fwd.x);
-			const float2 seg = tipPos - prevPos;
-			const float segLenSq = dot(seg, seg);
-			const float segT = segLenSq > 1e-4 ? saturate(dot(worldPos - prevPos, seg) / segLenSq) : 0.0;
-			const float2 onPath = prevPos + seg * segT;
-			const float radius = max(DepositShape[w].x, 1e-3);
-
-			// ANCHORED AT THE FOOT, STRETCHED FORWARD: the
-			// wave starts where the trench ends, always. Offsetting the lobe's
-			// centre forward instead detaches the mound from the trench mouth
-			// as Reach goes up. The shape's near edge stays
-			// pinned at the foot and Reach only DIVIDES the forward axis, so
-			// turning it up extends the hill onward from the same start
-			// instead of moving it away.
-			const float reach = max(DepositParams.y, 0.25);
-			const float2 rel = worldPos - onPath;
-			const float along = dot(rel, fwd);
-			const float across = dot(rel, sideDir);
-			// Forward distances are compressed by Reach - the lobe covers
-			// [0 .. ~1.45 x radius x reach] ahead; behind is left at true
-			// scale and the angular term kills it anyway.
-			const float2 shaped = float2(along > 0.0 ? along / reach : along, across);
-			const float d = length(shaped);
-			[branch] if (d > radius * 1.45)
-				continue;
-			const float t = d / radius;
-			// Zero AT the foot (the walker stands in the trench they just
-			// cut), rising to the crest ahead.
-			const float radial = smoothstep(0.25, 0.85, t) * (1.0 - smoothstep(0.95, 1.45, t));
-			const float forward = d > 1e-3 ? shaped.x / d : 1.0;
-			const float halfAngle = saturate(forward * 0.5 + 0.5);
-			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
-			const float shape = radial * angular;
-			crest = max(crest, shape * DepositShape[w].y);
-
-			// THE WIPE NEVER REACHES THE PILE (the final melt fix).
-			// The wipe is a per-frame MULTIPLICATIVE cut, so any leak onto
-			// the pile compounds at frame rate. A claim mask keyed to the crest
-			// shape being exactly 1 protects almost nowhere, and the flanks melt
-			// within a second of the fade.
-			// No shape algebra survives that; geometry does: the pile lies
-			// AHEAD of the foot by construction, so the wipe is confined to
-			// ground at or BEHIND the leading edge, plus the corridor's
-			// sides. Ground ahead is structurally unreachable by it. When
-			// the walker advances, yesterday's pile falls behind the new
-			// foot and is cleared; when the walker stops, the pile is ahead
-			// of a foot that never comes, and stands for good.
-			const float behind = 1.0 - smoothstep(0.05 * radius, 0.35 * radius, along);
-			const float lateral = 1.0 - smoothstep(1.4, 2.1, abs(across) / radius);
-			wipe = max(wipe, behind * lateral * DepositShape[w].y);
-		}
-		// Clear what the crest region owns, THEN lay this frame's crest into
-		// it. Order matters: the pile ahead of the walker is written after
-		// the wipe, so it survives; the pile the walker has drawn level with
-		// is wiped and not rewritten (the forward lobe no longer covers it),
-		// which is how the corridor behind comes out clean. When the walker
-		// stops, wave strength decays, no crest is emitted, nothing wipes -
-		// and the last pile pushed stands there for good.
-		deposit *= saturate(1.0 - wipe);
-		// Only on snow that is still standing: a crest cannot pile up out of
-		// ground that has already been dug away.
-		deposit = max(deposit, crest * saturate(1.0 - total));
-	}
-
 	float4 result = float4(total,
-		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
+		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, 0.0);
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);

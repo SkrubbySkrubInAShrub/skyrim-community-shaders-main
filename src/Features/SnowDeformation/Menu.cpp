@@ -794,27 +794,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTrampleBr = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trample_bracket_tooltip"), "How much overlapping traffic counts as trampled ground: the two settings above begin at the first reading and are fully applied at the second. Lower Starts At to let smaller churned patches count as trampled; raise it to keep the change to wide, heavily walked areas only. A lone trail sits well below the default start, which is what keeps it untouched."));
 
-		ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
-
-		ImGui::SliderFloat(T(TKEY("bow_wave_height"), "Bow Wave Height"), &settings.BowWaveHeight, 0.0f, 1.5f, "%.2f");
-		if (auto _ttBwH = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("bow_wave_height_tooltip"), "How high a moving body heaps the snow it is pushing, as a fraction of local snow depth. This is the crest that rides ahead of and beside the legs and relaxes into the berm behind. 0 = off."));
-
-		ImGui::SliderFloat(T(TKEY("bow_wave_reach"), "Bow Wave Reach"), &settings.BowWaveReach, 0.25f, 3.0f, "%.2fx");
-		if (auto _ttBwR = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("bow_wave_reach_tooltip"), "How far AHEAD of the feet the pushed snow piles, and how far the hill stretches along the direction of travel. It does not make the mound bigger - it moves it out in front and draws it out longer, which is what a body ploughing a furrow leaves. Width is set by Forward Bias."));
-
-		ImGui::SliderFloat(T(TKEY("bow_wave_forward"), "Bow Wave Forward Bias"), &settings.BowWaveForward, 0.0f, 1.0f, "%.2f");
-		if (auto _ttBwF = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("bow_wave_forward_tooltip"), "0 = snow heaps evenly all around the actor; 1 = only dead ahead. Middle values give the crescent - pushed mostly forward but shouldered aside too."));
-
-		ImGui::SliderFloat(T(TKEY("bow_wave_chunk"), "Bow Wave Chunkiness"), &settings.BowWaveChunk, 0.0f, 1.0f, "%.2f");
-		if (auto _ttBwC = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("bow_wave_chunk_tooltip"), "How far the pushed snow breaks into uneven lumps instead of a smooth swell. 0 reads as a water wave; higher gives chunks that ride up and tumble aside. The lumps are anchored to the world, so they appear to flow through the crest as you advance rather than travelling with you."));
-
-		ImGui::SliderFloat(T(TKEY("bow_wave_speed"), "Bow Wave Full Speed"), &settings.BowWaveFullSpeed, 40.0f, 500.0f, "%.0f u/s");
-		if (auto _ttBwS = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("bow_wave_speed_tooltip"), "Travel speed at which the crest reaches full height. Lower means a walk already pushes a wave; higher means only a sprint does. The crest builds quickly and eases out over about a third of a second when you stop."));
 
 		ImGui::SeparatorText(T(TKEY("dropped_items_group"), "Dropped Items"));
 		ImGui::Checkbox(T(TKEY("item_sink"), "Enable Dynamic Object Sink Depth"), &settings.ItemSink);
@@ -1402,13 +1381,13 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &settings.ShowDebugTexture);
 			if (settings.ShowDebugTexture) {
 				// The honest caption. ImGui blends by the texture's alpha, and this
-				// map's .w was claimed by the bow wave's deposit field, so the view
+				// map's .w was claimed by the retired bow wave's deposit field, so the view
 				// is drawn through deposit: transparent wherever nothing has been
 				// pushed, whatever the depth channel holds. Right after a load it is
 				// blank BY CONSTRUCTION, because deposit is not stored. Two rounds
 				// were read backwards from this image before anyone noticed.
 				// The map's own depth, copied to a single channel so ImGui cannot
-				// draw it through the bow wave's deposit alpha. This is the image
+				// draw it through that deposit alpha. This is the image
 				// that answers "did the trench reach the map".
 				WrapTextF("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
 				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
@@ -1493,9 +1472,9 @@ void SnowDeformation::DrawSettings()
 				else
 					WrapTextF("Update pass: idle (skipped)");
 			} else {
-				static const char* kBlockerNames[9] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale", "contact" };
+				static const char* kBlockerNames[8] = { "scroll", "stamps", "inject", "refill", "clear", "map-active", "verdict-stale", "contact" };
 				std::string held;
-				for (int bit = 0; bit < 9; bit++)
+				for (int bit = 0; bit < 8; bit++)
 					if (deformIdleBlockers & (1u << bit)) {
 						if (!held.empty())
 							held += ", ";

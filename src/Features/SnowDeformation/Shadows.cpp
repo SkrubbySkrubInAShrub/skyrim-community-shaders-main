@@ -562,18 +562,15 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->OMSetRenderTargets(0, nullptr, shadowAtlasDSV[cascade].get());
 
 		// Terrain shell: vertex-buffer-less grid with the excess-height
-		// caster VS. The grid VS reads BowWaveCB at b1 and the skin/patch
-		// draws below rebind b1 to StaticsCB, so b1 MUST be re-bound here
-		// every cascade: cascade 0 used to survive on the bind inherited
-		// from last frame's visible DrawShell, while every later cascade's
-		// grid read StaticsCB bytes as bow-wave params - harmless while the
-		// skins' first CB float was a rotation element (wave count
-		// truncated to zero), but the patch fill put the world-space patch
-		// centre there and threw phantom trail geometry into the far
-		// cascades (Josef's giant trench wedges: near cascade clean, far
-		// cascades streaked).
-		ID3D11Buffer* waveCB1 = bowWaveCB ? bowWaveCB->CB() : nullptr;
-		context->VSSetConstantBuffers(1, 1, &waveCB1);
+		// caster VS. b1 is cleared for the grid draw because the skin/patch
+		// draws below bind StaticsCB there: the grid declared a b1 of its
+		// own until the bow wave was retired, and every later cascade read
+		// the patch fill's world-space centre as wave params - phantom
+		// trail geometry in the far cascades (Josef's giant trench wedges).
+		// The grid reads no b1 now, so this only keeps a stale buffer from
+		// being visible to it if one is ever added back.
+		ID3D11Buffer* nullCB1 = nullptr;
+		context->VSSetConstantBuffers(1, 1, &nullCB1);
 		context->IASetInputLayout(nullptr);
 		ID3D11Buffer* nullVB = nullptr;
 		UINT zero = 0;

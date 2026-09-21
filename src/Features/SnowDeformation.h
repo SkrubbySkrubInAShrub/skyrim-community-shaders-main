@@ -60,8 +60,6 @@ public:
 	static constexpr uint kContactMaxActors = 16;
 	/** @brief Corpses drawn by the contact pass, budgeted apart from the living: a corpse holds its slot only until it settles. */
 	static constexpr uint kContactMaxCorpses = 8;
-	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl and MAX_DEPOSIT_WAVES in DeformationUpdateCS.hlsl. Declared HERE because PerFrame sizes arrays with it - an in-class static constexpr must precede the struct that uses it (S4 r20 lesson). */
-	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeCarve = 0.0f;
 	static constexpr float kStampModeMelt = 1.0f;
@@ -572,16 +570,6 @@ public:
 		float TrampleFull = 0.50f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
-		/** @brief Bow wave: crest height as a fraction of local snow depth. 0 = off. */
-		float BowWaveHeight = 0.30f;
-		/** @brief Bow wave: how far ahead of the feet the crest sits, and how far it stretches along travel. Not a size multiplier; width comes from BowWaveForward. */
-		float BowWaveReach = 1.15f;
-		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
-		float BowWaveForward = 0.80f;
-		/** @brief Bow wave: how far the crest breaks into uneven lumps rather than a smooth swell (P6's clod octave, world-anchored). 0 = smooth. */
-		float BowWaveChunk = 0.25f;
-		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
-		float BowWaveFullSpeed = 200.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
@@ -797,10 +785,6 @@ public:
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
 		float4 StampEnds[kMaxStamps];
 
-		/** @brief Bow wave, deposited into the map's .w channel so the crest PERSISTS instead of following the feet. x = live count, y = reach, z = forward bias, w = settle seconds. Appended last; BermFieldCS mirrors only the leading rows and is unaffected. */
-		float4 DepositParams;
-		float4 DepositPosDir[kMaxBowWaves];
-		float4 DepositShape[kMaxBowWaves];
 
 		float2 ContactCenter;
 		float ContactHalfExtent;
@@ -819,6 +803,7 @@ public:
 		float HasRoadRaster;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
+	static_assert(offsetof(PerFrame, ContactCenter) == 8336, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
 
 	Settings settings;
 
@@ -1322,7 +1307,7 @@ public:
 	ID3D11ComputeShader* GetDeformationRingCS();
 	/** @brief Returns the map-evolution compute shader (refill/decay/slump - the neighbour-reading pass), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationEvolveCS();
-	/** @brief Returns the stamp compute shader (stamps + bow waves, in-place RMW, one group per CPU-listed tile), compiling it on first use. */
+	/** @brief Returns the stamp compute shader (in-place RMW, one group per CPU-listed tile), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationStampCS();
 	/** @brief Returns the full-map stamp fallback (tile list past its cap, or force-all-dirty). */
 	ID3D11ComputeShader* GetDeformationStampAllCS();
@@ -1787,29 +1772,6 @@ public:
 	std::vector<LightningArc> lightningArcs;
 	uint32_t lightningArcSeed = 0;
 
-	/** @brief One actor's push crest for this frame. Rebuilt every frame from live position and velocity - nothing persists, so nothing can be left behind (the retired spray's failure). */
-	struct BowWave
-	{
-		float2 pos{};
-		/** @brief Previous foot position - the crest rides this capsule, exactly as the trench stamp does. */
-		float2 prev{};
-		float2 dir{};
-		float radius = 24.0f;
-		float strength = 0.0f;
-		float distSq = 0.0f;
-	};
-	/** @brief Layout must match BowWaveCB in SnowShell.hlsl (b1 of the shell pass). Its own buffer: ShellCB is hand-mirrored across two shaders and this is landscape-only. */
-	struct BowWaveCB
-	{
-		float4 BowWaveParams;
-		float4 BowWaveLook;
-	};
-	ConstantBuffer* bowWaveCB = nullptr;
-	std::vector<BowWave> bowWaves;
-	/** @brief Smoothed speed + last travel direction per actor, so the crest eases in and OUT rather than snapping off the instant someone stops - the "settles after a brief moment" half of the design - and keeps pointing the right way while it eases. xy = unit direction, z = smoothed speed. Keyed by formID. */
-	std::unordered_map<uint32_t, float4> bowWaveSpeed;
-	/** @brief Uploads this frame's crests to b1 of the shell pass. */
-	void UpdateBowWaveBuffer();
 
 	/** @brief Layout must match ArcCB in LightningArc.hlsl. Its own buffer, NOT part of ShellCB, which is hand-mirrored across two shaders and must not grow for a cosmetic pass. */
 	struct ArcCB

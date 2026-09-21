@@ -130,11 +130,6 @@
 	X(RimLip) \
 	X(RimTeeth) \
 	X(BermClods) \
-	X(BowWaveHeight) \
-	X(BowWaveReach) \
-	X(BowWaveForward) \
-	X(BowWaveChunk) \
-	X(BowWaveFullSpeed) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
 	X(ShellSSSRemarch) \
@@ -388,7 +383,7 @@ void SnowDeformation::SetupResources()
 		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
 		// so ClearUAV's all-zero init works for every field), [16] maxX,
 		// [20] maxY, [24] depth count, [28] melt/scorch count, [32]
-		// crust/deposit count, [36] per-texel max-delta sum, fixed-point 1e6,
+		// crust count, [36] per-texel max-delta sum, fixed-point 1e6,
 		// [40] evolve-only flag (that pass's own idle gate; meaningful only on
 		// frames evolve ran), [44] evolve tile count, [48] berm tile count
 		// (the dispatch census).
@@ -1227,23 +1222,6 @@ void SnowDeformation::Prepass()
 	// about to be written into is the one that frame will be copying.
 	MarkTrenchDirtyRows(perFrameData);
 
-	// Bow-wave crests, deposited into the map's .w so they PERSIST on the
-	// ground rather than following the feet that made them.
-	// GatherStamps has just sorted them nearest-first, so the slots go to the
-	// crests the player can actually see.
-	{
-		const uint waveCount = std::min((uint)bowWaves.size(), (uint)kMaxBowWaves);
-		perFrameData.DepositParams = { settings.BowWaveHeight > 0.001f ? (float)waveCount : 0.0f,
-			std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
-			std::clamp(settings.BowWaveForward, 0.0f, 1.0f),
-			// w unused: trench-spoil decay is a fixed clock in the CS.
-			0.0f };
-		for (uint i = 0; i < waveCount; i++) {
-			const auto& wave = bowWaves[i];
-			perFrameData.DepositPosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };
-			perFrameData.DepositShape[i] = { wave.radius, wave.strength, wave.prev.x, wave.prev.y };
-		}
-	}
 
 	// Activity view: which texels the CS is about to claim changed, and in
 	// which channel. The count in the readback rides along whether or not the
@@ -1326,7 +1304,6 @@ void SnowDeformation::Prepass()
 	const bool inputsIdle =
 		scroll.x == 0 && scroll.y == 0 &&
 		stampsQuiet &&
-		perFrameData.DepositParams.x < 0.5f &&
 		perFrameData.InjectValid == 0 &&
 		perFrameData.RefillAmount <= 0.0f &&
 		perFrameData.ClearMap == 0 &&
@@ -1335,13 +1312,12 @@ void SnowDeformation::Prepass()
 	deformIdleBlockers =
 		((scroll.x != 0 || scroll.y != 0) ? 1u : 0u) |
 		(!stampsQuiet ? 2u : 0u) |
-		(perFrameData.DepositParams.x >= 0.5f ? 4u : 0u) |
-		(perFrameData.InjectValid != 0 ? 8u : 0u) |
-		(perFrameData.RefillAmount > 0.0f ? 16u : 0u) |
-		(perFrameData.ClearMap != 0 ? 32u : 0u) |
-		(deformFlagActive ? 64u : 0u) |
-		(deformFlagSeq <= deformLastNonIdleSeq ? 128u : 0u) |
-		(perFrameData.ContactDim > 0.5f ? 256u : 0u);
+		(perFrameData.InjectValid != 0 ? 4u : 0u) |
+		(perFrameData.RefillAmount > 0.0f ? 8u : 0u) |
+		(perFrameData.ClearMap != 0 ? 16u : 0u) |
+		(deformFlagActive ? 32u : 0u) |
+		(deformFlagSeq <= deformLastNonIdleSeq ? 64u : 0u) |
+		(perFrameData.ContactDim > 0.5f ? 128u : 0u);
 	// The berm field is only rebuilt by an executed pass; re-enabling its A/B
 	// at rest needs one forced run or the stale bake stands until something moves.
 	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
@@ -1412,8 +1388,7 @@ void SnowDeformation::Prepass()
 			cpuCensus.stampHashRing[cpuCensus.stampHashHead] = h;
 			cpuCensus.stampHashHead = (cpuCensus.stampHashHead + 1) % CpuCensus::kHashRing;
 		}
-		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f ||
-		                      perFrameData.ContactDim > 0.5f;
+		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.ContactDim > 0.5f;
 		// Whether the stamp pass actually wrote anything - a stamp set that
 		// lies entirely outside the window dispatches nothing and must not
 		// re-arm evolve.
@@ -2014,19 +1989,6 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 			std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + reach);
 	}
 
-	// Bow waves: crest forward extent is compressed by Reach in shaped space
-	// (world extent 1.45 x r x reach); the wipe reaches 2.1 r laterally.
-	if (a_data.DepositParams.x > 0.5f) {
-		const uint waveCount = (uint)a_data.DepositParams.x;
-		const float reachExtent = std::max(1.45f * std::max(a_data.DepositParams.y, 0.25f), 2.2f);
-		for (uint w = 0; w < waveCount && !overflow; w++) {
-			const float r = std::max(a_data.DepositShape[w].x, 1e-3f) * reachExtent;
-			addWorldBox(std::min(a_data.DepositPosDir[w].x, a_data.DepositShape[w].z) - r,
-				std::min(a_data.DepositPosDir[w].y, a_data.DepositShape[w].w) - r,
-				std::max(a_data.DepositPosDir[w].x, a_data.DepositShape[w].z) + r,
-				std::max(a_data.DepositPosDir[w].y, a_data.DepositShape[w].w) + r);
-		}
-	}
 
 	// Rasterized props: the field's own bounds, plus the stamp pass's
 	// one-texel dilation at contact resolution and the usual slop.

@@ -980,27 +980,6 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	};
 }
 
-/**
- * This frame's bow-wave crests, uploaded to b1 of the shell pass.
- *
- * Rebuilt from scratch every frame from live actor positions and velocities
- * Nothing is stored between frames except the smoothed speed
- * that lets a crest ease out, so no crest can ever be left behind. That is
- * the structural fix for what killed the Stage 4 spray.
- */
-void SnowDeformation::UpdateBowWaveBuffer()
-{
-	if (!bowWaveCB)
-		bowWaveCB = new ConstantBuffer(ConstantBufferDesc<BowWaveCB>(), "SnowDeformation::BowWaveCB");
-
-	// Shape and position now live in the deformation map's deposit channel
-	// (DeformationUpdateCS writes it); the shell only needs the look knobs.
-	BowWaveCB data{};
-	data.BowWaveParams = { 0.0f, std::clamp(settings.BowWaveHeight, 0.0f, 1.5f), 0.0f, 0.0f };
-	data.BowWaveLook = { std::clamp(settings.BowWaveChunk, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f };
-	bowWaveCB->Update(data);
-}
-
 void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
@@ -1420,20 +1399,10 @@ void SnowDeformation::DrawShell()
 		ps = shellLODPS;
 	}
 
-	UpdateBowWaveBuffer();
 
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
-	// Bow wave crests (b1). VS displaces by them, PS differences them for the
-	// normal, DS evaluates the surface on the tessellated path - all three
-	// must see the same buffer or shape and shading disagree.
-	if (bowWaveCB) {
-		ID3D11Buffer* waveCB[1] = { bowWaveCB->CB() };
-		context->VSSetConstantBuffers(1, 1, waveCB);
-		context->PSSetConstantBuffers(1, 1, waveCB);
-		context->DSSetConstantBuffers(1, 1, waveCB);
-	}
 	// SharedData (b5) supplies SH ambient + sun for the PS lighting; rebind
 	// the b4-b6 triple exactly as Deferred does for its own passes.
 	auto state = globals::state;
@@ -1653,8 +1622,6 @@ void SnowDeformation::DrawShell()
 	if (shellGround && tessellate && bake) {
 		globals::profiler->BeginPass("SnowDeformation::ShellVertexBake");
 		context->CSSetConstantBuffers(0, 1, cbs);
-		ID3D11Buffer* bakeWaveCB[1] = { bowWaveCB ? bowWaveCB->CB() : nullptr };
-		context->CSSetConstantBuffers(1, 1, bakeWaveCB);
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
 		context->CSSetShaderResources(0, 6, shellSRVs);
 		context->CSSetShaderResources(13, 1, &fineSRV);

@@ -97,12 +97,6 @@ static constexpr int kBoneWalkMaxDepth = 32;
 // Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
 static constexpr uint64_t kLimbKeyBit = 0x4000;
-/** Body key for the bow wave's own previous-position entry. */
-static constexpr uint64_t kBodyKeyBit = 0x2000;
-/** Push radius of a human-sized actor before the Reach crank, in world units. */
-static constexpr float kBowWaveBaseRadius = 30.0f;
-/** A jump this big in one frame is a teleport, a fast travel or a cell load, not a stride. */
-static constexpr float kBowWaveTeleport = 400.0f;
 // Limb stamps below this carve fraction are invisible; skip them.
 static constexpr float kMinLimbCarve = 0.05f;
 // Prop stamps floor here so small dropped items (daggers, gems) stay visible
@@ -634,9 +628,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
-	bowWaves.clear();
-	if (bowWaveSpeed.size() > 512)
-		bowWaveSpeed.clear();
 	stampStats = {};
 
 	// The map is 2048 whatever the Trenches range, so past ~100 m a texel
@@ -839,49 +830,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			skeletonProbe.shellDepth = skeletonProbe.cellBaked ? probeDepth : -1.0f;
 		}
 
-		// Bow wave. The body measures the motion - one smoothed speed and
-		// heading per actor, so the crest never pulses with the gait - but the
-		// feet carry it (emitted in the foot loop below). Anchoring the crest
-		// to the body places it a fixed radius from the actor's centre, which
-		// a sprinting lead foot can reach and clip through. A crest measured
-		// from the foot is zero at the foot and peaks ahead of it.
-		float bowWaveStrength = 0.0f;
-		float2 bowWaveDir = { 0.0f, 0.0f };
-		if (settings.BowWaveHeight > 0.001f && !isDead) {
-			const uint64_t bodyKey = (uint64_t(formID) << 16) | kBodyKeyBit;
-			const float2 here = { position.x, position.y };
-			auto prevBody = stampPrevPositions.find(bodyKey);
-			currentPositions[bodyKey] = here;
-			auto& track = bowWaveSpeed[formID];
-			const float dtBody = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
-			if (prevBody != stampPrevPositions.end()) {
-				const float2 step = { here.x - prevBody->second.x, here.y - prevBody->second.y };
-				const float dist = std::sqrt(step.x * step.x + step.y * step.y);
-				// A teleport must not read as a supersonic stride.
-				if (dist < kBowWaveTeleport) {
-					if (dist > 0.5f) {
-						track.x = step.x / dist;
-						track.y = step.y / dist;
-					}
-					// Asymmetric smoothing: the crest builds fast when you set
-					// off and eases out over ~0.3 s when you stop, which IS the
-					// "settles after a brief moment" half of the design.
-					const float instant = dist / dtBody;
-					// Builds fast, HOLDS slow. Snow that has been shoved
-					// aside does not shove itself back the moment you stop;
-					// too quick a decay reads as the crest morphing back into
-					// flat ground. The settle time is a crank.
-					// The deposit field owns persistence now, so this only
-					// has to stop the live crest flickering between strides:
-					// a short release, not the settle time (which decays the
-					// DEPOSIT, in DeformationUpdateCS).
-					const float rate = instant > track.z ? 12.0f : 2.5f;
-					track.z += (instant - track.z) * std::clamp(rate * dtBody, 0.0f, 1.0f);
-				}
-			}
-			bowWaveStrength = std::clamp(track.z / std::max(settings.BowWaveFullSpeed, 1.0f), 0.0f, 1.0f);
-			bowWaveDir = { track.x, track.y };
-		}
 
 		StampBones* bones = nullptr;
 		if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
@@ -1161,73 +1109,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					} else {
 						contactLivingCount++;
 						stampStats.actorsRasterized++;
-						// The bow wave is motion, not contact, but its only
-						// emission sat in the bone foot loop below - which a
-						// rasterized actor never reaches. Same leading-foot
-						// rule and the same foot keys, so a hand-over between
-						// the two paths keeps its trail.
-						if (bowWaveStrength > 0.02f && (bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f)) {
-							float minFootZ = FLT_MAX;
-							float minFootScale = 1.0f;
-							for (const auto& foot : cache.feet)
-								if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f && n->world.translate.z < minFootZ) {
-									minFootZ = n->world.translate.z;
-									minFootScale = n->world.scale;
-								}
-							const bool groundRefStarved = minFootZ != FLT_MAX && minFootZ - groundZ > kFootPlantBand * minFootScale;
-							uint32_t footIndex = 0;
-							for (const auto& foot : cache.feet) {
-								const uint32_t thisIndex = footIndex++;
-								auto* footNode = foot.node.get();
-								if (!footNode || footNode->world.scale < 0.01f)
-									continue;
-								const auto& footWorld = footNode->world;
-								const float boneScale = footWorld.scale;
-								const float2 heel = { footWorld.translate.x, footWorld.translate.y };
-								float2 tip = heel;
-								float footLen = 2.0f * kHoofRadius * boneScale;
-								if (auto* parentNode = footNode->parent)
-									footLen = std::max(footLen, footWorld.translate.GetDistance(parentNode->world.translate));
-								if (auto* toeNode = foot.toe.get()) {
-									const float2 dir = { toeNode->world.translate.x - heel.x, toeNode->world.translate.y - heel.y };
-									const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-									if (len > 2.0f) {
-										const float extend = 1.0f + kFootToeExtend;
-										tip = { heel.x + dir.x * extend, heel.y + dir.y * extend };
-										footLen = len * extend;
-									}
-								}
-								const float plantRef = groundRefStarved ? minFootZ : groundZ;
-								const float plantBand = groundRefStarved ?
-								                            std::max(kFootRelativeBand * boneScale, kFootRelativeLenFactor * footLen) :
-								                            kFootPlantBand * boneScale;
-								const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
-								auto prevFoot = stampPrevPositions.find(key);
-								const float releaseBand = plantBand * (prevFoot != stampPrevPositions.end() ? 1.5f : 1.0f);
-								if (footWorld.translate.z - plantRef > releaseBand)
-									continue;
-								float2 segStart = heel;
-								if (prevFoot != stampPrevPositions.end()) {
-									const float2 delta = { heel.x - prevFoot->second.x, heel.y - prevFoot->second.y };
-									if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
-										segStart = prevFoot->second;
-								}
-								currentPositions[key] = heel;
-								const float footAhead = (tip.x - position.x) * bowWaveDir.x + (tip.y - position.y) * bowWaveDir.y;
-								if (footAhead <= -2.0f || bowWaves.size() >= kMaxBowWaves)
-									continue;
-								BowWave wave{};
-								wave.pos = tip;
-								wave.prev = segStart;
-								wave.dir = bowWaveDir;
-								wave.radius = kBowWaveBaseRadius * depthScale;
-								wave.strength = bowWaveStrength;
-								const float cdx = footWorld.translate.x - cameraPosition.x;
-								const float cdy = footWorld.translate.y - cameraPosition.y;
-								wave.distSq = cdx * cdx + cdy * cdy;
-								bowWaves.push_back(wave);
-							}
-						}
 					}
 				}
 				return;
@@ -1328,31 +1209,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					}
 					currentPositions[key] = heel;
 
-					// Only the LEADING foot pushes. The trailing foot is
-					// standing in the trench its owner already dug, so there
-					// is nothing left there to shoulder - that was the "wave
-					// behind the character". Emitted HERE, after segStart, so
-					// the crest rides the same swept CAPSULE the trench stamp
-					// uses rather than radiating from a point: a point source
-					// threw its whole radius ahead of wherever the foot was,
-					// which bulged the far wall of a trench before the foot
-					// had crossed it.
-					const float footAhead = (tip.x - position.x) * bowWaveDir.x +
-					                        (tip.y - position.y) * bowWaveDir.y;
-					if (bowWaveStrength > 0.02f && footAhead > -2.0f &&
-						(bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f) &&
-						bowWaves.size() < kMaxBowWaves) {
-						BowWave wave{};
-						wave.pos = tip;
-						wave.prev = segStart;
-						wave.dir = bowWaveDir;
-						wave.radius = kBowWaveBaseRadius * depthScale;
-						wave.strength = bowWaveStrength;
-						const float cdx = footWorld.translate.x - cameraPosition.x;
-						const float cdy = footWorld.translate.y - cameraPosition.y;
-						wave.distSq = cdx * cdx + cdy * cdy;
-						bowWaves.push_back(wave);
-					}
 
 					float4 stamp{};
 					stamp.x = tip.x;
@@ -1998,11 +1854,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	}
 
 	stampPrevPositions = std::move(currentPositions);
-	// Nearest crests win the slots: a crowd cannot each carry one, and the
-	// ones the player can see are the ones worth keeping.
-	if (bowWaves.size() > 1)
-		std::sort(bowWaves.begin(), bowWaves.end(),
-			[](const BowWave& a, const BowWave& b) { return a.distSq < b.distSq; });
 	perFrameData.StampCount = stampCount;
 	globals::profiler->EndPass();
 }
