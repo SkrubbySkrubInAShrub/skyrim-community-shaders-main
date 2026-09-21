@@ -655,8 +655,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
 		// Compute scene-controlled state once for both header and settings
-		auto* sceneManager = globals::sceneSettingsManager;
-		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
+		bool sceneControlled = globals::sceneSettingsManager->IsFeatureSceneControlled(featureName);
 
 		// Render feature header with integrated action buttons
 		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);

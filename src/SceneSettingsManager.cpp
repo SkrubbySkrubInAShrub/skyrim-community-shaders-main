@@ -2178,6 +2178,11 @@ SceneSettingsManager::SceneLayerGuard::~SceneLayerGuard()
 	}
 }
 
+bool SceneSettingsManager::IsFeatureSceneControlled(const std::string& featureShortName) const
+{
+	return HasActiveSettingsForFeature(featureShortName) && !IsFeaturePaused(featureShortName);
+}
+
 bool SceneSettingsManager::IsFeaturePaused(const std::string& featureShortName) const
 {
 	auto it = featurePauseStates.find(featureShortName);
@@ -2834,11 +2839,13 @@ void SceneSettingsManager::RestoreAppliedSettings()
 			baselineSettings.erase(item.address);
 		}
 		appliedFeatureNames.erase(featureShortName);
+		featureApplyDocuments.erase(featureShortName);
 	}
 
 	if (appliedSettings.empty()) {
 		baselineSettings.clear();
 		appliedFeatureNames.clear();
+		featureApplyDocuments.clear();
 		restoreFailureWarnings.clear();
 		restoreRetryAfter.clear();
 	} else {
@@ -3091,8 +3098,12 @@ void SceneSettingsManager::InvalidateFeatureSnapshot(std::string_view featureSho
 void SceneSettingsManager::PruneAppliedFeatureName(const std::string& featureShortName)
 {
 	if (std::none_of(appliedSettings.begin(), appliedSettings.end(),
-			[&](const auto& item) { return item.first.featureShortName == featureShortName; }))
+			[&](const auto& item) { return item.first.featureShortName == featureShortName; })) {
 		appliedFeatureNames.erase(featureShortName);
+		// The base settings are editable again from here, so the next apply has to re-snapshot them:
+		// replaying this document would revert anything changed while the layer was off the feature.
+		featureApplyDocuments.erase(featureShortName);
+	}
 }
 
 json SceneSettingsManager::GetBaselineValue(const SettingAddress& address)

@@ -214,6 +214,11 @@ public:
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 	void CaptureExternalFeatureChanges(Feature* feature);
 
+	/// Whether the scene layer is currently driving this feature, so its base settings must not be
+	/// offered for editing: the next resolve would revert the edit. Every settings UI has to gate on
+	/// this, not just the ImGui one.
+	bool IsFeatureSceneControlled(const std::string& featureShortName) const;
+
 	/// Per-feature pause: temporarily disable all scene-specific settings for a feature
 	bool IsFeaturePaused(const std::string& featureShortName) const;
 	void SetFeaturePaused(const std::string& featureShortName, bool paused);

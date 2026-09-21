@@ -67,6 +67,8 @@ namespace
 	{
 		SceneContextId source;
 		SceneContextId destination;
+		/// The page whose toolbar opened the flow, which owns the popup for as long as it runs.
+		SceneContextId owner;
 		std::string sourceName;
 		std::vector<CopyCandidate> candidates;
 		PeriodScope periodScope = PeriodScope::ActivePeriod;
@@ -242,8 +244,8 @@ namespace
 	}
 
 	/// Dry run first: a copy with nothing to overwrite needs no preview and runs on the click.
-	void StartCopy(const SceneContextId& source, const SceneContextId& destination, const std::string& sourceName,
-		PeriodScope periodScope)
+	void StartCopy(const SceneContextId& source, const SceneContextId& destination, const SceneContextId& owner,
+		const std::string& sourceName, PeriodScope periodScope)
 	{
 		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source, destination, periodScope);
 		if (std::ranges::none_of(candidates, [](const auto& candidate) { return candidate.conflicts; })) {
@@ -252,6 +254,7 @@ namespace
 		}
 		copyFlow = { .source = source,
 			.destination = destination,
+			.owner = owner,
 			.sourceName = sourceName,
 			.candidates = std::move(candidates),
 			.periodScope = periodScope,
@@ -513,7 +516,7 @@ namespace
 			Util::kTooltipWhenDisabled);
 		if (fromOpen) {
 			DrawCopyTree(BuildCopyTree(sources), [&](const CopySource& source) {
-				StartCopy(source.context, context, source.displayName, periodScope);
+				StartCopy(source.context, context, context, source.displayName, periodScope);
 				ImGui::CloseCurrentPopup();
 			});
 			ImGui::EndMenu();
@@ -526,7 +529,7 @@ namespace
 		if (toOpen) {
 			const auto sourceName = manager->GetSceneContextDisplayName(context);
 			DrawCopyTree(BuildCopyTree(destinations), [&](const CopySource& destination) {
-				StartCopy(context, destination.context, sourceName, periodScope);
+				StartCopy(context, destination.context, context, sourceName, periodScope);
 				ImGui::CloseCurrentPopup();
 			});
 			ImGui::EndMenu();
@@ -558,19 +561,13 @@ namespace
 		}
 	}
 
-	/// Draws wherever the destination page's own toolbar happens to render, which may not be the page
-	/// the user is currently looking at (e.g. copying to a period other than the one on screen). The
-	/// flow is global, so this only needs to run once per frame even if several toolbars call it.
-	void DrawCopyPreview()
+	/// Only the page that opened the flow draws it: every page nests its toolbar in its own window, so
+	/// a popup opened under one page's ID stack cannot be reopened under another's. The destination
+	/// may well be a page that is not on screen, but the page the user clicked in always is.
+	void DrawCopyPreview(const SceneContextId& a_page)
 	{
-		if (!copyFlow.active)
+		if (!copyFlow.active || copyFlow.owner != a_page)
 			return;
-
-		static int lastDrawnFrame = -1;
-		const int frame = ImGui::GetFrameCount();
-		if (lastDrawnFrame == frame)
-			return;
-		lastDrawnFrame = frame;
 
 		const char* title = T(TKEY("scene_page_copy_title"), "Copy settings");
 		if (copyFlow.pendingOpen) {
@@ -773,7 +770,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 		manager->ReloadOverwrites();
 		manager->ClearAllUserEntries();
 	});
-	DrawCopyPreview();
+	DrawCopyPreview(context);
 	ScenePresetExport::Draw(context);
 
 	ImGui::PopID();

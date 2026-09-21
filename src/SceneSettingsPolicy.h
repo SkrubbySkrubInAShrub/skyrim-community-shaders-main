@@ -19,6 +19,11 @@ namespace SceneSettingsPolicy
 		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
 		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
 		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
+		// Auto-catalogued, but a per-scene flip reloads grass LOD meshes on the render thread and
+		// recompiles the mesh-variation permutation. The GrassLighting LOD brightness sliders are a
+		// separate feature and stay scene-controllable.
+		{ "GrassOptimizations" },
+		{ "TerrainVariation" },
 	};
 
 	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {
