@@ -1305,6 +1305,85 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             ("components", "enabled", "enabled",
              ("Enabled", "feature.sample.enabled"))])
 
+    def test_save_roots_discover_const_save_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "ConstFeature.cpp"
+            source.write_text(
+                "void ConstFeature::SaveSettings(json& output) const { output = settings; }",
+                encoding="utf-8")
+            roots = GENERATOR.collect_save_roots([source])
+        self.assertEqual(roots["ConstFeature"], "settings")
+
+    def test_direct_persisted_fields_discover_const_save_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "ConstFeature.cpp"
+            source.write_text(
+                'void ConstFeature::SaveSettings(json& output) const { output["scale"] = scale; }',
+                encoding="utf-8")
+            fields = GENERATOR.collect_direct_persisted_fields(
+                [source], {"ConstFeature": {"scale": "float"}})
+        self.assertEqual(fields["ConstFeature"], [("scale", "Float", "scale")])
+
+    def test_nested_type_candidates_walk_every_enclosing_scope(self):
+        self.assertEqual(
+            GENERATOR.nested_type_candidates("Feature::Settings", "Inner"),
+            ["Inner", "Feature::Settings::Inner", "Feature::Inner"])
+
+    def _serialized_component_fixture(self, directory, draw_settings=""):
+        root = Path(directory)
+        feature_header = root / "CompositeFeature.h"
+        feature_source = root / "CompositeFeature.cpp"
+        child_header = root / "ExampleChild.h"
+        feature_header.write_text(
+            "struct CompositeFeature : Feature { "
+            "std::vector<std::unique_ptr<ExampleChild>> components; };",
+            encoding="utf-8")
+        child_header.write_text(
+            'struct ExampleChild { '
+            'std::string GetName() const { return "child"; } '
+            'std::string GetDisplayName() const { '
+            'return T("feature.child.name", "Child Display"); } };',
+            encoding="utf-8")
+        feature_source.write_text(
+            'void CompositeFeature::Populate() {\n'
+            '    components.emplace_back(std::make_unique<ExampleChild>());\n'
+            '}\n'
+            f'{draw_settings}'
+            'void CompositeFeature::SaveSettings(json& output) {\n'
+            '    json objects;\n'
+            '    for (auto& item : components) {\n'
+            '        json saved;\n'
+            '        item->SaveSettings(saved);\n'
+            '        objects[std::string(item->GetName())] = std::move(saved);\n'
+            '    }\n'
+            '    output["children"] = std::move(objects);\n'
+            '}\n',
+            encoding="utf-8")
+        features = {"CompositeFeature": {
+            "short": "CompositeFeature", "name": "Composite Feature",
+            "source": str(feature_header)}}
+        return features, [feature_header, feature_source, child_header]
+
+    def test_serialized_child_settings_are_discovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            components = GENERATOR.collect_serialized_settings_components(
+                *self._serialized_component_fixture(directory))
+        self.assertEqual(components, [GENERATOR.SerializedSettingsComponent(
+            "CompositeFeature", "ExampleChild", ("children", "child"),
+            "Child Display", "feature.child.name", "")])
+
+    def test_serialized_child_settings_record_their_control_scope(self):
+        draw_settings = (
+            'void CompositeFeature::DrawSettings() {\n'
+            '    auto& entry = components[index];\n'
+            '    auto name = entry->GetName();\n'
+            '    ImGui::PushID(name.data(), name.data() + name.size());\n'
+            '}\n')
+        with tempfile.TemporaryDirectory() as directory:
+            components = GENERATOR.collect_serialized_settings_components(
+                *self._serialized_component_fixture(directory, draw_settings))
+        self.assertEqual([child.control_scope for child in components], ["child"])
+
     def test_discovered_unconverted_control_uses_generic_fallback(self):
         binding = make_control_binding(
             "Example", ("flags",), "Flags", "CheckboxFlags")

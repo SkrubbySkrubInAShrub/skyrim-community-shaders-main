@@ -105,6 +105,19 @@ class CatalogContext:
     component_class: str = ""
     component_type: str = ""
     component_container: str = ""
+    # Serialized children live in a keyed map, so they have no fixed member address to compare.
+    addressable: bool = True
+    control_scope: str = ""
+
+
+@dataclass(frozen=True)
+class SerializedSettingsComponent:
+    feature_class: str
+    child_class: str
+    json_path: tuple[str, ...]
+    display_name: str
+    display_key: str
+    control_scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -294,6 +307,9 @@ def resolve_vector_binding(
 
 
 STRUCT_DECL_RE = r"\bstruct\s+(?:alignas\s*\([^)]*\)\s+)?(\w+)([^;{]*)\{"
+
+# A const SaveSettings persists exactly like a mutable one, so missing it drops a whole feature.
+SAVE_SETTINGS_DEFINITION_RE = r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*(?:const\s*)?\{"
 
 CATEGORY_CONTROL_NAMES = {
     "CollapsingHeader",
@@ -693,7 +709,7 @@ def collect_save_roots(paths: list[Path]) -> dict[str, str]:
     for path in paths:
         # Masked: a commented-out assignment must not win over the live one.
         text = masked_text(path)
-        for match in re.finditer(r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*\{", text):
+        for match in re.finditer(SAVE_SETTINGS_DEFINITION_RE, text):
             feature_class = match.group(1)
             body_end = find_matching_brace(text, match.end() - 1)
             if body_end < 0:
@@ -715,7 +731,7 @@ def collect_direct_persisted_fields(
         # the JSON key itself is blanked by masking, so read it back out of the raw text.
         raw = read_text(path)
         text = masked_text(path)
-        for match in re.finditer(r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*\{", text):
+        for match in re.finditer(SAVE_SETTINGS_DEFINITION_RE, text):
             feature_class = match.group(1)
             body_end = find_matching_brace(text, match.end() - 1)
             if body_end < 0:
@@ -869,6 +885,115 @@ def collect_settings_components(
                 seen_classes.add(child_name)
         if feature_components:
             components[feature_class] = feature_components
+    return components
+
+
+def collect_serialized_settings_components(
+        features: dict[str, dict[str, str]],
+        paths: list[Path]) -> list[SerializedSettingsComponent]:
+    """Discover children whose own SaveSettings output a feature folds into a keyed map."""
+    headers: dict[str, list[Path]] = {}
+    for path in (path for path in paths if path.suffix == ".h"):
+        for match in re.finditer(r"\b(?:struct|class)\s+(\w+)\b[^;{]*\{", masked_text(path)):
+            headers.setdefault(match.group(1), []).append(path)
+
+    sources = [(read_text(path), masked_text(path)) for path in paths if path.suffix == ".cpp"]
+    components: list[SerializedSettingsComponent] = []
+    for feature_class in features:
+        for text, masked in sources:
+            method = re.search(
+                rf"\bvoid\s+{re.escape(feature_class)}::SaveSettings"
+                rf"\s*\([^)]*&\s*(\w+)\s*\)\s*(?:const\s*)?\{{", masked)
+            if not method:
+                continue
+            body_end = find_matching_brace(text, method.end() - 1)
+            if body_end < 0:
+                continue
+            output = method.group(1)
+            body = text[method.end():body_end]
+            for loop in re.finditer(
+                    r"\bfor\s*\(\s*(?:const\s+)?auto\s*&\s*(\w+)\s*:\s*(\w+)\s*\)\s*\{",
+                    mask_cpp_source(body)):
+                child_variable, container = loop.groups()
+                loop_end = find_matching_brace(body, loop.end() - 1)
+                if loop_end < 0:
+                    continue
+                loop_body = body[loop.end():loop_end]
+                saved = re.search(
+                    rf"\b{child_variable}->SaveSettings\s*\(\s*(\w+)\s*\)\s*;", loop_body)
+                if not saved:
+                    continue
+                keyed = re.search(
+                    rf"\b(\w+)\s*\[\s*(?:std::string\s*\(\s*)?{child_variable}->(\w+)\(\)\s*\)?\s*\]"
+                    rf"\s*=\s*(?:std::move\s*\(\s*)?{saved.group(1)}\s*\)?\s*;", loop_body)
+                if not keyed:
+                    continue
+                object_name, key_method = keyed.groups()
+                persisted = re.search(
+                    rf'\b{output}\s*((?:\[\s*"[^"\n]+"\s*\]\s*)+)='
+                    rf'\s*(?:std::move\s*\(\s*)?{object_name}\s*\)?\s*;', body[loop_end + 1:])
+                if not persisted:
+                    continue
+                json_path = tuple(re.findall(r'"([^"\n]+)"', persisted.group(1)))
+                factory_pattern = re.compile(
+                    rf"\b{container}\.(?:emplace_back|push_back)\s*\(\s*"
+                    r"std::make_(?:unique|shared)\s*<\s*(\w+)\s*>")
+                child_classes: set[str] = set()
+                scopes_controls = False
+                for owner_text, owner_masked in sources:
+                    for owner in re.finditer(
+                            rf"\b{re.escape(feature_class)}::\w+\s*\([^;{{}}]*\)\s*(?:const\s*)?\{{",
+                            owner_masked):
+                        owner_end = find_matching_brace(owner_text, owner.end() - 1)
+                        if owner_end < 0:
+                            continue
+                        owner_body = owner_text[owner.end():owner_end]
+                        child_classes.update(factory_pattern.findall(mask_cpp_source(owner_body)))
+                        for alias in re.finditer(
+                                rf"\bauto\s*&\s*(\w+)\s*=\s*{container}\s*\[", owner_body):
+                            identity = re.search(
+                                rf"\bauto\s+(\w+)\s*=\s*{alias.group(1)}->{key_method}\(\)",
+                                owner_body)
+                            if not identity:
+                                continue
+                            name = identity.group(1)
+                            scopes_controls |= bool(re.search(
+                                rf"ImGui::PushID\s*\(\s*{name}\.data\(\)\s*,\s*"
+                                rf"{name}\.data\(\)\s*\+\s*{name}\.size\(\)\s*\)", owner_body))
+                for child_class in sorted(child_classes):
+                    candidates = headers.get(child_class, [])
+                    if len(candidates) != 1:
+                        continue
+                    header = candidates[0]
+                    header_text = read_text(header)
+                    declaration = re.search(
+                        rf"\b(?:struct|class)\s+{child_class}\b[^;{{]*\{{", masked_text(header))
+                    if not declaration:
+                        continue
+                    declaration_end = find_matching_brace(header_text, declaration.end() - 1)
+                    if declaration_end < 0:
+                        continue
+                    child_body = header_text[declaration.end():declaration_end]
+                    key_expression = get_function_return_expression(child_body, key_method)
+                    key = resolve_string_expression(
+                        key_expression, child_body,
+                        collect_string_constants(child_body)) if key_expression else None
+                    if not key:
+                        continue
+                    display_text = child_body
+                    display = get_function_return_expression(child_body, "GetDisplayName") or ""
+                    child_source = header.with_suffix(".cpp")
+                    if not display and child_source.exists():
+                        display_text = read_text(child_source)
+                        display = get_function_return_expression(
+                            display_text, f"{child_class}::GetDisplayName") or ""
+                    prefix = re.search(
+                        r'#define\s+I18N_KEY_PREFIX\s+"([^"]*)"', display_text)
+                    translated = extract_i18n_call(display, prefix.group(1) if prefix else "")
+                    display_key, display_name = translated or ("", key)
+                    components.append(SerializedSettingsComponent(
+                        feature_class, child_class, (*json_path, key),
+                        display_name, display_key, key if scopes_controls else ""))
     return components
 
 
@@ -3981,8 +4106,13 @@ def collect_class_numeric_constants(paths: list[Path]) -> dict[str, dict[str, fl
 
 
 def nested_type_candidates(owner: str, field_type: str) -> list[str]:
+    """Qualify a field type against every enclosing scope, innermost first."""
     cleaned = clean_type(field_type)
-    return [cleaned, f"{owner}::{cleaned}"]
+    candidates = [cleaned]
+    while owner:
+        candidates.append(f"{owner}::{cleaned}")
+        owner = owner.rsplit("::", 1)[0] if "::" in owner else ""
+    return candidates
 
 
 def build_entries(source_dir: Path) -> list[dict[str, object]]:
@@ -3998,6 +4128,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         [path for path in src_paths if path.suffix == ".h"])
     features = collect_features([p for p in src_paths if p.suffix == ".h"])
     settings_components = collect_settings_components(features, src_paths)
+    serialized_components = collect_serialized_settings_components(features, src_paths)
     component_persisted_controls = collect_component_persisted_controls(
         features, settings_components)
     settings_component_classes = {
@@ -4005,6 +4136,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         for children in settings_components.values()
         for child in children
     }
+    settings_component_classes.update(child.child_class for child in serialized_components)
     feature_fields = collect_feature_struct_fields([p for p in src_paths if p.suffix == ".h"], features)
     feature_members = collect_feature_member_fields([p for p in src_paths if p.suffix == ".h"], features)
     component_fields = collect_feature_struct_fields(
@@ -4055,7 +4187,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         feature_short = feature["short"]
         identity = (feature_short, tuple(full_path), key)
         signature = (
-            access, tuple(full_serialized_path),
+            context.field_class, access, tuple(full_serialized_path),
             serialized_key if serialized_key is not None else key,
             serialized_component)
         if identity in seen:
@@ -4206,6 +4338,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             "componentClass": context.component_class,
             "componentType": context.component_type,
             "componentContainer": context.component_container,
+            "addressable": context.addressable,
+            "controlScope": context.control_scope,
         })
 
     def emit_type(
@@ -4294,7 +4428,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                     element_value_type = "Integer"
                 element_components = VECTOR_COMPONENTS.get(element_type, ())
                 nested_element_type = next((
-                    candidate for candidate in nested_type_candidates(type_owner, element_type)
+                    candidate for candidate in nested_type_candidates(full_type, element_type)
                     if candidate in macros
                 ), None)
                 array_components = tuple(str(index) for index in range(element_count))
@@ -4363,7 +4497,7 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
                 if element_value_type or element_components or nested_element_type:
                     continue
             emitted_nested = False
-            for candidate in nested_type_candidates(type_owner, field_type):
+            for candidate in nested_type_candidates(full_type, field_type):
                 if candidate in macros:
                     emit_type(
                         context, candidate, path + [field], field_access,
@@ -4450,6 +4584,23 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         context = CatalogContext(feature_class, feature_class)
         for key, value_type, access in persisted_fields:
             add_entry(context, [], key, value_type, access)
+
+    for child in serialized_components:
+        root_member = save_roots.get(child.child_class, "")
+        root_type = component_members.get(child.child_class, {}).get(root_member, "")
+        if not root_member or not root_type:
+            discovery_errors.append(
+                f"{child.child_class} has no discovered serialized settings root")
+            continue
+        emit_type(
+            CatalogContext(
+                child.feature_class, child.child_class,
+                json_path_prefix=child.json_path,
+                display_path_prefix=(child.display_name,),
+                selector_path_prefix=(child.display_name,),
+                selector_key_prefix=(child.display_key,),
+                addressable=False, control_scope=child.control_scope),
+            f"{child.child_class}::{clean_type(root_type).split('::')[-1]}", [], root_member)
 
     if discovery_errors:
         raise ValueError("scene settings catalog discovery failed: " + "; ".join(sorted(set(discovery_errors))))
@@ -4566,6 +4717,8 @@ namespace SceneSettingsCatalog
 \t\tbool invertedDisplay;
 \t\tconst std::int64_t* choices;
 \t\tstd::size_t choiceCount;
+\t\t// Non-empty when the control lives under an ImGui scope pushed from this key.
+\t\tstd::string_view controlScope;
 \t};
 
 \tconstexpr bool IsSceneControllable(const SettingMetadata& setting)
@@ -4617,7 +4770,8 @@ namespace SceneSettingsCatalog
             f'{str(e.get("clampNumericInput", False)).lower()}, '
             f'{str(e.get("hdrColor", False)).lower()}, '
             f'{str(e["invertedDisplay"]).lower()}, '
-            f'{choice_pointer}, {choice_count} }},'
+            f'{choice_pointer}, {choice_count}, '
+            f'"{cpp_escape(e.get("controlScope", ""))}" }},'
         )
     joined_rows = "\n".join(rows)
     joined_choice_arrays = "\n".join(choice_arrays)
@@ -4630,7 +4784,7 @@ namespace SceneSettingsCatalog
             f'\t\tif (valueAddress == static_cast<const void*>(&typedFeature->{e["access"]}))\n'
             f'\t\t\treturn SceneSettingsCatalog::FindSetting("{cpp_escape(e["feature"])}", '
             f'"{cpp_escape(e["path"])}", "{cpp_escape(e["key"])}");'
-            for e in feature_entries if not e["componentClass"])
+            for e in feature_entries if not e["componentClass"] and e.get("addressable", True))
         component_groups: dict[str, dict[tuple[str, str], list[dict[str, object]]]] = {}
         for entry in feature_entries:
             if entry["componentClass"]:
