@@ -119,7 +119,7 @@
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
-	X(TrampledFloor) \
+	X(TrampledGround) \
 	X(RimLip) \
 	X(RimTeeth) \
 	X(BermClods) \
@@ -1566,7 +1566,7 @@ void SnowDeformation::Prepass()
 
 			// Trample extent, whole field, from the berm bake just finished
 			// (which leaves u0 so it can be read).
-			if (auto* extentCS = extentFieldTexture ? GetExtentFieldCS() : nullptr) {
+			if (auto* extentCS = (extentFieldTexture && !debugTrampleFreeze) ? GetExtentFieldCS() : nullptr) {
 				globals::profiler->BeginPass("SnowDeformation::ExtentField");
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				ID3D11ShaderResourceView* extentSrc = bermFieldTexture->srv.get();

@@ -435,7 +435,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	// carve instead of clamping it, so fins and overlaps survive as relief.
 	float field = 0.0;
 	[branch] if (TrampleStyle.x > 0.001 && d > 0.001)
-		field = TrampleField(worldXY);
+		field = TrampleField(worldXY) * saturate(TrampleStyle.x);
 	float cutT = depthT * (1.0 - field);
 
 	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
@@ -457,7 +457,9 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	float floorFrac = saturate(BorderStyle.y);
 	float floorDepth = min(uncarvedDepth, uncarvedDepth * floorFrac);
 	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
-	float packedFrac = lerp(floorFrac, 1.0, saturate(TrampleStyle.x));
+	// Packed snow bears weight, so the floor sits above a lone print's -
+	// but a trampled area is still a depression.
+	float packedFrac = lerp(floorFrac, 1.0, 0.35);
 	profile = lerp(profile, uncarvedDepth * (1.0 - d * (1.0 - packedFrac)), field);
 
 	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on

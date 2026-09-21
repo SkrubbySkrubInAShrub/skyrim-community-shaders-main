@@ -765,9 +765,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTeeth = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
-		ImGui::SliderFloat(T(TKEY("trampled_floor"), "Trampled Ground"), &settings.TrampledFloor, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("trampled_ground"), "Trampled Ground"), &settings.TrampledGround, 0.0f, 1.0f, "%.2f");
 		if (auto _ttTrample = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trampled_floor_tooltip"), "Where many trails overlap into a trampled area, the snow reads as packed ground instead of stacked trenches: the floor rises toward the surface, the cut walls and rim teeth give way to a gentle ramp, and the fins and overlaps inside survive as low bumps. A single trail is never touched. The value is how far the packed floor rises from the trench floor toward the surface; 0 = off."));
+			ImGui::Text("%s", T(TKEY("trampled_ground_tooltip"), "Where many trails overlap into a trampled area, the snow reads as packed ground instead of a comb of separate trenches: the cut walls, rim teeth and fins give way to one broad shallow depression with low bumps, its floor a little above a lone trench's because packed snow bears weight. A single trail is never touched. The value is how strongly the change applies; 0 = off."));
 
 		ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
 
@@ -1833,6 +1833,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("trample_full"), "Trampled Area: Full At"), &debugTrampleFull, 0.05f, 1.0f, "%.2f");
 			if (auto _ttTrampleBr = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trample_bracket_tooltip"), "Tuning aid, not saved: the extent readings between which the shape moves from trail to trampled ground. Raise Starts At until no lone trail shows green in the view above."));
+			ImGui::Checkbox(T(TKEY("trample_freeze"), "Trampled Area: Freeze Field"), &debugTrampleFreeze);
+			if (auto _ttTrampleFz = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trample_freeze_tooltip"), "Stops rebuilding the trampled-area field, so it keeps what it last held. If the view above still flickers while this is on, the flicker is in how the view is drawn, not in the field; if it stops, the field itself is changing."));
 
 			ImGui::Checkbox(T(TKEY("shell_edge_height_debug"), "Edge Height Debug"), &shellEdgeHeightDebug);
 			if (auto _ttEdgeDbg = Util::HoverTooltipWrapper())

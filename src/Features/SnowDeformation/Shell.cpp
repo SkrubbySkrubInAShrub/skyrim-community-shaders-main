@@ -1120,7 +1120,7 @@ void SnowDeformation::DrawShell()
 	// stale, so the class switch goes off with it.
 	const bool extentLive = !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture;
 	const float trampleStart = std::clamp(debugTrampleStart, 0.0f, 0.98f);
-	cbData.TrampleStyle = { extentLive ? std::clamp(settings.TrampledFloor, 0.0f, 1.0f) : 0.0f,
+	cbData.TrampleStyle = { extentLive ? std::clamp(settings.TrampledGround, 0.0f, 1.0f) : 0.0f,
 		trampleStart,
 		std::clamp(debugTrampleFull, trampleStart + 0.01f, 1.0f),
 		0.0f };

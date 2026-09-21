@@ -219,8 +219,8 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook2;
 	// xy spare; z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
-	// Trampled ground: x = packed-floor raise (0 = off), yz = the extent
-	// bracket trail -> field, w spare. Consumed inside CarveProfile.
+	// Trampled ground: x = strength of the trail -> field switch (0 = off),
+	// yz = the extent bracket, w spare. Consumed inside CarveProfile.
 	float4 TrampleStyle;
 }
 
