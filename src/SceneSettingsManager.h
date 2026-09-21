@@ -1060,6 +1060,9 @@ private:
 	static float EaseLocationTransition(const LocationTransition& transition, float now);
 	static bool IsLocationTransitionFinished(const LocationTransition& transition, float now);
 	void StartLocationTransitions(const ResolvedSettingMap& resolved, float now, bool animateChanges);
+	/// Re-reads each in-flight transition's endpoint so one crossing a time-of-day or weather
+	/// boundary eases toward where the scene is now rather than where it was when the transition began.
+	void RefreshLocationTransitionEndpoints(const ResolvedSettingMap& resolved);
 	bool AdvanceLocationTransitions(float now);
 	/// Drop transitions the main apply already landed on, restoring the ones that eased back out.
 	void RetireFinishedLocationTransitions(float now);

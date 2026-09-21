@@ -2235,6 +2235,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	resolverDirty = false;
 	const bool reconcileLocationTransitions = locationContextChanged || locationOverridesDirty;
 	auto& resolved = BuildResolvedSettings(reconcileLocationTransitions, interior);
+	RefreshLocationTransitionEndpoints(resolved);
 	if (reconcileLocationTransitions) {
 		// Editing a value in place snaps to it, as does arriving from a loading screen.
 		StartLocationTransitions(resolved, transitionTime, walkedBetweenWorldspaceCells);
@@ -2355,6 +2356,22 @@ void SceneSettingsManager::StartLocationTransitions(
 	}
 	lastLocationOverrideValues = std::move(nextOverrideValues);
 	lastLocationTransitionDurations = pendingLocationTransitionDurations;
+}
+
+void SceneSettingsManager::RefreshLocationTransitionEndpoints(const ResolvedSettingMap& resolved)
+{
+	for (auto& [address, transition] : activeLocationTransitions) {
+		// A restoring transition eases back to a captured baseline, which never drifts.
+		if (transition.restoreAtEnd)
+			continue;
+		const auto resolvedIt = resolved.find(address);
+		if (resolvedIt == resolved.end() || !IsNumericValue(resolvedIt->second))
+			continue;
+		// Only the endpoint moves: the eased output stays a continuous function of it, so retargeting
+		// mid-flight cannot snap, and the transition still lands exactly on the live value.
+		if (const auto targetValue = resolvedIt->second.get<float>(); std::isfinite(targetValue))
+			transition.targetValue = targetValue;
+	}
 }
 
 bool SceneSettingsManager::AdvanceLocationTransitions(float now)
