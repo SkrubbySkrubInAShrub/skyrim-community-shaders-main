@@ -122,6 +122,8 @@
 	X(BermHeight) \
 	X(TrampledFloorLowering) \
 	X(TrampledFlattening) \
+	X(TrampleStart) \
+	X(TrampleFull) \
 	X(RimLip) \
 	X(RimTeeth) \
 	X(BermClods) \
@@ -777,8 +779,8 @@ float SnowDeformation::SampleTrampleField(float a_worldX, float a_worldY)
 	const float fx = qx - fx0, fy = qy - fy0;
 	auto at = [&](int x, int y) { return extentMirror[(size_t)y * tiles + x]; };
 	const float extent = std::lerp(std::lerp(at(x0, y0), at(x1, y0), fx), std::lerp(at(x0, y1), at(x1, y1), fx), fy);
-	const float start = std::clamp(debugTrampleStart, 0.0f, 0.98f);
-	const float full = std::clamp(debugTrampleFull, start + 0.01f, 1.0f);
+	const float start = std::clamp(settings.TrampleStart, 0.0f, 0.98f);
+	const float full = std::clamp(settings.TrampleFull, start + 0.01f, 1.0f);
 	const float t = std::clamp((extent - start) / (full - start), 0.0f, 1.0f);
 	return t * t * (3.0f - 2.0f * t);
 }

@@ -560,6 +560,10 @@ public:
 		float TrampledFloorLowering = 0.5f;
 		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
 		float TrampledFlattening = 0.5f;
+		/** @brief Trampled ground: disturbance-extent reading where the trampled shape begins. Promoted from a debug aid to a real setting 2026-09-21, so it ships and persists; the CPU mirror reads the same pair. */
+		float TrampleStart = 0.20f;
+		/** @brief Trampled ground: extent reading where the trampled shape is fully applied. Held at least 0.01 above TrampleStart. */
+		float TrampleFull = 0.50f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
 		/** @brief Bow wave: crest height as a fraction of local snow depth. 0 = off. */
@@ -634,7 +638,7 @@ public:
 		/** @brief "Snow Drift Angle" (degrees from vertical): sizes the enclosure disc; higher asks for deeper cover before the band shelters. */
 		float ShelterDriftAngle = 30.0f;
 		/** @brief "Object Meeting Blend" (units): thickness of snow over a captured object across which the landscape sheet and an object's coat meet, half on each side of the junction: the sheet's macro slope goes halfway to the object's over its half, the coat's normal halfway to the sheet's over the other. 0 = off. */
-		float ObjectMeetBand = 32.0f;
+		float ObjectMeetBand = 12.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
@@ -1868,9 +1872,6 @@ public:
 	bool shellEdgeHeightDebug = false;
 	/** @brief Trampled-area view (ShellDebugData 7): blue -> red = raw extent, green = the field factor CarveProfile applies, white = the bracket ends. Real surface. */
 	bool shellTrampleDebug = false;
-	/** @brief Extent bracket trail -> field (TrampleStyle.yz). Runtime tuning aids, not serialised. */
-	float debugTrampleStart = 0.30f;
-	float debugTrampleFull = 0.55f;
 	/** @brief Skips the extent bake so the field keeps its last content: separates a field that really changes from a view that only shimmers. */
 	bool debugTrampleFreeze = false;
 	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */

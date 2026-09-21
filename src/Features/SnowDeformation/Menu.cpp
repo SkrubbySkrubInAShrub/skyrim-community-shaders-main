@@ -767,13 +767,18 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("trampled_group"), "Trampled Ground"));
 
-		ImGui::SliderFloat(T(TKEY("trampled_floor_lowering"), "Trampled Ground Floor Lowering"), &settings.TrampledFloorLowering, 0.0f, 1.0f, "%.2fx");
+		ImGui::SliderFloat(T(TKEY("trampled_floor_lowering"), "Floor Lowering"), &settings.TrampledFloorLowering, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttTrampleFloor = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trampled_floor_lowering_tooltip"), "Where many trails overlap into a trampled area, the trench floor sits lower than in a lone trail: this multiplies Trench Floor there. At 0.50x a Trench Floor of 0.50 becomes 0.25 in the middle of a trampled area, easing in from its edge. A single trail is never touched. 1.00x = off."));
 
-		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Trampled Ground Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
+		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttTrampleFlat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Where many trails overlap into a trampled area, the broken lumps on the trench floor are walked flatter: this multiplies Churn Height on the floor there, easing in the bigger the trampled area is. At 0.50x a Churn Height of 4 becomes 2. Lumps on the berms and in a single trail are never touched. 1.00x = off."));
+
+		ImGui::SliderFloat(T(TKEY("trample_start"), "Trampled Area: Starts At"), &settings.TrampleStart, 0.0f, 0.9f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("trample_full"), "Trampled Area: Full At"), &settings.TrampleFull, 0.05f, 1.0f, "%.2f");
+		if (auto _ttTrampleBr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trample_bracket_tooltip"), "How much overlapping traffic counts as trampled ground: the two settings above begin at the first reading and are fully applied at the second. Lower Starts At to let smaller churned patches count as trampled; raise it to keep the change to wide, heavily walked areas only. A lone trail sits well below the default start, which is what keeps it untouched."));
 
 		ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
 
@@ -1835,10 +1840,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_trample_debug"), "Trampled Area View"), &shellTrampleDebug);
 			if (auto _ttTrampleDbg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_trample_debug_tooltip"), "Landscape shell only, on the real geometry: how trampled the ground around each pixel reads. Blue = a lone trail or open snow, red = worked in every direction, green = how much of the Trampled Ground settings applies there. The two white contours are the ends of the bracket below. A single trail must stay blue with no green; the middle of a trampled area must go red and green."));
-			ImGui::SliderFloat(T(TKEY("trample_start"), "Trampled Area: Starts At"), &debugTrampleStart, 0.0f, 0.9f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("trample_full"), "Trampled Area: Full At"), &debugTrampleFull, 0.05f, 1.0f, "%.2f");
-			if (auto _ttTrampleBr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trample_bracket_tooltip"), "Tuning aid, not saved: the extent readings between which the shape moves from trail to trampled ground. Raise Starts At until no lone trail shows green in the view above."));
 			ImGui::Checkbox(T(TKEY("trample_freeze"), "Trampled Area: Freeze Field"), &debugTrampleFreeze);
 			if (auto _ttTrampleFz = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trample_freeze_tooltip"), "Stops rebuilding the trampled-area field, so it keeps what it last held. If the view above still flickers while this is on, the flicker is in how the view is drawn, not in the field; if it stops, the field itself is changing."));
