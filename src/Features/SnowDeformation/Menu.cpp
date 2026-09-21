@@ -771,6 +771,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, new trenches get sloped sides instead of sharp walls, the ridge beside them shrinks, and the rim loses its lip and teeth. As the snow settles over the following days, the look you set with Trench Wall Sharpness, Berm Height, Rim Lip and Rim Teeth comes back. Trenches keep the walls they were cut with. 0 = off, the snow is always firm."));
 
+		ImGui::SliderFloat(T(TKEY("fresh_snow_churn"), "Fresh Snow Churn"), &settings.FreshSnowChurn, 0.0f, 1.0f, "%.2fx");
+		if (auto _ttFreshChurn = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("fresh_snow_churn_tooltip"), "Loose new snow does not break into lumps, so the churn in trenches and on berms is smoother while the snow is fresh: this multiplies Churn Height in fully fresh snow, easing back to the full height as the snow settles. At 0.50x a Churn Height of 4 becomes 2 during a storm. It stacks with Flattening on trampled ground. 1.00x = off."));
+
 		ImGui::SliderFloat(T(TKEY("fresh_snow_settle"), "Fresh Snow Settles In"), &settings.FreshSnowSettleHours, 6.0f, 168.0f, "%.0f game hours");
 		if (auto _ttSettle = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("fresh_snow_settle_tooltip"), "How long clear weather takes to turn loose new snow fully firm. About two game hours of heavy snowfall makes it fully fresh again; lighter snow takes longer."));

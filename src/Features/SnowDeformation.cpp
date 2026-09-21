@@ -121,6 +121,7 @@
 	X(ParallaxDepth) \
 	X(BermHeight) \
 	X(FreshSnowSoftness) \
+	X(FreshSnowChurn) \
 	X(FreshSnowSettleHours) \
 	X(TrampledFloorLowering) \
 	X(TrampledFlattening) \

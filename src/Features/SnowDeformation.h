@@ -558,6 +558,8 @@ public:
 		float RimTeeth = 0.33f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 1.0f;
+		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
+		float FreshSnowChurn = 0.5f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
 		float FreshSnowSettleHours = 24.0f;
 		/** @brief Trampled ground: multiplier on TrenchFloorFraction where trails overlap into a trampled area (0.5 = the floor sits half as high there). 1 = off. */
