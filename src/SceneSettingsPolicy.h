@@ -24,6 +24,10 @@ namespace SceneSettingsPolicy
 		// separate feature and stay scene-controllable.
 		{ "GrassOptimizations" },
 		{ "TerrainVariation" },
+		// Context gates deciding where IBL applies at all: map and loading screens have no scene to
+		// resolve against in the first place.
+		{ "ImageBasedLighting", "DisableInWorldMap" },
+		{ "ImageBasedLighting", "DisableInLoadingScreen" },
 	};
 
 	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {

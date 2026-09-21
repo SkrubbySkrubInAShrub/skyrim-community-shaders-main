@@ -901,8 +901,6 @@
     "feature.ibl.dalc_mode_luminance_ratio": "Luminance Ratio",
     "feature.ibl.dalc_mode_tooltip": "How the DALC-to-IBL brightness ratio is computed:\nLuminance Ratio: Scalar ratio from overall luminance (loses DALC color tint).\nColor Ratio: Per-channel ratio (preserves DALC color tint).\nDALC + Sky: Uses vanilla ambient as base, sky IBL on top. Skylighting only affects sky.\nDALC + Sky (Directional): Same, but Skylighting also dims vanilla ambient per-direction.",
     "feature.ibl.description": "Replaces the game's ambient lighting with physically-based IBL derived from cubemap spherical harmonics.",
-    "feature.ibl.disable_in_interiors": "Disable in interiors",
-    "feature.ibl.disable_in_interiors_tooltip": "Disables IBL in interior cells.",
     "feature.ibl.disable_in_loading_screen": "Disable in loading screens",
     "feature.ibl.disable_in_loading_screen_tooltip": "Disables IBL during loading screens and the main menu.",
     "feature.ibl.disable_in_world_map": "Disable in world map",

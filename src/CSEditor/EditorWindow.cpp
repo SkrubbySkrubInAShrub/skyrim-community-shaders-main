@@ -952,9 +952,14 @@ void EditorWindow::ShowObjectsWindow()
 
 void EditorWindow::ShowViewportWindow()
 {
-	Util::BeginWithRoundedClose(T(TKEY("viewport"), "Viewport"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	// Begin() returns false while collapsed; Draw() reads this to skip next frame's framebuffer copy.
+	viewportCollapsed = !Util::BeginWithRoundedClose(T(TKEY("viewport"), "Viewport"), nullptr, ImGuiWindowFlags_NoFocusOnAppearing);
+	if (viewportCollapsed) {
+		ImGui::End();
+		return;
+	}
 
-	// The size of the image in ImGui																														   // Get the available space in the current window
+	// The size of the image in ImGui																													   // Get the available space in the current window
 	ImVec2 availableSpace = ImGui::GetContentRegionAvail();
 
 	// Calculate aspect ratio of the image
@@ -1543,7 +1548,8 @@ void EditorWindow::Draw()
 	if (!IsViewportActive()) {
 		delete tempTexture;
 		tempTexture = nullptr;
-	} else {
+	} else if (!viewportCollapsed) {
+		// Kept allocated while collapsed so expanding costs one stale frame rather than a reupload.
 		auto renderer = globals::game::renderer;
 		if (renderer) {
 			auto& framebuffer = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];

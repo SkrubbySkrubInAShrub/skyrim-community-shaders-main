@@ -73,6 +73,9 @@ public:
 	/** @brief Bottom Y of the viewport window, set during layout for palette positioning. */
 	float viewportBottomY = 0.0f;
 
+	/** @brief Last frame's viewport collapse state, so Draw() can skip the framebuffer copy. */
+	bool viewportCollapsed = false;
+
 	// Time control constants
 	static constexpr float kVanillaTimeScale = 20.0f;
 	static constexpr float kGameHourMax = 23.99f;

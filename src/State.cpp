@@ -408,6 +408,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		json& disabledFeaturesJson = settings["Disable at Boot"];
 		logger::info("Loading 'Disable at Boot' settings");
 
+		// Load runs again on config switches; stale entries would otherwise outlive the config that set them.
+		ClearDisabledFeatures();
 		for (auto& [featureName, featureStatus] : disabledFeaturesJson.items()) {
 			if (featureStatus.is_boolean()) {
 				disabledFeatures[featureName] = featureStatus.get<bool>();

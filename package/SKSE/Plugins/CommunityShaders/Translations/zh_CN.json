@@ -730,8 +730,6 @@
     "feature.ibl.dalc_mode_luminance_ratio": "亮度比例",
     "feature.ibl.dalc_mode_tooltip": "DALC与IBL亮度比率的计算方式：\n亮度比：来自总亮度的标量比率（丢失DALC颜色色调）。\n颜色比：逐通道比率（保留DALC颜色色调）。\nDALC + 天空：使用原版环境光作为基础，天空IBL叠加。天光仅影响天空。\nDALC + 天空（方向性）：相同，但天光也按方向降低原版环境光。",
     "feature.ibl.description": "用基于物理的IBL替代游戏的环境光照，IBL从立方体贴图的球谐函数中推导得出。",
-    "feature.ibl.disable_in_interiors": "在室内禁用",
-    "feature.ibl.disable_in_interiors_tooltip": "在室内单元中禁用IBL。",
     "feature.ibl.enable_ibl": "启用IBL",
     "feature.ibl.enable_ibl_tooltip": "切换IBL。启用时，环境光来自立方体贴图球谐函数，而非原版系统。",
     "feature.ibl.env_ibl_saturation": "环境IBL饱和度",

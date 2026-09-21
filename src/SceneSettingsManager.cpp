@@ -236,6 +236,13 @@ namespace
 		return formId != 0 ? Util::FormIdToSpid(formId) : std::string(formKey);
 	}
 
+	/// Location form keys become directory names, so refuse anything that could escape the overwrites root.
+	bool IsSafeLocationFormKey(std::string_view formKey)
+	{
+		return !formKey.empty() && formKey != "." && formKey != ".." &&
+		       formKey.find_first_of("\\/:*?\"<>|") == std::string_view::npos;
+	}
+
 	bool ReadOptionalStringField(const json& object, std::string_view field, std::string& value,
 		std::string_view context)
 	{
@@ -1092,6 +1099,14 @@ namespace
 		std::erase_if(names, [&](const auto& name) { return !CatalogHasSceneSettings(name, type); });
 		return names;
 	}
+
+	/** @brief The weather region the sky picked for this cell, or 0 when it has none. */
+	RE::FormID GetActiveRegionId(RE::TESObjectCELL* cell)
+	{
+		return cell && cell->IsExteriorCell() && globals::game::sky && globals::game::sky->region ?
+		           globals::game::sky->region->GetFormID() :
+		           0;
+	}
 }
 
 size_t SceneSettingsManager::GetCatalogUpdateSignature(std::string_view featureShortName,
@@ -1826,15 +1841,11 @@ static bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
 	if (!std::filesystem::exists(path, ec))
 		return !ec;
 
-	std::ifstream in(path);
-	if (!in.is_open()) {
-		logger::error("[SceneSettings] Could not open overwrite file '{}' for editing", path.string());
-		return false;
-	}
-
-	auto data = json::parse(in, nullptr, false);
-	if (!data.is_object()) {
-		logger::error("[SceneSettings] Could not parse overwrite file '{}' for editing", path.string());
+	// The read handle has to be closed before the rewrite below: Windows refuses to replace or
+	// delete a file that still has one open.
+	json data;
+	if (!ReadBoundedSceneJson(path, data)) {
+		logger::error("[SceneSettings] Could not read overwrite file '{}' for editing", path.string());
 		return false;
 	}
 
@@ -2262,8 +2273,11 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	const auto locationId = location ? location->GetFormID() : 0;
 	const auto cellId = cell->GetFormID();
 	const auto worldspaceId = worldspace ? worldspace->GetFormID() : 0;
+	const auto regionId = GetActiveRegionId(cell);
 	const bool cellChanged = cellId != lastResolvedCellId;
-	const bool locationContextChanged = locationId != lastResolvedLocationId || cellChanged;
+	// Regions overlap within a cell, so region-scoped settings can go stale without the cell changing.
+	const bool locationContextChanged = locationId != lastResolvedLocationId || cellChanged ||
+	                                    regionId != lastResolvedRegionId || worldspaceId != lastResolvedWorldspaceId;
 	// Only walking between exterior cells of one worldspace eases; anything behind a loading screen
 	// has to be in place by the time the player sees it.
 	const bool walkedBetweenWorldspaceCells = allowLocationTransitions && cellChanged &&
@@ -2308,6 +2322,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	lastResolvedLocationId = locationId;
 	lastResolvedCellId = cellId;
 	lastResolvedWorldspaceId = worldspaceId;
+	lastResolvedRegionId = regionId;
 	lastResolvedHour = hour;
 	lastResolvedCurrentWeatherId = weather.currentWeatherId;
 	lastResolvedPreviousWeatherId = weather.previousWeatherId;
@@ -3724,7 +3739,9 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 		json preservedSection = json::object();
 
 		for (const auto& [formKey, rawConfig] : sectionIt->items()) {
-			if (formKey.empty()) {
+			if (!IsSafeLocationFormKey(formKey)) {
+				if (!formKey.empty())
+					logger::warn("[SceneSettings] Ignoring location config with unusable form key '{}'", formKey);
 				preservedSection[formKey] = rawConfig;
 				continue;
 			}
@@ -4398,6 +4415,22 @@ namespace
 		return cell ? BuildLocationTargetChain(cell->GetLocation(), cell) :
 		              std::vector<SceneSettingsManager::LocationTarget>{};
 	}
+
+	/// Whether a chain describes an interior, or nothing when no link in it settles the question.
+	std::optional<bool> GetLocationChainInteriorState(
+		const std::vector<SceneSettingsManager::LocationTarget>& targets)
+	{
+		for (const auto& target : targets) {
+			// Regions only ever cover exterior cells.
+			if (target.type == SceneSettingsManager::LocationTargetType::Region)
+				return false;
+			if (target.type == SceneSettingsManager::LocationTargetType::Cell)
+				if (auto* form = ResolveLocationTargetForm(target.formKey))
+					if (auto* cell = form->As<RE::TESObjectCELL>())
+						return cell->IsInteriorCell();
+		}
+		return std::nullopt;
+	}
 }
 
 const std::vector<SceneSettingsManager::LocationTarget>& SceneSettingsManager::GetCurrentLocationTargets() const
@@ -4419,9 +4452,7 @@ const std::vector<SceneSettingsManager::LocationTarget>& SceneSettingsManager::G
 	const auto locationId = location ? location->GetFormID() : 0;
 	const auto cellId = cell->GetFormID();
 	// Regions overlap within a cell, so the winning one can change without the cell changing.
-	const auto regionId = cell->IsExteriorCell() && globals::game::sky && globals::game::sky->region ?
-	                          globals::game::sky->region->GetFormID() :
-	                          0;
+	const auto regionId = GetActiveRegionId(cell);
 	if (locationTargetsCached && cachedTargetLocationId == locationId &&
 		cachedTargetCellId == cellId && cachedTargetRegionId == regionId)
 		return cachedLocationTargets;
@@ -4555,7 +4586,10 @@ std::optional<SceneSettingsManager::ResolvedSettingMap> SceneSettingsManager::Bu
 	LocationTargetType type, std::string_view formKey, std::optional<EntrySource> selectedSource)
 {
 	ResolvedSettingMap lowerLayers;
-	const bool interior = Util::IsInterior();
+	const auto locationTargets = ResolveLocationTargetChain(type, formKey);
+	// The target being edited is not necessarily where the player stands, so its own chain decides
+	// which layers sit underneath it. An unresolved chain falls back to the general TOD/weather one.
+	const bool interior = GetLocationChainInteriorState(locationTargets).value_or(false);
 	RefreshBlendSnapshot(interior);
 	if (interior) {
 		ResolveInteriorSettings(lowerLayers);
@@ -4567,7 +4601,7 @@ std::optional<SceneSettingsManager::ResolvedSettingMap> SceneSettingsManager::Bu
 
 	bool targetFound = false;
 	const auto selectedTargetKey = GetLocationConfigKey(type, formKey);
-	for (const auto& target : ResolveLocationTargetChain(type, formKey)) {
+	for (const auto& target : locationTargets) {
 		const auto targetKey = GetLocationConfigKey(target.type, target.formKey);
 		auto configIt = locationSceneConfigs.find(targetKey);
 		if (targetKey == selectedTargetKey) {

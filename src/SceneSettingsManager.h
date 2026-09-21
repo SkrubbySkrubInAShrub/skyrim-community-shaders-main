@@ -874,6 +874,7 @@ private:
 	RE::FormID lastResolvedLocationId = 0;
 	RE::FormID lastResolvedCellId = 0;
 	RE::FormID lastResolvedWorldspaceId = 0;
+	RE::FormID lastResolvedRegionId = 0;
 	float lastResolvedHour = -1.0f;
 	RE::FormID lastResolvedCurrentWeatherId = 0;
 	RE::FormID lastResolvedPreviousWeatherId = 0;

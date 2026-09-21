@@ -27,7 +27,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkyIBLSaturation,
 	FogAmount,
 	DALCMode,
-	DisableInInteriors,
 	DisableInWorldMap,
 	DisableInLoadingScreen)
 
@@ -98,10 +97,6 @@ void IBL::DrawSettings()
 	ImGui::Checkbox(T(TKEY("preserve_fog_luminance"), "Preserve Fog Luminance"), (bool*)&settings.PreserveFogLuminance);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("preserve_fog_luminance_tooltip"), "When Fog Mix is active, rescales the IBL-tinted fog to keep the original fog brightness.\nPrevents fog from becoming too bright or too dark."));
-	}
-	ImGui::Checkbox(T(TKEY("disable_in_interiors"), "Disable in interiors"), &settings.DisableInInteriors);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("disable_in_interiors_tooltip"), "Disables IBL in interior cells."));
 	}
 	ImGui::Checkbox(T(TKEY("disable_in_world_map"), "Disable in world map"), &settings.DisableInWorldMap);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -174,8 +169,7 @@ bool IBL::IsDisabledForCurrentScene() const
 
 	const bool inLoadingScreen = settings.DisableInLoadingScreen && state->IsMainOrLoadingMenuOpen();
 	const bool inWorldMap = settings.DisableInWorldMap && state->isMapMenuOpen;
-	const bool inInterior = settings.DisableInInteriors && Util::IsInterior();
-	return inLoadingScreen || inWorldMap || inInterior;
+	return inLoadingScreen || inWorldMap;
 }
 
 void IBL::ReflectionsPrepass()
