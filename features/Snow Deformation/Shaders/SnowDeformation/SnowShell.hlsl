@@ -219,8 +219,8 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook2;
 	// xy spare; z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
-	// Trampled ground: x = strength of the trail -> field switch (0 = off),
-	// yz = the extent bracket, w spare. Consumed inside CarveProfile.
+	// Trampled ground: x = trench floor scale, y = floor churn scale (1 = off),
+	// zw = the extent bracket trail -> field. See TrampleScales.
 	float4 TrampleStyle;
 }
 
@@ -1410,7 +1410,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
-			depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD) * saturate(depth / 10.0);
+			depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD, GridOrigin + gridLocal) * saturate(depth / 10.0);
 			// Berm clods: a coarser octave weighted by BermShape rather than
 			// the churn weight, since spoil lands on the crest and churn peaks
 			// in the trench. Masked like the berm and gated on material; the
@@ -2431,7 +2431,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// override, and is the one voice allowed to overrule it.
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
 	{
-		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
+		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y) * TrampleScales(GridOrigin + gridLocal, pixelCarve).x);
 		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
 		[branch] if (remaining < 4.0)
 		{
@@ -2537,7 +2537,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	// Churn gradient (same field the geometry displaces by).
-	float churnW = ChurnWeight(pixelCarve, bermCenter) * saturate(pixelDepth / 10.0);
+	float churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * saturate(pixelDepth / 10.0);
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
 	{
 		const float cStep = 3.0;
@@ -3212,7 +3212,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// two ends of the bracket.
 		float dbgExtent = TrampleExtent(GridOrigin + gridLocal);
 		preLit = float3(dbgExtent, TrampleField(GridOrigin + gridLocal) * 0.8, 1.0 - dbgExtent) * 0.6;
-		[flatten] if (abs(dbgExtent - TrampleStyle.y) < 0.006 || abs(dbgExtent - TrampleStyle.z) < 0.006)
+		[flatten] if (abs(dbgExtent - TrampleStyle.z) < 0.006 || abs(dbgExtent - TrampleStyle.w) < 0.006)
 			preLit = float3(1.0, 1.0, 1.0);
 	}
 	else if (ShellDebugData == 3)

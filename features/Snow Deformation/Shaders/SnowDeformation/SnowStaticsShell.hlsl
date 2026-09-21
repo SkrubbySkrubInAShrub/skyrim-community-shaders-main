@@ -1397,7 +1397,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// floor) zeroed churn AT the floor, and fully trampled road floors
 		// shaded as pristine top snow. The object-exposure guard is now the
 		// pad clamp instead: lumps dig toward the pad, never through it.
-		float churnW = ChurnWeight(deform, bermD) * saturate(depth / 10.0);
+		float churnW = ChurnWeight(deform, bermD, worldXY) * saturate(depth / 10.0);
 		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
 			depth = max(depth + ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW, pad);
 
@@ -2745,7 +2745,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
 	[branch] if (ObjChurnHeightAmp > 0.01)
 	{
-		float churnWPix = ChurnWeight(pixelDeform, bermC) * saturate(PatchSkinDepth(worldXY).x / 10.0);
+		float churnWPix = ChurnWeight(pixelDeform, bermC, worldXY) * saturate(PatchSkinDepth(worldXY).x / 10.0);
 		[branch] if (churnWPix > 0.001)
 		{
 			const float cStep = 3.0;

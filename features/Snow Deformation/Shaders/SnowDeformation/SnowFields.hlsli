@@ -128,10 +128,20 @@ float TrampleExtent(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) * inside;
 }
 
-// 0 = trail, 1 = trampled field. TrampleStyle.yz bracket the extent.
+// 0 = trail, 1 = trampled field. TrampleStyle.zw bracket the extent.
 float TrampleField(float2 worldXY)
 {
-	return smoothstep(TrampleStyle.y, TrampleStyle.z, TrampleExtent(worldXY));
+	return smoothstep(TrampleStyle.z, TrampleStyle.w, TrampleExtent(worldXY));
+}
+
+// Trampled ground: x scales the trench floor fraction, y scales the churn on
+// the trench floor; both 1 = off. Open snow (d = 0) never pays for the read.
+float2 TrampleScales(float2 worldXY, float deformation)
+{
+	float2 scales = float2(1.0, 1.0);
+	[branch] if (min(TrampleStyle.x, TrampleStyle.y) < 0.999 && deformation > 0.001)
+		scales = lerp(float2(1.0, 1.0), saturate(TrampleStyle.xy), TrampleField(worldXY));
+	return scales;
 }
 
 // Churn lump noise; the caller passes its size knob (ChurnSizeScale /
@@ -148,9 +158,10 @@ float ChurnNoiseScaled(float2 worldXY, float sizeScale)
 // frequencies - the two-scale contrast of RDR2's O3.
 static const float kClodSizeScale = 1.5;
 
-float ChurnWeight(float deformation, float bermDeform)
+// The trench-floor half flattens in trampled ground; the berm half does not.
+float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
 {
-	return max(smoothstep(0.05, 0.5, deformation), BermShape(bermDeform));
+	return max(smoothstep(0.05, 0.5, deformation) * TrampleScales(worldXY, deformation).y, BermShape(bermDeform));
 }
 
 // ---- Deformation surface-state readers (spell marks). One bilinear tap;
@@ -430,13 +441,6 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
 	float d = saturate(deformation);
 
-	// Trampled ground is a packed surface, not stacked prints: no cut-wall
-	// vocabulary, and a floor raised toward the surface that SCALES the
-	// carve instead of clamping it, so fins and overlaps survive as relief.
-	float field = 0.0;
-	[branch] if (TrampleStyle.x > 0.001 && d > 0.001)
-		field = TrampleField(worldXY) * saturate(TrampleStyle.x);
-	float cutT = depthT * (1.0 - field);
 
 	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
 	// 8-unit raggedness, HEIGHT-BLEND-PLAN - reused, not reinvented),
@@ -449,18 +453,14 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 		float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
 		              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
 		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
-		d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * cutT);
+		d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
 	}
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
-	float floorFrac = saturate(BorderStyle.y);
+	float floorFrac = saturate(BorderStyle.y) * TrampleScales(worldXY, d).x;
 	float floorDepth = min(uncarvedDepth, uncarvedDepth * floorFrac);
 	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
-	// Packed snow bears weight, so the floor sits above a lone print's -
-	// but a trampled area is still a depression.
-	float packedFrac = lerp(floorFrac, 1.0, 0.35);
-	profile = lerp(profile, uncarvedDepth * (1.0 - d * (1.0 - packedFrac)), field);
 
 	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on
 	// the carve skirt, peaking at d ~ 0.1 and gone by mid-wall. Berm
@@ -472,7 +472,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	[branch] if (RimStyle.x > 0.001)
 	{
 		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
-		profile += RimStyle.x * uncarvedDepth * hump * cutT;
+		profile += RimStyle.x * uncarvedDepth * hump * depthT;
 	}
 	return profile;
 }

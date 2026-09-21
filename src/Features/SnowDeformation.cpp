@@ -119,7 +119,8 @@
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
-	X(TrampledGround) \
+	X(TrampledFloorLowering) \
+	X(TrampledFlattening) \
 	X(RimLip) \
 	X(RimTeeth) \
 	X(BermClods) \

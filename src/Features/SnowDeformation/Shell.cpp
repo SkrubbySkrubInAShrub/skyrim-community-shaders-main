@@ -1120,10 +1120,10 @@ void SnowDeformation::DrawShell()
 	// stale, so the class switch goes off with it.
 	const bool extentLive = !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture;
 	const float trampleStart = std::clamp(debugTrampleStart, 0.0f, 0.98f);
-	cbData.TrampleStyle = { extentLive ? std::clamp(settings.TrampledGround, 0.0f, 1.0f) : 0.0f,
+	cbData.TrampleStyle = { extentLive ? std::clamp(settings.TrampledFloorLowering, 0.0f, 1.0f) : 1.0f,
+		extentLive ? std::clamp(settings.TrampledFlattening, 0.0f, 1.0f) : 1.0f,
 		trampleStart,
-		std::clamp(debugTrampleFull, trampleStart + 0.01f, 1.0f),
-		0.0f };
+		std::clamp(debugTrampleFull, trampleStart + 0.01f, 1.0f) };
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
 	// The retired crisp-grain pair: the landscape half now carries the A/B

@@ -556,8 +556,10 @@ public:
 		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
-		/** @brief Trampled ground: strength of the switch from the trail profile to the packed-ground profile where trails overlap into an area. 0 = off, every carve keeps the trail profile. */
-		float TrampledGround = 1.0f;
+		/** @brief Trampled ground: multiplier on TrenchFloorFraction where trails overlap into a trampled area (0.5 = the floor sits half as high there). 1 = off. */
+		float TrampledFloorLowering = 0.5f;
+		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
+		float TrampledFlattening = 0.5f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
 		/** @brief Bow wave: crest height as a fraction of local snow depth. 0 = off. */
@@ -1580,7 +1582,7 @@ public:
 		float4 BloodLook2;
 		/** @brief Blood detail tiles: xy spare (the retired soak), z = the tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
-		/** @brief Trampled ground: x = Settings::TrampledGround (0 when the extent bake is not live), yz = the extent bracket trail -> field, w spare. Consumed inside CarveProfile. Appended last; mirror in both shells. */
+		/** @brief Trampled ground: x = Settings::TrampledFloorLowering, y = Settings::TrampledFlattening (both 1 when the extent bake is not live), zw = the extent bracket trail -> field. Read through TrampleScales. Appended last; mirror in both shells. */
 		float4 TrampleStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
