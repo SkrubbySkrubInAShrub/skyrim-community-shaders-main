@@ -1161,6 +1161,73 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					} else {
 						contactLivingCount++;
 						stampStats.actorsRasterized++;
+						// The bow wave is motion, not contact, but its only
+						// emission sat in the bone foot loop below - which a
+						// rasterized actor never reaches. Same leading-foot
+						// rule and the same foot keys, so a hand-over between
+						// the two paths keeps its trail.
+						if (bowWaveStrength > 0.02f && (bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f)) {
+							float minFootZ = FLT_MAX;
+							float minFootScale = 1.0f;
+							for (const auto& foot : cache.feet)
+								if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f && n->world.translate.z < minFootZ) {
+									minFootZ = n->world.translate.z;
+									minFootScale = n->world.scale;
+								}
+							const bool groundRefStarved = minFootZ != FLT_MAX && minFootZ - groundZ > kFootPlantBand * minFootScale;
+							uint32_t footIndex = 0;
+							for (const auto& foot : cache.feet) {
+								const uint32_t thisIndex = footIndex++;
+								auto* footNode = foot.node.get();
+								if (!footNode || footNode->world.scale < 0.01f)
+									continue;
+								const auto& footWorld = footNode->world;
+								const float boneScale = footWorld.scale;
+								const float2 heel = { footWorld.translate.x, footWorld.translate.y };
+								float2 tip = heel;
+								float footLen = 2.0f * kHoofRadius * boneScale;
+								if (auto* parentNode = footNode->parent)
+									footLen = std::max(footLen, footWorld.translate.GetDistance(parentNode->world.translate));
+								if (auto* toeNode = foot.toe.get()) {
+									const float2 dir = { toeNode->world.translate.x - heel.x, toeNode->world.translate.y - heel.y };
+									const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+									if (len > 2.0f) {
+										const float extend = 1.0f + kFootToeExtend;
+										tip = { heel.x + dir.x * extend, heel.y + dir.y * extend };
+										footLen = len * extend;
+									}
+								}
+								const float plantRef = groundRefStarved ? minFootZ : groundZ;
+								const float plantBand = groundRefStarved ?
+								                            std::max(kFootRelativeBand * boneScale, kFootRelativeLenFactor * footLen) :
+								                            kFootPlantBand * boneScale;
+								const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
+								auto prevFoot = stampPrevPositions.find(key);
+								const float releaseBand = plantBand * (prevFoot != stampPrevPositions.end() ? 1.5f : 1.0f);
+								if (footWorld.translate.z - plantRef > releaseBand)
+									continue;
+								float2 segStart = heel;
+								if (prevFoot != stampPrevPositions.end()) {
+									const float2 delta = { heel.x - prevFoot->second.x, heel.y - prevFoot->second.y };
+									if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
+										segStart = prevFoot->second;
+								}
+								currentPositions[key] = heel;
+								const float footAhead = (tip.x - position.x) * bowWaveDir.x + (tip.y - position.y) * bowWaveDir.y;
+								if (footAhead <= -2.0f || bowWaves.size() >= kMaxBowWaves)
+									continue;
+								BowWave wave{};
+								wave.pos = tip;
+								wave.prev = segStart;
+								wave.dir = bowWaveDir;
+								wave.radius = kBowWaveBaseRadius * depthScale;
+								wave.strength = bowWaveStrength;
+								const float cdx = footWorld.translate.x - cameraPosition.x;
+								const float cdy = footWorld.translate.y - cameraPosition.y;
+								wave.distSq = cdx * cdx + cdy * cdy;
+								bowWaves.push_back(wave);
+							}
+						}
 					}
 				}
 				return;
