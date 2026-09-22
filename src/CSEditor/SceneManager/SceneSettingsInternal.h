@@ -62,6 +62,10 @@ namespace SceneSettingsInternal
 	// TOD/weather can only interpolate float settings, not integer toggles or enum values.
 	bool IsNumericValue(const json& value);
 
+	/// A hand-written file may spell a float as `1`. The catalog accepts that for a float setting, so widen
+	/// it at the parse boundary rather than let IsNumericValue drop the entry.
+	void WidenParsedIntegerToFloat(json& value);
+
 	bool IsSceneSettingPathWrapper(std::string_view token);
 
 	std::string NormalizeSceneSettingAddressToken(std::string_view token);

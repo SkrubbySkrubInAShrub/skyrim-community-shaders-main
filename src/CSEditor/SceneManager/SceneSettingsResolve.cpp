@@ -24,6 +24,9 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 		TryEnsureWeatherDataLoaded();
 	if (!HasActiveSceneEntriesCached()) {
 		applyFailures.clear();
+		// The committed context freezes while nothing is active, so the resolve that follows the
+		// next entry must not mistake the stale cell for the player having walked.
+		suppressLocationTransitionUntilContextResolved = true;
 		if (!appliedSettings.empty())
 			RestoreAppliedSettings();
 		else
@@ -63,6 +66,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	// Only walking between exterior cells of one worldspace eases; anything behind a loading screen
 	// has to be in place by the time the player sees it.
 	const bool walkedBetweenWorldspaceCells = allowLocationTransitions && cellChanged &&
+	                                          !suppressLocationTransitionUntilContextResolved &&
 	                                          !interior && !lastResolvedInterior &&
 	                                          lastResolvedCellId != 0 &&
 	                                          worldspaceId != 0 && worldspaceId == lastResolvedWorldspaceId;
@@ -77,7 +81,9 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	                            weather.currentWeatherId != lastResolvedCurrentWeatherId ||
 	                            weather.previousWeatherId != lastResolvedPreviousWeatherId ||
 	                            std::abs(weather.lerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
-	                            lastResolvedHour < 0.0f || std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold;
+	                            // Indoors resolves nothing from the hour, so time alone cannot change it.
+	                            (!interior && (lastResolvedHour < 0.0f ||
+	                                              std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
 	const auto now = std::chrono::steady_clock::now();
 	const bool applyRetryDue = std::any_of(applyFailures.begin(), applyFailures.end(),
 		[&](const auto& item) { return now >= item.second.retryAfter; });
@@ -101,6 +107,8 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	ApplyResolvedSettings(resolved, force);
 	RetireFinishedLocationTransitions(transitionTime);
 
+	// Committed, so the context is trustworthy again and the next cell change is a real walk.
+	suppressLocationTransitionUntilContextResolved = false;
 	lastResolvedInterior = interior;
 	lastResolvedLocationId = locationId;
 	lastResolvedCellId = cellId;
@@ -643,6 +651,15 @@ void SceneSettingsManager::RestoreAppliedSettings()
 			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
 			continue;
 		}
+		// Verify before dropping the baseline: erasing it on an unverified restore strands the
+		// user's original value with nothing left to retry from.
+		if (!FeatureRetainedUpdates(*feature, featureShortName, updates)) {
+			if (restoreFailureWarnings.insert(featureShortName).second)
+				logger::warn("[SceneSettings] {} did not retain restored base settings", featureShortName);
+			featureApplyDocuments.erase(featureShortName);
+			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
+			continue;
+		}
 		restoreFailureWarnings.erase(featureShortName);
 		restoreRetryAfter.erase(featureShortName);
 		// The restore deliberately undoes whatever the last apply put there.
@@ -932,7 +949,34 @@ json SceneSettingsManager::GetBaselineValue(const SettingAddress& address)
 
 bool SceneSettingsManager::ResolvedValuesEqual(const json& lhs, const json& rhs)
 {
-	if (lhs.is_number() && rhs.is_number())
-		return std::abs(lhs.get<double>() - rhs.get<double>()) < kBlendEpsilon;
 	return lhs == rhs;
+}
+
+bool SceneSettingsManager::AppliedValuesEqual(const json& lhs, const json& rhs)
+{
+	if (lhs == rhs)
+		return true;
+	if (!lhs.is_number() || !rhs.is_number())
+		return false;
+	return static_cast<float>(lhs.get<double>()) == static_cast<float>(rhs.get<double>());
+}
+
+bool SceneSettingsManager::FeatureRetainedUpdates(Feature& feature, std::string_view featureShortName,
+	const std::vector<CatalogSceneSettingUpdate>& updates, std::vector<json>* observed)
+{
+	json actualSettings;
+	if (!TrySaveFeatureSettings(feature, "verify applied settings", actualSettings))
+		return false;
+
+	bool retained = true;
+	if (observed)
+		observed->reserve(updates.size());
+	for (const auto& update : updates) {
+		auto* setting = FindAllowedCatalogSetting(featureShortName, update.settingPath, update.key);
+		const auto* actual = setting ? GetCatalogSerializedValue(actualSettings, *setting) : nullptr;
+		retained = retained && actual && AppliedValuesEqual(*actual, update.value);
+		if (observed)
+			observed->push_back(actual ? *actual : json{});
+	}
+	return retained;
 }

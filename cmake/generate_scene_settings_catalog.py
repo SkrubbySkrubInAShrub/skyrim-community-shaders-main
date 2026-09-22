@@ -311,6 +311,10 @@ STRUCT_DECL_RE = r"\bstruct\s+(?:alignas\s*\([^)]*\)\s+)?(\w+)([^;{]*)\{"
 # A const SaveSettings persists exactly like a mutable one, so missing it drops a whole feature.
 SAVE_SETTINGS_DEFINITION_RE = r"\bvoid\s+(\w+)::SaveSettings\s*\([^)]*\)\s*(?:const\s*)?\{"
 
+# Features reach for eastl as readily as std, and either smart pointer owns a child the same way, so
+# recognising only one spelling would silently drop that child's whole set of bindings.
+SMART_POINTER_FACTORY_RE = r"(?:std|eastl)::make_(?:unique|shared)"
+
 CATEGORY_CONTROL_NAMES = {
     "CollapsingHeader",
     "TreeNode",
@@ -855,7 +859,7 @@ def collect_settings_components(
         seen_classes = set()
         for container_name, child_type in re.findall(
                 r"\b([A-Za-z_]\w*)\s*\[[^\]]+\]\s*=\s*"
-                r"std::make_unique\s*<\s*([A-Za-z_]\w*(?:::\w+)*)\s*>", text):
+                rf"{SMART_POINTER_FACTORY_RE}\s*<\s*([A-Za-z_]\w*(?:::\w+)*)\s*>", text):
             child_name = child_type.split("::")[-1]
             if child_name in seen_classes:
                 continue
@@ -937,7 +941,7 @@ def collect_serialized_settings_components(
                 json_path = tuple(re.findall(r'"([^"\n]+)"', persisted.group(1)))
                 factory_pattern = re.compile(
                     rf"\b{container}\.(?:emplace_back|push_back)\s*\(\s*"
-                    r"std::make_(?:unique|shared)\s*<\s*(\w+)\s*>")
+                    rf"{SMART_POINTER_FACTORY_RE}\s*<\s*(\w+)\s*>")
                 child_classes: set[str] = set()
                 scopes_controls = False
                 for owner_text, owner_masked in sources:
@@ -1201,6 +1205,7 @@ def collect_tab_selector_roots(
     method_pattern = re.compile(
         r"\b(?:bool|void)\s+([A-Za-z_]\w*)::Draw[A-Za-z_]\w*\s*\([^;{]*\)\s*(?:const\s*)?\{")
     tab_pattern = re.compile(r"\b(?:ImGui|Util)::BeginTabItem\s*\(")
+    tab_end_pattern = re.compile(r"\b(?:ImGui|Util)::EndTabItem\s*\(")
     setting_pattern = re.compile(
         r"\b(?:settings|debugSettings|[A-Za-z_]\w*Settings)\."
         r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)")
@@ -1228,7 +1233,12 @@ def collect_tab_selector_roots(
                 block_end = find_matching_brace(body, block_start)
                 translated = extract_i18n_call(body[tab.start():close + 1], prefix)
                 if block_end >= 0 and translated:
-                    tabs.append((block_start, block_end, translated[1], translated[0]))
+                    # The tab ends at its EndTabItem, not at the brace: a block that keeps drawing
+                    # after that call is back on the tab bar, and those controls are not in the tab.
+                    # Any nested tab closes first, so the last call in the block is this tab's.
+                    ends = list(tab_end_pattern.finditer(masked_body, block_start, block_end))
+                    scope_end = ends[-1].start() if ends else block_end
+                    tabs.append((block_start, scope_end, translated[1], translated[0]))
 
             for setting in setting_pattern.finditer(masked_body):
                 selectors = sorted(
@@ -1585,8 +1595,15 @@ def extract_control_setting_path(
         return normalize_setting_path(setting_match.group(1))
 
     for alias, setting_path in aliases.items():
-        if re.search(rf"(?:&|\b){re.escape(alias)}\b", storage_argument):
-            return setting_path
+        alias_match = re.search(
+            rf"(?:&|\b){re.escape(alias)}\b"
+            r"((?:(?:\[[^\]]+\])|(?:\.[A-Za-z_]\w*(?:\(\))?))*)",
+            storage_argument)
+        if not alias_match:
+            continue
+        # `&alias.member` addresses the member: dropping the suffix would file the control under the
+        # aliased struct's own path, where no scalar setting lives.
+        return setting_path + normalize_setting_path(alias_match.group(1))
 
     return None
 
@@ -3624,7 +3641,9 @@ def _project_standard_controls(
 
     projected_helpers = collect_projected_numeric_helpers(paths)
     for function in functions:
-        if function.name != "DrawSettings" or not function.owner:
+        # A feature that moved part of its UI into a Draw* helper draws no less of its settings there,
+        # so the reachable set is the gate, not the entry point's own name.
+        if function not in draw_control_functions:
             continue
         aliases = collect_local_setting_aliases(function.body)
         source_text = text_by_path[function.source] + (
@@ -3682,7 +3701,7 @@ def _project_standard_controls(
 
     mapped_helpers = collect_mapped_combo_helpers(paths)
     for function in functions:
-        if function.name != "DrawSettings" or not function.owner:
+        if function not in draw_control_functions:
             continue
         aliases = collect_local_setting_aliases(function.body)
         for helper_name, summary in mapped_helpers.items():
@@ -3802,7 +3821,7 @@ def _project_standard_controls(
                 add_choices(identity, summary.choices)
 
     for function in functions:
-        if function.name != "DrawSettings" or not function.owner:
+        if function not in draw_control_functions:
             continue
         constants = constants_by_path[function.source]
         for button in re.finditer(r"\bImGui::Button\s*\(", function.masked_body):
@@ -3920,7 +3939,9 @@ def _collect_reversible_numeric_bindings(
     collected = {}
     conflicts = set()
     for function in functions:
-        if function.name != "DrawSettings" or not function.owner:
+        # No call graph here to walk, so the naming convention stands in for it: a Draw* member draws
+        # settings whether or not it is the entry point, and gating on the exact name loses its controls.
+        if not function.owner or not function.name.startswith("Draw"):
             continue
         aliases = collect_local_setting_aliases(function.body)
         for helper_name, helper_summaries in summaries.items():

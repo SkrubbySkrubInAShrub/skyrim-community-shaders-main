@@ -1,5 +1,6 @@
 #include "FeatureOverwrites.h"
 
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
@@ -47,7 +48,11 @@ namespace
 		exportState.failed = false;
 		if (auto* feature = Feature::FindFeatureByShortName(exportState.shortNames[index])) {
 			json settings;
-			feature->SaveSettings(settings);
+			{
+				// Export the author's own values, not whatever the active scene is applying.
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+				feature->SaveSettings(settings);
+			}
 			exportState.settings = Util::Settings::GetExportSettings(feature->GetShortName(), settings);
 		}
 		exportState.selected.assign(exportState.settings.size(), uint8_t{ 1 });
@@ -193,8 +198,10 @@ namespace
 
 			json settings;
 			auto* feature = Feature::FindFeatureByShortName(exportState.shortNames[exportState.featureIndex]);
-			if (feature)
+			if (feature) {
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 				feature->SaveSettings(settings);
+			}
 
 			exportState.failed = !feature || !SettingsOverrideManager::GetSingleton()->ExportSettings(modName,
 												 exportState.shortNames[exportState.featureIndex], paths, settings);

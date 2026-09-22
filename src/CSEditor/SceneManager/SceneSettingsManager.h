@@ -345,8 +345,8 @@ public:
 	bool HasWeatherConfig(RE::FormID weatherId);
 
 	/// Weather UI preference: show TOD table vs flat view (view-only, data is always per-period).
-	/// Read-only in this build: only a loaded document sets it.
 	bool IsWeatherShowTimeOfDay(RE::FormID weatherId);
+	void SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show);
 
 	static std::filesystem::path GetWeatherOverwritesDir();
 
@@ -879,6 +879,9 @@ private:
 	RE::FormID lastResolvedCurrentWeatherId = 0;
 	RE::FormID lastResolvedPreviousWeatherId = 0;
 	float lastResolvedWeatherLerp = -1.0f;
+	/// Set whenever the committed context goes stale (a load, or no active entries), cleared only by
+	/// a resolve that commits again. Until then a cell change cannot be read as the player walking.
+	bool suppressLocationTransitionUntilContextResolved = false;
 	mutable RE::FormID cachedPreviousWeatherId = 0;
 	mutable RE::FormID cachedTargetLocationId = 0;
 	mutable RE::FormID cachedTargetCellId = 0;
@@ -1041,7 +1044,21 @@ private:
 	/// Deferring the commit lets a fan-out over the periods land as one save.
 	CopyResult CopySettingsToContext(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy, bool deferCommit);
+	/// Exact: an eased value moves by far less than any tolerance would forgive, and a skipped apply
+	/// would accumulate that difference into a visible staircase.
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
+	/// Readback comparison, tolerant of a feature storing a double-valued setting in a float.
+	static bool AppliedValuesEqual(const json& lhs, const json& rhs);
+	/**
+	 * Reads a feature back to confirm it kept every value it was handed: a clean LoadSettings only
+	 * means nothing threw, not that the value survived a clamp, a quantise or a mode gate.
+	 *
+	 * @param observed When given, receives the value the feature reports per update, in the order of
+	 * `updates` and null where it reports none. Left empty when the feature cannot be read at all.
+	 * @return true when every update survived the round trip
+	 */
+	static bool FeatureRetainedUpdates(Feature& feature, std::string_view featureShortName,
+		const std::vector<CatalogSceneSettingUpdate>& updates, std::vector<json>* observed = nullptr);
 	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
 		std::span<const CatalogSceneSettingUpdate> updates);
 	bool ApplyCatalogSceneSettings(

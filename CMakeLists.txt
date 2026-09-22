@@ -383,11 +383,11 @@ add_custom_command(
         --out-dir
         "${SCENE_SETTINGS_CATALOG_DIR}"
         --min-entries
-        250
+        330
         --min-controllable
-        290
+        305
         --min-controllable-features
-        28
+        29
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
         ${SCENE_SETTINGS_CATALOG_INPUTS}

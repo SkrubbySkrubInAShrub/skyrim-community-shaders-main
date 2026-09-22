@@ -378,10 +378,11 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	size_t overridesDiscovered = overrideManager->DiscoverOverrides();
 
-	// Cleanup stale user override files (where override hash has changed)
+	// Runs even at zero discoveries so companions orphaned by an uninstall still get pruned.
+	overrideManager->CleanupStaleUserOverrides();
+
 	if (overridesDiscovered > 0) {
 		logger::info("Discovered {} override files", overridesDiscovered);
-		overrideManager->CleanupStaleUserOverrides();
 
 		// Apply global overrides to main settings
 		size_t globalOverrides = overrideManager->ApplyGlobalOverrides(settings);
@@ -650,7 +651,6 @@ void State::LoadFromJson(nlohmann::json& settings)
 void State::Save(ConfigMode a_configMode)
 {
 	std::string configPath = GetConfigPath(a_configMode);
-	std::ofstream o{ configPath };
 
 	try {
 		std::filesystem::create_directories(Util::PathHelpers::GetCommunityShaderPath());
@@ -659,20 +659,17 @@ void State::Save(ConfigMode a_configMode)
 		return;
 	}
 
-	// Check if the file opened successfully
-	if (!o.is_open()) {
-		logger::warn("Failed to open config file for saving: {}", configPath);
-		return;  // Exit early if file cannot be opened
+	// Serialize fully before touching the file: a throwing feature must not truncate the config.
+	json settings;
+	try {
+		SaveToJson(settings);
+	} catch (const std::exception& e) {
+		logger::error("Failed to serialize settings, leaving {} untouched. Error: {}", configPath, e.what());
+		return;
 	}
 
-	json settings;
-	SaveToJson(settings);
-
-	try {
-		o << settings.dump(1);
+	if (Util::FileHelpers::WriteJsonAtomically(configPath, settings, 1, "config")) {
 		logger::info("Saving settings to {}", configPath);
-	} catch (const std::exception& e) {
-		logger::warn("Failed to write settings to file: {}. Error: {}", configPath, e.what());
 	}
 }
 

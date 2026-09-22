@@ -283,6 +283,10 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 
 	// Per-period entries always blend as floats, so they carry the same requirement as float-only scenes.
 	const bool requireNumeric = requirePeriod || requireNumericValue;
+	if (requireNumeric) {
+		WidenParsedIntegerToFloat(entry.value);
+		WidenParsedIntegerToFloat(entry.originalValue);
+	}
 	if (requireNumeric && (!IsNumericValue(entry.value) || !IsNumericValue(entry.originalValue) ||
 		!std::isfinite(entry.value.get<float>()))) {
 		logger::warn("[SceneSettings] {} entry {} is not a finite float setting - skipping",

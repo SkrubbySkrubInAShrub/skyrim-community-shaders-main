@@ -4,6 +4,7 @@
 #include "Globals.h"
 #include "SceneSettingsCatalog.generated.h"
 #include "SceneSettingsPolicy.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/SettingsCatalog.h"
 
@@ -56,57 +57,7 @@ namespace SceneSettingsInternal
 	bool WriteJsonAtomically(const std::filesystem::path& path, const json& data, int indent,
 		std::string_view context)
 	{
-		std::string serialized;
-		try {
-			serialized = data.dump(indent);
-		} catch (const std::exception& e) {
-			logger::error("[SceneSettings] Could not serialize {} '{}': {}", context, path.string(), e.what());
-			return false;
-		}
-
-		std::error_code ec;
-		if (!path.parent_path().empty()) {
-			std::filesystem::create_directories(path.parent_path(), ec);
-			if (ec) {
-				logger::error("[SceneSettings] Could not create directory for {} '{}': {}",
-					context, path.string(), ec.message());
-				return false;
-			}
-		}
-
-		auto temporaryPath = path;
-		temporaryPath += std::format(".{}.tmp", ::GetCurrentProcessId());
-		{
-			std::ofstream file(temporaryPath, std::ios::binary | std::ios::trunc);
-			if (!file.is_open()) {
-				logger::error("[SceneSettings] Could not open temporary {} file '{}'", context, temporaryPath.string());
-				return false;
-			}
-			file.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
-			file.flush();
-			if (file.fail()) {
-				logger::error("[SceneSettings] Could not write temporary {} file '{}'", context, temporaryPath.string());
-				file.close();
-				std::filesystem::remove(temporaryPath, ec);
-				return false;
-			}
-			file.close();
-			if (file.fail()) {
-				logger::error("[SceneSettings] Could not close temporary {} file '{}'", context, temporaryPath.string());
-				std::filesystem::remove(temporaryPath, ec);
-				return false;
-			}
-		}
-
-		if (!::MoveFileExW(temporaryPath.c_str(), path.c_str(),
-				MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-			const auto error = ::GetLastError();
-			logger::error("[SceneSettings] Could not replace {} '{}' (Win32 error {})",
-				context, path.string(), error);
-			std::filesystem::remove(temporaryPath, ec);
-			return false;
-		}
-		return true;
+		return Util::FileHelpers::WriteJsonAtomically(path, data, indent, context);
 	}
 
 	std::vector<std::filesystem::path> GetSortedDirectoryPaths(
@@ -220,6 +171,12 @@ namespace SceneSettingsInternal
 	bool IsNumericValue(const json& value)
 	{
 		return value.is_number_float();
+	}
+
+	void WidenParsedIntegerToFloat(json& value)
+	{
+		if (value.is_number_integer())
+			value = value.get<double>();
 	}
 
 	bool IsSceneSettingPathWrapper(std::string_view token)

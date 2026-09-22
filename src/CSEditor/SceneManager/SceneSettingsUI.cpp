@@ -73,10 +73,6 @@ namespace
 	};
 	PeriodBarState periodBar;
 
-	/// Weather pages are flat until the user asks for periods; the bar only takes over time, and
-	/// pauses the game, once they do. The Scene Manager panel has no flat mode and never shows this.
-	bool weatherTimeOfDayEnabled = false;
-
 	/// The Scene Manager panel edits interior and time of day, and only one of them resolves at a
 	/// time, so it follows the player instead of being matched to the cell by hand.
 	bool interiorEnabled = false;
@@ -149,10 +145,13 @@ namespace
 	}
 
 	/// Whether a page edits one period at a time. The Scene Manager panel has no flat mode, so it
-	/// always does, except indoors where the aperiodic interior layer takes the panel over.
-	bool ResolvePeriodEditing(bool sceneManagerPanel)
+	/// always does, except indoors where the aperiodic interior layer takes the panel over. Weather
+	/// pages are flat until the user asks for periods, per weather and persisted with the weather.
+	bool ResolvePeriodEditing(const SceneSettingsManager::SceneContextId& baseContext, bool sceneManagerPanel)
 	{
-		return sceneManagerPanel ? !interiorEnabled : weatherTimeOfDayEnabled;
+		if (sceneManagerPanel)
+			return !interiorEnabled;
+		return SceneSettingsManager::GetSingleton()->IsWeatherShowTimeOfDay(baseContext.weatherId);
 	}
 
 	/// How much of a page an action owns: a flat periodic page writes every period at once, so the
@@ -223,9 +222,13 @@ namespace
 				Util::kTooltipWhenDisabled);
 		} else {
 			// Enabling re-couples the bar to live time, so it always lands on the current period.
-			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &weatherTimeOfDayEnabled) && weatherTimeOfDayEnabled) {
-				periodBar.selected = -1;
-				periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
+			bool showTimeOfDay = editing;
+			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &showTimeOfDay)) {
+				SceneSettingsManager::GetSingleton()->SetWeatherShowTimeOfDay(baseContext.weatherId, showTimeOfDay);
+				if (showTimeOfDay) {
+					periodBar.selected = -1;
+					periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
+				}
 			}
 			Util::AddTooltip(T(TKEY("time_of_day_toggle_tooltip"),
 				"Edit one period at a time instead of the whole page at once. Game time pauses while a period is being edited."),
@@ -292,7 +295,7 @@ namespace
 		auto context = baseContext;
 		bool periodEditing = false;
 		if (withPeriodBar) {
-			periodEditing = ResolvePeriodEditing(sceneManagerPanel);
+			periodEditing = ResolvePeriodEditing(baseContext, sceneManagerPanel);
 			periodEditingThisFrame |= periodEditing;
 			const auto period = static_cast<TimeOfDayPeriod>(
 				DrawPeriodBar(baseContext, periodEditing, sceneManagerPanel));

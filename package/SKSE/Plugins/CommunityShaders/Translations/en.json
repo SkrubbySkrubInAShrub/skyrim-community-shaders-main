@@ -355,6 +355,8 @@
     "cs_editor.scene_override_restore_mod": "Restore the mod's value",
     "cs_editor.scene_override_restore_mod_tooltip": "Bring the mod's value back here.",
     "cs_editor.scene_override_revert": "Revert to original",
+    "cs_editor.scene_override_unavailable": "This kind of scene cannot hold this setting. Weather and time of day only take settings that can blend between values.",
+    "cs_editor.scene_override_unbound": "This setting cannot be part of a scene. Change it on the feature's own page.",
     "cs_editor.scene_page_clear": "Clear",
     "cs_editor.scene_page_clear_message": "Remove all {} settings from {}? Mod overrides are left alone.\n\nSettings you removed come back too.",
     "cs_editor.scene_page_clear_title": "Clear page",

@@ -181,7 +181,10 @@ namespace SceneSettingsOverwrites
 
 		bool foundAny = false;
 		CollectOverwriteEntries(data, {}, [&](const auto& settingPath, const auto& key, const auto& value) {
-			if (!ValidateSceneSettingEntry("Overwrite", featureShortName, settingPath, key, value,
+			json parsedValue = value;
+			if (requireNumeric)
+				WidenParsedIntegerToFloat(parsedValue);
+			if (!ValidateSceneSettingEntry("Overwrite", featureShortName, settingPath, key, parsedValue,
 					requireNumeric, featureSettingsCache))
 				return;
 
@@ -190,7 +193,7 @@ namespace SceneSettingsOverwrites
 			entry.settingPath = settingPath;
 			entry.settingKey = key;
 			entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, key);
-			entry.value = value;
+			entry.value = std::move(parsedValue);
 			entry.originalValue = entry.value;
 			entry.source = SSM::EntrySource::Overwrite;
 			entry.sourceFilename = filePath.filename().string();

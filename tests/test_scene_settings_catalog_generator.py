@@ -749,6 +749,19 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
             "bool enabled = settings.Primary || settings.Secondary;")
         self.assertNotIn("enabled", aliases)
 
+    def test_control_setting_inference_keeps_the_alias_member_suffix(self):
+        aliases = GENERATOR.collect_local_setting_aliases(
+            "auto& group = settings.group;")
+        self.assertEqual(aliases.get("group"), ("group",))
+        self.assertEqual(
+            GENERATOR.extract_control_setting_path(
+                "SliderFloat", ['"Amount"', '&group.amount', '0.f', '1.f'], aliases),
+            ("group", "amount"))
+        self.assertEqual(
+            GENERATOR.extract_control_setting_path(
+                "SliderFloat", ['"Amount"', '&group', '0.f', '1.f'], aliases),
+            ("group",))
+
     def test_suffix_metadata_requires_an_unambiguous_type_owner(self):
         first = make_control_binding(
             "FirstSettings", ("value",), "First", "SliderFloat")

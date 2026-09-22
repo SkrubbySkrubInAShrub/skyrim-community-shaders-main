@@ -10,7 +10,9 @@ loading screen, apply verification, the cached apply document; rev3 brought loca
 caching and the generic scene copy API). The port is **backend only**: upstream's authoring UI was never taken, and
 Community Shaders branding was kept throughout. This fork grows its own editor in `src/CSEditor/`. See
 [What was dropped](#what-was-dropped) and [Known gaps](#known-gaps) before assuming a missing piece is a
-bug.
+bug, and
+[Comparison against open-shaders `05f084a4a4`](./scene-settings-open-shaders-comparison.md) for what
+upstream has grown since the port and what it would cost to take.
 
 **On-disk compatibility with upstream is a hard requirement:** a `SceneManager.json` authored in
 open-shaders must load in Community Shaders with every setting honored, and vice versa. Any divergence
@@ -66,7 +68,7 @@ when, and only when, a second TU needs it.
 ## How the catalog is built
 
 `CMakeLists.txt` runs the generator as a custom command before compiling, with
-`--min-entries 250 --min-controllable 290 --min-controllable-features 28` as a regression gate. The two
+`--min-entries 330 --min-controllable 305 --min-controllable-features 29` as a regression gate. The two
 controllable floors are the ones that matter: a parser change that stops binding a control does not
 remove the entry, it silently drops its `SceneControllable` flag. Keep them just under the real numbers.
 It statically parses feature sources and derives, for every persisted setting:
@@ -449,14 +451,14 @@ justifies the second rendering path.
 python -m unittest tests.test_scene_settings_catalog_generator tests.test_scene_settings_policy
 ```
 
-74 tests. Both suites run in CI via `.github/workflows/pr-python-tests.yaml`, on any PR touching `src/**`,
+81 tests. Both suites run in CI via `.github/workflows/pr-python-tests.yaml`, on any PR touching `src/**`,
 the generator, or `tests/**`. Run them locally after touching the generator or the policy lists.
 
 The generator can be run standalone to inspect its output:
 
 ```bash
-python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 250 \
-    --min-controllable 290 --min-controllable-features 28
+python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 330 \
+    --min-controllable 305 --min-controllable-features 29
 ```
 
 The generator test file is upstream's with the open-shaders-coupled assertions removed (`CSUtility`,

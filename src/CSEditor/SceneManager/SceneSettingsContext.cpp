@@ -540,14 +540,14 @@ void SceneSettingsManager::TogglePauseContextEntry(const SceneContextId& context
 	if (!contextEntries || index >= contextEntries->size())
 		return;
 
+	// Only the user layer is ours to change. Pausing a mod's entry would hold it back for this session
+	// and come back on the next discovery, so it is refused here as it already is in bulk.
 	auto& entry = (*contextEntries)[index];
+	if (entry.source != EntrySource::User)
+		return;
+
 	entry.paused = !entry.paused;
-	BumpEntryPresentationRevision();
-	if (entry.source == EntrySource::User) {
-		MarkContextUserSettingsModified(context, false);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
+	CommitContextUserEntryMutation(context);
 }
 
 void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& context, size_t index)
@@ -556,7 +556,12 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 	if (!contextEntries || index >= contextEntries->size())
 		return;
 
+	// Only the user layer is ours to change. Rewriting a mod's entry would diverge it from its backing
+	// file and lose the edit on the next discovery, so it is refused here as it already is in bulk.
 	auto& entry = (*contextEntries)[index];
+	if (entry.source != EntrySource::User)
+		return;
+
 	const auto rules = GetSceneContextRules(context.type);
 	const auto defaultValue = ResolveContextEntryDefault(context, entry);
 	if (!defaultValue || !ValidateSceneSettingEntry(rules.label, entry.featureShortName,
@@ -565,9 +570,7 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 
 	entry.value = *defaultValue;
 	entry.originalValue = entry.value;
-	if (entry.source == EntrySource::User) {
-		MarkContextUserSettingsModified(context, false);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
+	// Only the value moved, so the presentation caches hold: no revision bump, unlike a mutation.
+	MarkContextUserSettingsModified(context, false);
+	CommitSceneSettingChanges();
 }

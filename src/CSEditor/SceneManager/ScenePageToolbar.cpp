@@ -702,10 +702,13 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 		Util::kTooltipWhenDisabled);
 
 	ImGui::SameLine();
-	// The lists are rebuilt on open, so what they offer is never a frame behind the page.
+	// The lists are rebuilt on open, so what they offer is never a frame behind the page. Sources only
+	// walk authored contexts, so asking every frame is cheap; destinations validate against every loaded
+	// weather, and asking here would rebuild that on the first frame after any entry change just to grey
+	// a button. A page holding entries always has somewhere to offer them, and the popup greys each
+	// direction from the real list anyway.
 	const bool hasSources = HasUsableEntries(GetCachedSources(context, false), context, periodScope);
-	const bool hasDestinations = HasUsableEntries(GetCachedDestinations(context, false), context, periodScope);
-	ImGui::BeginDisabled(!hasSources && !hasDestinations);
+	ImGui::BeginDisabled(!hasSources && !hasEntries);
 	if (ImGui::Button(copyLabel)) {
 		GetCopySources(context, periodScope, true);
 		GetCopyDestinations(context, periodScope, true);

@@ -157,3 +157,18 @@ bool SceneSettingsManager::IsWeatherShowTimeOfDay(RE::FormID weatherId)
 	auto it = weatherShowTimeOfDay.find(weatherId);
 	return it != weatherShowTimeOfDay.end() && it->second;
 }
+
+void SceneSettingsManager::SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show)
+{
+	if (!weatherId || !TryEnsureWeatherDataLoaded())
+		return;
+
+	auto it = weatherShowTimeOfDay.find(weatherId);
+	if (it != weatherShowTimeOfDay.end() && it->second == show)
+		return;
+
+	weatherShowTimeOfDay[weatherId] = show;
+	// A view preference touches no entry, so it only needs the document marked and written.
+	PrepareWeatherUserSettingsMutation(weatherId, false);
+	MarkDeferredSceneChanges();
+}

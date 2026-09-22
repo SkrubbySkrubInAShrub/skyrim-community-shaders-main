@@ -8,6 +8,7 @@
 ## Subsystems
 
 -   **[Scene Settings Framework](./scene-settings-framework.md)** - Interior/time-of-day/weather/location setting overrides, the generated catalog, and what the port left out
+-   **[Scene Settings vs open-shaders `05f084a4a4`](./scene-settings-open-shaders-comparison.md)** - What upstream has that this fork does not, what diverged on purpose, and the one precedence decision still open
 
 ## Quick Links
 

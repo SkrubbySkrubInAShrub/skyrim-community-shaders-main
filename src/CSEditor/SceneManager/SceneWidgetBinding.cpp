@@ -985,6 +985,13 @@ const char* SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 		return T(TKEY("scene_override_from_user_below"),
 			"Your override on a scene layer below this one supplies this value. Tick to pin one here too.");
 	switch (state) {
+	case State::Unbound:
+		return T(TKEY("scene_override_unbound"),
+			"This setting cannot be part of a scene. Change it on the feature's own page.");
+	case State::Unavailable:
+		return T(TKEY("scene_override_unavailable"),
+			"This kind of scene cannot hold this setting. Weather and time of day only take settings "
+			"that can blend between values.");
 	case State::Overwritten:
 		return T(TKEY("scene_override_from_mod"),
 			"A mod supplies this value. Tick to pin your own, or remove it to suppress the mod's.");
@@ -1282,9 +1289,12 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	if (state == State::Unsupported)
 		return a_changed;
-	// Both were greyed, so neither took input: no gutter to own and nothing to commit.
-	if (state == State::Unbound || state == State::Unavailable)
+	// Both were greyed, so neither took input: no gutter to own and nothing to commit. Words are all a
+	// greyed control has left, and without them it reads as broken rather than barred.
+	if (state == State::Unbound || state == State::Unavailable) {
+		Util::AddTooltip(ResolveStatusTooltip(), Util::kTooltipWhenDisabled);
 		return false;
+	}
 
 	// Read the drag state before the menu or the gutter becomes the current item.
 	const bool dragging = ImGui::IsItemActive();

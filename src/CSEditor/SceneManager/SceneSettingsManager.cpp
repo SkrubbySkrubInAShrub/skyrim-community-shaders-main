@@ -156,26 +156,28 @@ void SceneSettingsManager::VerifyPendingApplies()
 			continue;
 		}
 
-		bool retained = false;
-		json actualSettings;
 		auto* feature = Feature::FindFeatureByShortName(featureShortName);
-		if (feature && TrySaveFeatureSettings(*feature, "verify applied settings", actualSettings))
-			retained = std::all_of(verification.updates.begin(), verification.updates.end(),
-				[&](const auto& update) {
-					auto* setting = FindAllowedCatalogSetting(
-						featureShortName, update.settingPath, update.key);
-					const auto* actual = setting ?
-					                         GetCatalogSerializedValue(actualSettings, *setting) :
-					                         nullptr;
-					return actual && ResolvedValuesEqual(*actual, update.value);
-				});
+		std::vector<json> observed;
+		const bool retained = feature &&
+		                      FeatureRetainedUpdates(*feature, featureShortName, verification.updates, &observed);
 
 		if (!retained) {
 			logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
 				featureShortName);
 			featureApplyDocuments.erase(featureShortName);
-			for (const auto& update : verification.updates)
-				appliedSettings.erase({ featureShortName, update.settingPath, update.key });
+			// Record what the feature actually reports rather than dropping the address: the scene
+			// layer did touch it, so it still owes the baseline back, and the mismatch against the
+			// resolved value is what drives the retry. A restore keeps dropping it, as it always did.
+			for (size_t index = 0; index < verification.updates.size(); ++index) {
+				const auto& update = verification.updates[index];
+				const SettingAddress address{ featureShortName, update.settingPath, update.key };
+				const bool hasObserved = update.clampToControlRange && index < observed.size() &&
+				                         !observed[index].is_null();
+				if (hasObserved)
+					appliedSettings[address] = observed[index];
+				else
+					appliedSettings.erase(address);
+			}
 			PruneAppliedFeatureName(featureShortName);
 			auto& failure = (verification.transition ? transitionApplyFailures : applyFailures)[featureShortName];
 			failure.signature = verification.signature;
@@ -588,6 +590,10 @@ void SceneSettingsManager::Update()
 void SceneSettingsManager::OnLoadingTransition()
 {
 	resolverDirty = true;
+	// The cell can take several frames to arrive, so the committed context stays stale until a
+	// resolve actually succeeds. The sky is mid-transition on arrival, so its cache is stale too.
+	suppressLocationTransitionUntilContextResolved = true;
+	cachedPreviousWeatherId = 0;
 	ResolveAndApply(true, false);
 }
 
@@ -660,8 +666,9 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 		if (!setting)
 			continue;
 		const auto* value = GetCatalogSerializedValue(featureSettings, *setting);
+		// Narrowing is not a user edit: treating it as one would overwrite the captured baseline.
 		if (!value || !IsSceneSettingPrimitive(*value) ||
-			!IsCompatibleSceneSettingValue(appliedValue, *value) || appliedValue == *value)
+			!IsCompatibleSceneSettingValue(appliedValue, *value) || AppliedValuesEqual(appliedValue, *value))
 			continue;
 		changedSettings.emplace_back(address, *value);
 	}

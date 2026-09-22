@@ -30,6 +30,7 @@ namespace
 	}
 
 	constexpr size_t MAX_OVERRIDE_FILE_SIZE = 1024 * 1024;
+	constexpr int kOverrideJsonIndent = 2;
 
 	/** @brief Parses an override file without the discovery-time filename and sanitization passes. */
 	bool ReadOverrideDocument(const std::filesystem::path& path, json& document)
@@ -378,21 +379,7 @@ void SettingsOverrideManager::SaveAppliedOverridesTracking(const json& appliedOv
 			}
 		}
 
-		std::ofstream file(trackingPath);
-		if (file.is_open()) {
-			try {
-				file << appliedOverrides.dump(1);
-				file.flush();
-
-				if (file.fail()) {
-					logger::info("Failed to write applied overrides tracking file completely");
-				}
-			} catch (const json::exception& e) {
-				logger::info("JSON error writing applied overrides tracking file: {}", e.what());
-			}
-		} else {
-			logger::info("Could not open applied overrides tracking file for writing: {}", trackingPath.string());
-		}
+		Util::FileHelpers::WriteJsonAtomically(trackingPath, appliedOverrides, 1, "applied overrides tracking");
 	} catch (const std::filesystem::filesystem_error& e) {
 		logger::info("Filesystem error saving applied overrides tracking: {}", e.what());
 	} catch (const std::exception& e) {
@@ -1059,22 +1046,9 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 
 		auto userFilePath = userDir / (featureName + ".user.json");
 
-		std::ofstream file(userFilePath);
-		if (!file.is_open()) {
-			logger::info("Could not create user override file: {}", userFilePath.string());
+		if (!Util::FileHelpers::WriteJsonAtomically(userFilePath, currentSettings, 1, "user override")) {
 			return false;
 		}
-
-		file << currentSettings.dump(1);
-		file.flush();
-
-		if (file.fail()) {
-			logger::info("Failed to write user override file: {}", userFilePath.string());
-			file.close();
-			return false;
-		}
-
-		file.close();
 
 		// Store the current override hash so we can detect if overrides change later
 		json tracking = LoadAppliedOverridesTracking();
@@ -1206,20 +1180,15 @@ void SettingsOverrideManager::CleanupStaleUserOverrides()
 			std::string currentHash = GetCombinedOverrideHash(featureName);
 			std::string trackingKey = featureName + "_hash";
 
+			// A changed override hash only means the provider was updated or re-exported; the
+			// user's own customizations stay theirs. Track the new hash and keep the file.
 			if (tracking.contains(trackingKey) && tracking[trackingKey].is_string()) {
 				std::string storedHash = tracking[trackingKey].get<std::string>();
 				if (storedHash != currentHash) {
-					// Override file changed, delete user customizations
-					logger::info("Override changed for {}, removing stale user override", featureName);
-					std::filesystem::remove(entry.path(), ec);
-
-					// Update stored hash
-					tracking[trackingKey] = currentHash;
+					logger::info("Override changed for {}, keeping user override", featureName);
 				}
-			} else {
-				// First time tracking or invalid entry, set the hash
-				tracking[trackingKey] = currentHash;
 			}
+			tracking[trackingKey] = currentHash;
 		}
 
 		SaveAppliedOverridesTracking(tracking);
@@ -1305,23 +1274,8 @@ bool SettingsOverrideManager::ExportSettings(const std::string& modName, const s
 		return false;
 	}
 
-	try {
-		Util::FileHelpers::EnsureDirectoryExists(GetOverridesDirectory());
-
-		std::ofstream file(destination);
-		if (!file.is_open()) {
-			logger::error("Could not create override file {}", destination.string());
-			return false;
-		}
-
-		file << document.dump(2);
-		file.flush();
-		if (file.fail()) {
-			logger::error("Failed to write override file {}", destination.string());
-			return false;
-		}
-	} catch (const std::exception& e) {
-		logger::error("Error exporting override file {}: {}", destination.string(), e.what());
+	// Atomic so a failed export cannot leave a third party's override file truncated.
+	if (!Util::FileHelpers::WriteJsonAtomically(destination, document, kOverrideJsonIndent, "override file")) {
 		return false;
 	}
 
