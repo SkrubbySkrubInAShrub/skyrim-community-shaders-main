@@ -226,6 +226,13 @@ namespace SnowLighting
 		return vertexAlpha;
 	}
 
+	// Vertex Alpha Fades Snow: 0 at alpha 1 (the switch), 1 from alpha 0.75
+	// down (the game's blend). Mirror: SnowStaticsShell.hlsl.
+	float AlphaDensityRamp(float vertexAlpha)
+	{
+		return saturate((1.0 - vertexAlpha) * 4.0);
+	}
+
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
 	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
 	// picks texture vs flat-color projection in Lighting; when the CPU
@@ -233,7 +240,7 @@ namespace SnowLighting
 	// here onto the shell's snow set. Sits after the SPARKLE branch so the
 	// multipass snow pass (technique 14, every surviving pixel already snow)
 	// takes the same set.
-	void ProjectedRecolor(inout State s, float projWeight, float3 vertexNormal, float3 projWorldPos, float screenNoise,
+	void ProjectedRecolor(inout State s, float projWeight, float vertexAlpha, float3 vertexNormal, float3 projWorldPos, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS)
 	{
 		s.projMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !s.underWater &&
@@ -246,6 +253,11 @@ namespace SnowLighting
 			// paint turned a faint dusting into full snow (interior floors,
 			// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
 			projectedMaterialWeight = smoothstep(-0.01, 0.01, projWeight);
+			// Vertex Alpha Fades Snow: a vertex alpha below 1 is a deliberate
+			// thinning (authored mask, XPMF's roof-shelter ramp), so it takes
+			// the game's own blend; alpha 1 keeps the switch above.
+			[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
+				projectedMaterialWeight = lerp(projectedMaterialWeight, smoothstep(0.0, 1.0, 5.0 * (0.1 + projWeight)), AlphaDensityRamp(vertexAlpha));
 			[branch] if (projectedMaterialWeight > 0.003)
 			{
 				// Plane weights from the smooth vertex normal. The derivative face

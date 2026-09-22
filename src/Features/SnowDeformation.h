@@ -625,6 +625,8 @@ public:
 		bool MultipassSnowFollowsPaint = true;
 		/** @brief "Recolor Snow-Textured Meshes": shapes whose diffuse is a snow texture but which carry no projection (dirt cliffs' snow01 tops, a season swap's alternate sets, drifts) take the baked-snow recolor in Lighting by texel, their skins take the coat, and the written weight reaches the volume. Unprojected shapes only; the projected-pass texel floor that shipped with the 2026-09-14 A/B is not part of it. */
 		bool SnowTexturedRecolor = false;
+		/** @brief "Vertex Alpha Fades Snow" (A/B, 2026-09-22): where a mesh's vertex alpha is below 1 (an authored mask, or XPMF's roof-shelter ramp) the recolor takes the game's own blend weight instead of the all-or-nothing half-blend cut, and the drape dissolves with it above the half blend. Alpha 1 keeps the switch, so angle/noise dustings still go bare. */
+		bool ProjAlphaDensity = false;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Enclosed Shelter": cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)). Tents, not overhangs. */
@@ -717,6 +719,12 @@ public:
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;
 		float WaterWindowDim;
+
+		/** @brief Settings::ProjAlphaDensity as 0/1. Mirror in SharedData.hlsli. */
+		float ProjAlphaDensity;
+		float ProjAlphaPad0;
+		float ProjAlphaPad1;
+		float ProjAlphaPad2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 

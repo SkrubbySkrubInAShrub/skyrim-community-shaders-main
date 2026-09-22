@@ -390,6 +390,14 @@ namespace SharedData
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;
 		float WaterWindowDim;
+
+		// Vertex Alpha Fades Snow: where vertex alpha < 1 the recolor takes
+		// the game's own blend weight instead of the half-blend switch, and
+		// the drape dissolves with it. Mirror in SnowDeformation.h.
+		float ProjAlphaDensity;
+		float ProjAlphaPad0;
+		float ProjAlphaPad1;
+		float ProjAlphaPad2;
 	};
 
 	cbuffer FeatureData : register(b6)

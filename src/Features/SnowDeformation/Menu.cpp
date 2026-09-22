@@ -263,6 +263,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttStr = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, a season mod's swapped-in winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives every unprojected shape whose texture is a snow texture the same treatment: the shell's snow in the object's own shader, the drape's coat, and the written weight the volume snow reads. Needs Recolor Projected Snow."));
 
+		ImGui::Checkbox(T(TKEY("proj_alpha_density"), "Vertex Alpha Fades Snow"), &settings.ProjAlphaDensity);
+		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the recolor follows the game's gradual blend instead of switching at the half blend, and the drape thins out with it. Where the alpha is untouched, snow stays all or nothing, so faint angle dustings still go bare. Off = the previous behaviour."));
+
 		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
 		if (auto _ttMultipass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));
