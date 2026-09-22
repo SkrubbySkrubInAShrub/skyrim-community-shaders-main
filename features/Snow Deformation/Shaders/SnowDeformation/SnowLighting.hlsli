@@ -241,7 +241,7 @@ namespace SnowLighting
 	// multipass snow pass (technique 14, every surviving pixel already snow)
 	// takes the same set.
 	void ProjectedRecolor(inout State s, float projWeight, float vertexAlpha, float3 vertexNormal, float3 projWorldPos, float screenNoise,
-		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS)
+		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
 		s.projMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !s.underWater &&
 		              (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
@@ -252,20 +252,51 @@ namespace SnowLighting
 			// shader so no angle is missed. The old cut at the last trace of
 			// paint turned a faint dusting into full snow (interior floors,
 			// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
-			projectedMaterialWeight = smoothstep(-0.01, 0.01, projWeight);
+			// The snow verdict itself: what the pixel would take before any
+			// hand-over. The RELIEF rides this, so a handed-over pixel keeps
+			// the snow's grain even where the albedo went back to the game.
+			float snowVerdict = smoothstep(-0.01, 0.01, projWeight);
+			projectedMaterialWeight = snowVerdict;
 			// Vertex Alpha Fades Snow: a vertex alpha below 1 is a deliberate
 			// thinning (authored mask, XPMF's roof-shelter ramp), and the
 			// game's own PD renders it as its author calibrated it - hand the
 			// pixel over: no recolor, no relight. Alpha 1 keeps the switch.
 			[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
 				projectedMaterialWeight *= 1.0 - AlphaDensityRamp(vertexAlpha);
-			[branch] if (projectedMaterialWeight > 0.003)
+			[branch] if (snowVerdict > 0.003)
 			{
 				// Plane weights from the smooth vertex normal. The derivative face
 				// normal behind Lighting's triWeights goes through a hard step()
 				// mask and flips planes on the quads straddling mesh creases - a
 				// line of a different snow texel along the edge.
 				float3 snowTriWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
+				// THE RELIEF. Vanilla's own projected normal never reaches the
+				// G-buffer: Lighting builds worldNormal from the tangent-space
+				// normal BEFORE the projected block, and the block's
+				// `normal.xyz = lerp(..., finalProjNormal, ...)` is a dead write
+				// (upstream too - see CODE-NOTES). So every projected-snow pixel
+				// wears the object's own bump, which reads as snow PAINTED ON
+				// the plank; only the drape's coat hid it. The shell's own
+				// recipe, applied here to the pixels the coat does not own:
+				// same additive perturbation and same +Y reference frame as
+				// SnowStaticsShell, so coat and bare PD carry one grain and
+				// their junction is a seam of height only.
+				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+				{
+#		if defined(SPARKLE)
+					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampColorSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+#		else
+					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+#		endif
+					texN.y = -texN.y;
+					float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), worldNormal) + float3(1e-5, 0.0, 0.0));
+					float3 bumpB = cross(worldNormal, bumpT);
+					worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * snowVerdict);
+				}
+				// SINGLE RETURN: an early `return` inside a `[branch]` is the
+				// X4000 shape this file has paid for twice. Nested branch.
+				[branch] if (projectedMaterialWeight > 0.003)
+				{
 				// The sparkle pass declares no projected-diffuse sampler (s3 is
 				// its own texture there); its colour sampler is the same wrap state.
 #		if defined(SPARKLE)
@@ -299,6 +330,7 @@ namespace SnowLighting
 				// the snow fraction through the PBR evaluators (hue+brightness).
 				baseColor = lerp(baseColor, Color::ColorToLinear(s.projAlbedo) * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
 #		endif
+				}
 			}
 		}
 		// Recolor weight view (bit 32): projected draws the recolor does not

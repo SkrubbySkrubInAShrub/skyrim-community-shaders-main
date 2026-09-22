@@ -263,6 +263,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttStr = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, a season mod's swapped-in winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives every unprojected shape whose texture is a snow texture the same treatment: the shell's snow in the object's own shader, the drape's coat, and the written weight the volume snow reads. Needs Recolor Projected Snow."));
 
+		ImGui::Checkbox(T(TKEY("proj_snow_normals"), "Recolor Projected Snow Normals"), &settings.ProjSnowNormals);
+		if (auto _ttProjNormals = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it. Applies at the full snow verdict, so snow handed back to the game by Vertex Alpha Fades Snow keeps the relief too."));
+
 		ImGui::Checkbox(T(TKEY("proj_alpha_density"), "Vertex Alpha Fades Snow"), &settings.ProjAlphaDensity);
 		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the pixel is handed back to the game's own projected snow: no recolor, no drape, so the shelter renders exactly as its author calibrated it, and this mod's snow fades into it at the edge of the thinning. Where the alpha is untouched, nothing changes. Off = the previous behaviour."));

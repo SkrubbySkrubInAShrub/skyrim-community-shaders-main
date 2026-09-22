@@ -627,6 +627,8 @@ public:
 		bool SnowTexturedRecolor = false;
 		/** @brief "Vertex Alpha Fades Snow" (A/B, 2026-09-22): where a mesh's vertex alpha is below 1 (an authored mask, or XPMF's roof-shelter ramp) the pixel is handed to the game's own projected snow (no recolor, no relight, no drape), so an XPMF/authored shelter renders as calibrated and ours fades into it over alpha 1 -> 0.75. Alpha 1 is untouched. Round 1 (follow the game's blend weight) produced nothing visible: the blend saturates long before the alpha floor and both sides are snow01. */
 		bool ProjAlphaDensity = false;
+		/** @brief "Recolor Projected Snow Normals" (2026-09-22): recolored projected snow also wears the shell snow's NORMAL, perturbed the way the drape's coat does. Vanilla's own projected normal never reaches the G-buffer (Lighting builds worldNormal before the projected block; the block's normal write is dead, upstream included), so without this every projected-snow pixel the coat does not cover wears the object's bump and reads as snow painted on. Rides the snow verdict, not the blend, so a pixel handed back by ProjAlphaDensity keeps the grain. */
+		bool ProjSnowNormals = true;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Enclosed Shelter": cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)). Tents, not overhangs. */
@@ -722,7 +724,8 @@ public:
 
 		/** @brief Settings::ProjAlphaDensity as 0/1. Mirror in SharedData.hlsli. */
 		float ProjAlphaDensity;
-		float ProjAlphaPad0;
+		/** @brief Settings::ProjSnowNormals as 0/1. Mirror in SharedData.hlsli. */
+		float ProjSnowNormalEnable;
 		float ProjAlphaPad1;
 		float ProjAlphaPad2;
 	};

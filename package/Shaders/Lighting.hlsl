@@ -1706,7 +1706,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif      // SPARKLE
 
 #		if defined(SNOW_DEFORMATION) && !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
-	SnowLighting::ProjectedRecolor(snowState, projWeight, vertexAlpha, tbnTr[2], projWorldPos, screenNoise, projectedMaterialWeight, baseColor.xyz, rawRMAOS);
+	SnowLighting::ProjectedRecolor(snowState, projWeight, vertexAlpha, tbnTr[2], projWorldPos, screenNoise, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		endif
 
 #	endif  // SNOW

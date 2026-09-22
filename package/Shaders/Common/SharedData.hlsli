@@ -394,7 +394,9 @@ namespace SharedData
 		// Vertex Alpha Fades Snow: where vertex alpha < 1 the pixel is handed
 		// to the game's own PD (no recolor, no drape). Mirror in SnowDeformation.h.
 		float ProjAlphaDensity;
-		float ProjAlphaPad0;
+		// Recolored projected snow also wears the shell snow's normal (vanilla's
+		// own projected normal is a dead write). Mirror in SnowDeformation.h.
+		float ProjSnowNormalEnable;
 		float ProjAlphaPad1;
 		float ProjAlphaPad2;
 	};
