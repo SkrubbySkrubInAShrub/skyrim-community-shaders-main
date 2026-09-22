@@ -1570,6 +1570,8 @@
     "feature.snow_deformation.model_depths_tooltip": "Object snow: the recolor of the game's projected snow and the dials that shape the drape over it. Flat vs round is classified automatically per mesh.",
     "feature.snow_deformation.mound_steepness": "Mound Steepness",
     "feature.snow_deformation.mound_steepness_tooltip": "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds.",
+    "feature.snow_deformation.unprojected_shapes_bare": "Unpainted Shapes Stay Bare",
+    "feature.snow_deformation.unprojected_shapes_bare_tooltip": "A building whose snow is painted on by the game is drawn as several shapes, and some of them carry no snow at all. Those plain shapes are drawn over the snowy ones, and they wipe out the note the game leaves for the drape saying whether a spot was painted. With no note, the drape assumes nothing was ever decided and lays snow anyway - which is how door frames and posts under a roof end up sleeved in snow. On, a plain shape leaves the note \"considered, no snow here\" and the drape stays off it. Only objects with a real snow material are affected; snow-textured mesh replacements and drifts are not.",
     "feature.snow_deformation.multipass_snow_follows_paint": "Multipass Snow Follows Paint",
     "feature.snow_deformation.multipass_snow_follows_paint_tooltip": "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included.",
     "feature.snow_deformation.name": "Snow Deformation",

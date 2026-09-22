@@ -271,6 +271,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the pixel is handed back to the game's own projected snow: no recolor, no drape, so the shelter renders exactly as its author calibrated it, and this mod's snow fades into it at the edge of the thinning. Where the alpha is untouched, nothing changes. Off = the previous behaviour."));
 
+		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
+		if (auto _ttBare = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("unprojected_shapes_bare_tooltip"), "A building whose snow is painted on by the game is drawn as several shapes, and some of them carry no snow at all. Those plain shapes are drawn over the snowy ones, and they wipe out the note the game leaves for the drape saying whether a spot was painted. With no note, the drape assumes nothing was ever decided and lays snow anyway - which is how door frames and posts under a roof end up sleeved in snow. On, a plain shape leaves the note \"considered, no snow here\" and the drape stays off it. Only objects with a real snow material are affected; snow-textured mesh replacements and drifts are not."));
+
 		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
 		if (auto _ttMultipass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));

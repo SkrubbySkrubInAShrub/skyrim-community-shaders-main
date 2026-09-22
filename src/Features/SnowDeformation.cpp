@@ -166,6 +166,7 @@
 	X(LODObjectSnow) \
 	X(SnowTexturedRecolor) 	X(ProjAlphaDensity) \
 	X(ProjSnowNormals) \
+	X(UnprojectedShapesBare) \
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \

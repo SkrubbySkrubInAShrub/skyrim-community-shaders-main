@@ -435,7 +435,9 @@ namespace SnowLighting
 		// unpainted; the sparkle pass writes 48 over it where it paints.
 		// Same for any multipass snow MATO (vanilla glaciers and ice, Simplicity
 		// of Snow, Stretched Snow Begone) when Multipass Snow Follows Paint is on.
-		[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase)) != 0)
+		// And for a plain shape of a snow-MATO object (SnowObjectBarePass): it
+		// draws over its projected siblings and would otherwise leave 0 there.
+		[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase | Permutation::ExtraFeatureFlags::SnowObjectBarePass)) != 0)
 			masksY = 2.0;
 #	endif
 #	if !defined(WORLD_MAP) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)

@@ -673,7 +673,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
 	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow) |
 						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored) | uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha) |
-						 uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase));
+						 uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase) | uint32_t(State::ExtraFeatureDescriptors::SnowObjectBarePass));
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
@@ -701,6 +701,20 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		if (settings.MultipassSnowFollowsPaint && !rec.seasonsProj && !treeAnim && rec.mato != MatoClass::kNotSnow &&
 			a_pass->shaderProperty->flags.all(Flag::kMultiIndexSnow))
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase);
+		// A shape the game draws with NO projection, on an object whose MATO
+		// really is snow (Inn01:49 under XPMF, measured 2026-09-22: it lost
+		// its ProjectedUV bit, drew over the porch and wrote Masks.y 0 across
+		// the verdict Inn01:5 had written, which the drape read as licence and
+		// sleeved the door posts). "Known, unpainted" is the true reading: the
+		// game drew something that is not snow here. Only a POSITIVE snow MATO
+		// qualifies, so mesh-replacer statics and drifts - no MATO at all, and
+		// they depend on the unknown-means-reconstruct path - are untouched,
+		// and engine decals keep their own veto.
+		if (settings.UnprojectedShapesBare && !passProjected && !treeAnim &&
+			(rec.mato == MatoClass::kSnow || rec.mato == MatoClass::kSnowSeasons) &&
+			!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
+			!NameFactsOf(a_pass->geometry).engineDecal)
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowObjectBarePass);
 		if (!passProjected || treeAnim) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
 		} else if (rec.mato == MatoClass::kNotSnow) {
