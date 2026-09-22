@@ -2503,6 +2503,12 @@ public:
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
+	/** @brief Interior cell: no landscape exists, so no ground shell and no trench can; object snow is unaffected. */
+	bool InInteriorCell() const
+	{
+		auto* tes = RE::TES::GetSingleton();
+		return tes && tes->interiorCell;
+	}
 	/** @brief The reach the accumulated maps were built at; a change re-texels the grid, so the scroll cannot carry them and the window clears instead. */
 	float objectRasterHalfExtentBuilt = 0.0f;
 

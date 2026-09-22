@@ -1199,6 +1199,14 @@ void SnowDeformation::PostPostLoad()
 // tiny and the test errs toward "has snow".
 bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy, uint32_t* a_verdictOut) const
 {
+	// No landscape indoors: the cells under the player never bake, which
+	// otherwise reads as unknown and keeps every deformation pass running.
+	// Object snow in caves is not this test's business (GroundNearHasSnow).
+	if (InInteriorCell()) {
+		if (a_verdictOut)
+			*a_verdictOut = kSnowGateBare;
+		return false;
+	}
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	// Two cells of lead beyond the window. The snowy set only refreshes when
 	// the terrain window rebuilds, which waits on the bake thread, so testing
@@ -1333,6 +1341,9 @@ uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_max
 
 bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 {
+	// Snow in a cave is on its objects; classification alone decides there.
+	if (InInteriorCell())
+		return true;
 	int sqMinX, sqMinY, sqMaxX, sqMaxY;
 	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
 		return true;

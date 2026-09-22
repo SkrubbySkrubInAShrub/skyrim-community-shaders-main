@@ -1336,13 +1336,18 @@ void SnowDeformation::DrawShell()
 	// kShellGateBareFrames before the grid draw and its dependents (bake,
 	// stats, depth sync) are skipped. The CB upload above stays - the
 	// statics and the caster read it.
-	{
+	// An interior has no landscape, so the square under the player is
+	// unbaked for ever and read as unknown (Alternate Start's dungeon ran the
+	// shell, bake and sync at full cost).
+	if (InInteriorCell()) {
+		shellSnowVerdict = kSnowGateBare;
+	} else {
 		int sqMinX, sqMinY, sqMaxX, sqMaxY;
 		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
 		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
 		                       kSnowGateUnknown;
-		shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
 	}
+	shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
 	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 
 	// Main depth before any snow draw: DepthSync syncs the pixels the snow
