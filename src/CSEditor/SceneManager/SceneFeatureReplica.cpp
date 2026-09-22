@@ -1,6 +1,6 @@
 #include "SceneFeatureReplica.h"
 
-#include "../I18n/I18n.h"
+#include "../../I18n/I18n.h"
 #include "Feature.h"
 #include "SceneWidgetInterceptor.h"
 #include "Utils/UI.h"

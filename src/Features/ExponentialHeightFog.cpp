@@ -1,6 +1,6 @@
 #include "ExponentialHeightFog.h"
 
-#include "CSEditor/SceneWidgetInterceptor.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Deferred.h"
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"

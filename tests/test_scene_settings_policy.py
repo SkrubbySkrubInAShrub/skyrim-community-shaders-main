@@ -5,14 +5,19 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[1]
-POLICY_PATH = ROOT / "src" / "SceneSettingsPolicy.h"
-MANAGER_PATH = ROOT / "src" / "SceneSettingsManager.cpp"
+SCENE_DIR = ROOT / "src" / "CSEditor" / "SceneManager"
+POLICY_PATH = SCENE_DIR / "SceneSettingsPolicy.h"
 GENERATOR_PATH = ROOT / "cmake" / "generate_scene_settings_catalog.py"
 
 SPEC = importlib.util.spec_from_file_location("scene_catalog_generator", GENERATOR_PATH)
 GENERATOR = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(GENERATOR)
+
+
+def scene_sources(pattern: str) -> list[Path]:
+    """The manager is split across several translation units, so match them all."""
+    return sorted(SCENE_DIR.glob(pattern))
 
 
 def extract_initializer(source: str, name: str) -> str:
@@ -80,7 +85,9 @@ class SceneSettingsPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.policy = POLICY_PATH.read_text(encoding="utf-8")
-        cls.manager = MANAGER_PATH.read_text(encoding="utf-8")
+        cls.manager = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in scene_sources("SceneSettings*.cpp"))
         cls.entries = GENERATOR.build_entries(ROOT)
         cls.addresses = [normalize_path(catalog_address(entry)) for entry in cls.entries]
         cls.blacklist = extract_paths(cls.policy, "kSettingBlacklist")
@@ -185,13 +192,9 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             *self.time_features,
         }
         implementation_paths = [
-            path for path in (ROOT / "src").glob("SceneSettings*.h")
+            path for path in scene_sources("SceneSettings*.h")
             if path != POLICY_PATH
-        ] + list((ROOT / "src").glob("SceneSettings*.cpp")) + [
-            ROOT / "src" / "CSEditor" / "SceneSettingsUI.h",
-            ROOT / "src" / "CSEditor" / "SceneSettingsUI.cpp",
-            GENERATOR_PATH,
-        ]
+        ] + scene_sources("SceneSettings*.cpp") + [GENERATOR_PATH]
         for path in implementation_paths:
             source = path.read_text(encoding="utf-8")
             for feature in named_features:

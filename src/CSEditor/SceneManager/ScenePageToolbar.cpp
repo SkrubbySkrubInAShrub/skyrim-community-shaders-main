@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "../I18n/I18n.h"
-#include "EditorWindow.h"
+#include "../../I18n/I18n.h"
+#include "../EditorWindow.h"
 #include "Menu.h"
 #include "ScenePresetExport.h"
 #include "SceneTransitionField.h"

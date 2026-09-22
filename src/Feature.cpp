@@ -25,7 +25,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
-#include "Features/SceneManager.h"
+#include "CSEditor/SceneManager/SceneManager.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"

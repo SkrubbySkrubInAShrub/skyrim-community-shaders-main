@@ -4,15 +4,15 @@
 #include <cstring>
 #include <format>
 
-#include "../I18n/I18n.h"
-#include "EditorWindow.h"
+#include "../../I18n/I18n.h"
+#include "../EditorWindow.h"
 #include "Menu.h"
 #include "SceneFeatureReplica.h"
 #include "ScenePageToolbar.h"
 #include "SceneSettingsManager.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
-#include "WeatherUtils.h"
+#include "../WeatherUtils.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
 

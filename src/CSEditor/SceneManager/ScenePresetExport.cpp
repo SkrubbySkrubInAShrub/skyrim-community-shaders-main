@@ -9,8 +9,8 @@
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
-#include "../I18n/I18n.h"
-#include "EditorWindow.h"
+#include "../../I18n/I18n.h"
+#include "../EditorWindow.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 

@@ -8,7 +8,7 @@
 #include "Menu.h"
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
-#include "SceneSettingsUI.h"
+#include "SceneManager/SceneSettingsUI.h"
 #include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"

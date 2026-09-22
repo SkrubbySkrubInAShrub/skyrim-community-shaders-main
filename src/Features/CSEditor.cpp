@@ -6,7 +6,7 @@
 #include "Deferred.h"
 #include "Feature.h"
 #include "Menu.h"
-#include "SceneSettingsManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/Game.h"

@@ -18,7 +18,7 @@
 #	include "Features/ScreenshotFeature.h"
 #	include "Globals.h"
 #	include "Profiler.h"
-#	include "SceneSettingsManager.h"
+#	include "CSEditor/SceneManager/SceneSettingsManager.h"
 #	include "ShaderCache.h"
 #	include "State.h"
 

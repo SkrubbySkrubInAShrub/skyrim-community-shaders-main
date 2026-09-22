@@ -7,7 +7,7 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
-#include "../SceneSettingsUI.h"
+#include "../SceneManager/SceneSettingsUI.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."

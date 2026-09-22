@@ -3,7 +3,7 @@
 #include <DirectXTex.h>
 
 #include "../I18n/I18n.h"
-#include "CSEditor/SceneWidgetInterceptor.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Deferred.h"
 #include "State.h"
 #include "Util.h"

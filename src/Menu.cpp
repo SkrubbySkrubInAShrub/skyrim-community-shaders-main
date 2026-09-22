@@ -42,7 +42,7 @@
 #include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
-#include "CSEditor/SceneWidgetInterceptor.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/PerformanceOverlay.h"

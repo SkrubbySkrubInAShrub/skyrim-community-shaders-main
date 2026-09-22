@@ -3,7 +3,7 @@
 #include "NativeMenu/Vendor/SystemMenuHook.h"
 
 #include "Globals.h"
-#include "SceneSettingsManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "State.h"
 
 namespace NativeMenu

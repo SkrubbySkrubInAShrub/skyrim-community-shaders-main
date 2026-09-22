@@ -1,6 +1,6 @@
 #include "WetnessEffects.h"
 #include "CSEditor.h"
-#include "CSEditor/SceneWidgetInterceptor.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 

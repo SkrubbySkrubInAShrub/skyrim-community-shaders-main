@@ -18,7 +18,7 @@
 #include "Menu/HomePageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
-#include "SceneSettingsManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"

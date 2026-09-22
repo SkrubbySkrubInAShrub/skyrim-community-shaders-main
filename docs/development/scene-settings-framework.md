@@ -18,11 +18,13 @@ below is behavioral, never a change to the file format.
 
 ## Files
 
+Everything belonging to the system lives under `src/CSEditor/SceneManager/`.
+
 | File | Role |
 | ---- | ---- |
-| `src/SceneSettingsManager.{h,cpp}` | The system. Storage, persistence, resolver, apply/restore, blending. |
-| `src/SceneSettingsPolicy.h` | Hand-maintained allow/deny lists consumed by the manager. |
-| `src/Features/SceneManager.{h,cpp}` | Thin `Feature` wrapper that drives the manager's lifecycle. |
+| `SceneSettingsManager.h` | The public interface: storage, persistence, resolver, apply/restore, blending. |
+| `SceneSettingsPolicy.h` | Hand-maintained allow/deny lists consumed by the manager. |
+| `SceneManager.{h,cpp}` | Thin `Feature` wrapper that drives the manager's lifecycle. |
 | `cmake/generate_scene_settings_catalog.py` | Build-time generator; parses `src/**/*.{h,hpp,cpp,cxx}`. |
 | `features/Scene Manager/` | `CORE` marker + `SceneManager.ini` (version `1-0-0`). |
 | `tests/test_scene_settings_catalog_generator.py` | Generator unit tests (hermetic + catalog assertions). |
@@ -33,6 +35,33 @@ Generated into `${CMAKE_CURRENT_BINARY_DIR}/generated` (e.g. `build/ALL/generate
 -   `SceneSettingsCatalog.generated.h` / `.cpp` — the `SceneSettingsCatalog` namespace and the catalog array.
 -   `FeatureSceneSettingsAdapters.generated.cpp` — per-feature control resolvers (see
     [Known gaps](#known-gaps)).
+
+### How the manager is split
+
+`SceneSettingsManager` is one class declared in one header, but its members are defined across several
+translation units so no single file stays unreadable. Find a member by what it does, not by file name:
+
+| TU | Holds |
+| -- | ----- |
+| `SceneSettingsManager.cpp` | Singleton, lifecycle, `Update()`, name/path resolution. |
+| `SceneSettingsResolve.cpp` | `ResolveAndApply()` and the apply/restore pipeline. |
+| `SceneSettingsSerialization.cpp` | `SceneManager.json` load and save. |
+| `SceneSettingsDiscovery.cpp` | Overwrite-file scanning and preset baking. |
+| `SceneSettingsContext.cpp` | Context add / update / remove. |
+| `SceneSettingsCopy.cpp` | The [generic copy API](#generic-scene-copy-api). |
+| `SceneSettingsWeather.cpp` / `SceneSettingsLocation.cpp` | The weather and location layers. |
+| `SceneSettingsDebug.cpp` | The resolver-state debug view. |
+
+Helpers that more than one of those needs are not file-local. They live in four internal namespaces with
+their own headers, and every consumer opens them with a file-scope `using namespace`:
+
+-   `SceneSettingsInternal` — catalog lookup, JSON path walking, policy evaluation, entry validation.
+-   `SceneSettingsOverwrites` — the overwrite directory layout and the grouped JSON files in it.
+-   `SceneSettingsLocationTargets` — the broadest-to-narrowest location target chain.
+-   `SceneSettingsContextRules` — which layer a context writes to and how its entries group.
+
+A helper only one TU uses stays in that TU's anonymous namespace. Promote it to an internal namespace
+when, and only when, a second TU needs it.
 
 ## How the catalog is built
 
@@ -313,7 +342,7 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
 
 ## Policy
 
-`src/SceneSettingsPolicy.h` is hand-maintained and pruned to features that exist in this fork:
+`src/CSEditor/SceneManager/SceneSettingsPolicy.h` is hand-maintained and pruned to features that exist in this fork:
 
 -   `kSettingBlacklist` — settings that must never be scene-overridden, matched by catalog address prefix.
     Upstream's entries all pointed at features this fork does not have, so the list is this fork's own:
@@ -347,7 +376,7 @@ someone asks for the UI layer.
 
 | File | Lines | What it was |
 | ---- | ----- | ----------- |
-| upstream `SceneSettingsUI.{h,cpp}` | ~3180 | The authoring UI: add-setting dialogs, per-scene panels, weather scene panel. This fork's `src/CSEditor/SceneSettingsUI.{h,cpp}` is unrelated in-house work that happens to share the name. |
+| upstream `SceneSettingsUI.{h,cpp}` | ~3180 | The authoring UI: add-setting dialogs, per-scene panels, weather scene panel. This fork's `src/CSEditor/SceneManager/SceneSettingsUI.{h,cpp}` is unrelated in-house work that happens to share the name. |
 | `src/SceneSettingsUIHooks.{h,cpp}` | ~776 | ImGui interception marking scene-controlled widgets and offering right-click capture. |
 | `src/Features/SceneManagerUI.{h,cpp}` | ~34 | `SceneManager::DrawSettings()` body. |
 
@@ -373,7 +402,7 @@ rather than an authoring panel.
 
 ### Existing UI
 
--   `src/CSEditor/SceneSettingsUI.cpp` is this fork's own editor: the time-of-day period bar with its
+-   `src/CSEditor/SceneManager/SceneSettingsUI.cpp` is this fork's own editor: the time-of-day period bar with its
     automatic time pause, the interior toggle, the per-feature list, and per-location windows. It uses only
     `GetCurrentGameHour` / `SetGameHour`, `GetCurrentPeriod`, `Get*RelevantFeatureNames`,
     `GetFeatureDisplayName`, and the `LocationTarget` accessors.
@@ -387,13 +416,13 @@ rather than an authoring panel.
     is live, so it follows the restore with `CaptureExternalFeatureChanges` to re-baseline; without that the
     next resolve puts the old values back.
 -   `CSEditor` flags a weather that has scene settings via `HasWeatherConfig`.
--   `src/CSEditor/SceneWidgetInterceptor.cpp` detours the ImGui calls and replays a feature's real
+-   `src/CSEditor/SceneManager/SceneWidgetInterceptor.cpp` detours the ImGui calls and replays a feature's real
     `DrawSettings()` bound to a scene context, so entry authoring needs no per-scene tables:
     `SceneWidgetBinding::Guard` creates, edits, pauses and deletes entries in place.
     `GutterPolicy::GroupMember` is kept although no intercepted feature currently draws a radio group: it is
     what stops several calls against one address (`RadioButton`) from each drawing their own gutter toggle,
     and the alternative to keeping it is a latent double-gutter bug the first time a feature adds one.
--   `src/CSEditor/ScenePageToolbar.cpp` drives the [copy API](#generic-scene-copy-api) and preset export.
+-   `src/CSEditor/SceneManager/ScenePageToolbar.cpp` drives the [copy API](#generic-scene-copy-api) and preset export.
 
 ## Known gaps
 

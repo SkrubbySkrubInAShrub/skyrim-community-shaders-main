@@ -1,7 +1,7 @@
 #include "UI.h"
 
 #include "../CSEditor/EditorWindow.h"
-#include "../CSEditor/SceneWidgetInterceptor.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "../I18n/I18n.h"
 #include "D3D.h"
 #include "FileSystem.h"
