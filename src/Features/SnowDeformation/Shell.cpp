@@ -238,6 +238,40 @@ void SnowDeformation::EnsureShellSnowTextures()
 			[](unsigned char c) { return (char)std::tolower(c); });
 		const auto& pbrSets = globals::features::truePBR.pbrTextureSets;
 		size_t matchCount = 0;
+		// The user's pin wins over any match: a modlist can hold several sets
+		// whose key contains the same basename and no rule fits every one.
+		if (!settings.SnowPBRConfig.empty()) {
+			if (pbrSets.find(settings.SnowPBRConfig) != pbrSets.end()) {
+				snowPBRSetName = settings.SnowPBRConfig;
+			} else {
+				std::string pinLower = settings.SnowPBRConfig;
+				std::transform(pinLower.begin(), pinLower.end(), pinLower.begin(),
+					[](unsigned char c) { return (char)std::tolower(c); });
+				for (const auto& [setName, setData] : pbrSets) {
+					std::string keyLower = setName;
+					std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
+					if (keyLower == pinLower) {
+						snowPBRSetName = setName;
+						break;
+					}
+				}
+				if (snowPBRSetName.empty())
+					logger::info("[SNOW DEFORMATION] pinned TruePBR config '{}' is not loaded; falling back to the automatic match", settings.SnowPBRConfig);
+			}
+		}
+		// RANKED, not first-alphabetically. A modlist holds several keys
+		// containing the same basename, and taking the smallest name handed the
+		// shell an AutoBlend stub - three fields, no glintParameters block at
+		// all - so the snow rendered with glints off and the stub's roughness
+		// (2026-09-22: 'Blendsnow01' beat 'LandscapeSnow01' on the letter B and
+		// the sparkle vanished from BOTH shells, which share the >1.1 gate).
+		// Order: a set that carries the glint block we came for, then the least
+		// decorated name, then alphabetically so a tie resolves the same run to
+		// run. An exact key still wins outright.
+		std::string bestKey;
+		bool bestHasGlints = false;
+		size_t bestExtra = 0;
 		for (const auto& [setName, setData] : pbrSets) {
 			std::string keyLower = setName;
 			std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(),
@@ -245,13 +279,28 @@ void SnowDeformation::EnsureShellSnowTextures()
 			if (keyLower.find(baseName) == std::string::npos)
 				continue;
 			++matchCount;
-			if (keyLower == baseName) {
+			if (keyLower == baseName && snowPBRSetName.empty()) {
 				snowPBRSetName = setName;
+				bestKey.clear();
 				break;
 			}
-			if (snowPBRSetName.empty() || setName < snowPBRSetName)
-				snowPBRSetName = setName;
+			const bool hasGlints = setData.glintParameters.enabled;
+			const size_t extra = keyLower.size() - baseName.size();
+			bool better = bestKey.empty();
+			if (!better && hasGlints != bestHasGlints)
+				better = hasGlints;
+			else if (!better && extra != bestExtra)
+				better = extra < bestExtra;
+			else if (!better)
+				better = setName < bestKey;
+			if (better) {
+				bestKey = setName;
+				bestHasGlints = hasGlints;
+				bestExtra = extra;
+			}
 		}
+		if (snowPBRSetName.empty())
+			snowPBRSetName = bestKey;
 		if (!snowPBRSetName.empty()) {
 			RefreshSnowPBRParams();
 			logger::info("[SNOW DEFORMATION] TruePBR config matched: {} ({} of {} sets matched '{}'; glintDensity={:.1f} roughScale={:.2f} spec={:.3f})",

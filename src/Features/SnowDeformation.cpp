@@ -106,6 +106,7 @@
 	X(SkinEdgeFlankWidth) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
+	X(SnowPBRConfig) \
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
 	X(SnowBorderDithering) \

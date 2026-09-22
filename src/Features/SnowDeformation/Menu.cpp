@@ -202,6 +202,19 @@ void SnowDeformation::DrawSettings()
 			shellSnowTextureAttempted = false;
 		}
 
+		if (ImGui::InputText(T(TKEY("snow_pbr_config"), "Snow PBR Config"), &settings.SnowPBRConfig)) {
+			// Re-resolve on the next frame, the way Reload does: the match is
+			// made where the texture loads.
+			shellSnowTextureAttempted = false;
+		}
+		if (auto _ttPbrCfg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_pbr_config_tooltip"), "The shell takes its roughness, specular level and sparkle from a TruePBR texture set, matched by the snow texture's file name. A modlist often holds several sets whose name contains that word - a blend variant, a glacier, a grass edge - and some of them carry no sparkle settings at all, which leaves the snow flat and dull. Leave this empty to take the best automatic match, or type a set's name (its JSON file name, without the extension) to pin it. The set in use is shown beside this box; press Reload after changing it."));
+		ImGui::SameLine();
+		if (snowPBRSetName.empty())
+			ImGui::TextDisabled("%s", T(TKEY("snow_pbr_config_none"), "(no match - built-in snow)"));
+		else
+			ImGui::TextDisabled("%s%s", T(TKEY("snow_pbr_config_using"), "using: "), snowPBRSetName.c_str());
+
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("camera_above_snow"), "Keep Camera Above the Snow"), &settings.CameraAboveSnow);
