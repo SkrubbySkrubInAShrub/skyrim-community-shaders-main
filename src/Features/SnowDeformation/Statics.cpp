@@ -2752,6 +2752,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
 	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
 	a_scb.AlphaTested = a_cap.alphaTested ? 1.0f : 0.0f;
+	a_scb.DecalMode = a_cap.decalDepth ? 1.0f : 0.0f;
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()

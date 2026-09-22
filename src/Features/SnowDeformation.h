@@ -2309,7 +2309,8 @@ public:
 		float FarWindowCenterY;
 		float FarHalfExtent;
 		float FarRoadDepth;
-		float padWeld;
+		/** @brief >0.5: the mesh drew in the game's decal mode, after the opaque section; the blended depth never holds it. */
+		float DecalMode;
 
 		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinMasksCopy;

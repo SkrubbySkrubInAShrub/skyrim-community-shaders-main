@@ -292,7 +292,8 @@ cbuffer StaticCB : register(b1)
 	float FarWindowCenterY;
 	float FarHalfExtent;
 	float FarRoadDepth;
-	float padWeld;
+	// >0.5: drawn in the game's decal mode, after the blended depth was final.
+	float DecalMode;
 
 	// >0.5: PreSkinMasks is bound. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
@@ -3683,8 +3684,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Alpha-tested meshes (thatch fringes): the game discarded the
 	// transparent texels, so the scene surface there is whatever lies
 	// behind; a skin pixel standing off it by more than its own lift is a
-	// sheet in the air.
-	else [branch] if (AlphaTested > 0.5)
+	// sheet in the air. Not decal-mode meshes: they draw after the blended
+	// depth was final, so it holds the floor under a snow plane, and the
+	// plane's coat vanished wherever that floor dipped 6 units.
+	else [branch] if (AlphaTested > 0.5 && DecalMode < 0.5)
 	{
 		float atSceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
 		float3 atView = normalize(input.WorldPos);

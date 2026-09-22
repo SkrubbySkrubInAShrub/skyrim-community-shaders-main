@@ -64,7 +64,7 @@ cbuffer StaticCB : register(b1)
 	float FarWindowCenterY;  // layout sync with SnowStaticsShell; unused here
 	float FarHalfExtent;     // layout sync with SnowStaticsShell; unused here
 	float FarRoadDepth;      // layout sync with SnowStaticsShell; unused here
-	float padWeld;
+	float DecalMode;
 
 	float HasSkinMasksCopy;  // layout sync with SnowStaticsShell; unused here
 	float padLumpSize;
