@@ -298,7 +298,10 @@ cbuffer StaticCB : register(b1)
 	// >0.5: PreSkinMasks is bound. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
 	float HasSkinMasksCopy;
-	float padLumpSize;
+	// >0.5: PreDecalMasks at t53 holds the note from before the frame's
+	// first decal-mode draw blended it (took padLumpSize's slot).
+	// Mirror in SnowDeformation.h and SnowHeightCapture.hlsl.
+	float HasPreDecalMasks;
 	// How far past the edge the lumps reach: a fraction of the projected
 	// weight's own fade on coated draws, a normal-z band elsewhere.
 	float EdgeFlankWidth;
@@ -358,6 +361,7 @@ Texture2D<float4> GameShadowMask : register(t24);
 // the projection's verdict (SkinRecolorEnc). The coat and its reach key off
 // the paint the game really applied, not a reconstruction of it.
 Texture2D<float3> PreSkinMasks : register(t32);
+Texture2D<float3> PreDecalMasks : register(t53);
 
 // The terrain window also reaches the patch VS: the road-verge depth blend
 // needs the landscape class depth per vertex.
@@ -512,6 +516,26 @@ float SkinRecolorWeight(float enc)
 {
 	enc = enc >= 256.0 ? enc / 256.0 : enc;
 	return (enc >= 3.5 && enc < 40.0) ? (log2(enc * 0.25) / 3.0 - 1.0) * kRecolorWeightSpan : -1.0;
+}
+// The note, read through the decal blend. Decal mode blends EVERY bound target,
+// so a decal over painted snow can only drag the note DOWN from what the
+// surface wrote (48 -> 20 under Inn01:0, 2026-09-22) and the coat then cut
+// itself out in the decal's own alpha pattern. Take whichever of the two reads
+// as more painted: the snapshot rescues a blended pixel, and the live copy
+// still wins where a decal-mode draw is itself the snow (Seasons' rock skirts
+// keep their skin).
+float SkinMasksY(int2 a_px)
+{
+	float live = PreSkinMasks.Load(int3(a_px, 0)).y;
+	[branch] if (HasPreDecalMasks > 0.5)
+	{
+		float pre = PreDecalMasks.Load(int3(a_px, 0)).y;
+		float liveEnc = SkinRecolorEnc(live);
+		float preEnc = SkinRecolorEnc(pre);
+		[flatten] if (preEnc > liveEnc || (preEnc == liveEnc && SkinRecolorWeight(pre) > SkinRecolorWeight(live)))
+			live = pre;
+	}
+	return live;
 }
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
@@ -3854,7 +3878,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// footprint, the same at every depth.
 		[branch] if (HasSkinMasksCopy > 0.5 && input.Lift < 2.0 * coatRef)
 		{
-			float realEnc = SkinRecolorEnc(PreSkinMasks.Load(int3(input.Position.xy, 0)).y);
+			float realEnc = SkinRecolorEnc(SkinMasksY(int2(input.Position.xy)));
 			[flatten] if (realEnc >= 1.5)
 				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
 		}

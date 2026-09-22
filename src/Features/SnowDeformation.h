@@ -627,7 +627,7 @@ public:
 		bool MultipassSnowFollowsPaint = true;
 		/** @brief "Recolor Snow-Textured Meshes": shapes whose diffuse is a snow texture but which carry no projection (dirt cliffs' snow01 tops, a season swap's alternate sets, drifts) take the baked-snow recolor in Lighting by texel, their skins take the coat, and the written weight reaches the volume. Unprojected shapes only; the projected-pass texel floor that shipped with the 2026-09-14 A/B is not part of it. */
 		bool SnowTexturedRecolor = false;
-		/** @brief "Vertex Alpha Fades Snow" (A/B, 2026-09-22): where a mesh's vertex alpha is below 1 (an authored mask, or XPMF's roof-shelter ramp) the pixel is handed to the game's own projected snow (no recolor, no relight, no drape), so an XPMF/authored shelter renders as calibrated and ours fades into it over alpha 1 -> 0.75. Alpha 1 is untouched. Round 1 (follow the game's blend weight) produced nothing visible: the blend saturates long before the alpha floor and both sides are snow01. */
+		/** @brief "Vertex Alpha Fades Snow" (A/B, 2026-09-22): where a mesh's vertex alpha is below 1 (an authored mask, or XPMF's roof-shelter ramp) the snow loses THICKNESS, not its material: the recolor keeps the pixel and the drape dissolves off it over alpha 1 -> 0.75, so a sheltered spot reads as this mod's snow lying flat. Round 1 (follow the game's blend weight) was invisible; round 2 handed the pixel back to the game's own PD, which covered right but wore the wrong material (Josef, 2026-09-22). */
 		bool ProjAlphaDensity = false;
 		/** @brief "Recolor Projected Snow Normals" (2026-09-22): recolored projected snow also wears the shell snow's NORMAL, perturbed the way the drape's coat does. Vanilla's own projected normal never reaches the G-buffer (Lighting builds worldNormal before the projected block; the block's normal write is dead, upstream included), so without this every projected-snow pixel the coat does not cover wears the object's bump and reads as snow painted on. Rides the snow verdict, not the blend, so a pixel handed back by ProjAlphaDensity keeps the grain. */
 		bool ProjSnowNormals = true;
@@ -2182,6 +2182,11 @@ public:
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
+	/** @brief The Masks note as it stood before the frame's first DECAL-MODE lighting draw. Decal mode blends every render target, the Masks channel included, so a decal over painted snow drags the drape's verdict off "painted" toward its own value (measured 2026-09-22: 48 -> 20 under Inn01:0, and the drape cut itself out in the decal's alpha pattern). The coat takes whichever of this and the live copy reads as more painted. */
+	winrt::com_ptr<ID3D11Texture2D> preDecalMasksTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> preDecalMasksSRV;
+	uint32_t preDecalMasksFrame = UINT32_MAX;
+	void CapturePreDecalMasks();
 
 	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Bound at skin PS t23. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
@@ -2329,7 +2334,8 @@ public:
 
 		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinMasksCopy;
-		float padLumpSize;
+		/** @brief >0.5: preDecalMasksSRV is bound at the skin PS t53 - the same note taken before the frame's first decal-mode draw blended it. Took the retired padLumpSize slot, so the buffer layout is untouched. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float HasPreDecalMasks;
 		/** @brief Settings::SkinEdgeFlankWidth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeFlankWidth;
 		/** @brief Settings::ProjSnowMatch as 0/1: the skin coats the solidly painted projected snow with its own material near the camera. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

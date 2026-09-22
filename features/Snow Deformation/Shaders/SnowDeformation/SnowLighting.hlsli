@@ -258,11 +258,11 @@ namespace SnowLighting
 			float snowVerdict = smoothstep(-0.01, 0.01, projWeight);
 			projectedMaterialWeight = snowVerdict;
 			// Vertex Alpha Fades Snow: a vertex alpha below 1 is a deliberate
-			// thinning (authored mask, XPMF's roof-shelter ramp), and the
-			// game's own PD renders it as its author calibrated it - hand the
-			// pixel over: no recolor, no relight. Alpha 1 keeps the switch.
-			[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
-				projectedMaterialWeight *= 1.0 - AlphaDensityRamp(vertexAlpha);
+			// thinning (authored mask, XPMF's roof-shelter ramp). The snow
+			// LOSES THICKNESS there, not its material (Josef, 2026-09-22):
+			// the recolor keeps the pixel and the drape dissolves off it in
+			// the coat block, so a sheltered spot reads as this mod's snow
+			// lying flat rather than as the game's own projected texture.
 			[branch] if (snowVerdict > 0.003)
 			{
 				// Plane weights from the smooth vertex normal. The derivative face

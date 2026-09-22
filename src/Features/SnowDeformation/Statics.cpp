@@ -7,6 +7,7 @@
 
 #include <d3dcompiler.h>
 
+#include "Deferred.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/IBL.h"
 #include "Globals.h"
@@ -764,6 +765,34 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	}
 }
 
+// The Masks channel is not colour: it is the note Lighting leaves for the
+// drape saying whether the game painted snow on this pixel. A decal-mode draw
+// blends EVERY bound target, so that note gets averaged with the decal's own
+// value and the drape reads the result as bare. Snapshot it before the frame's
+// first decal-mode draw; the coat merges the two (SnowStaticsShell SkinMasksY).
+void SnowDeformation::CapturePreDecalMasks()
+{
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	if (!renderer)
+		return;
+	auto* masksSRV = renderer->GetRuntimeData().renderTargets[MASKS].SRV;
+	if (!masksSRV)
+		return;
+	// Mid-pass: the game's targets are unbound around the copy and put back.
+	ID3D11RenderTargetView* rtvs[8]{};
+	ID3D11DepthStencilView* dsv = nullptr;
+	context->OMGetRenderTargets(8, rtvs, &dsv);
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	CopySRVResource(masksSRV, "SnowDeformation::PreDecalMasks", preDecalMasksTex, preDecalMasksSRV);
+	context->OMSetRenderTargets(8, rtvs, dsv);
+	for (auto* rtv : rtvs)
+		if (rtv)
+			rtv->Release();
+	if (dsv)
+		dsv->Release();
+}
+
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	ScopedTicks _hookTicks(cpuCensus.hookTicks, cpuCensus.hookCalls);
@@ -790,6 +819,19 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			mainViewportMinDepth = vp.MinDepth;
 			mainViewportMaxDepth = vp.MaxDepth;
 			mainViewportFrame = globals::state->frameCount;
+		}
+	}
+
+	// Before the frame's first decal-mode draw blends the Masks note away.
+	// Same test the capture path uses for decalDepth; the hook runs BEFORE
+	// the draw, so the targets still hold the note the surface wrote.
+	if (preDecalMasksFrame != globals::state->frameCount &&
+		!(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) {
+		using DecalFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+		const auto biasMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode;
+		if (biasMode != 0 || a_pass->shaderProperty->flags.any(DecalFlag::kDecal, DecalFlag::kDynamicDecal)) {
+			preDecalMasksFrame = globals::state->frameCount;
+			CapturePreDecalMasks();
 		}
 	}
 
@@ -2742,6 +2784,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
+	a_scb.HasPreDecalMasks = preDecalMasksSRV ? 1.0f : 0.0f;
 	// The accumulation scalar is already 0..1 over Accumulation Time, melt
 	// and fade, independent of the peak - exactly the reach's timeline.
 	a_scb.EdgeFlankWidth = (settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates) ?
@@ -3393,6 +3436,9 @@ void SnowDeformation::DrawCapturedStatics()
 	// The pre-shell Masks copy: the recolor's real projected weight.
 	ID3D11ShaderResourceView* skinMasksSRV = landMasksCopySRV.get();
 	context->PSSetShaderResources(32, 1, &skinMasksSRV);
+	// The same note from before the frame's first decal-mode draw blended it.
+	ID3D11ShaderResourceView* preDecalSRV = preDecalMasksSRV.get();
+	context->PSSetShaderResources(53, 1, &preDecalSRV);
 	// The game's shadow mask: the drape lies on the geometry it was drawn
 	// for and takes its shadows from it (sun in x, local lights by mask
 	// index), as Lighting does at t14.

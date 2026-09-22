@@ -282,7 +282,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("proj_alpha_density"), "Vertex Alpha Fades Snow"), &settings.ProjAlphaDensity);
 		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the pixel is handed back to the game's own projected snow: no recolor, no drape, so the shelter renders exactly as its author calibrated it, and this mod's snow fades into it at the edge of the thinning. Where the alpha is untouched, nothing changes. Off = the previous behaviour."));
+			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the snow loses its depth there: the raised drape dissolves away and what is left is this mod's snow lying flat on the surface. It keeps this mod's material and sparkle, it just stops standing proud of the mesh. Where the alpha is untouched, nothing changes. Off = the drape covers the thinned spots at full depth."));
 
 		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
 		if (auto _ttBare = Util::HoverTooltipWrapper())

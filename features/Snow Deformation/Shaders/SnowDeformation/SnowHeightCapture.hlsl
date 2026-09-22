@@ -67,7 +67,7 @@ cbuffer StaticCB : register(b1)
 	float DecalMode;
 
 	float HasSkinMasksCopy;  // layout sync with SnowStaticsShell; unused here
-	float padLumpSize;
+	float HasPreDecalMasks;  // layout sync with SnowStaticsShell; unused here
 	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
 	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
 	float FineHalfExtent;  // layout sync with SnowStaticsShell; unused here
