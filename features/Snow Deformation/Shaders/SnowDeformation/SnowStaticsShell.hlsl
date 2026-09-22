@@ -4332,7 +4332,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 			bool realKnown = realEnc >= 1.5;
 			// LOD hulls coat off the written weight alone: the reconstruction
 			// would paint the atlas whole, ships and walls with the mountains.
-			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (LODBatch < 0.5 && edgeW >= edgeThr);
+			// An alpha-tested mesh too: its unknown pixels are the texels the
+			// game discarded (a dungeon's snow planes wrote 48 where their
+			// alpha passed and nothing elsewhere), and the reconstruction
+			// filled the whole plane.
+			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (LODBatch < 0.5 && AlphaTested < 0.5 && edgeW >= edgeThr);
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
