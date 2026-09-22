@@ -265,7 +265,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("proj_alpha_density"), "Vertex Alpha Fades Snow"), &settings.ProjAlphaDensity);
 		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the recolor follows the game's gradual blend instead of switching at the half blend, and the drape thins out with it. Where the alpha is untouched, snow stays all or nothing, so faint angle dustings still go bare. Off = the previous behaviour."));
+			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the pixel is handed back to the game's own projected snow: no recolor, no drape, so the shelter renders exactly as its author calibrated it, and this mod's snow fades into it at the edge of the thinning. Where the alpha is untouched, nothing changes. Off = the previous behaviour."));
 
 		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
 		if (auto _ttMultipass = Util::HoverTooltipWrapper())

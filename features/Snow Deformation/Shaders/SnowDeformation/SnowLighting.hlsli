@@ -226,8 +226,8 @@ namespace SnowLighting
 		return vertexAlpha;
 	}
 
-	// Vertex Alpha Fades Snow: 0 at alpha 1 (the switch), 1 from alpha 0.75
-	// down (the game's blend). Mirror: SnowStaticsShell.hlsl.
+	// Vertex Alpha Fades Snow: 0 at alpha 1 (ours), 1 from alpha 0.75 down
+	// (the game's own PD). Mirror: SnowStaticsShell.hlsl.
 	float AlphaDensityRamp(float vertexAlpha)
 	{
 		return saturate((1.0 - vertexAlpha) * 4.0);
@@ -254,10 +254,11 @@ namespace SnowLighting
 			// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
 			projectedMaterialWeight = smoothstep(-0.01, 0.01, projWeight);
 			// Vertex Alpha Fades Snow: a vertex alpha below 1 is a deliberate
-			// thinning (authored mask, XPMF's roof-shelter ramp), so it takes
-			// the game's own blend; alpha 1 keeps the switch above.
+			// thinning (authored mask, XPMF's roof-shelter ramp), and the
+			// game's own PD renders it as its author calibrated it - hand the
+			// pixel over: no recolor, no relight. Alpha 1 keeps the switch.
 			[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
-				projectedMaterialWeight = lerp(projectedMaterialWeight, smoothstep(0.0, 1.0, 5.0 * (0.1 + projWeight)), AlphaDensityRamp(vertexAlpha));
+				projectedMaterialWeight *= 1.0 - AlphaDensityRamp(vertexAlpha);
 			[branch] if (projectedMaterialWeight > 0.003)
 			{
 				// Plane weights from the smooth vertex normal. The derivative face

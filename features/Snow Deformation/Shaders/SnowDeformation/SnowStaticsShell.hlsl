@@ -3793,9 +3793,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
 	float pdCoverage = 0.0;
-	// Vertex Alpha Fades Snow: the coat's share of the game's blend above
-	// its half, where the vertex alpha thinned it; rides the distance
-	// dither (the one fade allowed to dither), 1 = untouched.
+	// Vertex Alpha Fades Snow: the coat hands sheltered pixels (vertex alpha
+	// thinned) to the game's own PD; rides the distance dither (the one
+	// fade allowed to dither), 1 = untouched.
 	float densityFade = 1.0;
 	// The normal z the slope cut reads, the reconstructed projected weight
 	// and its fill gate: the edge breakup and the coat key off the same
@@ -3859,14 +3859,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
 		}
 		// Vertex Alpha Fades Snow: on a thinned alpha (mirror of Lighting's
-		// AlphaDensityRamp) the coat dissolves from the game's full blend
-		// down to its half, where the read-back above already cuts it; the
-		// recolored PD beneath carries the rest of the fade.
+		// AlphaDensityRamp) the coat dissolves and the game's own PD, which
+		// the recolor hands over the same way, shows through.
 		[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
-		{
-			float gameBlend = smoothstep(0.0, 1.0, 5.0 * wpix);
-			densityFade = lerp(1.0, smoothstep(0.5, 1.0, gameBlend), saturate((1.0 - input.ProjFactor) * 4.0));
-		}
+			densityFade = 1.0 - saturate((1.0 - input.ProjFactor) * 4.0);
 		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
 		// occlusion find, decoded by his coverage-alpha shot): every gate
 		// above reads nzPix / wpix from the PRE-SHELL G-buffer - the
