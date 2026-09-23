@@ -1031,6 +1031,8 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 
 void SnowDeformation::DrawShell()
 {
+	// First profiled code after the opaque batches; the profiler cannot nest.
+	CloseLandscapeRun();
 	if (!settings.EnableSnowDeformation)
 		return;
 	if (SnowShadersPending(1))

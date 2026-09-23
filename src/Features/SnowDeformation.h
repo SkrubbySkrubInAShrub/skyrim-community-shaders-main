@@ -3367,6 +3367,27 @@ public:
 	/** @brief Publishes the cached snow mask for the material about to be drawn via ExtraFeatureDescriptor bits 10-15. */
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 
+	/** @brief Lighting SetupTechnique: a deferred-pass MTLand/MTLandLODBlend batch opens or extends the landscape run (one profiler pass over consecutive terrain batches); anything else closes it. Implemented in TerrainData.cpp. */
+	void OnLightingSetupTechnique(uint32_t a_rawTechnique);
+	/** @brief Ends the open landscape run. Called before any non-landscape SetupTechnique on every BSShader type, and at DrawShell entry. */
+	void CloseLandscapeRun();
+	/** @brief Installs SetupTechnique hooks on every batch-rendered BSShader vtable. Called from PostPostLoad. */
+	void InstallLandscapeTimingHook();
+	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */
+	static constexpr uint32_t kLandscapeRunCap = 8;
+	bool landscapeRunOpen = false;
+	uint32_t landscapeRunFrame = 0;
+	uint32_t landscapeRunsThisFrame = 0;
+	uint32_t landscapeBatchesThisFrame = 0;
+	/** @brief Log-once census over in-world terrain frames: runs, batches, runs past the cap, runs dropped at the frame boundary. */
+	uint64_t landscapeCensusRuns = 0;
+	uint64_t landscapeCensusBatches = 0;
+	uint64_t landscapeCensusCapped = 0;
+	uint64_t landscapeCensusDropped = 0;
+	uint32_t landscapeCensusFrames = 0;
+	uint32_t landscapeCensusPeakRuns = 0;
+	bool landscapeCensusLogged = false;
+
 	/** @brief Diagnostics shown in the settings UI: landscape materials that hit/missed the snow-mask cache at draw time. */
 	std::atomic<uint64_t> landMaskHits{ 0 };
 	std::atomic<uint64_t> landMaskMisses{ 0 };

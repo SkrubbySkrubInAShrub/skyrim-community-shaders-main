@@ -10,8 +10,11 @@
 #include <DDSTextureLoader.h>
 #include <DirectXPackedVector.h>
 
+#include "Deferred.h"
 #include "Features/TerrainShadows.h"
 #include "Globals.h"
+#include "Profiler.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/D3D.h"
@@ -1138,6 +1141,68 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << 10;
 }
 
+// Times the game's deferred terrain draws, which the per-type overlay only sees
+// as CPU wall time between draws. One pass per RUN of consecutive terrain batches:
+// a pass per batch (~35 a frame) overran the profiler's shared 128-slot frame
+// budget. The run ends at the next non-terrain SetupTechnique of any shader,
+// or at DrawShell entry, the first profiled code after the opaque batches.
+// The profiler cannot nest; a run still open at the frame boundary is
+// dropped, never ended into the next frame's slots.
+void SnowDeformation::OnLightingSetupTechnique(uint32_t a_rawTechnique)
+{
+	using Technique = SIE::ShaderCache::LightingShaderTechniques;
+	const auto technique = static_cast<Technique>((a_rawTechnique >> 24) & 0x3F);
+	// Deferred pass only: forward terrain (reflections) can be the frame's last
+	// setup, leaving a run open across later profiled passes.
+	const bool landscape = (technique == Technique::MTLand || technique == Technique::MTLandLODBlend) && globals::deferred->deferredPass;
+	if (!landscape) {
+		CloseLandscapeRun();
+		return;
+	}
+
+	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
+	if (frame != landscapeRunFrame) {
+		CloseLandscapeRun();
+		const auto* player = RE::PlayerCharacter::GetSingleton();
+		if (!landscapeCensusLogged && landscapeRunsThisFrame > 0 && player && player->GetParentCell()) {
+			landscapeCensusRuns += landscapeRunsThisFrame;
+			landscapeCensusBatches += landscapeBatchesThisFrame;
+			landscapeCensusPeakRuns = std::max(landscapeCensusPeakRuns, landscapeRunsThisFrame);
+			if (++landscapeCensusFrames == 600) {
+				landscapeCensusLogged = true;
+				logger::info("[SNOW DEFORMATION] landscape timer census over 600 terrain frames: {:.1f} runs/frame (peak {}), {:.1f} batches/frame, {} runs past the cap of {}, {} dropped at the frame boundary",
+					landscapeCensusRuns / 600.0, landscapeCensusPeakRuns, landscapeCensusBatches / 600.0, landscapeCensusCapped, kLandscapeRunCap, landscapeCensusDropped);
+			}
+		}
+		landscapeRunFrame = frame;
+		landscapeRunsThisFrame = 0;
+		landscapeBatchesThisFrame = 0;
+	}
+
+	landscapeBatchesThisFrame++;
+	if (landscapeRunOpen)
+		return;
+	if (landscapeRunsThisFrame >= kLandscapeRunCap) {
+		landscapeCensusCapped++;
+		return;
+	}
+	landscapeRunsThisFrame++;
+	landscapeRunOpen = true;
+	globals::profiler->BeginPass("SnowDeformation::LandscapeLighting");
+}
+
+void SnowDeformation::CloseLandscapeRun()
+{
+	if (!landscapeRunOpen)
+		return;
+	landscapeRunOpen = false;
+	if (globals::state->frameCountAtomic.load(std::memory_order_relaxed) != landscapeRunFrame) {
+		landscapeCensusDropped++;
+		return;
+	}
+	globals::profiler->EndPass();
+}
+
 struct SD_TESObjectLAND_SetupMaterial
 {
 	static bool thunk(RE::TESObjectLAND* land)
@@ -1169,6 +1234,46 @@ struct SD_BSLightingShader_SetupMaterial
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
+struct SD_BSLightingShader_SetupTechnique
+{
+	static bool thunk(RE::BSShader* shader, uint32_t a_technique)
+	{
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.OnLightingSetupTechnique(a_technique);
+		return func(shader, a_technique);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+// Any other shader setting up a technique ends the landscape run.
+template <int Slot>
+struct SD_OtherShader_SetupTechnique
+{
+	static bool thunk(RE::BSShader* shader, uint32_t a_technique)
+	{
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.CloseLandscapeRun();
+		return func(shader, a_technique);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void SnowDeformation::InstallLandscapeTimingHook()
+{
+	logger::info("[SNOW DEFORMATION] Hooking BSShader::SetupTechnique on 9 shader types (landscape timer)");
+	stl::write_vfunc<0x2, SD_BSLightingShader_SetupTechnique>(RE::VTABLE_BSLightingShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<0>>(RE::VTABLE_BSGrassShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<1>>(RE::VTABLE_BSEffectShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<2>>(RE::VTABLE_BSWaterShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<3>>(RE::VTABLE_BSSkyShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<4>>(RE::VTABLE_BSParticleShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<5>>(RE::VTABLE_BSBloodSplatterShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<6>>(RE::VTABLE_BSDistantTreeShader[0]);
+	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<7>>(RE::VTABLE_BSUtilityShader[0]);
+}
+
 void SnowDeformation::PostPostLoad()
 {
 	// Same detour target as TruePBR, whose PostPostLoad runs earlier in the
@@ -1181,6 +1286,7 @@ void SnowDeformation::PostPostLoad()
 	stl::write_vfunc<0x4, SD_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
 	InstallStaticsCaptureHook();
+	InstallLandscapeTimingHook();
 	InstallCameraHook();
 	InstallAPI();
 
