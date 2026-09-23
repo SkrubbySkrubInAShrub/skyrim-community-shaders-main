@@ -3489,6 +3489,12 @@ public:
 	};
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchors;
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchorsNext;
+	/** @brief Measurement, runtime-only: bitmask zeroing shell PS feature flags before the ShellCB upload (bit 0 parallax, 1 normal map, 2 RMAOS, 3 crisp shadows, 4 screen-space shadows, 5 SSS remarch, 6 glints, 7 point lights, 8 skylighting, 9 albedo texture). The statics shell shares the CB, so it sees the kills too. */
+	uint32_t shellKillMask = 0;
+	/** @brief Measurement, runtime-only: time the Shell pass as Shell.Setup / Shell.Prepass / Shell.Fill / Shell.Main rows instead of one. */
+	bool shellSplitTiming = false;
+	/** @brief DevBench: applies shell measurement args (shellKill, shellSplitTiming, shellPrepass, shellBake, shellStats) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
+	json DevBenchShellArgs(const json& a_args);
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */

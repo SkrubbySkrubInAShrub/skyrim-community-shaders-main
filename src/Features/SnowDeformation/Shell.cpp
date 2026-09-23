@@ -1277,6 +1277,30 @@ void SnowDeformation::DrawShell()
 		}
 	}
 
+	if (const uint32_t kill = shellKillMask) {
+		if (kill & (1u << 0)) {
+			cbData.SnowParallax.y = 0.0f;
+			cbData.SnowParallax.z = 0.0f;
+		}
+		if (kill & (1u << 1))
+			cbData.HasSnowNormal = 0.0f;
+		if (kill & (1u << 2))
+			cbData.HasSnowRmaos = 0.0f;
+		if (kill & (1u << 3))
+			cbData.CrispShadows = 0.0f;
+		if (kill & (1u << 4))
+			cbData.ScreenSpaceShadowsActive = 0.0f;
+		if (kill & (1u << 5))
+			cbData.CompactLook.y = 0.0f;
+		if (kill & (1u << 6))
+			cbData.EnableGlints = 0.0f;
+		if (kill & (1u << 7))
+			cbData.PointLightsActive = 0.0f;
+		if (kill & (1u << 8))
+			cbData.SkylightingActive = 0.0f;
+		if (kill & (1u << 9))
+			cbData.HasSnowTexture = 0;
+	}
 	shellCB->Update(cbData);
 
 	// Back up the pipeline state we touch so the composite and later game
@@ -1732,7 +1756,7 @@ void SnowDeformation::DrawShell()
 	if (!shellGround) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Shell");
 	} else {
-		globals::profiler->BeginPass("SnowDeformation::Shell");
+		globals::profiler->BeginPass(shellSplitTiming ? "SnowDeformation::Shell.Setup" : "SnowDeformation::Shell");
 		if (tessellate) {
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 			context->VSSetShader(tessVS, nullptr, 0);
@@ -1807,7 +1831,14 @@ void SnowDeformation::DrawShell()
 				hsFar = hsNear ? GetShellHSFar(false) : nullptr;
 			}
 			auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
+			auto splitRow = [&](const char* a_name) {
+				if (shellSplitTiming) {
+					globals::profiler->EndPass();
+					globals::profiler->BeginPass(a_name);
+				}
+			};
 			if (prepass) {
+				splitRow("SnowDeformation::Shell.Prepass");
 				const float rasterClear[4] = {};
 				context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
 				ID3D11RenderTargetView* prepassRTV = shellRasterDepth->rtv.get();
@@ -1815,6 +1846,7 @@ void SnowDeformation::DrawShell()
 				context->PSSetShader(psPrepass, nullptr, 0);
 				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 
+				splitRow("SnowDeformation::Shell.Fill");
 				context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 				context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1828,6 +1860,7 @@ void SnowDeformation::DrawShell()
 				ID3D11ShaderResourceView* nullRasterSRV = nullptr;
 				context->PSSetShaderResources(9, 1, &nullRasterSRV);
 
+				splitRow("SnowDeformation::Shell.Main");
 				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 				context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
