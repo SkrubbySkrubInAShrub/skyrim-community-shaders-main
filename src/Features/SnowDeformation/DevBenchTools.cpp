@@ -47,6 +47,8 @@ namespace
 				const json args = json::parse(a_argsJson);
 				if (args.contains("contactRowMarks") && args["contactRowMarks"].is_boolean())
 					globals::features::snowDeformation.debugContactRowMarks = args["contactRowMarks"].get<bool>();
+				if (args.contains("markSettle") && args["markSettle"].is_boolean())
+					globals::features::snowDeformation.debugTrenchMarkSettle = args["markSettle"].get<bool>();
 			}
 			const auto& s = globals::features::snowDeformation.cpuShown;
 			json spans = json::array();
@@ -63,6 +65,7 @@ namespace
 				storePaths[SnowDeformation::CpuCensus::kStorePathNames[i]] = { { "calls", cc.storeCalls[i] }, { "raises", cc.storeRaises[i] } };
 			out = { { "spans", spans }, { "storePaths", storePaths },
 				{ "stampsTotal", cc.stampsTotal }, { "carveStampsTotal", cc.carveStampsTotal }, { "rowsMarkedTotal", cc.rowsMarkedTotal }, { "contactRectsTotal", cc.contactRectsTotal }, { "contactRowMarks", globals::features::snowDeformation.debugContactRowMarks },
+				{ "markSettle", globals::features::snowDeformation.debugTrenchMarkSettle }, { "settledSkipsTotal", cc.settledSkipsTotal },
 				{ "stampersThisFrame", cc.stampSourceCount }, { "lastStampers", stampers }, { "lastStampersFrame", cc.lastStampSourceFrame },
 				{ "hookMs", s.hookMs }, { "hookCalls", s.hookCalls }, { "actorMs", s.actorMs }, { "actors", s.actors },
 				{ "landMs", s.landMs }, { "landCalls", s.landCalls }, { "depthMs", s.depthMs }, { "depthCalls", s.depthCalls },
@@ -103,7 +106,7 @@ void SnowDeformation::InstallDevBenchTools()
 		R"({"description":"The F10 performance overlay's shader-type table: per BSShader type, smoothed draw calls and CPU wall time (ms) between draw submissions attributed to that type - NOT GPU time. live=false means the overlay is hidden and the numbers are stale (toggle it with F10).","readOnly":true,"inputSchema":{"type":"object","properties":{}}})";
 	dvb->RegisterTool("snowdeformation.shadertypes", shaderTypesDesc, &ShaderTypesTool, nullptr);
 	static constexpr const char* cpuCensusDesc =
-		R"({"description":"Snow Deformation CPU census: 30-frame averages (ms, rdtsc calibrated to QPC) of named CPU spans - Prepass and DrawShell whole, DrawShell's consecutive segments - plus the capture hook, actor/land stamping, depth and traversal counters. Stamps: stampsTotal/carveStampsTotal/rowsMarkedTotal are cumulative (read deltas); lastStampers lists the actors that emitted stamps in the latest frame that had any (props and spells not attributed). Arg contactRowMarks (bool) toggles the runtime A/B for contact-draw row marking.","inputSchema":{"type":"object","properties":{"contactRowMarks":{"type":"boolean"}}}})";
+		R"({"description":"Snow Deformation CPU census: 30-frame averages (ms, rdtsc calibrated to QPC) of named CPU spans - Prepass and DrawShell whole, DrawShell's consecutive segments - plus the capture hook, actor/land stamping, depth and traversal counters. Stamps: stampsTotal/carveStampsTotal/rowsMarkedTotal are cumulative (read deltas); lastStampers lists the actors that emitted stamps in the latest frame that had any (props and spells not attributed). Arg contactRowMarks (bool) toggles the runtime A/B for contact-draw row marking; markSettle (bool) toggles skipping sources whose key has settled.","inputSchema":{"type":"object","properties":{"contactRowMarks":{"type":"boolean"},"markSettle":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.cpucensus", cpuCensusDesc, &CpuCensusTool, nullptr);
 	static constexpr const char* trenchProbeDesc =
 		R"({"description":"Persistent trench store depth (0-1, bilinear) at world positions in the active worldspace. points: [[x,y],...].","readOnly":true,"inputSchema":{"type":"object","properties":{"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}},"required":["points"]}})";

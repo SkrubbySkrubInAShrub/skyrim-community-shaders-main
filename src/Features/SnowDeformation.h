@@ -2483,6 +2483,8 @@ public:
 		uint64_t rowsMarkedTotal = 0;
 		/** @brief Cumulative raster-candidate (contact capture) rectangles that marked rows. */
 		uint64_t contactRectsTotal = 0;
+		/** @brief Cumulative marks skipped because their source had settled (unchanged key past the settle tail). */
+		uint64_t settledSkipsTotal = 0;
 		/** @brief Actors that emitted stamps: this frame, and the latest frame that had any. Props and spells are not attributed. */
 		struct StampSource
 		{
@@ -3460,6 +3462,12 @@ public:
 	void InstallDevBenchTools();
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
+	/** @brief Runtime A/B, default ON: a stamp or contact draw stops marking rows once its texel-quantized key has held for kTrenchMarkSettleFrames (an unchanged max-carve rewrites nothing). Set via snowdeformation.cpucensus {"markSettle":bool}. */
+	bool debugTrenchMarkSettle = true;
+	static constexpr uint16_t kTrenchMarkSettleFrames = 60;
+	/** @brief Consecutive frames each mark key has been seen; rebuilt every MarkTrenchDirtyRows. */
+	std::unordered_map<uint64_t, uint16_t> trenchMarkAge;
+	std::unordered_map<uint64_t, uint16_t> trenchMarkAgeNext;
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */

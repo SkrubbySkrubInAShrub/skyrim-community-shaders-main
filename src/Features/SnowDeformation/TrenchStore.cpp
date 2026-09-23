@@ -225,6 +225,25 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 		}
 	};
 
+	// A source whose texel-quantized key has held for the settle tail carves
+	// the same max again: its rows hold nothing new for the mirror.
+	auto quant = [](float a_value, float a_step) { return (uint64_t)(int64_t)std::floor(a_value / a_step); };
+	auto mix = [](uint64_t a_hash, uint64_t a_value) {
+		a_hash ^= a_value + 0x9E3779B97F4A7C15ull + (a_hash << 6) + (a_hash >> 2);
+		return a_hash;
+	};
+	auto unsettled = [&](uint64_t a_key) {
+		if (!debugTrenchMarkSettle)
+			return true;
+		const auto it = trenchMarkAge.find(a_key);
+		const uint16_t age = it == trenchMarkAge.end() ? 0 : (uint16_t)std::min<int>(it->second + 1, 0xFFFF);
+		trenchMarkAgeNext[a_key] = age;
+		if (age < kTrenchMarkSettleFrames)
+			return true;
+		cpuCensus.settledSkipsTotal++;
+		return false;
+	};
+
 	cpuCensus.stampsTotal += a_data.StampCount;
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
 		// Carves only. A melt stamp's depth is subtracted out of what the
@@ -233,21 +252,32 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 			continue;
 		cpuCensus.carveStampsTotal++;
 
+		const auto& s = a_data.Stamps[i];
+		const auto& e = a_data.StampEnds[i];
+		uint64_t key = mix(mix(mix(1, quant(s.x, texel)), quant(s.y, texel)), quant(s.z, 1.0f));
+		key = mix(mix(mix(key, quant(s.w, 1.0f)), quant(e.x, texel)), quant(e.y, texel));
+		if (!unsettled(key))
+			continue;
+
 		// The capsule spans segStart to tip, so take both ends plus the radius.
-		const float radius = a_data.Stamps[i].w;
-		markSpan(std::min(a_data.Stamps[i].y, a_data.StampEnds[i].y) - radius,
-			std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + radius);
+		markSpan(std::min(s.y, e.y) - s.w, std::max(s.y, e.y) + s.w);
 	}
 
 	// Contact-window raster draws carve by mesh and never enter the stamp list;
 	// their bounds mark rows too (CODE-NOTES: trench roll blind spot).
-	if (!debugContactRowMarks)
-		return;
-	for (const auto* draws : { &contactActors, &contactProps })
-		for (const auto& draw : *draws) {
-			cpuCensus.contactRectsTotal++;
-			markSpan(draw.minY, draw.maxY);
-		}
+	if (debugContactRowMarks) {
+		for (const auto* draws : { &contactActors, &contactProps })
+			for (const auto& draw : *draws) {
+				cpuCensus.contactRectsTotal++;
+				uint64_t key = mix(mix(2, draw.ref.native_handle()), quant(draw.minX, texel));
+				key = mix(mix(mix(key, quant(draw.minY, texel)), quant(draw.maxX, texel)), quant(draw.maxY, texel));
+				if (unsettled(key))
+					markSpan(draw.minY, draw.maxY);
+			}
+	}
+
+	std::swap(trenchMarkAge, trenchMarkAgeNext);
+	trenchMarkAgeNext.clear();
 }
 
 void SnowDeformation::RollTrenchWindow()
