@@ -3462,12 +3462,33 @@ public:
 	void InstallDevBenchTools();
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
-	/** @brief Runtime A/B, default ON: a stamp or contact draw stops marking rows once its texel-quantized key has held for kTrenchMarkSettleFrames (an unchanged max-carve rewrites nothing). Set via snowdeformation.cpucensus {"markSettle":bool}. */
-	bool debugTrenchMarkSettle = true;
-	static constexpr uint16_t kTrenchMarkSettleFrames = 60;
-	/** @brief Consecutive frames each mark key has been seen; rebuilt every MarkTrenchDirtyRows. */
-	std::unordered_map<uint64_t, uint16_t> trenchMarkAge;
-	std::unordered_map<uint64_t, uint16_t> trenchMarkAgeNext;
+	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */
+	int trenchMarkSettleMode = 2;
+	/** @brief Frames a source keeps marking after its last change, and the period at which a settled source re-marks once (bounds creep inside the hysteresis tolerance). */
+	static constexpr uint32_t kTrenchMarkSettleFrames = 60;
+	static constexpr uint32_t kTrenchMarkRefreshFrames = 600;
+	/** @brief Hysteresis tolerance in map texels (positions) and world units (stamp z, radius). */
+	static constexpr float kTrenchMarkTolTexels = 2.0f;
+	/** @brief Mode 1: consecutive frames each quantized key has been seen; rebuilt every MarkTrenchDirtyRows. */
+	std::unordered_map<uint64_t, uint32_t> trenchMarkAge;
+	std::unordered_map<uint64_t, uint32_t> trenchMarkAgeNext;
+	/** @brief Mode 2 anchors: stamps matched to the nearest unclaimed anchor, contact draws by ref handle. */
+	struct TrenchStampAnchor
+	{
+		float4 s;
+		float2 e;
+		uint32_t age;
+	};
+	std::vector<TrenchStampAnchor> trenchStampAnchors;
+	std::vector<TrenchStampAnchor> trenchStampAnchorsNext;
+	std::vector<uint8_t> trenchStampAnchorClaimed;
+	struct TrenchRectAnchor
+	{
+		float minX, minY, maxX, maxY;
+		uint32_t age;
+	};
+	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchors;
+	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchorsNext;
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */
