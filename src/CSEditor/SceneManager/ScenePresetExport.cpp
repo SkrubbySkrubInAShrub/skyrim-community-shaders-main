@@ -117,7 +117,8 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		pendingOpen = false;
 	}
 
-	ImGui::SetNextWindowSize(ImVec2(kModalWidth * Util::GetUIScale(), 0.0f), ImGuiCond_Appearing);
+	// Pinned every frame: the wrapped text and -1 name field size off the window, so auto-fit would shrink it.
+	ImGui::SetNextWindowSize(ImVec2(kModalWidth * Util::GetUIScale(), 0.0f), ImGuiCond_Always);
 	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 		ImGui::TextWrapped(
 			"%s", T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
