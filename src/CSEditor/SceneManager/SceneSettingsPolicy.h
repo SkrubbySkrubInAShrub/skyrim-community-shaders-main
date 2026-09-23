@@ -28,6 +28,7 @@ namespace SceneSettingsPolicy
 		// resolve against in the first place.
 		{ "ImageBasedLighting", "DisableInWorldMap" },
 		{ "ImageBasedLighting", "DisableInLoadingScreen" },
+		{ "VolumetricLighting" },
 	};
 
 	inline const std::vector<SettingPolicyPath> kLocationFeatureWhitelist = {
