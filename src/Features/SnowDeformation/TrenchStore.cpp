@@ -241,6 +241,8 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 
 	// Contact-window raster draws carve by mesh and never enter the stamp list;
 	// their bounds mark rows too (CODE-NOTES: trench roll blind spot).
+	if (!debugContactRowMarks)
+		return;
 	for (const auto* draws : { &contactActors, &contactProps })
 		for (const auto& draw : *draws) {
 			cpuCensus.contactRectsTotal++;

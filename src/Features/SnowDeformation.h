@@ -3458,6 +3458,8 @@ public:
 	void InstallLandscapeTimingHook();
 	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
 	void InstallDevBenchTools();
+	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
+	bool debugContactRowMarks = true;
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */
