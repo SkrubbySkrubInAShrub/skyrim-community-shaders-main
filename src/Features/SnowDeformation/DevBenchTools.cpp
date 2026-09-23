@@ -121,9 +121,11 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 		shellVertexBakeDisabled = !a_args["shellBake"].get<bool>();
 	if (a_args.contains("shellStats") && a_args["shellStats"].is_boolean())
 		shellPipelineStatsEnabled = a_args["shellStats"].get<bool>();
+	if (a_args.contains("shellVisibleCull") && a_args["shellVisibleCull"].is_boolean())
+		shellVisibleCull = a_args["shellVisibleCull"].get<bool>();
 	const auto& s = shellStatsLast;
 	return { { "shellKill", shellKillMask }, { "shellSplitTiming", shellSplitTiming }, { "shellPrepass", !shellDepthPrepassDisabled },
-		{ "shellBake", !shellVertexBakeDisabled }, { "shellStats", shellPipelineStatsEnabled }, { "tessellation", settings.Tessellation },
+		{ "shellBake", !shellVertexBakeDisabled }, { "shellStats", shellPipelineStatsEnabled }, { "shellVisibleCull", shellVisibleCull }, { "tessellation", settings.Tessellation },
 		{ "stats", { { "valid", s.valid }, { "vs", s.vsInvocations }, { "hs", s.hsInvocations }, { "ds", s.dsInvocations },
 					   { "ps", s.psInvocations }, { "primitives", s.rasterizedPrimitives }, { "samplesPassed", s.samplesPassed } } } };
 }
@@ -144,7 +146,7 @@ void SnowDeformation::InstallDevBenchTools()
 		R"({"description":"Persistent trench store depth (0-1, bilinear) at world positions in the active worldspace. points: [[x,y],...].","readOnly":true,"inputSchema":{"type":"object","properties":{"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}},"required":["points"]}})";
 	dvb->RegisterTool("snowdeformation.trenchprobe", trenchProbeDesc, &TrenchProbeTool, nullptr);
 	static constexpr const char* shellDesc =
-		R"({"description":"Landscape shell measurement switches (runtime-only). shellKill: bitmask zeroing PS features before the ShellCB upload (1 parallax, 2 normal map, 4 RMAOS, 8 crisp shadows, 16 screen-space shadows, 32 SSS remarch, 64 glints, 128 point lights, 256 skylighting, 512 albedo texture; the statics shell shares the CB). shellSplitTiming: Shell row split into Shell.Setup/Prepass/Fill/Main. shellPrepass, shellBake: the depth prepass and the vertex bake. shellStats: D3D11 pipeline statistics around the shell draws, returned in stats (read two frames late). No args = read state.","inputSchema":{"type":"object","properties":{"shellKill":{"type":"integer"},"shellSplitTiming":{"type":"boolean"},"shellPrepass":{"type":"boolean"},"shellBake":{"type":"boolean"},"shellStats":{"type":"boolean"}}}})";
+		R"({"description":"Landscape shell measurement switches (runtime-only). shellKill: bitmask zeroing PS features before the ShellCB upload (1 parallax, 2 normal map, 4 RMAOS, 8 crisp shadows, 16 screen-space shadows, 32 SSS remarch, 64 glints, 128 point lights, 256 skylighting, 512 albedo texture; the statics shell shares the CB). shellSplitTiming: Shell row split into Shell.Setup/Prepass/Fill/Main. shellPrepass, shellBake: the depth prepass and the vertex bake. shellVisibleCull: the shading pass tessellates only patches that won a prepass pixel. shellStats: D3D11 pipeline statistics around the shell draws, returned in stats (read two frames late). No args = read state.","inputSchema":{"type":"object","properties":{"shellKill":{"type":"integer"},"shellSplitTiming":{"type":"boolean"},"shellPrepass":{"type":"boolean"},"shellBake":{"type":"boolean"},"shellStats":{"type":"boolean"},"shellVisibleCull":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.shell", shellDesc, &ShellTool, nullptr);
 	logger::info("[SNOW DEFORMATION] DevBench tools registered: snowdeformation.shadertypes, snowdeformation.cpucensus");
 #endif

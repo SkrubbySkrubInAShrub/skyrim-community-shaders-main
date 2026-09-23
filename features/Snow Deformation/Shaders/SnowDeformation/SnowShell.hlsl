@@ -399,6 +399,10 @@ struct VS_OUTPUT
 	float DebugHeight : TEXCOORD5;
 	// xyz: smooth per-vertex terrain normal, w: coverage alpha (taper*fade).
 	float4 TerrainNormalAlpha : TEXCOORD6;
+#ifdef SNOW_SHELL_PATCH_ID
+	// Prepass draw only: the patch (+1) for the visible-patch cull, from the DS.
+	nointerpolation uint PatchId : TEXCOORD7;
+#endif
 };
 
 // Manual bilinear over the terrain window (Load-based, deterministic).
@@ -1781,9 +1785,24 @@ float FarReliefInsideFactor(float2 c0, float2 c1, float2 c2, float2 c3)
 	return factor;
 }
 
-TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
+#ifdef SNOW_HS_VISIBLE
+// Patches that won at least one pixel in the depth prepass. The shading pass
+// only admits prepass winners (EQUAL), so a patch that won nothing cannot
+// shade and is not tessellated a second time.
+StructuredBuffer<uint> VisiblePatches : register(t60);
+#endif
+
+TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch, uint patchId : SV_PrimitiveID)
 {
 	TessFactors f;
+#ifdef SNOW_HS_VISIBLE
+	[branch] if (VisiblePatches[patchId] == 0)
+	{
+		f.Edge[0] = f.Edge[1] = f.Edge[2] = f.Edge[3] = 0.0;
+		f.Inside[0] = f.Inside[1] = 0.0;
+		return f;
+	}
+#endif
 
 	// The bake's corner records are hoisted above the culls: their z bounds
 	// the patch for the frustum test, and their deformation taps feed the
@@ -1955,6 +1974,15 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 [domain("quad")]
 VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
 {
+#ifdef SNOW_SHELL_PATCH_ID
+	// Same index the hull sees as SV_PrimitiveID (vertexID / 4 in the VS):
+	// the patch's (0,0) grid corner, whatever the rotation.
+	const uint2 dsQuadXY = min(min(patch[0].GridXY, patch[1].GridXY), min(patch[2].GridXY, patch[3].GridXY));
+	const uint dsPatchId = dsQuadXY.y * GridDim + dsQuadXY.x + 1;
+#	define SHELL_DS_OUT(expr) { VS_OUTPUT dsOut = (expr); dsOut.PatchId = dsPatchId; return dsOut; }
+#else
+#	define SHELL_DS_OUT(expr) return (expr)
+#endif
 	float2 gridLocal = lerp(
 		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
 		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
@@ -1968,9 +1996,9 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		{
 			VS_OUTPUT culled = (VS_OUTPUT)0;
 			culled.Position = asfloat(0x7FC00000).xxxx;
-			return culled;
+			SHELL_DS_OUT(culled);
 		}
-		return FinishShellVertex(gridLocal, flatTerrain.x + max(flatTerrain.y, 0.0), saturate(flatTerrain.z), flatTerrain.x);
+		SHELL_DS_OUT(FinishShellVertex(gridLocal, flatTerrain.x + max(flatTerrain.y, 0.0), saturate(flatTerrain.z), flatTerrain.x));
 	}
 #endif
 
@@ -2004,7 +2032,7 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 			asuint(liveSlope.x) != asuint(slope.x) || asuint(liveSlope.y) != asuint(slope.y) || asuint(liveDeform) != asuint(baked.w))
 			z += 50.0;
 #	endif
-		return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, slope.x, slope.y);
+		SHELL_DS_OUT(FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, slope.x, slope.y));
 	}
 	else
 #endif
@@ -2012,8 +2040,9 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		z = ShellVertexZ(gridLocal, coverage, terrainHeight);
 	}
 
-	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+	SHELL_DS_OUT(FinishShellVertex(gridLocal, z, coverage, terrainHeight));
 }
+#undef SHELL_DS_OUT
 #endif
 
 
@@ -2057,6 +2086,11 @@ struct PS_OUTPUT
 struct PS_PREPASS_OUTPUT
 {
 	float RasterDepth : SV_Target0;
+#	ifdef SNOW_SHELL_PREPASS_PATCH
+	// Winning patch + 1 (0 = none): the fill marks it visible, and the shading
+	// pass's hull culls every patch that won no pixel.
+	uint PatchId : SV_Target1;
+#	endif
 	float DepthLE : SV_DepthLessEqual;
 };
 
@@ -2407,6 +2441,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
+#	ifdef SNOW_SHELL_PREPASS_PATCH
+	prepassOut.PatchId = input.PatchId;
+#	endif
 	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ, input.Position.xy));
 	return prepassOut;
 #endif

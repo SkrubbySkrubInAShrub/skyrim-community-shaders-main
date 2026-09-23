@@ -53,8 +53,20 @@ float4 FillVS(uint vertexID : SV_VertexID) : SV_Position
 	return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 }
 
+#ifdef FILL_VISIBLE_PATCHES
+// The prepass's winning patch per pixel (+1, 0 = none), folded into one
+// visible flag per patch for the shading pass's hull.
+Texture2D<uint> FillPatch : register(t61);
+RWStructuredBuffer<uint> VisiblePatchesOut : register(u1);
+#endif
+
 float FillPS(float4 pos : SV_Position) : SV_Depth
 {
+#ifdef FILL_VISIBLE_PATCHES
+	const uint patch = FillPatch.Load(int3(pos.xy, 0));
+	[branch] if (patch != 0)
+		VisiblePatchesOut[patch - 1] = 1;
+#endif
 	return FillSource.Load(int3(pos.xy, 0));
 }
 

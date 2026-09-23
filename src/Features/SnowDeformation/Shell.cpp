@@ -649,15 +649,20 @@ ID3D11HullShader* SnowDeformation::GetShellHSFar(bool a_bake)
 	return slot;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSPrepass()
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepass(bool a_patch)
 {
-	if (!shellPSPrepass) {
-		logger::debug("Compiling SnowShell PS (depth prepass)");
+	auto*& slot = a_patch ? shellPSPrepassPatch : shellPSPrepass;
+	if (!slot) {
+		logger::debug("Compiling SnowShell PS (depth prepass{})", a_patch ? ", patch id" : "");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
-		shellPSPrepass = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		if (a_patch) {
+			defines.emplace_back("SNOW_SHELL_PREPASS_PATCH", "");
+			defines.emplace_back("SNOW_SHELL_PATCH_ID", "");
+		}
+		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
-	return shellPSPrepass;
+	return slot;
 }
 
 ID3D11VertexShader* SnowDeformation::GetShellFillVS()
@@ -676,6 +681,100 @@ ID3D11PixelShader* SnowDeformation::GetShellFillPS()
 		shellFillPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "ps_5_0", "FillPS"));
 	}
 	return shellFillPS;
+}
+
+ID3D11DomainShader* SnowDeformation::GetShellDSPatch(bool a_bake, bool a_check)
+{
+	auto*& slot = shellDSPatch[a_bake ? (a_check ? 2 : 1) : 0];
+	if (!slot) {
+		logger::debug("Compiling SnowShell DS (patch id{})", a_bake ? (a_check ? ", bake check" : ", bake") : "");
+		std::vector<std::pair<const char*, const char*>> defines = { { "SNOW_SHELL_PATCH_ID", "" } };
+		if (a_bake)
+			defines.push_back({ a_check ? "SNOW_DS_BAKE_CHECK" : "SNOW_DS_BAKE", "" });
+		slot = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ds_5_0"));
+	}
+	return slot;
+}
+
+ID3D11HullShader* SnowDeformation::GetShellHSVisible(bool a_bake)
+{
+	auto*& slot = a_bake ? shellHSVisibleBake : shellHSVisible;
+	if (!slot) {
+		logger::debug("Compiling SnowShell HS (visible patches{})", a_bake ? ", bake" : "");
+		std::vector<std::pair<const char*, const char*>> defines = { { "SNOW_HS_VISIBLE", "" } };
+		if (a_bake)
+			defines.push_back({ "SNOW_HS_BAKE", "" });
+		slot = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "hs_5_0"));
+	}
+	return slot;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellFillPSVisible()
+{
+	if (!shellFillPSVisible) {
+		logger::debug("Compiling DepthSyncCS FillPS (visible patches)");
+		shellFillPSVisible = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_VISIBLE_PATCHES", "" } }, "ps_5_0", "FillPS"));
+	}
+	return shellFillPSVisible;
+}
+
+bool SnowDeformation::EnsureVisiblePatchResources()
+{
+	auto device = globals::d3d::device;
+	if (!shellRasterDepth)
+		return false;
+	const auto& depthDesc = shellRasterDepth->desc;
+	if (shellRasterPatch && (shellRasterPatch->desc.Width != depthDesc.Width || shellRasterPatch->desc.Height != depthDesc.Height)) {
+		delete shellRasterPatch;
+		shellRasterPatch = nullptr;
+	}
+	if (!shellRasterPatch) {
+		D3D11_TEXTURE2D_DESC desc = depthDesc;
+		desc.Format = DXGI_FORMAT_R32_UINT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		shellRasterPatch = new Texture2D(desc, "SnowDeformation::ShellRasterPatch");
+		shellRasterPatch->CreateSRV(srvDesc);
+		shellRasterPatch->CreateRTV(rtvDesc);
+	}
+	if (!shellVisiblePatches) {
+		constexpr UINT patches = kShellGridDim * kShellGridDim;
+		D3D11_BUFFER_DESC bufDesc{};
+		bufDesc.ByteWidth = patches * sizeof(uint32_t);
+		bufDesc.Usage = D3D11_USAGE_DEFAULT;
+		bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+		bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		bufDesc.StructureByteStride = sizeof(uint32_t);
+		if (FAILED(device->CreateBuffer(&bufDesc, nullptr, shellVisiblePatches.put())))
+			return false;
+		Util::SetResourceName(shellVisiblePatches.get(), "SnowDeformation::ShellVisiblePatches");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = patches;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.NumElements = patches;
+		if (FAILED(device->CreateUnorderedAccessView(shellVisiblePatches.get(), &uavDesc, shellVisiblePatchesUAV.put())) ||
+			FAILED(device->CreateShaderResourceView(shellVisiblePatches.get(), &srvDesc, shellVisiblePatchesSRV.put()))) {
+			shellVisiblePatches = nullptr;
+			shellVisiblePatchesUAV = nullptr;
+			shellVisiblePatchesSRV = nullptr;
+			return false;
+		}
+		Util::SetResourceName(shellVisiblePatchesUAV.get(), "SnowDeformation::ShellVisiblePatches UAV");
+		Util::SetResourceName(shellVisiblePatchesSRV.get(), "SnowDeformation::ShellVisiblePatches SRV");
+	}
+	return shellRasterPatch->rtv && shellRasterPatch->srv;
 }
 
 bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV)
@@ -1838,16 +1937,40 @@ void SnowDeformation::DrawShell()
 				}
 			};
 			if (prepass) {
+				// Visible-patch cull: the prepass records each pixel's winning
+				// patch, the fill folds that into one flag per patch, and the
+				// shading pass's hull skips every patch that won nothing.
+				auto* hsVisible = shellVisibleCull && EnsureVisiblePatchResources() ? GetShellHSVisible(bake) : nullptr;
+				auto* fillPSVisible = hsVisible ? GetShellFillPSVisible() : nullptr;
+				auto* psPrepassPatch = fillPSVisible ? GetShellPSPrepass(true) : nullptr;
+				auto* dsPrepassPatch = psPrepassPatch ? GetShellDSPatch(bake, shellVertexBakeCheck) : nullptr;
+				const bool visibleCull = dsPrepassPatch != nullptr;
+				if (visibleCull)
+					psPrepass = psPrepassPatch;
+
 				splitRow("SnowDeformation::Shell.Prepass");
 				const float rasterClear[4] = {};
 				context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
-				ID3D11RenderTargetView* prepassRTV = shellRasterDepth->rtv.get();
-				context->OMSetRenderTargets(1, &prepassRTV, dsv);
+				ID3D11RenderTargetView* prepassRTVs[2] = { shellRasterDepth->rtv.get(), visibleCull ? shellRasterPatch->rtv.get() : nullptr };
+				if (visibleCull)
+					context->ClearRenderTargetView(prepassRTVs[1], rasterClear);
+				context->OMSetRenderTargets(visibleCull ? 2 : 1, prepassRTVs, dsv);
+				if (visibleCull)
+					context->DSSetShader(dsPrepassPatch, nullptr, 0);
 				context->PSSetShader(psPrepass, nullptr, 0);
 				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 
 				splitRow("SnowDeformation::Shell.Fill");
-				context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+				if (visibleCull) {
+					const UINT zeros[4] = {};
+					context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
+					ID3D11UnorderedAccessView* visibleUAV = shellVisiblePatchesUAV.get();
+					context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shellTestDepthDSV.get(), 1, 1, &visibleUAV, nullptr);
+					ID3D11ShaderResourceView* patchSRV = shellRasterPatch->srv.get();
+					context->PSSetShaderResources(61, 1, &patchSRV);
+				} else {
+					context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+				}
 				context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 				context->VSSetShader(fillVS, nullptr, 0);
@@ -1855,20 +1978,33 @@ void SnowDeformation::DrawShell()
 				context->DSSetShader(nullptr, nullptr, 0);
 				ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
 				context->PSSetShaderResources(9, 1, &rasterSRV);
-				context->PSSetShader(fillPS, nullptr, 0);
+				context->PSSetShader(visibleCull ? fillPSVisible : fillPS, nullptr, 0);
 				context->Draw(3, 0);
 				ID3D11ShaderResourceView* nullRasterSRV = nullptr;
 				context->PSSetShaderResources(9, 1, &nullRasterSRV);
+				if (visibleCull) {
+					context->PSSetShaderResources(61, 1, &nullRasterSRV);
+					ID3D11UnorderedAccessView* nullUAV = nullptr;
+					context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 1, 1, &nullUAV, nullptr);
+				}
 
 				splitRow("SnowDeformation::Shell.Main");
 				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 				context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 				context->VSSetShader(tessVS, nullptr, 0);
-				context->HSSetShader(tessHS, nullptr, 0);
+				context->HSSetShader(visibleCull ? hsVisible : tessHS, nullptr, 0);
+				if (visibleCull) {
+					ID3D11ShaderResourceView* visibleSRV = shellVisiblePatchesSRV.get();
+					context->HSSetShaderResources(60, 1, &visibleSRV);
+				}
 				context->DSSetShader(tessDS, nullptr, 0);
 				context->PSSetShader(psPrepassMain, nullptr, 0);
 				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+				if (visibleCull) {
+					ID3D11ShaderResourceView* nullVisibleSRV = nullptr;
+					context->HSSetShaderResources(60, 1, &nullVisibleSRV);
+				}
 
 				context->OMSetRenderTargets(8, rtvs, dsv);
 				context->OMSetDepthStencilState(shellDepthState.get(), 0);

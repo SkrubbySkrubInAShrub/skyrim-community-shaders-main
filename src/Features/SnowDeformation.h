@@ -1735,14 +1735,31 @@ public:
 	ID3D11PixelShader* GetShellPSNoDepth();
 
 	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's clamped depth into the main buffer (alpha cut + export clamp) and its raster depth into shellRasterDepth; the fill pass copies that into shellTestDepth, a private depth buffer the shading pass tests EQUAL against with writes off, so occluded, self-hidden and alpha-cut fragments are rejected by hardware early-Z. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11PixelShader* GetShellPSPrepass();
+	ID3D11PixelShader* GetShellPSPrepass(bool a_patch = false);
 	ID3D11PixelShader* shellPSPrepass = nullptr;
+	/** @brief Prepass variant that also writes the winning patch id (SNOW_SHELL_PREPASS_PATCH), used only with the visible-patch cull. */
+	ID3D11PixelShader* shellPSPrepassPatch = nullptr;
 	ID3D11VertexShader* GetShellFillVS();
 	ID3D11PixelShader* GetShellFillPS();
 	ID3D11VertexShader* shellFillVS = nullptr;
 	ID3D11PixelShader* shellFillPS = nullptr;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
+	/** @brief Visible-patch cull (runtime, default ON): the prepass also writes each pixel's winning patch (+1) into shellRasterPatch, the fill marks those patches in shellVisiblePatches, and the shading pass's hull (SNOW_HS_VISIBLE) gives every other patch zero factors. The shading pass admits only prepass winners, so the image is unchanged; only the second tessellation shrinks. */
+	bool shellVisibleCull = true;
+	Texture2D* shellRasterPatch = nullptr;
+	winrt::com_ptr<ID3D11Buffer> shellVisiblePatches;
+	winrt::com_ptr<ID3D11UnorderedAccessView> shellVisiblePatchesUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePatchesSRV;
+	bool EnsureVisiblePatchResources();
+	/** @brief Prepass-draw DS variants that also carry the patch id (SNOW_SHELL_PATCH_ID): [0] live, [1] bake, [2] bake check. */
+	ID3D11DomainShader* GetShellDSPatch(bool a_bake, bool a_check);
+	ID3D11DomainShader* shellDSPatch[3] = {};
+	ID3D11HullShader* GetShellHSVisible(bool a_bake);
+	ID3D11HullShader* shellHSVisible = nullptr;
+	ID3D11HullShader* shellHSVisibleBake = nullptr;
+	ID3D11PixelShader* GetShellFillPSVisible();
+	ID3D11PixelShader* shellFillPSVisible = nullptr;
 	/** @brief The prepass ran this frame, so shellRasterDepth marks the shell's pixels; DepthSync is skipped otherwise. */
 	bool shellPrepassThisFrame = false;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
