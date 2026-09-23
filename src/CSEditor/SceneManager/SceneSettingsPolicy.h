@@ -19,13 +19,8 @@ namespace SceneSettingsPolicy
 		{ "ExponentialHeightFog", "volumetricHistoryMissSampleCount" },
 		{ "ExponentialHeightFog", "volumetricSampleJitterMultiplier" },
 		{ "ExponentialHeightFog", "volumetricUpsampleJitterMultiplier" },
-		// Auto-catalogued, but a per-scene flip reloads grass LOD meshes on the render thread and
-		// recompiles the mesh-variation permutation. The GrassLighting LOD brightness sliders are a
-		// separate feature and stay scene-controllable.
 		{ "GrassOptimizations" },
 		{ "TerrainVariation" },
-		// Context gates deciding where IBL applies at all: map and loading screens have no scene to
-		// resolve against in the first place.
 		{ "ImageBasedLighting", "DisableInWorldMap" },
 		{ "ImageBasedLighting", "DisableInLoadingScreen" },
 		{ "VolumetricLighting" },
