@@ -20,9 +20,22 @@ namespace SceneSettingsLocationTargets
 	/// Regions carry no full name, so their editor ID is the only readable label they have.
 	std::string GetRegionTargetName(const RE::TESRegion* region);
 
+	/** @brief Whether a keyword names a location type, which by convention starts "LocType". */
+	bool IsLocationTypeKeyword(const RE::BGSKeyword* keyword);
+
+	SceneSettingsManager::LocationTarget MakeWorldspaceTarget(const RE::TESWorldSpace* worldspace);
+	/** @brief Target for a keyword that already passed IsLocationTypeKeyword. */
+	SceneSettingsManager::LocationTarget MakeLocationTypeTarget(const RE::BGSKeyword* keyword);
+	SceneSettingsManager::LocationTarget MakeRegionTarget(const RE::TESRegion* region, const std::string& cocCode);
+	SceneSettingsManager::LocationTarget MakeLocationTarget(const RE::BGSLocation* location, const std::string& cocCode);
+	SceneSettingsManager::LocationTarget MakeCellTarget(const RE::TESObjectCELL* cell);
+
 	/// Build the broadest-to-narrowest target chain for a location and the cell that resolved it.
 	std::vector<SceneSettingsManager::LocationTarget> BuildLocationTargetChain(
 		RE::BGSLocation* location, RE::TESObjectCELL* cell);
+
+	/** @brief Every target the game defines, sorted by type then name, for the editor's picker. */
+	std::vector<SceneSettingsManager::LocationTarget> BuildLocationCatalog();
 
 	RE::TESForm* ResolveLocationTargetForm(std::string_view formKey);
 

@@ -15,24 +15,27 @@ using namespace SceneSettingsContextRules;
 
 bool SceneSettingsManager::IsPeriodicContext(SceneContextType type)
 {
-	return type == SceneContextType::TimeOfDay || type == SceneContextType::Weather;
+	return type != SceneContextType::Interior;
 }
 
 bool SceneSettingsManager::IsValidSceneContext(const SceneContextId& context)
 {
 	const auto periodIndex = static_cast<int>(context.period);
+	const bool realPeriod = periodIndex >= 0 && periodIndex < kPeriodCount;
+	// Weather and locations keep a flat set (Count) beside their per-period one.
+	const bool periodOrFlat = realPeriod || context.period == TimeOfDayPeriod::Count;
 	switch (context.type) {
 	case SceneContextType::Interior:
 		return context.period == TimeOfDayPeriod::Count && context.weatherId == 0 &&
 		       context.locationFormKey.empty() && context.locationType == LocationTargetType::Location;
 	case SceneContextType::TimeOfDay:
-		return periodIndex >= 0 && periodIndex < kPeriodCount && context.weatherId == 0 &&
+		return realPeriod && context.weatherId == 0 &&
 		       context.locationFormKey.empty() && context.locationType == LocationTargetType::Location;
 	case SceneContextType::Weather:
-		return context.weatherId != 0 && periodIndex >= 0 && periodIndex < kPeriodCount &&
+		return context.weatherId != 0 && periodOrFlat &&
 		       context.locationFormKey.empty() && context.locationType == LocationTargetType::Location;
 	case SceneContextType::Location:
-		return context.period == TimeOfDayPeriod::Count && context.weatherId == 0 &&
+		return periodOrFlat && context.weatherId == 0 &&
 		       IsValidLocationTargetType(context.locationType) && !context.locationFormKey.empty();
 	default:
 		return false;
@@ -51,7 +54,7 @@ bool SceneSettingsManager::IsSameSceneContext(const SceneContextId& lhs, const S
 	case SceneContextType::Weather:
 		return lhs.weatherId == rhs.weatherId && lhs.period == rhs.period;
 	case SceneContextType::Location:
-		return lhs.locationType == rhs.locationType &&
+		return lhs.locationType == rhs.locationType && lhs.period == rhs.period &&
 		       NormalizeLocationFormKey(lhs.locationFormKey) == NormalizeLocationFormKey(rhs.locationFormKey);
 	default:
 		return false;
@@ -268,13 +271,13 @@ std::optional<json> SceneSettingsManager::ResolveContextEntryDefault(const Scene
 }
 
 SceneSettingsManager::ContextEntrySummary SceneSettingsManager::GetContextUserEntrySummary(
-	const SceneContextId& context, PeriodScope periodScope) const
+	const SceneContextId& context) const
 {
 	ContextEntrySummary summary;
 	if (!IsValidSceneContext(context))
 		return summary;
 	for (const auto& entry : GetContextEntries(context)) {
-		if (entry.source != EntrySource::User || !EntryCoveredByContext(entry, context, periodScope))
+		if (entry.source != EntrySource::User || !EntryBelongsToContext(entry, context))
 			continue;
 		++summary.total;
 		summary.paused += entry.paused ? 1 : 0;
@@ -282,8 +285,7 @@ SceneSettingsManager::ContextEntrySummary SceneSettingsManager::GetContextUserEn
 	return summary;
 }
 
-void SceneSettingsManager::SetContextEntriesPaused(const SceneContextId& context, bool paused,
-	PeriodScope periodScope)
+void SceneSettingsManager::SetContextEntriesPaused(const SceneContextId& context, bool paused)
 {
 	auto* contextEntries = GetContextEntriesMut(context);
 	if (!contextEntries)
@@ -292,7 +294,7 @@ void SceneSettingsManager::SetContextEntriesPaused(const SceneContextId& context
 	bool changed = false;
 	for (auto& entry : *contextEntries) {
 		if (entry.source != EntrySource::User || entry.paused == paused ||
-			!EntryCoveredByContext(entry, context, periodScope))
+			!EntryBelongsToContext(entry, context))
 			continue;
 		entry.paused = paused;
 		changed = true;
@@ -301,7 +303,7 @@ void SceneSettingsManager::SetContextEntriesPaused(const SceneContextId& context
 		CommitContextUserEntryMutation(context);
 }
 
-void SceneSettingsManager::ClearContextEntries(const SceneContextId& context, PeriodScope periodScope)
+void SceneSettingsManager::ClearContextEntries(const SceneContextId& context)
 {
 	auto* contextEntries = GetContextEntriesMut(context);
 	if (!contextEntries)
@@ -309,7 +311,7 @@ void SceneSettingsManager::ClearContextEntries(const SceneContextId& context, Pe
 
 	// Unresolved raw entries are left in the document: they belong to features this session cannot judge.
 	const auto removed = std::erase_if(*contextEntries, [&](const SettingEntry& entry) {
-		return entry.source == EntrySource::User && EntryCoveredByContext(entry, context, periodScope);
+		return entry.source == EntrySource::User && EntryBelongsToContext(entry, context);
 	});
 	if (removed != 0)
 		CommitContextUserEntryMutation(context);
@@ -385,7 +387,7 @@ std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContext
 	if (!IsValidSceneContext(context))
 		return std::nullopt;
 
-	const auto rules = GetSceneContextRules(context.type);
+	const auto rules = GetSceneContextRules(context);
 	if (!IsSettingAllowedForType(rules.sceneType, featureShortName, settingPath, settingKey) ||
 		FindContextUserEntry(context, featureShortName, settingPath, settingKey))
 		return std::nullopt;
@@ -421,7 +423,7 @@ void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& contex
 	if (!contextEntries)
 		return;
 
-	const auto rules = GetSceneContextRules(context.type);
+	const auto rules = GetSceneContextRules(context);
 	bool userEntriesChanged = false;
 	if (!ApplyEntryValueUpdates(rules.label, *contextEntries, updates, rules.requireNumeric,
 			userEntriesChanged))
@@ -485,7 +487,7 @@ bool SceneSettingsManager::TombstoneContextSetting(const SceneContextId& context
 		return false;
 
 	// A tombstone must not land at an address where an ordinary user entry would be rejected.
-	if (!IsSettingAllowedForType(GetSceneContextRules(context.type).sceneType, featureShortName, settingPath, settingKey))
+	if (!IsSettingAllowedForType(GetSceneContextRules(context).sceneType, featureShortName, settingPath, settingKey))
 		return false;
 
 	// An existing user entry becomes the tombstone: two entries at one address would race.
@@ -562,7 +564,7 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 	if (entry.source != EntrySource::User)
 		return;
 
-	const auto rules = GetSceneContextRules(context.type);
+	const auto rules = GetSceneContextRules(context);
 	const auto defaultValue = ResolveContextEntryDefault(context, entry);
 	if (!defaultValue || !ValidateSceneSettingEntry(rules.label, entry.featureShortName,
 							  entry.settingPath, entry.settingKey, *defaultValue, rules.requireNumeric))

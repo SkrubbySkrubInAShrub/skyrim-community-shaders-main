@@ -19,6 +19,18 @@ namespace SceneSettingsOverwrites
 	std::filesystem::path GetOverwriteDir(const std::filesystem::path& baseDir,
 		SceneSettingsManager::TimeOfDayPeriod period);
 
+	/** @brief Visits a scene's flat overwrite directory, then each period subfolder that exists. */
+	template <class Visit>
+	void ForEachOverwriteSetDir(const std::filesystem::path& sceneDir, Visit&& visit)
+	{
+		std::error_code ec;
+		if (std::filesystem::exists(sceneDir, ec))
+			visit(sceneDir, SceneSettingsManager::TimeOfDayPeriod::Count);
+		for (const auto period : SceneSettingsManager::kPeriods)
+			if (const auto periodDir = GetOverwriteDir(sceneDir, period); std::filesystem::exists(periodDir, ec))
+				visit(periodDir, period);
+	}
+
 	/// Discovered entries keep the exact file they came from; authored ones derive it from their period.
 	std::filesystem::path GetOverwriteFilePath(const std::filesystem::path& baseDir,
 		const SceneSettingsManager::SettingEntry& entry);
@@ -41,8 +53,10 @@ namespace SceneSettingsOverwrites
 	bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
+	/** @param timeOfDayEnabled Receives the file's `timeOfDayEnabled` metadata, if it has any. */
 	bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 		SceneSettingsManager::SceneType allowedType, bool requireNumeric,
 		std::vector<SceneSettingsManager::SettingEntry>& outEntries,
-		SceneSettingsInternal::FeatureSettingsCache* featureSettingsCache);
+		SceneSettingsInternal::FeatureSettingsCache* featureSettingsCache,
+		std::optional<bool>* timeOfDayEnabled = nullptr);
 }

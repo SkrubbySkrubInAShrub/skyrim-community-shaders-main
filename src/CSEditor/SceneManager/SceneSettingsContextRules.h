@@ -19,13 +19,9 @@ namespace SceneSettingsContextRules
 
 	const char* GetCopyLocationTypeName(SceneSettingsManager::LocationTargetType type);
 
-	/// Location entries carry no period, so only time and weather contexts filter on one.
+	/** @brief A context addresses one saved set: its period, or Count for the flat set. */
 	bool EntryBelongsToContext(const SceneSettingsManager::SettingEntry& entry,
 		const SceneSettingsManager::SceneContextId& context);
-
-	/// AllPeriods drops the period filter, which is what a flat page's fan-out amounts to.
-	bool EntryCoveredByContext(const SceneSettingsManager::SettingEntry& entry,
-		const SceneSettingsManager::SceneContextId& context, SceneSettingsManager::PeriodScope periodScope);
 
 	/// The stored SceneType behind a non-weather, non-location context.
 	SceneSettingsManager::SceneType ContextSceneType(SceneSettingsManager::SceneContextType type);
@@ -39,6 +35,6 @@ namespace SceneSettingsContextRules
 		const char* label;
 	};
 
-	/// One rule set per context type, so an add, a copy and a tombstone all judge an address alike.
-	SceneContextRules GetSceneContextRules(SceneSettingsManager::SceneContextType type);
+	/// One rule set per context, so an add, a copy and a tombstone all judge an address alike.
+	SceneContextRules GetSceneContextRules(const SceneSettingsManager::SceneContextId& context);
 }

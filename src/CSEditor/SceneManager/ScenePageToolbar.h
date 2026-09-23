@@ -9,7 +9,6 @@ namespace ScenePageToolbar
 {
 	/// Draws the actions right-aligned on the current row, along with the dialogs they open.
 	/// Precede it with ImGui::SameLine to share a row with the content already on it.
-	/// The period scope has to match what the page authors: a page with time of day off owns every period.
-	void Draw(const SceneSettingsManager::SceneContextId& context,
-		SceneSettingsManager::PeriodScope periodScope);
+	/// The context's period names the saved set the page authors: Count for a flat set.
+	void Draw(const SceneSettingsManager::SceneContextId& context);
 }

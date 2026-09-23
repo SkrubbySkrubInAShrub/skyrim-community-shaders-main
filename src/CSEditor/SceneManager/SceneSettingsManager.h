@@ -141,7 +141,7 @@ public:
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
 		std::filesystem::path sourcePath;                 // For overwrites: exact file path
-		TimeOfDayPeriod period = TimeOfDayPeriod::Count;  // Which period this entry belongs to (TimeOfDay only)
+		TimeOfDayPeriod period = TimeOfDayPeriod::Count;  // Which period this entry belongs to; Count for flat entries
 		std::optional<float> transitionSeconds;           // Location float transition override
 		// A transition this build cannot honor is dropped from the entry but kept in the template,
 		// so a document authored by another implementation round-trips with its field intact.
@@ -335,30 +335,52 @@ public:
 
 	// --- Per-Weather Scene Settings ---
 
-	/// Per-weather configuration: all entries are per-period (TOD).
-	/// The UI flat/TOD toggle is a view-only preference, not a data mode.
-	struct WeatherSceneConfig
+	/// Entries split into two saved sets: flat (period Count) and per-period. The time-of-day mode
+	/// selects which set resolves; the other is kept so toggling back restores it.
+	struct PeriodicSceneConfig
 	{
 		std::vector<SettingEntry> entries;
+		bool timeOfDayEnabled = false;
+		std::optional<bool> userTimeOfDayEnabled;
+		std::optional<bool> overwriteTimeOfDayEnabled;
+
+		/** @brief The user's choice, else a shipped preset's, else per-period when every entry is. */
+		void RefreshTimeOfDayMode()
+		{
+			timeOfDayEnabled = userTimeOfDayEnabled.value_or(overwriteTimeOfDayEnabled.value_or(
+				!entries.empty() && std::ranges::all_of(entries, [](const SettingEntry& entry) {
+					return entry.period != TimeOfDayPeriod::Count;
+				})));
+		}
+
+		/** @brief Whether entries stored under this period belong to the active set. */
+		bool IsPeriodActive(TimeOfDayPeriod period) const
+		{
+			return timeOfDayEnabled ? period != TimeOfDayPeriod::Count : period == TimeOfDayPeriod::Count;
+		}
 	};
 
-	bool HasWeatherConfig(RE::FormID weatherId);
+	using WeatherSceneConfig = PeriodicSceneConfig;
 
-	/// Weather UI preference: show TOD table vs flat view (view-only, data is always per-period).
-	bool IsWeatherShowTimeOfDay(RE::FormID weatherId);
-	void SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show);
+	bool HasWeatherConfig(RE::FormID weatherId);
 
 	static std::filesystem::path GetWeatherOverwritesDir();
 
 	// --- Per-Location Scene Settings ---
 
-	/// Broadest to narrowest: a region bounds its locations to one stretch of a worldspace.
+	/// Broadest to narrowest, in chain order. A location type (a LocType keyword) covers every location
+	/// that carries it; a region bounds its locations to one stretch of a worldspace.
 	enum class LocationTargetType
 	{
+		Worldspace,
+		LocationType,
 		Region,
 		Location,
 		Cell
 	};
+	static constexpr std::array kLocationTargetTypes{ LocationTargetType::Worldspace,
+		LocationTargetType::LocationType, LocationTargetType::Region, LocationTargetType::Location,
+		LocationTargetType::Cell };
 
 	/// Persisted "type" discriminator, also used as the overwrite metadata targetType.
 	static const char* GetLocationTargetTypeName(LocationTargetType type);
@@ -375,7 +397,7 @@ public:
 		RE::FormID formId = 0;
 	};
 
-	struct LocationSceneConfig
+	struct LocationSceneConfig : PeriodicSceneConfig
 	{
 		LocationTargetType type = LocationTargetType::Location;
 		std::string formKey;
@@ -384,7 +406,6 @@ public:
 		/// editor even when the plugin that defines them is not installed.
 		std::string editorId;
 		std::string cocCode;
-		std::vector<SettingEntry> entries;
 		/// The user put this target on their list. Keeps a target that has no settings yet persistable,
 		/// and separates it from a config that only exists because a mod shipped an overwrite for it.
 		bool userAuthored = false;
@@ -396,6 +417,9 @@ public:
 	/// Targets the user has taken on, for the editor's location list.
 	std::vector<LocationTarget> GetAuthoredLocationTargets() const;
 
+	/** @brief Every target the game defines, for the editor's picker. Built once: forms are fixed after data load. */
+	const std::vector<LocationTarget>& GetLocationCatalog() const;
+
 	/// Put a target on the user's list so it can be authored before it has any settings.
 	bool AddLocationTarget(const LocationTarget& target);
 	bool IsLocationTargetAuthored(LocationTargetType type, std::string_view formKey) const;
@@ -403,7 +427,7 @@ public:
 	/// Drop a target from the user's list, discarding the settings they authored for it.
 	void RemoveLocationTarget(LocationTargetType type, const std::string& formKey);
 
-	/// Locations and cells share one directory; each target's type comes from its form, not its path.
+	/// Every target kind shares one directory; each target's type comes from its form, not its path.
 	static std::filesystem::path GetLocationOverwritesDir();
 
 	/// Default duration used by location float transitions.
@@ -455,20 +479,17 @@ public:
 		auto operator<=>(const SceneContextId&) const = default;
 	};
 
-	/// Whether a context stores one entry per time-of-day period. Interior and location do not.
+	/// Whether a context can store entries per time-of-day period. Interior cannot.
 	static bool IsPeriodicContext(SceneContextType type);
 
-	/// How much of a periodic context an action covers. A page with time of day off authors every
-	/// period at once, so its actions have to cover every period too.
-	enum class PeriodScope : std::uint8_t
-	{
-		ActivePeriod,
-		AllPeriods,
-	};
+	/** @brief Whether a weather or location resolves its per-period set rather than its flat one.
+	 *  Always true for TimeOfDay and false for Interior. */
+	bool IsSceneTimeOfDayEnabled(const SceneContextId& context) const;
+	/** @brief Switches which saved set a weather or location resolves, persisting the choice. */
+	void SetSceneTimeOfDayEnabled(const SceneContextId& context, bool enabled);
 
 	/// How an existing destination user setting is handled. Cancel has no caller yet: the conflict
-	/// modal only offers skip and overwrite, but the fan-out across periods depends on it being
-	/// decided over the whole operation, so the policy is honoured everywhere a copy is staged.
+	/// modal only offers skip and overwrite.
 	enum class CopyConflictPolicy : std::uint8_t
 	{
 		SkipExisting,
@@ -528,15 +549,11 @@ public:
 	/// settings yet: every weather and known location, not just the ones already authored.
 	std::vector<CopySource> GetCopyDestinations(const SceneContextId& source) const;
 	/// Inspect the settings and conflicts in a proposed copy without mutating state.
-	/// AllPeriods answers for every period at once: a row conflicts if any of them already holds it.
 	std::vector<CopyCandidate> GetCopyCandidates(const SceneContextId& source,
-		const SceneContextId& destination, PeriodScope periodScope = PeriodScope::ActivePeriod) const;
+		const SceneContextId& destination) const;
 	/// Copy settings as one validated mutation and one save/reapply operation.
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy);
-	/// Copy into every period of a flat page, or into the one period of a normal page, as one save.
-	CopyResult CopySettingsAcrossPeriods(const SceneContextId& source, const SceneContextId& destination,
-		CopyConflictPolicy conflictPolicy, PeriodScope periodScope);
 	/// Name one context the way the copy source list spells it.
 	std::string GetSceneContextDisplayName(const SceneContextId& context) const;
 
@@ -614,15 +631,12 @@ public:
 	};
 
 	/// Count the user entries belonging to one context, and how many of them are paused.
-	ContextEntrySummary GetContextUserEntrySummary(const SceneContextId& context,
-		PeriodScope periodScope = PeriodScope::ActivePeriod) const;
+	ContextEntrySummary GetContextUserEntrySummary(const SceneContextId& context) const;
 	/// Pause or resume every user entry in a context as one save.
-	void SetContextEntriesPaused(const SceneContextId& context, bool paused,
-		PeriodScope periodScope = PeriodScope::ActivePeriod);
+	void SetContextEntriesPaused(const SceneContextId& context, bool paused);
 	/// Remove every user entry in a context as one save. Mod-authored overwrites are left alone,
 	/// as are raw entries this session could not resolve to a loaded feature.
-	void ClearContextEntries(const SceneContextId& context,
-		PeriodScope periodScope = PeriodScope::ActivePeriod);
+	void ClearContextEntries(const SceneContextId& context);
 
 	/// Whether any user entry exists in any context, tombstones included.
 	bool HasAnyUserEntries() const;
@@ -808,9 +822,6 @@ private:
 
 	// --- Per-Weather Scene storage ---
 	std::map<RE::FormID, WeatherSceneConfig> weatherSceneConfigs;
-
-	/// UI preference per weather: show TOD table vs flat view (keyed by FormID for fast access).
-	std::map<RE::FormID, bool> weatherShowTimeOfDay;
 	json unresolvedWeatherUserSettings = json::object();
 	bool weatherDataLoaded = false;
 
@@ -888,6 +899,7 @@ private:
 	mutable RE::FormID cachedTargetRegionId = 0;
 	mutable bool locationTargetsCached = false;
 	mutable std::vector<LocationTarget> cachedLocationTargets;
+	mutable std::optional<std::vector<LocationTarget>> cachedLocationCatalog;
 
 	/// One float easing from its pre-location value to the location override, or back.
 	struct LocationTransition
@@ -973,8 +985,12 @@ private:
 	std::uint64_t sceneValueRevision = 0;
 	mutable CachedPeriodSettingMap timeOfDayValueGroups;
 	mutable std::map<RE::FormID, CachedPeriodSettingMap> weatherValueGroups;
-	/// Groups an entry list's per-period floats by address, dropping anything unresolvable.
-	void CollectPeriodValueGroups(const std::vector<SettingEntry>& sourceEntries, PeriodSettingMap& values) const;
+	/// Per-period location values, rebuilt with cachedLocationOverrides but re-blended every resolve.
+	PeriodSettingMap cachedLocationPeriodValues;
+	/** @brief Groups one saved set's floats by address, dropping anything unresolvable.
+	 *  @param timeOfDayEnabled Selects the per-period set; otherwise each flat entry fills every period. */
+	void CollectPeriodValueGroups(const std::vector<SettingEntry>& sourceEntries, bool timeOfDayEnabled,
+		PeriodSettingMap& values) const;
 	const PeriodSettingMap& BuildTimeOfDayValueGroups() const;
 	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
 
@@ -991,8 +1007,17 @@ private:
 	void ResolveInteriorSettings(ResolvedSettingMap& resolved) const;
 	void ResolveTimeOfDaySettings(ResolvedSettingMap& resolved, const PeriodSettingMap& values) const;
 	void ResolveWeatherSettings(ResolvedSettingMap& resolved, const PeriodSettingMap& timeOfDayValues) const;
-	void ResolveLocationSettings(ResolvedSettingMap& resolved,
+	/** @brief Walks the chain into flat overrides and per-period values, narrowest link winning. */
+	void ResolveLocationSettings(ResolvedSettingMap& resolved, PeriodSettingMap& periodValues,
 		const std::vector<LocationTarget>& locationTargets, bool collectTransitionDurations);
+	/** @brief Layers one chain link's active set over the links broader than it. */
+	void ResolveLocationLink(const std::vector<SettingEntry>& linkEntries, bool timeOfDayEnabled,
+		ResolvedSettingMap& resolved, PeriodSettingMap& periodValues,
+		std::map<SettingAddress, float>* transitionDurations) const;
+	/** @brief Blends per-period location values against whatever the lower layers resolved. */
+	void BlendLocationPeriodValues(ResolvedSettingMap& resolved, const PeriodSettingMap& periodValues) const;
+	void RecordLocationTransitionDuration(const SettingEntry& entry, const SettingAddress& address,
+		std::map<SettingAddress, float>& transitionDurations) const;
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, EntrySource source,
 		std::map<SettingAddress, float>* transitionDurations = nullptr) const;
@@ -1040,7 +1065,7 @@ private:
 	/// layers, whatever those supply now.
 	std::optional<json> ResolveContextEntryDefault(const SceneContextId& context, const SettingEntry& entry);
 	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
-		const SceneContextId& destination, PeriodScope periodScope) const;
+		const SceneContextId& destination) const;
 	/// Deferring the commit lets a fan-out over the periods land as one save.
 	CopyResult CopySettingsToContext(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy, bool deferCommit);
@@ -1091,7 +1116,7 @@ private:
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
-		const std::string& settingKey, std::optional<EntrySource> source = std::nullopt) const;
+		const std::string& settingKey, TimeOfDayPeriod period, std::optional<EntrySource> source = std::nullopt) const;
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);
 	/// User-document section holding the targets of this type.
 	static const char* GetLocationSectionName(LocationTargetType type);
@@ -1151,4 +1176,7 @@ private:
 
 	/// Load weather user settings from SceneManager.json. Requires TESDataHandler.
 	void LoadWeatherUserSettings();
+
+	/** @brief Re-derives which saved set each weather and location resolves once its entries have loaded. */
+	void RefreshTimeOfDayModes();
 };

@@ -31,8 +31,7 @@ namespace
 	}
 }
 
-void SceneFeatureReplica::Draw(const std::string& featureShortName,
-	const SceneSettingsManager::SceneContextId& contextId, bool perPeriod)
+void SceneFeatureReplica::Draw(const std::string& featureShortName, const SceneSettingsManager::SceneContextId& contextId)
 {
 	if (!SceneWidgetInterceptor::IsInstalled()) {
 		DrawInstallFailure();
@@ -48,7 +47,7 @@ void SceneFeatureReplica::Draw(const std::string& featureShortName,
 
 	// No SceneLayerGuard here: the replica must show the live, scene-applied values so an active
 	// override reads back as the value it applies.
-	const SceneWidgetInterceptor::Scope scope({ feature, contextId, perPeriod });
+	const SceneWidgetInterceptor::Scope scope({ feature, contextId });
 	feature->DrawSettings();
 }
 

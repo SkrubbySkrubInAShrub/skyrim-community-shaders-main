@@ -187,8 +187,7 @@ namespace SceneWidgetBinding
 		bool HasAllCoveredEntries() const;
 
 		/** @brief Runs a_visit over every component and covered period slot, with the context that
-		 *  slot's entry lives in. The manager is period-scoped, so a control writing every period at
-		 *  once has to name each one itself. */
+		 *  slot's entry lives in. */
 		template <typename Visitor>
 		void ForEachCoveredSlot(Visitor&& a_visit) const
 		{
@@ -196,10 +195,7 @@ namespace SceneWidgetBinding
 				for (int slot = 0; slot < SceneSettingsManager::kPeriodCount; ++slot) {
 					if (!IsCoveredSlot(slot))
 						continue;
-					auto slotContext = contextId;
-					if (flatAcrossPeriods)
-						slotContext.period = SceneSettingsManager::kPeriods[static_cast<size_t>(slot)];
-					a_visit(component, slot, slotContext);
+					a_visit(component, slot, contextId);
 				}
 		}
 
@@ -264,10 +260,8 @@ namespace SceneWidgetBinding
 		SceneSettingsManager::SettingIdentity identity;
 		std::vector<Component> components;
 
-		/// Period slot the armed context edits; 0 for a context that has no periods.
+		/// Period slot the armed context edits; 0 for a flat set, which has no periods.
 		int armedSlot = 0;
-		/// One edit writes every period, which is what "time of day off" means.
-		bool flatAcrossPeriods = false;
 		/// The periods and components this control spans do not agree on a value or on coverage.
 		bool mixedAcrossPeriods = false;
 

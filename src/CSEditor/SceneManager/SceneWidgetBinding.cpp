@@ -12,6 +12,7 @@
 
 #include "../../I18n/I18n.h"
 #include "Menu.h"
+#include "SceneSettingsContextRules.h"
 #include "SceneTransitionField.h"
 #include "SceneWidgetInterceptor.h"
 #include "Utils/Game.h"
@@ -33,6 +34,8 @@ namespace
 	constexpr float kMinCompensatedItemWidth = 60.0f;
 
 	constexpr int kPeriodCount = SceneSettingsManager::kPeriodCount;
+	using TimeOfDayPeriod = SceneSettingsManager::TimeOfDayPeriod;
+	using SceneSettingsContextRules::EntryBelongsToContext;
 
 	/// Reads and writes one ImGui scalar through a double. A zero size means the type is not one
 	/// the scalar widgets accept, which the binding treats as an unresolvable control.
@@ -164,6 +167,22 @@ namespace
 	using PeriodLayers = std::array<SettingLayer, kPeriodCount>;
 	using LayerIndex = std::map<SceneSettingsManager::SettingIdentity, PeriodLayers>;
 
+	/** @brief A stacked weather or location is read through the saved set it has active; the period
+	 *  only picks the set, since the layer walk reads every period of a per-period one. */
+	SceneContextId WithActiveSet(SceneContextId a_context)
+	{
+		a_context.period = SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(a_context) ?
+		                       SceneSettingsManager::kPeriods[0] :
+		                       TimeOfDayPeriod::Count;
+		return a_context;
+	}
+
+	/** @brief Whether an entry sits in the saved set a context reads: flat for Count, else per-period. */
+	bool IsInContextSet(const SceneSettingsManager::SettingEntry& a_entry, const SceneContextId& a_context)
+	{
+		return (a_entry.period == TimeOfDayPeriod::Count) == (a_context.period == TimeOfDayPeriod::Count);
+	}
+
 	/// One collected stack per page per frame. Which layers sit under or over a page depends on the
 	/// live scene rather than on the control, so every widget on the page shares one build.
 	template <auto Collect>
@@ -183,7 +202,6 @@ namespace
 	/// The layers a page sits on top of, highest first: weather resolves over time of day, and a
 	/// location over whichever stack is running. Interior and the exterior stack never resolve at the
 	/// same time, so the live cell picks the one a location sits on, exactly as the resolver does.
-	/// Periods are filled in because a context is only fetchable with a valid one.
 	std::vector<SceneContextId> CollectLowerContexts(const SceneContextId& a_page)
 	{
 		std::vector<SceneContextId> lower;
@@ -195,9 +213,8 @@ namespace
 		switch (a_page.type) {
 		case SceneContextType::Location:
 			if (const auto* sky = globals::game::sky; sky && sky->currentWeather)
-				lower.push_back({ .type = SceneContextType::Weather,
-					.period = SceneSettingsManager::kPeriods[0],
-					.weatherId = sky->currentWeather->GetFormID() });
+				lower.push_back(WithActiveSet({ .type = SceneContextType::Weather,
+					.weatherId = sky->currentWeather->GetFormID() }));
 			[[fallthrough]];
 		case SceneContextType::Weather:
 			lower.push_back({ .type = SceneContextType::TimeOfDay, .period = SceneSettingsManager::kPeriods[0] });
@@ -222,7 +239,8 @@ namespace
 
 		for (const auto source : { EntrySource::Overwrite, EntrySource::User }) {
 			for (const auto& entry : manager->GetContextEntries(a_context)) {
-				if (entry.source != source || entry.paused || entry.featureShortName != a_feature)
+				if (entry.source != source || entry.paused || entry.featureShortName != a_feature ||
+					!IsInContextSet(entry, a_context))
 					continue;
 				auto layer = source == EntrySource::Overwrite ? SettingLayer::Overwrite : SettingLayer::User;
 				if (entry.deleted)
@@ -269,17 +287,16 @@ namespace
 		auto* manager = SceneSettingsManager::GetSingleton();
 		return cache[{ a_context, a_feature }].Get(manager->GetEntryPresentationRevision(), [&] {
 			UserEntryIndex index;
-			// An aperiodic context stores one entry with no period of its own, so it fills slot 0.
-			const bool periodic = SceneSettingsManager::IsPeriodicContext(a_context.type);
 			const auto entries = manager->GetContextEntries(a_context);
 			for (size_t position = 0; position < entries.size(); ++position) {
 				const auto& entry = entries[position];
 				if (entry.source != SceneSettingsManager::EntrySource::User ||
-					entry.featureShortName != a_feature)
+					entry.featureShortName != a_feature || !IsInContextSet(entry, a_context))
 					continue;
-				if (const auto slot = periodic ? static_cast<size_t>(entry.period) : 0;
-					slot < static_cast<size_t>(kPeriodCount))
-					index[{ entry.featureShortName, entry.settingPath, entry.settingKey }][slot] = position;
+				// A flat entry has no period of its own, so it fills slot 0.
+				const auto slot = entry.period == TimeOfDayPeriod::Count ? 0 : static_cast<size_t>(entry.period);
+				assert(slot < static_cast<size_t>(kPeriodCount));
+				index[{ entry.featureShortName, entry.settingPath, entry.settingKey }][slot] = position;
 			}
 			return index;
 		});
@@ -300,9 +317,9 @@ namespace
 			++target;
 		}
 		for (; target != targets.end(); ++target)
-			a_upper.push_back({ .type = SceneContextType::Location,
+			a_upper.push_back(WithActiveSet({ .type = SceneContextType::Location,
 				.locationType = target->type,
-				.locationFormKey = target->formKey });
+				.locationFormKey = target->formKey }));
 	}
 
 	/// The layers a page is resolved under, lowest first: weather resolves over time of day, and the
@@ -322,9 +339,8 @@ namespace
 			if (interior)
 				return upper;
 			if (const auto* sky = globals::game::sky; sky && sky->currentWeather)
-				upper.push_back({ .type = SceneContextType::Weather,
-					.period = SceneSettingsManager::kPeriods[0],
-					.weatherId = sky->currentWeather->GetFormID() });
+				upper.push_back(WithActiveSet({ .type = SceneContextType::Weather,
+					.weatherId = sky->currentWeather->GetFormID() }));
 			break;
 		case SceneContextType::Weather:
 			if (interior)
@@ -390,23 +406,6 @@ namespace
 		return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
 	}
 
-	/// Same scene-type split the manager applies when persisting a new entry (AddContextSetting),
-	/// so a control never resolves as allowed here and then fails to gain an entry on the gutter tick.
-	SceneSettingsManager::SceneType SceneTypeForContext(SceneSettingsManager::SceneContextType a_type)
-	{
-		using SceneContextType = SceneSettingsManager::SceneContextType;
-		using SceneType = SceneSettingsManager::SceneType;
-		switch (a_type) {
-		case SceneContextType::Interior:
-			return SceneType::InteriorOnly;
-		case SceneContextType::Location:
-			return SceneType::Location;
-		case SceneContextType::TimeOfDay:
-		case SceneContextType::Weather:
-		default:
-			return SceneType::TimeOfDay;
-		}
-	}
 }
 
 void SceneWidgetBinding::WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value)
@@ -460,12 +459,8 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	identity.featureShortName = std::string{ metadata->featureShortName };
 	identity.settingPath = SceneSettingsManager::SplitSettingPath(metadata->settingPath);
 
-	// Interior and Location store one entry with no period, so only a periodic context can fan out.
-	const bool periodic = SceneSettingsManager::IsPeriodicContext(contextId.type);
-	flatAcrossPeriods = periodic && !context->perPeriod;
-	if (const auto period = static_cast<int>(contextId.period);
-		periodic && period >= 0 && period < kPeriodCount)
-		armedSlot = period;
+	if (contextId.period != TimeOfDayPeriod::Count)
+		armedSlot = static_cast<int>(contextId.period);
 
 	ResolveComponents();
 	if (components.empty()) {
@@ -548,7 +543,9 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 	// The resolver answers a control's base address with its first component, so an aggregate has
 	// to walk out to its siblings: each one is a separate entry keyed by its own settingKey.
 	const auto start = std::max<int>(metadata->aggregateStart, 0);
-	const auto sceneType = SceneTypeForContext(contextId.type);
+	// The rules AddContextSetting judges by, so a control never shows as allowed and then fails to
+	// gain an entry on the gutter tick.
+	const auto sceneType = SceneSettingsContextRules::GetSceneContextRules(contextId).sceneType;
 
 	for (const auto* setting : GetControlComponents(*metadata)) {
 		// Siblings share featureShortName/settingPath (see MakeAggregateKey), so the guard's own
@@ -670,16 +667,11 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveWinningLaye
 
 std::uint8_t SceneWidgetBinding::Guard::CoveredPeriodMask() const
 {
-	// An aperiodic page spans the whole day, but only the running period of a periodic layer reaches
-	// the scene, so folding all six would let an off-hours entry answer for right now.
-	if (!SceneSettingsManager::IsPeriodicContext(contextId.type))
+	// A flat page spans the whole day, but only the running period of a periodic layer reaches the
+	// scene, so folding all six would let an off-hours entry answer for right now.
+	if (contextId.period == TimeOfDayPeriod::Count)
 		return LivePeriodMask();
-
-	PeriodMask mask = 0;
-	for (int slot = 0; slot < kPeriodCount; ++slot)
-		if (IsCoveredSlot(slot))
-			mask = static_cast<PeriodMask>(mask | (1u << slot));
-	return mask;
+	return static_cast<PeriodMask>(1u << armedSlot);
 }
 
 SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer() const
@@ -719,7 +711,7 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveUpperLayer(
 
 bool SceneWidgetBinding::Guard::IsCoveredSlot(int a_slot) const
 {
-	return flatAcrossPeriods || a_slot == armedSlot;
+	return a_slot == armedSlot;
 }
 
 bool SceneWidgetBinding::Guard::HasAllCoveredEntries() const
@@ -754,11 +746,8 @@ std::optional<size_t> SceneWidgetBinding::Guard::DisplayEntry(const Component& a
 		const auto& entry = entries[index];
 		if (entry.source != SceneSettingsManager::EntrySource::Overwrite || entry.paused || entry.deleted ||
 			entry.featureShortName != identity.featureShortName ||
-			entry.settingPath != identity.settingPath || entry.settingKey != a_component.settingKey)
-			continue;
-		// A period past the last slot spans every one of them, as the layer index reads it too.
-		if (const auto slot = static_cast<int>(entry.period);
-			slot >= 0 && slot < kPeriodCount && !IsCoveredSlot(slot))
+			entry.settingPath != identity.settingPath || entry.settingKey != a_component.settingKey ||
+			!EntryBelongsToContext(entry, contextId))
 			continue;
 		overwrite = index;
 	}

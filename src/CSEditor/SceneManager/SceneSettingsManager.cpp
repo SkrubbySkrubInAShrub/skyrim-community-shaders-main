@@ -771,12 +771,16 @@ void SceneSettingsManager::ReloadOverwrites()
 		std::erase_if(sourceEntries,
 			[](const SettingEntry& entry) { return entry.source == EntrySource::Overwrite; });
 	};
+	const auto dropSceneOverwrites = [&](PeriodicSceneConfig& config) {
+		dropOverwrites(config.entries);
+		config.overwriteTimeOfDayEnabled.reset();
+	};
 	for (auto& [type, sourceEntries] : entries)
 		dropOverwrites(sourceEntries);
 	for (auto& [weatherId, config] : weatherSceneConfigs)
-		dropOverwrites(config.entries);
+		dropSceneOverwrites(config);
 	for (auto& [configKey, config] : locationSceneConfigs)
-		dropOverwrites(config.entries);
+		dropSceneOverwrites(config);
 
 	DiscoverOverwrites(SceneType::InteriorOnly);
 	DiscoverOverwrites(SceneType::TimeOfDay);
@@ -785,6 +789,7 @@ void SceneSettingsManager::ReloadOverwrites()
 		DiscoverWeatherOverwrites();
 	if (locationDataLoaded)
 		DiscoverLocationOverwrites();
+	RefreshTimeOfDayModes();
 
 	BumpEntryPresentationRevision();
 	ReapplyIfActive();
@@ -810,6 +815,7 @@ bool SceneSettingsManager::TryEnsureLocationDataLoaded()
 		DiscoverLocationOverwrites();
 		if (userSettingsDocumentLoaded && userSettingsDocumentWritable && preservedUserSettingsRoot.is_object())
 			LoadLocationUserSettings(preservedUserSettingsRoot);
+		RefreshTimeOfDayModes();
 		locationDataLoaded = true;
 		locationTargetsCached = false;
 		BumpEntryPresentationRevision();
@@ -843,6 +849,7 @@ void SceneSettingsManager::LoadWeatherData()
 {
 	DiscoverWeatherOverwrites();
 	LoadWeatherUserSettings();
+	RefreshTimeOfDayModes();
 }
 
 float SceneSettingsManager::GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,

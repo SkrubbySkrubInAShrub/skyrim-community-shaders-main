@@ -10,9 +10,7 @@ namespace SceneFeatureReplica
 	/**
 	 * @brief Draws one feature's DrawSettings with every control bound to the given scene context.
 	 * @param featureShortName Feature to replicate, as returned by Feature::GetShortName().
-	 * @param contextId Scene context every edit is written to.
-	 * @param perPeriod False writes each edit to all six periods, which is the flat/global mode.
+	 * @param contextId Scene context every edit is written to; its period names the saved set.
 	 */
-	void Draw(const std::string& featureShortName,
-		const SceneSettingsManager::SceneContextId& contextId, bool perPeriod);
+	void Draw(const std::string& featureShortName, const SceneSettingsManager::SceneContextId& contextId);
 }

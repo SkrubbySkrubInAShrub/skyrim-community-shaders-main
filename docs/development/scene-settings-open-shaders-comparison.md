@@ -58,60 +58,29 @@ never a port that was missed.
 
 Ordered by what a user would notice.
 
-### 1. Per-period location overrides
+### 1. Per-period location overrides (ported)
 
-Upstream's `LocationSceneConfig` derives from `PeriodicSceneConfig` (`SceneSettingsManager.h:431`), the same
-base its weather configs use. A location therefore carries one value **per time-of-day period**, gated by a
-per-location `Is/SetLocationShowTimeOfDay` toggle, and `AddLocationSetting` takes a
-`TimeOfDayPeriod period = TimeOfDayPeriod::Count` argument.
+Ported. `LocationSceneConfig` now derives from `PeriodicSceneConfig`, like weather, and upstream per-period
+location documents load with their periods intact.
 
-This fork's `LocationSceneConfig` is a flat `std::vector<SettingEntry>` with no period dimension.
-`GetSceneContextRules` says so directly: *"Whether a context stores one entry per time-of-day period.
-Interior and location do not."* Only weather and the time-of-day scene itself are periodic here.
+Adapted rather than copied: upstream's per-location `showTimeOfDay` toggle picks between views of one entry
+list, whereas here a weather or location keeps a flat set and a per-period set side by side and
+`timeOfDayEnabled` picks which one resolves (see *Saved sets* in the
+[framework doc](./scene-settings-framework.md#precedence-and-blending)). Switching modes never discards the
+other set. A legacy `showTimeOfDay: true` migrates to the per-period mode; `false` is ignored, since it only
+ever hid the period bar.
 
-The practical difference: upstream can say "this location is dimmer, but only at night." This fork can say
-"this location is dimmer," and the time-of-day scene applies globally, so it cannot narrow that to one
-location.
+Note that **interior scenes are not periodic upstream either**. Upstream stores interior settings in a flat
+`std::vector<SettingDescriptor> interiorSettings`, the same as here.
 
-**On-disk behavior when loading an upstream document** (the design doc makes round-tripping a hard
-requirement, so this was traced rather than assumed): `LoadEntryFromJson` is called for location entries
-with `requirePeriod = false`, so a `"period"` key is ignored and `entry.period` stays `Count`. The first
-entry for an address is taken; `HasLocationEntry` then rejects the remaining five as duplicates, and
-`SceneSettingsSerialization.cpp:496` pushes each rejected one into `preservedConfig["entries"]`, which is
-written back out unchanged on save. So an upstream per-period location config **round-trips intact** and
-degrades to whichever period was listed first applying at all hours. No data is lost, but the values a user
-sees are wrong for five of the six periods.
+### 2. `LocationType` and `Worldspace` location targets (ported)
 
-Note that **interior scenes are not periodic upstream either**; an earlier draft of this review said they
-were. Upstream stores interior settings in a flat `std::vector<SettingDescriptor> interiorSettings`, the
-same as here.
+Ported. `LocationTargetType` now has upstream's five kinds, and the chain resolves worldspace, location type,
+region, location, cell, broadest first. A location type is a `LocType*` keyword on the innermost location.
+Upstream's older `categories` section is read and migrated to `locationTypes`.
 
-### 2. `LocationType` and `Worldspace` location targets
-
-Upstream's `LocationTargetType` has five kinds:
-
-```cpp
-enum class LocationTargetType { Region, LocationType, Location, Cell, Worldspace };
-```
-
-This fork has three: `Region`, `Location`, `Cell`. Missing are:
-
--   **`Worldspace`**, the outermost scope. "Everything in Solstheim" currently has to be expressed as a
-    region or repeated per location.
--   **`LocationType`**, keyword-driven targeting. Upstream's `LocationTarget` carries a
-    `std::vector<std::string> locationTypes`, so a user can author "every dungeon" or "every inn" once and
-    have it resolve through Skyrim's location keywords rather than enumerating FormIDs. There is no
-    equivalent here at all, and no way to approximate one: it is the only target kind that is not a single
-    form.
-
-This also explains upstream's extra resolver state (`cachedTargetWorldspaceId`) and the wider chain
-described by its `GetCurrentLocationTargets` doc comment: *"worldspace through location type, region, parent
-location, and cell."* Ours resolves region, location, cell.
-
-**On-disk behavior:** a config whose `"type"` is `locationType` or `worldspace` fails the
-`persistedType != expectedType` check for all three of our sections
-(`SceneSettingsSerialization.cpp:467`), lands in `preservedSection`, and is written back verbatim. Inert but
-not destroyed.
+The editor keeps the live-chain table and adds a searchable picker over every target the game defines, so a
+place the player is not standing in can be authored too.
 
 ### 3. The `FeatureSceneEdit` live-preview session
 

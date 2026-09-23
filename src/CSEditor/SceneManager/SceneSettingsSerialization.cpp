@@ -5,7 +5,6 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <set>
 
 using namespace SceneSettingsInternal;
 
@@ -68,6 +67,35 @@ static void MergeSectionEntries(json& section, json userEntries)
 	section["entries"] = std::move(userEntries);
 }
 
+/** @brief Persists the user's own time-of-day choice; a derived or mod-picked mode is not theirs to save. */
+static void WriteTimeOfDayMode(json& section, const SceneSettingsManager::PeriodicSceneConfig& config)
+{
+	if (config.userTimeOfDayEnabled)
+		section[kTimeOfDayEnabledKey] = *config.userTimeOfDayEnabled;
+}
+
+/** @brief Reads the user's time-of-day choice, consuming it from the preserved document copy. */
+static void ReadTimeOfDayMode(const json& section, json& preserved, SceneSettingsManager::PeriodicSceneConfig& config,
+	std::string_view context)
+{
+	if (auto modeIt = section.find(kTimeOfDayEnabledKey); modeIt != section.end()) {
+		if (!modeIt->is_boolean()) {
+			logger::warn("[SceneSettings] {} {} is not boolean - preserving", context, kTimeOfDayEnabledKey);
+			return;
+		}
+		config.userTimeOfDayEnabled = modeIt->get<bool>();
+		preserved.erase(kTimeOfDayEnabledKey);
+		return;
+	}
+	// The legacy view toggle only ever showed per-period data that the entries imply anyway, so only
+	// an opt-in carries over; an opt-out is left for the entries to decide.
+	if (auto legacyIt = section.find(kLegacyShowTimeOfDayKey); legacyIt != section.end() && legacyIt->is_boolean()) {
+		if (legacyIt->get<bool>())
+			config.userTimeOfDayEnabled = true;
+		preserved.erase(kLegacyShowTimeOfDayKey);
+	}
+}
+
 static bool ShouldSerializeUserSection(const json& data, std::string_view key, bool expectObject, bool modified)
 {
 	auto it = data.find(std::string(key));
@@ -105,28 +133,19 @@ void SceneSettingsManager::SaveAllUserSettings()
 	if (weatherLoaded && ShouldSerializeUserSection(data, "weather", true, weatherUserSettingsModified)) {
 		json weatherObj = unresolvedWeatherUserSettings.is_object() ?
 		                      unresolvedWeatherUserSettings : json::object();
-		std::set<RE::FormID> weatherIds;
-		for (const auto& [weatherId, _] : weatherSceneConfigs)
-			weatherIds.insert(weatherId);
-		for (const auto& [weatherId, _] : weatherShowTimeOfDay)
-			weatherIds.insert(weatherId);
-
-		for (auto weatherId : weatherIds) {
+		for (const auto& [weatherId, config] : weatherSceneConfigs) {
 			if (weatherId == 0)
 				continue;
 			const auto spid = Util::FormIdToSpid(weatherId);
-			auto configIt = weatherSceneConfigs.find(weatherId);
-			auto userEntries = configIt != weatherSceneConfigs.end() ?
-			                       UserEntriesToArray(configIt->second.entries, true) : json::array();
-			auto showIt = weatherShowTimeOfDay.find(weatherId);
-			const bool hasShowPreference = showIt != weatherShowTimeOfDay.end();
+			auto userEntries = UserEntriesToArray(config.entries, true);
+			const bool hasModeChoice = config.userTimeOfDayEnabled.has_value();
 
 			auto rawIt = weatherObj.find(spid);
 			const bool hasRaw = rawIt != weatherObj.end();
-			if (userEntries.empty() && !hasShowPreference && !hasRaw)
+			if (userEntries.empty() && !hasModeChoice && !hasRaw)
 				continue;
 			if (hasRaw && !rawIt->is_object()) {
-				if (userEntries.empty() && !hasShowPreference)
+				if (userEntries.empty() && !hasModeChoice)
 					continue;
 				*rawIt = json::object();
 			}
@@ -135,8 +154,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 			// A weather with no entries of its own leaves whatever the document listed untouched.
 			if (!userEntries.empty())
 				MergeSectionEntries(weatherEntry, std::move(userEntries));
-			if (hasShowPreference)
-				weatherEntry["showTimeOfDay"] = showIt->second;
+			WriteTimeOfDayMode(weatherEntry, config);
 			weatherObj[spid] = std::move(weatherEntry);
 		}
 		data["weather"] = std::move(weatherObj);
@@ -163,6 +181,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 			locationEntry["name"] = config.name;
 			locationEntry["editorId"] = config.editorId;
 			locationEntry["coc"] = config.cocCode;
+			WriteTimeOfDayMode(locationEntry, config);
 			rawConfig = std::move(locationEntry);
 		}
 		data["location"] = std::move(locationObj);
@@ -198,8 +217,16 @@ void SceneSettingsManager::SaveAllUserSettings()
 	deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
 }
 
+/** @brief How an entry section treats the `period` field. */
+enum class PeriodField
+{
+	Ignored,   ///< The layer is aperiodic.
+	Required,  ///< Every entry names its period.
+	Optional,  ///< Absent means the flat set.
+};
+
 static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::SettingEntry& entry,
-	bool requirePeriod, const char* typeName,
+	PeriodField periodField, const char* typeName,
 	std::optional<SceneSettingsManager::SceneType> allowedSceneType = std::nullopt,
 	bool requireNumericValue = false, FeatureSettingsCache* featureSettingsCache = nullptr)
 {
@@ -248,12 +275,29 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 	}
 	entry.source = SSM::EntrySource::User;
 
-	auto sceneType = allowedSceneType.value_or(requirePeriod ? SSM::SceneType::TimeOfDay : SSM::SceneType::InteriorOnly);
+	entry.period = SSM::TimeOfDayPeriod::Count;
+	if (auto periodIt = item.find("period"); periodField != PeriodField::Ignored &&
+											 (periodIt != item.end() || periodField == PeriodField::Required)) {
+		if (periodIt == item.end() || !periodIt->is_string()) {
+			logger::warn("[SceneSettings] {} entry {}.{} missing period - skipping", typeName, entry.featureShortName, entry.settingKey);
+			return false;
+		}
+		entry.period = SSM::GetPeriodFromName(periodIt->get<std::string>());
+		if (entry.period == SSM::TimeOfDayPeriod::Count) {
+			logger::warn("[SceneSettings] {} entry {}.{} has invalid period '{}' - skipping", typeName, entry.featureShortName, entry.settingKey, periodIt->get<std::string>());
+			return false;
+		}
+	}
+	const bool periodic = entry.period != SSM::TimeOfDayPeriod::Count;
+
+	const auto flatSceneType = allowedSceneType.value_or(
+		periodField == PeriodField::Ignored ? SSM::SceneType::InteriorOnly : SSM::SceneType::TimeOfDay);
+	const auto sceneType = GetEntrySceneType(entry, flatSceneType);
 	// An unusable transition costs the entry its blend, never its value: the setting still has to be
 	// honored, and the raw field still has to survive the round trip.
 	if (auto transitionIt = item.find("transitionSeconds"); transitionIt != item.end()) {
 		const auto seconds = transitionIt->is_number() ? transitionIt->get<float>() : 0.0f;
-		if (sceneType != SSM::SceneType::Location || !transitionIt->is_number()) {
+		if (flatSceneType != SSM::SceneType::Location || !transitionIt->is_number()) {
 			logger::warn("[SceneSettings] {} entry transitionSeconds is not valid for this scene type; applying it without a transition", typeName);
 			entry.retainSerializedTransition = true;
 		} else if (!std::isfinite(seconds) || seconds < 0.0f || seconds > SSM::kMaxLocationTransitionSeconds) {
@@ -269,20 +313,8 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 		return false;
 	}
 
-	if (requirePeriod) {
-		if (!item.contains("period") || !item["period"].is_string()) {
-			logger::warn("[SceneSettings] {} entry {}.{} missing period - skipping", typeName, entry.featureShortName, entry.settingKey);
-			return false;
-		}
-		entry.period = SSM::GetPeriodFromName(item["period"].get<std::string>());
-		if (entry.period == SSM::TimeOfDayPeriod::Count) {
-			logger::warn("[SceneSettings] {} entry {}.{} has invalid period '{}' - skipping", typeName, entry.featureShortName, entry.settingKey, item["period"].get<std::string>());
-			return false;
-		}
-	}
-
 	// Per-period entries always blend as floats, so they carry the same requirement as float-only scenes.
-	const bool requireNumeric = requirePeriod || requireNumericValue;
+	const bool requireNumeric = periodic || requireNumericValue;
 	if (requireNumeric) {
 		WidenParsedIntegerToFloat(entry.value);
 		WidenParsedIntegerToFloat(entry.originalValue);
@@ -360,12 +392,11 @@ void SceneSettingsManager::LoadAllUserSettings()
 			const char* key;
 			const char* typeName;
 			SceneType type;
-			/// TimeOfDay entries carry a period; interior ones do not.
-			bool requirePeriod;
+			PeriodField periodField;
 		};
-		for (const auto& [sectionKey, typeName, sceneType, requirePeriod] : {
-				 EntryListSection{ "interiorOnly", "InteriorOnly", SceneType::InteriorOnly, false },
-				 EntryListSection{ "timeOfDay", "TimeOfDay", SceneType::TimeOfDay, true },
+		for (const auto& [sectionKey, typeName, sceneType, periodField] : {
+				 EntryListSection{ "interiorOnly", "InteriorOnly", SceneType::InteriorOnly, PeriodField::Ignored },
+				 EntryListSection{ "timeOfDay", "TimeOfDay", SceneType::TimeOfDay, PeriodField::Required },
 			 }) {
 			auto sectionIt = data.find(sectionKey);
 			if (sectionIt == data.end())
@@ -380,7 +411,7 @@ void SceneSettingsManager::LoadAllUserSettings()
 			int loaded = 0;
 			for (const auto& item : *sectionIt) {
 				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, requirePeriod, typeName, std::nullopt, false,
+				if (!LoadEntryFromJson(item, entry, periodField, typeName, std::nullopt, false,
 						&featureSettingsCache) ||
 					HasDuplicateEntry(sceneType, entry.featureShortName, entry.settingPath,
 						entry.settingKey, EntrySource::User, entry.period)) {
@@ -406,8 +437,10 @@ void SceneSettingsManager::LoadAllUserSettings()
 
 void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 {
-	for (auto& [_, config] : locationSceneConfigs)
+	for (auto& [_, config] : locationSceneConfigs) {
 		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+		config.userTimeOfDayEnabled.reset();
+	}
 	unresolvedLocationUserSettings = json::object();
 	locationUserSettingsModified = false;
 	locationTransitionSeconds = kDefaultLocationTransitionSeconds;
@@ -432,7 +465,9 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 	}
 	FeatureSettingsCache featureSettingsCache;
 
-	const auto loadSection = [&](const char* sectionName, LocationTargetType type) {
+	// A legacy section only feeds the canonical one: whatever loads moves there on the next save.
+	const auto loadSection = [&](const char* sectionName, LocationTargetType type, std::string_view expectedType,
+								 bool legacySection) {
 		auto sectionIt = locationIt->find(sectionName);
 		if (sectionIt == locationIt->end() || !sectionIt->is_object())
 			return;
@@ -455,7 +490,6 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 			std::string persistedType;
 			std::string cocCode;
 			std::string editorId;
-			const auto* expectedType = GetLocationTargetTypeName(type);
 			persistedType = expectedType;
 			if (!ReadOptionalStringField(rawConfig, "name", name, configContext) ||
 				!ReadOptionalStringField(rawConfig, "type", persistedType, configContext) ||
@@ -468,32 +502,42 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 				preservedSection[formKey] = rawConfig;
 				continue;
 			}
+			// The canonical section's metadata outranks a legacy copy of the same target.
+			if (legacySection && IsLocationTargetAuthored(type, canonicalFormKey)) {
+				name.clear();
+				cocCode.clear();
+				editorId.clear();
+			}
 			// Presence in the user document is what makes a target theirs, entries or not.
 			auto& config = EnsureAuthoredLocationConfig(type, canonicalFormKey, name, cocCode, editorId);
+			auto preservedConfig = rawConfig;
+			ReadTimeOfDayMode(rawConfig, preservedConfig, config, configContext);
 			auto entriesIt = rawConfig.find("entries");
 			if (entriesIt == rawConfig.end()) {
-				preservedSection[formKey] = rawConfig;
+				if (!legacySection)
+					preservedSection[formKey] = std::move(preservedConfig);
 				continue;
 			}
 			if (!entriesIt->is_array()) {
-				preservedSection[formKey] = rawConfig;
+				preservedSection[formKey] = std::move(preservedConfig);
 				continue;
 			}
-			auto preservedConfig = rawConfig;
 			preservedConfig["entries"] = json::array();
 			bool hasValidEntry = false;
 
 			for (const auto& item : *entriesIt) {
 				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, false, "Location", SceneType::Location, false,
+				if (!LoadEntryFromJson(item, entry, PeriodField::Optional, "Location", SceneType::Location, false,
 						&featureSettingsCache)) {
 					preservedConfig["entries"].push_back(item);
 					continue;
 				}
 				hasValidEntry = true;
 				if (HasLocationEntry(type, canonicalFormKey, entry.featureShortName, entry.settingPath,
-						entry.settingKey, EntrySource::User)) {
-					preservedConfig["entries"].push_back(item);
+						entry.settingKey, entry.period, EntrySource::User)) {
+					// The canonical section already holds this setting, and it wins.
+					if (!legacySection)
+						preservedConfig["entries"].push_back(item);
 					continue;
 				}
 				config.entries.push_back(std::move(entry));
@@ -501,7 +545,7 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 			// The canonical key carries the metadata and every loaded entry, so the author's spelling
 			// only has to survive when it still holds entries this build rejected. Emitting it
 			// unconditionally would leave an empty duplicate target beside the canonical one.
-			if (hasValidEntry && formKey != canonicalFormKey) {
+			if ((hasValidEntry || legacySection) && (formKey != canonicalFormKey || legacySection)) {
 				if (preservedConfig["entries"].empty())
 					continue;
 				preservedConfig.erase("type");
@@ -511,19 +555,23 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 			}
 			preservedSection[formKey] = std::move(preservedConfig);
 		}
-		unresolvedLocationUserSettings[sectionName] = std::move(preservedSection);
+		if (legacySection && preservedSection.empty())
+			unresolvedLocationUserSettings.erase(sectionName);
+		else
+			unresolvedLocationUserSettings[sectionName] = std::move(preservedSection);
 	};
 
-	for (const auto type : { LocationTargetType::Region, LocationTargetType::Location,
-			 LocationTargetType::Cell })
-		loadSection(GetLocationSectionName(type), type);
+	for (const auto type : kLocationTargetTypes)
+		loadSection(GetLocationSectionName(type), type, GetLocationTargetTypeName(type), false);
+	loadSection(kLegacyLocationTypeSectionName, LocationTargetType::LocationType, kLegacyLocationTypeName, true);
 }
 
 void SceneSettingsManager::LoadWeatherUserSettings()
 {
-	for (auto& [_, config] : weatherSceneConfigs)
+	for (auto& [_, config] : weatherSceneConfigs) {
 		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-	weatherShowTimeOfDay.clear();
+		config.userTimeOfDayEnabled.reset();
+	}
 	unresolvedWeatherUserSettings = json::object();
 	weatherUserSettingsModified = false;
 	if (!userSettingsDocumentLoaded || !userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object())
@@ -553,15 +601,8 @@ void SceneSettingsManager::LoadWeatherUserSettings()
 				continue;
 			}
 			auto preservedWeather = weatherData;
-
-			if (auto showIt = weatherData.find("showTimeOfDay"); showIt != weatherData.end()) {
-				if (!showIt->is_boolean()) {
-					logger::warn("[SceneSettings] Weather config '{}' showTimeOfDay is not boolean - preserving", spidKey);
-				} else {
-					weatherShowTimeOfDay[weatherId] = showIt->get<bool>();
-					preservedWeather.erase("showTimeOfDay");
-				}
-			}
+			auto& config = GetWeatherConfigMut(weatherId);
+			ReadTimeOfDayMode(weatherData, preservedWeather, config, std::format("Weather config '{}'", spidKey));
 
 			auto entriesIt = weatherData.find("entries");
 			if (entriesIt == weatherData.end()) {
@@ -575,11 +616,10 @@ void SceneSettingsManager::LoadWeatherUserSettings()
 			}
 			preservedWeather["entries"] = json::array();
 
-			auto& config = GetWeatherConfigMut(weatherId);
 			int loaded = 0;
 			for (const auto& item : *entriesIt) {
 				SettingEntry entry;
-				if (!LoadEntryFromJson(item, entry, true, "Weather", std::nullopt, false,
+				if (!LoadEntryFromJson(item, entry, PeriodField::Optional, "Weather", std::nullopt, true,
 						&featureSettingsCache)) {
 					preservedWeather["entries"].push_back(item);
 					continue;

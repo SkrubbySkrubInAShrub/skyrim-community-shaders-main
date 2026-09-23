@@ -26,6 +26,10 @@ std::string SceneSettingsManager::GetLocationConfigKey(LocationTargetType type, 
 const char* SceneSettingsManager::GetLocationSectionName(LocationTargetType type)
 {
 	switch (type) {
+	case LocationTargetType::Worldspace:
+		return "worldspaces";
+	case LocationTargetType::LocationType:
+		return "locationTypes";
 	case LocationTargetType::Region:
 		return "regions";
 	case LocationTargetType::Location:
@@ -40,6 +44,10 @@ const char* SceneSettingsManager::GetLocationSectionName(LocationTargetType type
 const char* SceneSettingsManager::GetLocationTargetTypeName(LocationTargetType type)
 {
 	switch (type) {
+	case LocationTargetType::Worldspace:
+		return "Worldspace";
+	case LocationTargetType::LocationType:
+		return "LocationType";
 	case LocationTargetType::Region:
 		return "Region";
 	case LocationTargetType::Location:
@@ -103,6 +111,13 @@ std::vector<SceneSettingsManager::LocationTarget> SceneSettingsManager::GetAutho
 	return targets;
 }
 
+const std::vector<SceneSettingsManager::LocationTarget>& SceneSettingsManager::GetLocationCatalog() const
+{
+	if (!cachedLocationCatalog)
+		cachedLocationCatalog = BuildLocationCatalog();
+	return *cachedLocationCatalog;
+}
+
 bool SceneSettingsManager::AddLocationTarget(const LocationTarget& target)
 {
 	if (!TryEnsureLocationDataLoaded() || target.formKey.empty() ||
@@ -141,11 +156,15 @@ void SceneSettingsManager::RemoveLocationTarget(LocationTargetType type, const s
 	// The loader treats presence in the user document as ownership, so the target has to leave it
 	// entirely. Deleting only its entries would resurrect the target on the next launch.
 	PrepareLocationUserSettingsMutation(type, formKey, false);
-	const auto* sectionName = GetLocationSectionName(type);
-	if (auto sectionIt = unresolvedLocationUserSettings.find(sectionName);
-		sectionIt != unresolvedLocationUserSettings.end())
-		for (const auto& rawFormKey : MatchingRawLocationKeys(*sectionIt, type, formKey))
-			sectionIt->erase(rawFormKey);
+	for (const auto* sectionName : { GetLocationSectionName(type),
+			 type == LocationTargetType::LocationType ? kLegacyLocationTypeSectionName : nullptr }) {
+		if (!sectionName)
+			continue;
+		if (auto sectionIt = unresolvedLocationUserSettings.find(sectionName);
+			sectionIt != unresolvedLocationUserSettings.end())
+			for (const auto& rawFormKey : MatchingRawLocationKeys(*sectionIt, type, formKey))
+				sectionIt->erase(rawFormKey);
+	}
 
 	if (removedEntries != 0)
 		BumpEntryPresentationRevision();
@@ -218,6 +237,7 @@ std::optional<SceneSettingsManager::ResolvedSettingMap> SceneSettingsManager::Bu
 	}
 
 	bool targetFound = false;
+	PeriodSettingMap periodValues;
 	const auto selectedTargetKey = GetLocationConfigKey(type, formKey);
 	for (const auto& target : locationTargets) {
 		const auto targetKey = GetLocationConfigKey(target.type, target.formKey);
@@ -226,16 +246,21 @@ std::optional<SceneSettingsManager::ResolvedSettingMap> SceneSettingsManager::Bu
 			targetFound = true;
 			// A user entry sits above the overwrite it shadows, so the overwrite is its lower layer.
 			// A capture deliberately passes the overwrite layer here to resolve beneath it instead.
-			if (selectedSource == EntrySource::User && configIt != locationSceneConfigs.end())
-				OverlayEntries(
-					lowerLayers, configIt->second.entries, SceneType::Location, EntrySource::Overwrite);
+			if (selectedSource == EntrySource::User && configIt != locationSceneConfigs.end()) {
+				std::vector<SettingEntry> overwrites;
+				std::ranges::copy_if(configIt->second.entries, std::back_inserter(overwrites),
+					[](const SettingEntry& entry) { return entry.source == EntrySource::Overwrite; });
+				ResolveLocationLink(overwrites, configIt->second.timeOfDayEnabled, lowerLayers, periodValues, nullptr);
+			}
 			break;
 		}
 		if (configIt != locationSceneConfigs.end())
-			OverlayAllEntries(lowerLayers, configIt->second.entries, SceneType::Location);
+			ResolveLocationLink(
+				configIt->second.entries, configIt->second.timeOfDayEnabled, lowerLayers, periodValues, nullptr);
 	}
 	if (!targetFound)
 		return std::nullopt;
+	BlendLocationPeriodValues(lowerLayers, periodValues);
 	return lowerLayers;
 }
 
@@ -251,6 +276,9 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 		section = json::object();
 	const auto canonicalFormKey = CanonicalizeResolvedLocationFormKey(formKey);
 	const auto targetKey = GetLocationConfigKey(type, canonicalFormKey);
+	// Pinning the mode keeps a later preset from flipping which set the user's edits land in.
+	if (auto configIt = locationSceneConfigs.find(targetKey); configIt != locationSceneConfigs.end())
+		configIt->second.userTimeOfDayEnabled = configIt->second.timeOfDayEnabled;
 	if (replaceMalformedEntries) {
 		for (auto& [rawFormKey, rawConfig] : section.items()) {
 			if (!rawConfig.is_object() ||
@@ -400,11 +428,11 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 
 bool SceneSettingsManager::HasLocationEntry(LocationTargetType type, std::string_view formKey,
 	const std::string& featureShortName, const std::vector<std::string>& settingPath,
-	const std::string& settingKey, std::optional<EntrySource> source) const
+	const std::string& settingKey, TimeOfDayPeriod period, std::optional<EntrySource> source) const
 {
 	const auto& config = GetLocationConfig(type, formKey);
 	return std::any_of(config.entries.begin(), config.entries.end(), [&](const auto& entry) {
-		return (!source || entry.source == *source) &&
+		return (!source || entry.source == *source) && entry.period == period &&
 		       IsSameSetting(entry, featureShortName, settingPath, settingKey);
 	});
 }

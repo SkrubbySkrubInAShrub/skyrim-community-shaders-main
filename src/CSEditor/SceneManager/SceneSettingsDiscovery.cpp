@@ -1,6 +1,7 @@
 #include "SceneSettingsManager.h"
 
 #include "SceneSettingsInternal.h"
+#include "SceneSettingsLocationTargets.h"
 #include "SceneSettingsOverwrites.h"
 #include "Utils/FileSystem.h"
 
@@ -11,6 +12,7 @@
 
 using namespace SceneSettingsInternal;
 using namespace SceneSettingsOverwrites;
+using namespace SceneSettingsLocationTargets;
 
 void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 {
@@ -116,14 +118,14 @@ std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const s
 	sweepDir(GetOverwritesPath(SceneType::InteriorOnly));
 	for (auto period : kPeriods)
 		sweepDir(GetOverwriteDir(GetOverwritesPath(SceneType::TimeOfDay), period));
-	for (const auto& weatherDir : childDirectories(GetWeatherOverwritesDir(), "weather overwrite directories")) {
-		// A flat weather file feeds every period, so the preset has to claim it alongside its per-period files.
-		sweepDir(weatherDir);
-		for (auto period : kPeriods)
-			sweepDir(GetOverwriteDir(weatherDir, period));
-	}
+	// A weather or location keeps both saved sets on disk, so the preset claims its flat and per-period files.
+	const auto sweepSetDirs = [&](const std::filesystem::path& sceneDir) {
+		ForEachOverwriteSetDir(sceneDir, [&](const std::filesystem::path& directory, TimeOfDayPeriod) { sweepDir(directory); });
+	};
+	for (const auto& weatherDir : childDirectories(GetWeatherOverwritesDir(), "weather overwrite directories"))
+		sweepSetDirs(weatherDir);
 	for (const auto& locationDir : childDirectories(GetLocationOverwritesDir(), "location overwrite directories"))
-		sweepDir(locationDir);
+		sweepSetDirs(locationDir);
 	return found;
 }
 
@@ -168,19 +170,28 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 		bakeContext({ .type = SceneContextType::TimeOfDay, .period = period },
 			GetEntries(SceneType::TimeOfDay), GetOverwritesPath(SceneType::TimeOfDay), "Time of Day");
 
-	for (const auto& [weatherId, config] : weatherSceneConfigs) {
-		const auto weatherDir = GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId);
-		for (auto period : kPeriods)
-			bakeContext({ .type = SceneContextType::Weather, .period = period, .weatherId = weatherId },
-				config.entries, weatherDir, "Weather");
-	}
+	// Both saved sets ship; the metadata carries the mode that picks between them.
+	const auto bakeSceneSets = [&](SceneContextId context, const PeriodicSceneConfig& config,
+								   const std::filesystem::path& sceneDir, std::string_view sceneLabel,
+								   json metadata = json::object()) {
+		metadata[kTimeOfDayEnabledKey] = config.timeOfDayEnabled;
+		bakeContext(context, config.entries, sceneDir, sceneLabel, metadata);
+		for (auto period : kPeriods) {
+			context.period = period;
+			bakeContext(context, config.entries, sceneDir, sceneLabel, metadata);
+		}
+	};
+
+	for (const auto& [weatherId, config] : weatherSceneConfigs)
+		bakeSceneSets({ .type = SceneContextType::Weather, .weatherId = weatherId }, config,
+			GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId), "Weather");
 
 	for (const auto& [configKey, config] : locationSceneConfigs) {
 		const auto* targetDescription = GetLocationTargetTypeName(config.type);
-		bakeContext({ .type = SceneContextType::Location,
-						.locationType = config.type,
-						.locationFormKey = config.formKey },
-			config.entries, GetLocationOverwritesDir() / config.formKey, targetDescription,
+		bakeSceneSets({ .type = SceneContextType::Location,
+						  .locationType = config.type,
+						  .locationFormKey = config.formKey },
+			config, GetLocationOverwritesDir() / config.formKey, targetDescription,
 			json{ { "targetType", targetDescription },
 				{ "targetName", config.name },
 				{ "coc", config.cocCode } });
@@ -234,14 +245,19 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 	if (const auto formId = Util::SpidToFormId(formKey); formId != 0) {
 		canonicalFormKey = Util::FormIdToSpid(formId);
 		if (auto* form = RE::TESForm::LookupByID(formId)) {
-			if (form->GetFormType() == RE::FormType::Region)
+			if (form->GetFormType() == RE::FormType::WorldSpace)
+				resolvedType = LocationTargetType::Worldspace;
+			else if (IsLocationTypeKeyword(form->As<RE::BGSKeyword>()))
+				resolvedType = LocationTargetType::LocationType;
+			else if (form->GetFormType() == RE::FormType::Region)
 				resolvedType = LocationTargetType::Region;
 			else if (form->GetFormType() == RE::FormType::Location)
 				resolvedType = LocationTargetType::Location;
 			else if (form->GetFormType() == RE::FormType::Cell)
 				resolvedType = LocationTargetType::Cell;
 			else {
-				logger::warn("[SceneSettings] Location overwrite target '{}' is not a region, location, or cell", formKey);
+				logger::warn("[SceneSettings] Location overwrite target '{}' is not a worldspace, location type, region, location, or cell",
+					formKey);
 				return;
 			}
 			resolvedName = Util::GetFormDisplayName(formId);
@@ -251,71 +267,78 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 	}
 
 	FeatureSettingsCache featureSettingsCache;
-	for (const auto& filePath : GetSortedJsonFiles(targetDir, "location overwrite files")) {
-		try {
-			json data;
-			if (!ReadBoundedSceneJson(filePath, data)) {
-				logger::warn("[SceneSettings] Location overwrite '{}' is invalid or exceeds {} bytes",
-					filePath.string(), kMaxSceneOverwriteFileSize);
-				continue;
-			}
+	ForEachOverwriteSetDir(targetDir, [&](const std::filesystem::path& directory, TimeOfDayPeriod period) {
+		for (const auto& filePath : GetSortedJsonFiles(directory, "location overwrite files")) {
+			try {
+				json data;
+				if (!ReadBoundedSceneJson(filePath, data)) {
+					logger::warn("[SceneSettings] Location overwrite '{}' is invalid or exceeds {} bytes",
+						filePath.string(), kMaxSceneOverwriteFileSize);
+					continue;
+				}
 
-			std::optional<LocationTargetType> metadataType;
-			std::string metadataName;
-			std::string metadataCocCode;
-			if (auto metadataIt = data.find(kMetadataKey); metadataIt != data.end()) {
-				if (!metadataIt->is_object()) {
-					logger::warn("[SceneSettings] Location overwrite '{}' metadata must be an object",
+				std::optional<LocationTargetType> metadataType;
+				std::string metadataName;
+				std::string metadataCocCode;
+				if (auto metadataIt = data.find(kMetadataKey); metadataIt != data.end()) {
+					if (!metadataIt->is_object()) {
+						logger::warn("[SceneSettings] Location overwrite '{}' metadata must be an object",
+							filePath.string());
+						continue;
+					}
+					const auto metadataContext = std::format("Location overwrite '{}' metadata", filePath.string());
+					std::string targetType;
+					if (!ReadOptionalStringField(*metadataIt, "targetType", targetType, metadataContext) ||
+						!ReadOptionalStringField(*metadataIt, "targetName", metadataName, metadataContext) ||
+						!ReadOptionalStringField(*metadataIt, "coc", metadataCocCode, metadataContext))
+						continue;
+					if (targetType == kLegacyLocationTypeName)
+						metadataType = LocationTargetType::LocationType;
+					for (const auto type : kLocationTargetTypes)
+						if (targetType == GetLocationTargetTypeName(type))
+							metadataType = type;
+					if (!metadataType && !targetType.empty()) {
+						logger::warn("[SceneSettings] {} has invalid targetType '{}'", metadataContext, targetType);
+						continue;
+					}
+				}
+				if (resolvedType && metadataType && *resolvedType != *metadataType) {
+					logger::warn("[SceneSettings] Location overwrite '{}' targetType does not match resolved form '{}'",
+						filePath.string(), formKey);
+					continue;
+				}
+				const auto targetType = resolvedType ? resolvedType : metadataType;
+				if (!targetType) {
+					logger::warn("[SceneSettings] Location overwrite '{}' has no resolvable target type",
 						filePath.string());
 					continue;
 				}
-				const auto metadataContext = std::format("Location overwrite '{}' metadata", filePath.string());
-				std::string targetType;
-				if (!ReadOptionalStringField(*metadataIt, "targetType", targetType, metadataContext) ||
-					!ReadOptionalStringField(*metadataIt, "targetName", metadataName, metadataContext) ||
-					!ReadOptionalStringField(*metadataIt, "coc", metadataCocCode, metadataContext))
+
+				auto& config = GetLocationConfigMut(*targetType, canonicalFormKey,
+					!metadataName.empty() ? metadataName : resolvedName);
+				if (!metadataCocCode.empty())
+					config.cocCode = metadataCocCode;
+				else if (!resolvedCocCode.empty())
+					config.cocCode = resolvedCocCode;
+
+				std::vector<SettingEntry> parsedEntries;
+				std::optional<bool> timeOfDayEnabled;
+				const bool periodic = period != TimeOfDayPeriod::Count;
+				if (!ParseOverwriteFileEntries(filePath, periodic ? SceneType::TimeOfDay : SceneType::Location, periodic,
+						parsedEntries, &featureSettingsCache, &timeOfDayEnabled))
 					continue;
-				if (targetType == "Region")
-					metadataType = LocationTargetType::Region;
-				else if (targetType == "Location")
-					metadataType = LocationTargetType::Location;
-				else if (targetType == "Cell")
-					metadataType = LocationTargetType::Cell;
-				else if (!targetType.empty()) {
-					logger::warn("[SceneSettings] {} has invalid targetType '{}'", metadataContext, targetType);
-					continue;
+				if (!config.overwriteTimeOfDayEnabled)
+					config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
+				for (auto& entry : parsedEntries) {
+					entry.period = period;
+					AddOverwriteEntryIfUnique(config.entries, std::move(entry), "location");
 				}
+			} catch (const std::exception& e) {
+				logger::error("[SceneSettings] Failed to load location overwrite '{}': {}",
+					filePath.filename().string(), e.what());
 			}
-			if (resolvedType && metadataType && *resolvedType != *metadataType) {
-				logger::warn("[SceneSettings] Location overwrite '{}' targetType does not match resolved form '{}'",
-					filePath.string(), formKey);
-				continue;
-			}
-			const auto targetType = resolvedType ? resolvedType : metadataType;
-			if (!targetType) {
-				logger::warn("[SceneSettings] Location overwrite '{}' has no resolvable target type",
-					filePath.string());
-				continue;
-			}
-
-			auto& config = GetLocationConfigMut(*targetType, canonicalFormKey,
-				!metadataName.empty() ? metadataName : resolvedName);
-			if (!metadataCocCode.empty())
-				config.cocCode = metadataCocCode;
-			else if (!resolvedCocCode.empty())
-				config.cocCode = resolvedCocCode;
-
-			std::vector<SettingEntry> parsedEntries;
-			if (!ParseOverwriteFileEntries(filePath, SceneType::Location, false, parsedEntries,
-					&featureSettingsCache))
-				continue;
-			for (auto& entry : parsedEntries)
-				AddOverwriteEntryIfUnique(config.entries, std::move(entry), "location");
-		} catch (const std::exception& e) {
-			logger::error("[SceneSettings] Failed to load location overwrite '{}': {}",
-				filePath.filename().string(), e.what());
 		}
-	}
+	});
 }
 
 void SceneSettingsManager::DiscoverWeatherOverwrites()
@@ -353,37 +376,23 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 	auto& config = GetWeatherConfigMut(weatherId);
 	FeatureSettingsCache featureSettingsCache;
 
-	const auto loadWeatherFile = [&](const std::filesystem::path& filePath, auto&& assignPeriods) {
-		try {
-			std::vector<SettingEntry> parsedEntries;
-			if (ParseOverwriteFileEntries(filePath, SceneType::TimeOfDay, true, parsedEntries, &featureSettingsCache))
-				for (auto& parsed : parsedEntries)
-					assignPeriods(parsed);
-		} catch (const std::exception& e) {
-			logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
-		}
-	};
-
-	for (auto period : kPeriods) {
-		const auto periodDir = weatherDir / GetPeriodName(period);
-		std::error_code ec;
-		if (!std::filesystem::exists(periodDir, ec))
-			continue;
-
-		for (const auto& filePath : GetSortedJsonFiles(periodDir, "weather period overwrite files"))
-			loadWeatherFile(filePath, [&](SettingEntry& parsed) {
-				parsed.period = period;
-				AddOverwriteEntryIfUnique(config.entries, std::move(parsed), "weather");
-			});
-	}
-
-	// Flat weather files are copied to every period after period-specific files are loaded.
-	for (const auto& filePath : GetSortedJsonFiles(weatherDir, "flat weather overwrite files"))
-		loadWeatherFile(filePath, [&](const SettingEntry& parsed) {
-			for (auto period : kPeriods) {
-				SettingEntry entry = parsed;
-				entry.period = period;
-				AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
+	ForEachOverwriteSetDir(weatherDir, [&](const std::filesystem::path& directory, TimeOfDayPeriod period) {
+		for (const auto& filePath : GetSortedJsonFiles(directory, "weather overwrite files")) {
+			try {
+				std::vector<SettingEntry> parsedEntries;
+				std::optional<bool> timeOfDayEnabled;
+				if (!ParseOverwriteFileEntries(filePath, SceneType::TimeOfDay, true, parsedEntries, &featureSettingsCache,
+						&timeOfDayEnabled))
+					continue;
+				if (!config.overwriteTimeOfDayEnabled)
+					config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
+				for (auto& entry : parsedEntries) {
+					entry.period = period;
+					AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
+				}
+			} catch (const std::exception& e) {
+				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
 			}
-		});
+		}
+	});
 }

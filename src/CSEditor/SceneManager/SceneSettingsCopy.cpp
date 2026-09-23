@@ -14,8 +14,34 @@ using namespace SceneSettingsInternal;
 using namespace SceneSettingsLocationTargets;
 using namespace SceneSettingsContextRules;
 
+namespace
+{
+	/** @brief Visits the contexts of the saved set a scene resolves: the flat one, or one per period. */
+	template <class Visit>
+	void ForEachActiveSetContext(SceneSettingsManager::SceneContextId context, bool timeOfDayEnabled, Visit&& visit)
+	{
+		if (!timeOfDayEnabled) {
+			context.period = SceneSettingsManager::TimeOfDayPeriod::Count;
+			visit(context);
+			return;
+		}
+		for (const auto period : SceneSettingsManager::kPeriods) {
+			context.period = period;
+			visit(context);
+		}
+	}
+
+	/** @brief Suffixes a scene name with its period; the flat set keeps the bare name. */
+	std::string AppendPeriodName(std::string name, SceneSettingsManager::TimeOfDayPeriod period)
+	{
+		if (period == SceneSettingsManager::TimeOfDayPeriod::Count)
+			return name;
+		return std::format("{} / {}", name, GetCopyPeriodName(period));
+	}
+}
+
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopyCandidates(
-	const SceneContextId& source, const SceneContextId& destination, PeriodScope periodScope) const
+	const SceneContextId& source, const SceneContextId& destination) const
 {
 	std::vector<CopyCandidate> candidates;
 	if (!IsValidSceneContext(source) || !IsValidSceneContext(destination))
@@ -37,7 +63,7 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 	std::map<SettingIdentity, json> destinationUserSettings;
 	std::set<SettingIdentity> destinationOverwriteSettings;
 	for (const auto& entry : *destinationEntries) {
-		if (!EntryCoveredByContext(entry, destination, periodScope))
+		if (!EntryBelongsToContext(entry, destination))
 			continue;
 		if (entry.source == EntrySource::User && !entry.deleted)
 			destinationUserSettings.try_emplace(
@@ -46,7 +72,7 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 			destinationOverwriteSettings.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 	}
 
-	const auto destinationRules = GetSceneContextRules(destination.type);
+	const auto destinationRules = GetSceneContextRules(destination);
 	for (const auto& [identity, entry] : effectiveEntries) {
 		auto* setting = FindAllowedCatalogSetting(
 			identity.featureShortName, identity.settingPath, identity.settingKey, destinationRules.requireNumeric);
@@ -99,9 +125,9 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 }
 
 std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::GetCopyCandidates(
-	const SceneContextId& source, const SceneContextId& destination, PeriodScope periodScope) const
+	const SceneContextId& source, const SceneContextId& destination) const
 {
-	return BuildCopyCandidates(source, destination, periodScope);
+	return BuildCopyCandidates(source, destination);
 }
 
 std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySources(
@@ -119,7 +145,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 				EntryBelongsToContext(entry, destination))
 				destinationOverwrites.insert({ entry.featureShortName, entry.settingPath, entry.settingKey });
 
-	const auto destinationRules = GetSceneContextRules(destination.type);
+	const auto destinationRules = GetSceneContextRules(destination);
 	const auto countCompatible = [&](const EffectiveContextEntries& effectiveEntries) {
 		struct GroupCount
 		{
@@ -152,41 +178,33 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 		if (const auto settingCount = countCompatible(effectiveEntries); settingCount != 0)
 			sources.push_back({ context, GetSceneContextDisplayName(context), settingCount });
 	};
-	const auto buildPeriodMaps = [](const std::vector<SettingEntry>& sourceEntries) {
-		std::array<EffectiveContextEntries, kPeriodCount> periods;
+	// The last slot holds the flat set, whose entries carry the Count period.
+	const auto addActiveSetSources = [&](const SceneContextId& context, const std::vector<SettingEntry>& sourceEntries,
+										 bool timeOfDayEnabled) {
+		std::array<EffectiveContextEntries, kPeriodCount + 1> periods;
 		for (auto entrySource : { EntrySource::Overwrite, EntrySource::User })
 			for (const auto& entry : sourceEntries) {
 				const auto periodIndex = static_cast<int>(entry.period);
-				if (entry.source == entrySource && !entry.paused && periodIndex >= 0 && periodIndex < kPeriodCount)
+				if (entry.source == entrySource && !entry.paused && periodIndex >= 0 && periodIndex <= kPeriodCount)
 					periods[periodIndex][{ entry.featureShortName, entry.settingPath, entry.settingKey }] = &entry;
 			}
-		return periods;
+		ForEachActiveSetContext(context, timeOfDayEnabled, [&](const SceneContextId& setContext) {
+			addSource(setContext, periods[static_cast<int>(setContext.period)]);
+		});
 	};
 
 	const SceneContextId interiorContext{ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count };
 	addSource(interiorContext,
 		BuildEffectiveContextEntries(GetEntries(SceneType::InteriorOnly), interiorContext));
 
-	const auto timeOfDayPeriods = buildPeriodMaps(GetEntries(SceneType::TimeOfDay));
-	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
-		addSource({ .type = SceneContextType::TimeOfDay, .period = static_cast<TimeOfDayPeriod>(periodIndex) },
-			timeOfDayPeriods[periodIndex]);
-	for (const auto& [weatherId, config] : weatherSceneConfigs) {
-		const auto weatherPeriods = buildPeriodMaps(config.entries);
-		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
-			addSource({ .type = SceneContextType::Weather,
-						  .period = static_cast<TimeOfDayPeriod>(periodIndex),
-						  .weatherId = weatherId },
-				weatherPeriods[periodIndex]);
-	}
-	for (const auto& [configKey, config] : locationSceneConfigs) {
-		SceneContextId context{
-			.type = SceneContextType::Location,
-			.locationType = config.type,
-			.locationFormKey = config.formKey,
-		};
-		addSource(context, BuildEffectiveContextEntries(config.entries, context));
-	}
+	addActiveSetSources({ .type = SceneContextType::TimeOfDay }, GetEntries(SceneType::TimeOfDay), true);
+	for (const auto& [weatherId, config] : weatherSceneConfigs)
+		addActiveSetSources({ .type = SceneContextType::Weather, .weatherId = weatherId }, config.entries,
+			config.timeOfDayEnabled);
+	for (const auto& [configKey, config] : locationSceneConfigs)
+		addActiveSetSources(
+			{ .type = SceneContextType::Location, .locationType = config.type, .locationFormKey = config.formKey },
+			config.entries, config.timeOfDayEnabled);
 	std::sort(sources.begin(), sources.end(), [](const auto& lhs, const auto& rhs) {
 		return std::tie(lhs.context.type, lhs.displayName, lhs.context) <
 		       std::tie(rhs.context.type, rhs.displayName, rhs.context);
@@ -206,7 +224,7 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 	const auto addDestination = [&](const SceneContextId& context, std::string displayName) {
 		if (IsSameSceneContext(context, source))
 			return;
-		const auto candidates = BuildCopyCandidates(source, context, PeriodScope::ActivePeriod);
+		const auto candidates = BuildCopyCandidates(source, context);
 		const auto compatibleCount = static_cast<size_t>(
 			std::count_if(candidates.begin(), candidates.end(), [](const auto& candidate) { return candidate.compatible; }));
 		if (compatibleCount != 0)
@@ -216,24 +234,19 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 	const SceneContextId interiorContext{ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count };
 	addDestination(interiorContext, GetSceneContextDisplayName(interiorContext));
 
-	for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
-		const SceneContextId context{ .type = SceneContextType::TimeOfDay,
-			.period = static_cast<TimeOfDayPeriod>(periodIndex) };
-		addDestination(context, GetSceneContextDisplayName(context));
-	}
+	const auto addActiveSetDestinations = [&](const SceneContextId& context) {
+		ForEachActiveSetContext(context, IsSceneTimeOfDayEnabled(context), [&](const SceneContextId& setContext) {
+			addDestination(setContext, GetSceneContextDisplayName(setContext));
+		});
+	};
+	addActiveSetDestinations({ .type = SceneContextType::TimeOfDay });
 
 	// Weather has no "already authored" cache to lean on the way locations do, so every loaded
 	// weather form is a candidate destination, whether or not it holds any settings yet.
 	if (auto* dataHandler = RE::TESDataHandler::GetSingleton()) {
 		for (auto* weather : dataHandler->GetFormArray<RE::TESWeather>()) {
-			if (!weather)
-				continue;
-			for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
-				const SceneContextId context{ .type = SceneContextType::Weather,
-					.period = static_cast<TimeOfDayPeriod>(periodIndex),
-					.weatherId = weather->GetFormID() };
-				addDestination(context, GetSceneContextDisplayName(context));
-			}
+			if (weather)
+				addActiveSetDestinations({ .type = SceneContextType::Weather, .weatherId = weather->GetFormID() });
 		}
 	}
 
@@ -250,7 +263,10 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 		const SceneContextId context{ .type = SceneContextType::Location,
 			.locationType = target.type,
 			.locationFormKey = target.formKey };
-		addDestination(context, std::format("{} / {}", GetCopyLocationTypeName(target.type), target.name));
+		ForEachActiveSetContext(context, IsSceneTimeOfDayEnabled(context), [&](const SceneContextId& setContext) {
+			addDestination(setContext, AppendPeriodName(
+				std::format("{} / {}", GetCopyLocationTypeName(target.type), target.name), setContext.period));
+		});
 	}
 
 	std::sort(destinations.begin(), destinations.end(), [](const auto& lhs, const auto& rhs) {
@@ -268,8 +284,7 @@ std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextI
 	case SceneContextType::TimeOfDay:
 		return GetCopyPeriodName(context.period);
 	case SceneContextType::Weather:
-		return std::format("{} / {}", Util::GetFormDisplayName(context.weatherId),
-			GetCopyPeriodName(context.period));
+		return AppendPeriodName(Util::GetFormDisplayName(context.weatherId), context.period);
 	case SceneContextType::Location: {
 		auto configIt = locationSceneConfigs.find(
 			GetLocationConfigKey(context.locationType, context.locationFormKey));
@@ -277,7 +292,8 @@ std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextI
 		const std::string* name = &context.locationFormKey;
 		if (configIt != locationSceneConfigs.end())
 			name = configIt->second.name.empty() ? &configIt->second.formKey : &configIt->second.name;
-		return std::format("{} / {}", GetCopyLocationTypeName(context.locationType), *name);
+		return AppendPeriodName(
+			std::format("{} / {}", GetCopyLocationTypeName(context.locationType), *name), context.period);
 	}
 	default:
 		return {};
@@ -298,7 +314,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 		!TryEnsureLocationDataLoaded())
 		return result;
 
-	const auto candidates = BuildCopyCandidates(source, destination, PeriodScope::ActivePeriod);
+	const auto candidates = BuildCopyCandidates(source, destination);
 	if (candidates.empty())
 		return result;
 	std::map<CopyGroupKey, std::vector<CopyCandidate>> groups;
@@ -362,10 +378,6 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 	if (!destinationEntries)
 		return result;
 
-	// The interior and location layers are aperiodic, so entries landing there carry no period.
-	const bool aperiodicDestination = destination.type == SceneContextType::Interior ||
-	                                  destination.type == SceneContextType::Location;
-
 	std::map<SettingIdentity, size_t> destinationUserIndices;
 	for (size_t index = 0; index < destinationEntries->size(); ++index) {
 		const auto& entry = (*destinationEntries)[index];
@@ -400,6 +412,9 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 	const PeriodSettingMap* timeOfDayValues = destination.type == SceneContextType::Weather ?
 	                                             &BuildTimeOfDayValueGroups() :
 	                                             nullptr;
+	// A flat weather entry spans every period, so it restores to the time of day playing now.
+	const auto timeOfDayPeriod = static_cast<int>(
+		destination.period == TimeOfDayPeriod::Count ? GetCurrentPeriod() : destination.period);
 
 	std::map<SettingIdentity, std::optional<float>> sourceTransitions;
 	if (const auto* sourceEntries = GetCopyContextEntries(source))
@@ -468,7 +483,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 				// A weather entry sits on the time-of-day layer, which is what it restores to.
 				if (timeOfDayValues && IsNumericValue(originalValue)) {
 					if (auto valueIt = timeOfDayValues->find(address); valueIt != timeOfDayValues->end())
-						originalValue = valueIt->second[static_cast<int>(destination.period)]
+						originalValue = valueIt->second[timeOfDayPeriod]
 						                    .value_or(baselineIt->second.get<float>());
 				}
 			}
@@ -523,7 +538,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 			.originalValue = std::move(copy.originalValue),
 			.paused = false,
 			.source = EntrySource::User,
-			.period = aperiodicDestination ? TimeOfDayPeriod::Count : destination.period,
+			.period = destination.period,
 			.transitionSeconds = copy.transitionSeconds,
 		});
 		++result.copied;
@@ -539,40 +554,4 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 	const SceneContextId& destination, CopyConflictPolicy conflictPolicy)
 {
 	return CopySettingsToContext(source, destination, conflictPolicy, false);
-}
-
-SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsAcrossPeriods(const SceneContextId& source,
-	const SceneContextId& destination, CopyConflictPolicy conflictPolicy, PeriodScope periodScope)
-{
-	if (periodScope == PeriodScope::ActivePeriod || !IsPeriodicContext(destination.type))
-		return CopySettings(source, destination, conflictPolicy);
-
-	CopyResult result;
-	// Cancelling has to be decided over the whole fan-out, or the earlier periods land before a later one refuses.
-	if (conflictPolicy == CopyConflictPolicy::Cancel) {
-		const auto candidates = BuildCopyCandidates(source, destination, PeriodScope::AllPeriods);
-		if (std::any_of(candidates.begin(), candidates.end(),
-				[](const auto& candidate) { return candidate.conflicts; })) {
-			result.hadConflicts = true;
-			result.cancelled = true;
-			return result;
-		}
-	}
-
-	for (const auto period : kPeriods) {
-		auto periodDestination = destination;
-		periodDestination.period = period;
-		if (IsSameSceneContext(periodDestination, source))
-			continue;
-		const auto periodResult = CopySettingsToContext(source, periodDestination, conflictPolicy, true);
-		result.copied += periodResult.copied;
-		result.skipped += periodResult.skipped;
-		result.overwritten += periodResult.overwritten;
-		result.incompatible += periodResult.incompatible;
-		result.hadConflicts |= periodResult.hadConflicts;
-		result.cancelled |= periodResult.cancelled;
-	}
-	if (result.Changed())
-		CommitContextUserEntryMutation(destination);
-	return result;
 }

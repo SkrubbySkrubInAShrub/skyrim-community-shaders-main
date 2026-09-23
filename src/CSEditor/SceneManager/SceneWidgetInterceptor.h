@@ -15,8 +15,6 @@ namespace SceneWidgetInterceptor
 	{
 		Feature* feature = nullptr;
 		SceneSettingsManager::SceneContextId contextId;
-		/// False writes every edit to all six periods, which is what "no time of day" means.
-		bool perPeriod = true;
 	};
 
 	/** @brief Installs the detours. Idempotent; call from the render thread before the first frame. */

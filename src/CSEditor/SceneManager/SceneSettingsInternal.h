@@ -21,7 +21,14 @@ namespace SceneSettingsInternal
 	constexpr const char* kMetadataDescriptionKey = "description";
 	constexpr const char* kStatusKey = "status";
 	constexpr const char* kStatusDeleted = "deleted";
+	/// Picks a weather or location's saved set; also a mod's overwrite metadata key.
+	constexpr const char* kTimeOfDayEnabledKey = "timeOfDayEnabled";
+	/// Earlier view-only weather toggle; an opt-in migrates to kTimeOfDayEnabledKey.
+	constexpr const char* kLegacyShowTimeOfDayKey = "showTimeOfDay";
 	constexpr std::string_view kSceneSettingDisplaySeparator = " / ";
+	/// Earlier open-shaders name for the locationTypes section and its "Category" type; read and migrated.
+	constexpr const char* kLegacyLocationTypeSectionName = "categories";
+	constexpr const char* kLegacyLocationTypeName = "Category";
 
 	using namespace Util::Settings;
 
@@ -35,6 +42,14 @@ namespace SceneSettingsInternal
 	bool IsSceneSettingPrimitive(const json& value);
 
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type);
+
+	/** @brief The rules an entry is judged by: a per-period entry blends, so it follows TimeOfDay. */
+	inline SceneSettingsManager::SceneType GetEntrySceneType(const SceneSettingsManager::SettingEntry& entry,
+		SceneSettingsManager::SceneType flatType)
+	{
+		return entry.period == SceneSettingsManager::TimeOfDayPeriod::Count ? flatType :
+		                                                                     SceneSettingsManager::SceneType::TimeOfDay;
+	}
 
 	bool WriteJsonAtomically(const std::filesystem::path& path, const json& data, int indent,
 		std::string_view context);

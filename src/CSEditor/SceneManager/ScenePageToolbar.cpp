@@ -29,7 +29,7 @@ namespace
 	using CopyConflictPolicy = SceneSettingsManager::CopyConflictPolicy;
 	using CopyRejection = SceneSettingsManager::CopyRejection;
 	using CopySource = SceneSettingsManager::CopySource;
-	using PeriodScope = SceneSettingsManager::PeriodScope;
+	using TimeOfDayPeriod = SceneSettingsManager::TimeOfDayPeriod;
 
 	/// Keeps the toolbar off the window's scrollbar, like the widget gutter does.
 	constexpr float kRightMargin = 8.0f;
@@ -71,7 +71,6 @@ namespace
 		SceneContextId owner;
 		std::string sourceName;
 		std::vector<CopyCandidate> candidates;
-		PeriodScope periodScope = PeriodScope::ActivePeriod;
 		bool active = false;
 		bool pendingOpen = false;
 	};
@@ -127,44 +126,6 @@ namespace
 			revision, [&] { return fetch(manager, context); }, forceRefresh);
 	}
 
-	/// Whether two contexts are different periods of the same otherwise-identical weather or global
-	/// time-of-day context. With time of day off, a page already stands in for every period of its
-	/// own context at once, so offering another of its periods as a source or destination would just
-	/// copy the page into itself.
-	bool IsSamePeriodicFamily(const SceneContextId& lhs, const SceneContextId& rhs)
-	{
-		if (lhs.type != rhs.type)
-			return false;
-		switch (lhs.type) {
-		case SceneContextType::TimeOfDay:
-			return true;
-		case SceneContextType::Weather:
-			return lhs.weatherId == rhs.weatherId;
-		default:
-			return false;
-		}
-	}
-
-	std::vector<CopySource> FilterSamePeriodicFamily(
-		std::vector<CopySource> entries, const SceneContextId& context, PeriodScope periodScope)
-	{
-		if (periodScope != PeriodScope::AllPeriods)
-			return entries;
-		std::erase_if(entries, [&](const auto& entry) { return IsSamePeriodicFamily(entry.context, context); });
-		return entries;
-	}
-
-	/// Whether a cached list would survive the family filter, for a caller that only needs to know
-	/// whether the popup has anything to offer rather than what.
-	bool HasUsableEntries(const std::vector<CopySource>& entries, const SceneContextId& context,
-		PeriodScope periodScope)
-	{
-		if (periodScope != PeriodScope::AllPeriods)
-			return !entries.empty();
-		return std::ranges::any_of(entries,
-			[&](const auto& entry) { return !IsSamePeriodicFamily(entry.context, context); });
-	}
-
 	const std::vector<CopySource>& GetCachedSources(const SceneContextId& context, bool forceRefresh)
 	{
 		return GetCachedCopyList(sourceCaches, context, forceRefresh,
@@ -175,17 +136,6 @@ namespace
 	{
 		return GetCachedCopyList(destinationCaches, context, forceRefresh,
 			[](auto* manager, const auto& ctx) { return manager->GetCopyDestinations(ctx); });
-	}
-
-	std::vector<CopySource> GetCopySources(const SceneContextId& context, PeriodScope periodScope, bool forceRefresh)
-	{
-		return FilterSamePeriodicFamily(GetCachedSources(context, forceRefresh), context, periodScope);
-	}
-
-	std::vector<CopySource> GetCopyDestinations(
-		const SceneContextId& context, PeriodScope periodScope, bool forceRefresh)
-	{
-		return FilterSamePeriodicFamily(GetCachedDestinations(context, forceRefresh), context, periodScope);
 	}
 
 	/// Heading the source list groups under, matching the type-first order GetCopySources returns.
@@ -228,11 +178,9 @@ namespace
 		return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 	}
 
-	void RunCopy(const SceneContextId& source, const SceneContextId& destination, CopyConflictPolicy policy,
-		PeriodScope periodScope)
+	void RunCopy(const SceneContextId& source, const SceneContextId& destination, CopyConflictPolicy policy)
 	{
-		const auto result = SceneSettingsManager::GetSingleton()->CopySettingsAcrossPeriods(
-			source, destination, policy, periodScope);
+		const auto result = SceneSettingsManager::GetSingleton()->CopySettings(source, destination, policy);
 		auto copied = result.copied;
 		auto overwritten = result.overwritten;
 		// The preview already explained the incompatible rows; the toast only counts what landed.
@@ -245,11 +193,11 @@ namespace
 
 	/// Dry run first: a copy with nothing to overwrite needs no preview and runs on the click.
 	void StartCopy(const SceneContextId& source, const SceneContextId& destination, const SceneContextId& owner,
-		const std::string& sourceName, PeriodScope periodScope)
+		const std::string& sourceName)
 	{
-		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source, destination, periodScope);
+		auto candidates = SceneSettingsManager::GetSingleton()->GetCopyCandidates(source, destination);
 		if (std::ranges::none_of(candidates, [](const auto& candidate) { return candidate.conflicts; })) {
-			RunCopy(source, destination, CopyConflictPolicy::SkipExisting, periodScope);
+			RunCopy(source, destination, CopyConflictPolicy::SkipExisting);
 			return;
 		}
 		copyFlow = { .source = source,
@@ -257,16 +205,15 @@ namespace
 			.owner = owner,
 			.sourceName = sourceName,
 			.candidates = std::move(candidates),
-			.periodScope = periodScope,
 			.active = true,
 			.pendingOpen = true };
 	}
 
-	/// One weather form's periods, gathered so the scene picks once before the period does.
-	struct WeatherGroup
+	/// One weather or location's active set: its flat entry alone, or one entry per period.
+	struct SceneGroup
 	{
 		std::string displayName;
-		std::vector<const CopySource*> periods;
+		std::vector<const CopySource*> sets;
 	};
 
 	/// Type/scene tree the From and To submenus share, built once per popup draw from the flat,
@@ -275,37 +222,54 @@ namespace
 	{
 		const CopySource* interior = nullptr;
 		std::vector<const CopySource*> timeOfDay;
-		std::vector<WeatherGroup> weather;
-		std::vector<const CopySource*> location;
+		std::vector<SceneGroup> weather;
+		std::vector<SceneGroup> location;
 	};
 
-	/// Weather display names are "<weather> / <period>"; the period is always the final segment.
-	std::pair<std::string, std::string> SplitWeatherDisplayName(const std::string& displayName)
+	/// Periodic display names end in " / <period>"; a flat set's name has no period to split off.
+	std::pair<std::string, std::string> SplitPeriodName(const CopySource& entry)
 	{
-		const auto separator = displayName.rfind(" / ");
-		if (separator == std::string::npos)
-			return { displayName, displayName };
-		return { displayName.substr(0, separator), displayName.substr(separator + 3) };
+		const auto separator = entry.displayName.rfind(" / ");
+		if (entry.context.period == TimeOfDayPeriod::Count || separator == std::string::npos)
+			return { entry.displayName, entry.displayName };
+		return { entry.displayName.substr(0, separator), entry.displayName.substr(separator + 3) };
+	}
+
+	std::vector<SceneGroup> SortSceneGroups(std::map<SceneContextId, SceneGroup>& groups)
+	{
+		std::vector<SceneGroup> sorted;
+		sorted.reserve(groups.size());
+		for (auto& [sceneContext, group] : groups) {
+			std::ranges::sort(group.sets, {}, [](const auto* entry) { return entry->context.period; });
+			sorted.push_back(std::move(group));
+		}
+		std::ranges::sort(sorted, {}, &SceneGroup::displayName);
+		return sorted;
 	}
 
 	CopyTree BuildCopyTree(std::span<const CopySource> entries)
 	{
 		CopyTree tree;
-		std::map<RE::FormID, WeatherGroup> weatherGroups;
+		std::map<SceneContextId, SceneGroup> weatherGroups;
+		std::map<SceneContextId, SceneGroup> locationGroups;
+		const auto addToGroup = [](std::map<SceneContextId, SceneGroup>& groups, const CopySource& entry) {
+			auto sceneContext = entry.context;
+			sceneContext.period = TimeOfDayPeriod::Count;
+			auto& group = groups[sceneContext];
+			if (group.displayName.empty())
+				group.displayName = SplitPeriodName(entry).first;
+			group.sets.push_back(&entry);
+		};
 		for (const auto& entry : entries) {
 			switch (entry.context.type) {
 			case SceneContextType::Interior:
 				tree.interior = &entry;
 				break;
-			case SceneContextType::Weather: {
-				auto& group = weatherGroups[entry.context.weatherId];
-				if (group.displayName.empty())
-					group.displayName = SplitWeatherDisplayName(entry.displayName).first;
-				group.periods.push_back(&entry);
+			case SceneContextType::Weather:
+				addToGroup(weatherGroups, entry);
 				break;
-			}
 			case SceneContextType::Location:
-				tree.location.push_back(&entry);
+				addToGroup(locationGroups, entry);
 				break;
 			default:  // TimeOfDay
 				tree.timeOfDay.push_back(&entry);
@@ -313,12 +277,8 @@ namespace
 			}
 		}
 		std::ranges::sort(tree.timeOfDay, {}, [](const auto* entry) { return entry->context.period; });
-		tree.weather.reserve(weatherGroups.size());
-		for (auto& [weatherId, group] : weatherGroups) {
-			std::ranges::sort(group.periods, {}, [](const auto* entry) { return entry->context.period; });
-			tree.weather.push_back(std::move(group));
-		}
-		std::ranges::sort(tree.weather, {}, &WeatherGroup::displayName);
+		tree.weather = SortSceneGroups(weatherGroups);
+		tree.location = SortSceneGroups(locationGroups);
 		return tree;
 	}
 
@@ -446,9 +406,37 @@ namespace
 		ImGui::EndChild();
 	}
 
-	/// Type -> scene -> period, so From/To never dump every weather-period combination in one list.
-	/// Interior and Location are aperiodic and stop one level short; Weather collapses to its scene
-	/// alone when the scene's own TOD view is off, since every period then holds the same synced data.
+	/// Scene list for one type. A flat set is picked directly; a periodic set opens its periods.
+	void DrawSceneGroups(SceneContextType type, const std::vector<SceneGroup>& groups,
+		const std::function<void(const CopySource&)>& onPick)
+	{
+		if (groups.empty() || !ImGui::BeginMenu(GetContextTypeLabel(type)))
+			return;
+		const auto rowLabels = CollectRowLabels(groups, [](const auto& group) {
+			return FormatCopyLabel(group.displayName, group.sets.front()->settingCount);
+		});
+		DrawScrollableChild(rowLabels, [&] {
+			for (const auto& group : groups) {
+				const auto* firstSet = group.sets.front();
+				if (firstSet->context.period == TimeOfDayPeriod::Count) {
+					DrawCopyMenuItem(group.displayName, firstSet->settingCount, *firstSet, onPick);
+				} else {
+					PushContextId(firstSet->context);
+					if (ImGui::BeginMenu(group.displayName.c_str())) {
+						for (const auto* entry : group.sets)
+							DrawCopyMenuItem(SplitPeriodName(*entry).second, entry->settingCount, *entry, onPick);
+						ImGui::EndMenu();
+					}
+					PopContextId();
+				}
+				copyTypeAhead.ScrollToMatch(group.displayName);
+			}
+		});
+		ImGui::EndMenu();
+	}
+
+	/// Type -> scene -> period, so From/To never dump every scene-period combination in one list.
+	/// Interior is aperiodic and stops one level short, as does any scene whose flat set is active.
 	void DrawCopyTree(const CopyTree& tree, const std::function<void(const CopySource&)>& onPick)
 	{
 		if (tree.interior)
@@ -461,53 +449,17 @@ namespace
 			ImGui::EndMenu();
 		}
 
-		auto* manager = SceneSettingsManager::GetSingleton();
-		if (!tree.weather.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Weather))) {
-			const auto rowLabels = CollectRowLabels(tree.weather, [](const auto& group) {
-				return FormatCopyLabel(group.displayName, group.periods.front()->settingCount);
-			});
-			DrawScrollableChild(rowLabels, [&] {
-				for (const auto& group : tree.weather) {
-					const auto* firstPeriod = group.periods.front();
-					if (!manager->IsWeatherShowTimeOfDay(firstPeriod->context.weatherId)) {
-						DrawCopyMenuItem(group.displayName, firstPeriod->settingCount, *firstPeriod, onPick);
-					} else {
-						PushContextId(firstPeriod->context);
-						if (ImGui::BeginMenu(group.displayName.c_str())) {
-							for (const auto* entry : group.periods)
-								DrawCopyMenuItem(SplitWeatherDisplayName(entry->displayName).second,
-									entry->settingCount, *entry, onPick);
-							ImGui::EndMenu();
-						}
-						PopContextId();
-					}
-					copyTypeAhead.ScrollToMatch(group.displayName);
-				}
-			});
-			ImGui::EndMenu();
-		}
-
-		if (!tree.location.empty() && ImGui::BeginMenu(GetContextTypeLabel(SceneContextType::Location))) {
-			const auto rowLabels = CollectRowLabels(tree.location, [](const auto* entry) {
-				return FormatCopyLabel(entry->displayName, entry->settingCount);
-			});
-			DrawScrollableChild(rowLabels, [&] {
-				for (const auto* entry : tree.location) {
-					DrawCopyMenuItem(entry->displayName, entry->settingCount, *entry, onPick);
-					copyTypeAhead.ScrollToMatch(entry->displayName);
-				}
-			});
-			ImGui::EndMenu();
-		}
+		DrawSceneGroups(SceneContextType::Weather, tree.weather, onPick);
+		DrawSceneGroups(SceneContextType::Location, tree.location, onPick);
 	}
 
-	void DrawCopyPopup(const SceneContextId& context, PeriodScope periodScope)
+	void DrawCopyPopup(const SceneContextId& context)
 	{
 		if (!ImGui::BeginPopup(kCopyPopupId))
 			return;
 
 		auto* manager = SceneSettingsManager::GetSingleton();
-		const auto sources = GetCopySources(context, periodScope, false);
+		const auto sources = GetCachedSources(context, false);
 		// BeginMenu's own `enabled` param (not BeginDisabled) is required here: BeginDisabled only
 		// greys out the visuals but doesn't stop the hover-to-open submenu logic, leaving an empty
 		// submenu stuck open when the disabled entry is hovered.
@@ -516,20 +468,20 @@ namespace
 			Util::kTooltipWhenDisabled);
 		if (fromOpen) {
 			DrawCopyTree(BuildCopyTree(sources), [&](const CopySource& source) {
-				StartCopy(source.context, context, context, source.displayName, periodScope);
+				StartCopy(source.context, context, context, source.displayName);
 				ImGui::CloseCurrentPopup();
 			});
 			ImGui::EndMenu();
 		}
 
-		const auto destinations = GetCopyDestinations(context, periodScope, false);
+		const auto destinations = GetCachedDestinations(context, false);
 		const bool toOpen = ImGui::BeginMenu(T(TKEY("scene_page_copy_to"), "To"), !destinations.empty());
 		Util::AddTooltip(T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
 			Util::kTooltipWhenDisabled);
 		if (toOpen) {
 			const auto sourceName = manager->GetSceneContextDisplayName(context);
 			DrawCopyTree(BuildCopyTree(destinations), [&](const CopySource& destination) {
-				StartCopy(context, destination.context, context, sourceName, periodScope);
+				StartCopy(context, destination.context, context, sourceName);
 				ImGui::CloseCurrentPopup();
 			});
 			ImGui::EndMenu();
@@ -624,20 +576,20 @@ namespace
 		}
 
 		if (decision)
-			RunCopy(copyFlow.source, copyFlow.destination, *decision, copyFlow.periodScope);
+			RunCopy(copyFlow.source, copyFlow.destination, *decision);
 		// The preview is discarded once its popup is gone, whether it was acted on or dismissed.
 		if (!ImGui::IsPopupOpen(title))
 			copyFlow = {};
 	}
 }
 
-void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager::PeriodScope periodScope)
+void ScenePageToolbar::Draw(const SceneContextId& context)
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
 	if (!manager)
 		return;
 
-	const auto summary = manager->GetContextUserEntrySummary(context, periodScope);
+	const auto summary = manager->GetContextUserEntrySummary(context);
 	const bool hasEntries = summary.total != 0;
 	// A mixed page pauses rather than resumes: the button is a way out of that state, not into it.
 	const bool pauseTarget = !summary.AllPaused();
@@ -693,7 +645,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 
 	ImGui::BeginDisabled(!hasEntries);
 	if (ImGui::Button(toggleLabel))
-		manager->SetContextEntriesPaused(context, pauseTarget, periodScope);
+		manager->SetContextEntriesPaused(context, pauseTarget);
 	ImGui::EndDisabled();
 	Util::AddTooltip(pauseTarget ?
 						 T(TKEY("scene_page_pause_all_tooltip"),
@@ -707,17 +659,17 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	// weather, and asking here would rebuild that on the first frame after any entry change just to grey
 	// a button. A page holding entries always has somewhere to offer them, and the popup greys each
 	// direction from the real list anyway.
-	const bool hasSources = HasUsableEntries(GetCachedSources(context, false), context, periodScope);
+	const bool hasSources = !GetCachedSources(context, false).empty();
 	ImGui::BeginDisabled(!hasSources && !hasEntries);
 	if (ImGui::Button(copyLabel)) {
-		GetCopySources(context, periodScope, true);
-		GetCopyDestinations(context, periodScope, true);
+		GetCachedSources(context, true);
+		GetCachedDestinations(context, true);
 		ImGui::OpenPopup(kCopyPopupId);
 	}
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_copy_tooltip"), "Copies settings between this page and another context."),
 		Util::kTooltipWhenDisabled);
-	DrawCopyPopup(context, periodScope);
+	DrawCopyPopup(context);
 
 	ImGui::SameLine();
 	const bool hasUserLayer = manager->HasAnyUserEntries();
@@ -767,7 +719,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context, SceneSettingsManager:
 	Util::AddTooltip(T(TKEY("scene_page_clear_tooltip"), "Removes every override this page holds."),
 		Util::kTooltipWhenDisabled);
 
-	clearConfirmation.Draw(context, [&] { manager->ClearContextEntries(context, periodScope); });
+	clearConfirmation.Draw(context, [&] { manager->ClearContextEntries(context); });
 	loadPresetConfirmation.Draw(context, [manager] {
 		// An export earlier this session left the mod layer holding what was on disk before it.
 		manager->ReloadOverwrites();

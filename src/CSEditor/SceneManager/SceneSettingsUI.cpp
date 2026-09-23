@@ -45,6 +45,8 @@ namespace
 	constexpr float kLocationTypeColumnWidth = 90.0f;
 	constexpr float kLocationAddColumnWidth = 60.0f;
 	constexpr float kLocationRemoveColumnWidth = 40.0f;
+	/// Rows the picker shows before it scrolls.
+	constexpr float kLocationPickerVisibleRows = 10.0f;
 	/// Matches the weather list's JSON delete icon, which sits a little inside the row height.
 	constexpr float kRemoveIconScale = 0.85f;
 	/// Outlined like the weather editor's lists, which frame their rows the same way.
@@ -110,6 +112,15 @@ namespace
 	};
 	std::vector<LocationWindow> locationWindows;
 
+	struct LocationPickerState
+	{
+		char search[256]{};
+		/// Catalog indices passing the search, rebuilt only when the query changes.
+		std::vector<size_t> matches;
+		bool matchesValid = false;
+	};
+	LocationPickerState locationPicker;
+
 	// Latch driving the automatic time pause: raised by any page editing a period this frame.
 	bool periodEditingThisFrame = false;
 	bool wasEditingTimeOfDay = false;
@@ -133,35 +144,26 @@ namespace
 		}
 	}
 
-	/// The context one page edits: the base context, narrowed to the period the bar has selected.
+	/// The context one page edits: the selected period's set while editing periods, else the flat set.
 	SceneSettingsManager::SceneContextId ResolvePageContext(
-		const SceneSettingsManager::SceneContextId& baseContext, TimeOfDayPeriod period)
+		const SceneSettingsManager::SceneContextId& baseContext, TimeOfDayPeriod period, bool periodEditing)
 	{
 		auto context = baseContext;
-		// The interior and location layers are aperiodic, so the bar informs the view but not the context.
-		if (SceneSettingsManager::IsPeriodicContext(context.type))
-			context.period = period;
+		context.period = periodEditing && SceneSettingsManager::IsPeriodicContext(context.type) ?
+		                     period :
+		                     TimeOfDayPeriod::Count;
+		assert(context.type != SceneSettingsManager::SceneContextType::TimeOfDay || context.period != TimeOfDayPeriod::Count);
 		return context;
 	}
 
 	/// Whether a page edits one period at a time. The Scene Manager panel has no flat mode, so it
 	/// always does, except indoors where the aperiodic interior layer takes the panel over. Weather
-	/// pages are flat until the user asks for periods, per weather and persisted with the weather.
+	/// and location pages follow the saved set their scene has active.
 	bool ResolvePeriodEditing(const SceneSettingsManager::SceneContextId& baseContext, bool sceneManagerPanel)
 	{
 		if (sceneManagerPanel)
 			return !interiorEnabled;
-		return SceneSettingsManager::GetSingleton()->IsWeatherShowTimeOfDay(baseContext.weatherId);
-	}
-
-	/// How much of a page an action owns: a flat periodic page writes every period at once, so the
-	/// page-wide actions have to cover every period too.
-	SceneSettingsManager::PeriodScope ResolvePeriodScope(
-		const SceneSettingsManager::SceneContextId& context, bool periodEditing)
-	{
-		return SceneSettingsManager::IsPeriodicContext(context.type) && !periodEditing ?
-		           SceneSettingsManager::PeriodScope::AllPeriods :
-		           SceneSettingsManager::PeriodScope::ActivePeriod;
+		return SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(baseContext);
 	}
 
 	/// Draws the period bar and the page toolbar, and returns the period the panel below it should
@@ -222,27 +224,27 @@ namespace
 				Util::kTooltipWhenDisabled);
 		} else {
 			// Enabling re-couples the bar to live time, so it always lands on the current period.
-			bool showTimeOfDay = editing;
-			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &showTimeOfDay)) {
-				SceneSettingsManager::GetSingleton()->SetWeatherShowTimeOfDay(baseContext.weatherId, showTimeOfDay);
-				if (showTimeOfDay) {
+			bool timeOfDayEnabled = editing;
+			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &timeOfDayEnabled)) {
+				SceneSettingsManager::GetSingleton()->SetSceneTimeOfDayEnabled(baseContext, timeOfDayEnabled);
+				if (timeOfDayEnabled) {
 					periodBar.selected = -1;
 					periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
 				}
 			}
 			Util::AddTooltip(T(TKEY("time_of_day_toggle_tooltip"),
-				"Edit one period at a time instead of the whole page at once. Game time pauses while a period is being edited."),
+				"Use a separate set of settings for each period instead of one set for the whole day. "
+				"Both sets are kept, so switching back restores the other. Game time pauses while a period is being edited."),
 				ImGuiHoveredFlags_DelayNormal);
 		}
 
 		ImGui::SameLine();
-		const auto pageContext = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active));
-		ScenePageToolbar::Draw(pageContext, ResolvePeriodScope(pageContext, editing));
+		ScenePageToolbar::Draw(ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), editing));
 
 		if (interior)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
 		else if (!editing)
-			Util::Text::Disabled("%s", T(TKEY("period_bar_off"), "Time of day editing is off. The bar does not follow game time."));
+			Util::Text::Disabled("%s", T(TKEY("period_bar_off"), "Time of day is off, so one set of settings applies all day. The bar does not follow game time."));
 		else if (periodBar.selected < 0)
 			Util::Text::Disabled("%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to jump to it and edit it on its own."));
 		else
@@ -299,13 +301,13 @@ namespace
 			periodEditingThisFrame |= periodEditing;
 			const auto period = static_cast<TimeOfDayPeriod>(
 				DrawPeriodBar(baseContext, periodEditing, sceneManagerPanel));
-			context = ResolvePageContext(baseContext, period);
+			context = ResolvePageContext(baseContext, period, periodEditing);
 			ImGui::Spacing();
 			ImGui::Separator();
 			ImGui::Spacing();
 		} else {
 			// A page without the bar has no toggle row to share, so the actions get a row of their own.
-			ScenePageToolbar::Draw(context, ResolvePeriodScope(context, periodEditing));
+			ScenePageToolbar::Draw(context);
 		}
 		ImGui::TextWrapped("%s", intro);
 		// Greying covers both what no scene can hold and what only another scene type can.
@@ -315,8 +317,7 @@ namespace
 
 		if (selectedFeature.empty())
 			return;
-		const bool perPeriod = periodEditing && SceneSettingsManager::IsPeriodicContext(context.type);
-		SceneFeatureReplica::Draw(selectedFeature, context, perPeriod);
+		SceneFeatureReplica::Draw(selectedFeature, context);
 	}
 
 	/// Feature column beside the panel body, split by a divider the user can drag.
@@ -353,6 +354,10 @@ namespace
 	const char* GetLocationTypeLabel(SceneSettingsManager::LocationTargetType type)
 	{
 		switch (type) {
+		case SceneSettingsManager::LocationTargetType::Worldspace:
+			return T(TKEY("location_type_worldspace"), "Worldspace");
+		case SceneSettingsManager::LocationTargetType::LocationType:
+			return T(TKEY("location_type_location_type"), "Location Type");
 		case SceneSettingsManager::LocationTargetType::Region:
 			return T(TKEY("location_type_region"), "Region");
 		case SceneSettingsManager::LocationTargetType::Cell:
@@ -437,6 +442,29 @@ namespace
 		});
 	}
 
+	/// One row of a table the user adds targets from, disabled once the target is on their list.
+	void DrawLocationAddRow(SceneSettingsManager& manager, const SceneSettingsManager::LocationTarget& target)
+	{
+		ImGui::TableNextRow();
+		ImGui::PushID(target.formKey.c_str());
+
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(target.name.c_str());
+		DrawLocationDetailColumns(target);
+
+		ImGui::TableNextColumn();
+		const bool authored = manager.IsLocationTargetAuthored(target.type, target.formKey);
+		ImGui::BeginDisabled(authored);
+		if (ImGui::SmallButton(T(TKEY("location_add"), "Add")))
+			manager.AddLocationTarget(target);
+		ImGui::EndDisabled();
+		if (authored)
+			Util::AddTooltip(T(TKEY("location_already_added"), "Already on your list."),
+				Util::kTooltipWhenDisabled);
+
+		ImGui::PopID();
+	}
+
 	/// The chain the player is standing in, outermost first, each link addable on its own.
 	void DrawLocationChain()
 	{
@@ -454,26 +482,56 @@ namespace
 			return;
 
 		SetupLocationColumns(kLocationAddColumnWidth);
-		for (const auto& target : targets) {
-			ImGui::TableNextRow();
-			ImGui::PushID(target.formKey.c_str());
+		for (const auto& target : targets)
+			DrawLocationAddRow(*manager, target);
+		ImGui::EndTable();
+	}
 
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(target.name.c_str());
-			DrawLocationDetailColumns(target);
+	bool LocationTargetMatchesSearch(const SceneSettingsManager::LocationTarget& target, const std::string& query)
+	{
+		return Util::StringMatchesSearch(target.name, query) ||
+		       Util::StringMatchesSearch(GetLocationIdentityText(target), query) ||
+		       Util::StringMatchesSearch(GetLocationTypeLabel(target.type), query);
+	}
 
-			ImGui::TableNextColumn();
-			const bool authored = manager->IsLocationTargetAuthored(target.type, target.formKey);
-			ImGui::BeginDisabled(authored);
-			if (ImGui::SmallButton(T(TKEY("location_add"), "Add")))
-				manager->AddLocationTarget(target);
-			ImGui::EndDisabled();
-			if (authored)
-				Util::AddTooltip(T(TKEY("location_already_added"), "Already on your list."),
-					Util::kTooltipWhenDisabled);
+	/// Every place the game defines, searchable, so targets away from the player can be added too.
+	void DrawLocationPicker()
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		if (!manager)
+			return;
+		const auto& catalog = manager->GetLocationCatalog();
 
-			ImGui::PopID();
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		const bool searchChanged = ImGui::InputTextWithHint("##LocationSearch",
+			T(TKEY("location_search"), "Search by name, editor ID, or type..."), locationPicker.search,
+			IM_ARRAYSIZE(locationPicker.search));
+		// The catalog runs to thousands of forms, so it is filtered only when the query changes.
+		if (searchChanged || !locationPicker.matchesValid) {
+			const std::string query = locationPicker.search;
+			locationPicker.matches.clear();
+			for (size_t index = 0; index < catalog.size(); ++index)
+				if (LocationTargetMatchesSearch(catalog[index], query))
+					locationPicker.matches.push_back(index);
+			locationPicker.matchesValid = true;
 		}
+
+		if (locationPicker.matches.empty()) {
+			Util::Text::WrappedDisabled("%s", T(TKEY("location_search_empty"), "No places match the search."));
+			return;
+		}
+
+		const ImVec2 tableSize{ 0.0f, ImGui::GetFrameHeightWithSpacing() * kLocationPickerVisibleRows };
+		if (!ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize))
+			return;
+
+		ImGui::TableSetupScrollFreeze(0, 1);
+		SetupLocationColumns(kLocationAddColumnWidth);
+		ImGuiListClipper clipper;
+		clipper.Begin(static_cast<int>(locationPicker.matches.size()));
+		while (clipper.Step())
+			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+				DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
 		ImGui::EndTable();
 	}
 
@@ -500,7 +558,7 @@ namespace
 		auto targets = manager->GetAuthoredLocationTargets();
 		if (targets.empty()) {
 			Util::Text::WrappedDisabled("%s", T(TKEY("location_list_empty"),
-				"No locations yet. Add one from where you are standing."));
+				"No locations yet. Add one from where you are standing, or search for any place."));
 			return;
 		}
 
@@ -597,7 +655,8 @@ void SceneSettingsUI::DrawLocationBrowser()
 	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
 
 	ImGui::TextWrapped("%s", T(TKEY("location_browser_intro"),
-		"Locations resolve last, so they win over interior, time of day, and weather. A cell wins over the locations that contain it."));
+		"Locations resolve last, so they win over interior, time of day, and weather. Narrower places win over broader ones: "
+		"a cell over its location, a location over its region, location types, and worldspace."));
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
@@ -605,6 +664,14 @@ void SceneSettingsUI::DrawLocationBrowser()
 	ImGui::Text("%s", T(TKEY("location_add_from_here"), "Add from where you are"));
 	ImGui::Spacing();
 	DrawLocationChain();
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+
+	ImGui::Text("%s", T(TKEY("location_add_any"), "Add any place"));
+	ImGui::Spacing();
+	DrawLocationPicker();
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -640,10 +707,10 @@ void SceneSettingsUI::DrawLocationWindows()
 				.locationType = window.target.type,
 				.locationFormKey = window.target.formKey,
 			};
-			// Location settings are flat, so the window carries no period bar and no time selection.
-			DrawFeatureLayout(window.selectedFeature, false,
+			// A per-period set blends like time of day, so it only offers the transitionable features.
+			DrawFeatureLayout(window.selectedFeature, SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(context),
 				T(TKEY("scene_manager_location_intro"), "Settings overridden while the player is in this location."),
-				false, context);
+				true, context);
 		}
 		ImGui::End();
 	}

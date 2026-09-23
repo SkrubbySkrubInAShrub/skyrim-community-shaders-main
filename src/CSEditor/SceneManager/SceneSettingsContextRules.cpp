@@ -50,6 +50,10 @@ namespace SceneSettingsContextRules
 	const char* GetCopyLocationTypeName(SceneSettingsManager::LocationTargetType type)
 	{
 		switch (type) {
+		case SceneSettingsManager::LocationTargetType::Worldspace:
+			return T("feature.scene_manager.location.target_worldspace", "Worldspace");
+		case SceneSettingsManager::LocationTargetType::LocationType:
+			return T("feature.scene_manager.location.target_location_type", "Location Type");
 		case SceneSettingsManager::LocationTargetType::Region:
 			return T("feature.scene_manager.location.target_region", "Region");
 		case SceneSettingsManager::LocationTargetType::Location:
@@ -64,16 +68,7 @@ namespace SceneSettingsContextRules
 	bool EntryBelongsToContext(const SceneSettingsManager::SettingEntry& entry,
 		const SceneSettingsManager::SceneContextId& context)
 	{
-		return context.type == SceneSettingsManager::SceneContextType::Location ||
-		       entry.period == context.period;
-	}
-
-	bool EntryCoveredByContext(const SceneSettingsManager::SettingEntry& entry,
-		const SceneSettingsManager::SceneContextId& context, SceneSettingsManager::PeriodScope periodScope)
-	{
-		return (periodScope == SceneSettingsManager::PeriodScope::AllPeriods &&
-			       SceneSettingsManager::IsPeriodicContext(context.type)) ||
-		       EntryBelongsToContext(entry, context);
+		return entry.period == context.period;
 	}
 
 	SceneSettingsManager::SceneType ContextSceneType(SceneSettingsManager::SceneContextType type)
@@ -83,14 +78,17 @@ namespace SceneSettingsContextRules
 		           SceneSettingsManager::SceneType::TimeOfDay;
 	}
 
-	SceneContextRules GetSceneContextRules(SceneSettingsManager::SceneContextType type)
+	SceneContextRules GetSceneContextRules(const SceneSettingsManager::SceneContextId& context)
 	{
 		using SceneContextType = SceneSettingsManager::SceneContextType;
 		using SceneType = SceneSettingsManager::SceneType;
-		switch (type) {
+		switch (context.type) {
 		case SceneContextType::Interior:
 			return { SceneType::InteriorOnly, false, "InteriorOnly" };
 		case SceneContextType::Location:
+			// A per-period location entry blends like time of day; only the flat set takes toggles.
+			if (context.period != SceneSettingsManager::TimeOfDayPeriod::Count)
+				return { SceneType::TimeOfDay, true, "Location" };
 			return { SceneType::Location, false, "Location" };
 		case SceneContextType::Weather:
 			// Weather stores into the time-of-day layer but names itself in its own logs.

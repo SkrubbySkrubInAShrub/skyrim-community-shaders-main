@@ -160,7 +160,7 @@ location transition, and `false` in `RestoreAppliedSettings()`.
 `BuildResolvedSettings()` overlays in order, later winning per setting address:
 
 ```
-interior  →  time of day  →  weather  →  location (region → location → cell)
+interior  →  time of day  →  weather  →  location (worldspace → location type → region → location → cell)
 ```
 
 Within a layer, `EntrySource::Overwrite` (mod-shipped files) is overlaid first and `EntrySource::User`
@@ -170,10 +170,15 @@ address always wins. `SettingsUser.json` remains the baseline beneath all of thi
 -   **Time of day** — six periods (`Dawn`, `Sunrise`, `Day`, `Sunset`, `Dusk`, `Night`) with hour ranges in
     `kPeriodHours`; `Night` wraps midnight as `21..28`. Floats cross-fade across a `kTransitionHours` (0.5h)
     zone at each boundary. Non-float settings snap.
--   **Weather** — per-weather configs are always stored per period; floats blend across
-    `Sky::currentWeatherPct` between the outgoing and incoming weather.
+-   **Weather**: floats blend across `Sky::currentWeatherPct` between the outgoing and incoming weather.
 -   **Location**: see [Location targets](#location-targets); the chain resolves broadest to narrowest, so a
     cell entry wins over the location that contains it, which wins over the region that contains them both.
+-   **Saved sets.** A weather or location (`PeriodicSceneConfig`) keeps two sets side by side: a flat set
+    (entries with `period == Count`) and a per-period set. `timeOfDayEnabled` picks which one resolves
+    (`IsPeriodActive`); the other is kept untouched, so switching back restores it. The mode comes from the
+    user's choice, else a shipped overwrite's `timeOfDayEnabled` metadata, else per-period only when every
+    entry is. Any user edit pins the current mode so a later preset cannot move the user's entries between
+    sets. A per-period location set follows time-of-day rules (floats only, blended across periods).
 -   Writes smaller than `kBlendEpsilon` (1e-3) are skipped so blending does not spam `LoadSettings`.
 
 **Divergence from upstream, deliberate:** upstream overlays `User` first and `Overwrite` second, so a
@@ -187,6 +192,8 @@ A location resolves to a **chain** of targets, broadest first, built by `BuildLo
 
 | `LocationTargetType` | Source | Notes |
 | -------------------- | ------ | ----- |
+| `Worldspace` | The `TESWorldSpace` of an **exterior** cell | Interiors contribute none. |
+| `LocationType` | `LocType*` keywords on the **innermost** location | Deduplicated and sorted by form key, so the chain is stable. |
 | `Region` | The `TESRegion` covering an **exterior** cell | `Sky::region` when the player is in that cell, since it knows which of the overlapping regions won; otherwise the cell's first non-null `GetRegionList()` entry. Interiors contribute no region. |
 | `Location` | The `BGSLocation` chain, walked through `parentLoc` and reversed | Cycle-guarded by a visited FormID set. |
 | `Cell` | The player's parent cell | Its `editorId` is the coc code. |
@@ -198,11 +205,13 @@ reuses the player's chain when the target is in it, otherwise it looks the form 
 `Util::ParseSpid` / `Util::SpidToFormId` and rebuilds. A region is reached through the cells it covers, so
 off-chain it resolves to a chain of itself.
 
-The editor's Add list is the whole chain, so every link the player is standing in, the region included, is
-authorable in one click. There is deliberately no picker for a target the player is *not* standing in.
+The editor offers two ways to add a target: the live chain table, so every link the player is standing in
+is one click away, and a searchable picker over `BuildLocationCatalog()` for any place the game defines.
 
-Persisted under `location.regions` / `location.locations` / `location.cells` in `SceneManager.json` and
-under `Locations/<form key>/` for overwrites.
+Persisted under `location.worldspaces` / `location.locationTypes` / `location.regions` /
+`location.locations` / `location.cells` in `SceneManager.json` and under `Locations/<form key>/` for
+overwrites. The earlier open-shaders `categories` section (type `Category`) is read and migrated to
+`locationTypes`.
 
 ### Location transitions
 
@@ -278,8 +287,10 @@ resolve it triggers on destruction does not run while the lock is held.
 
 ## Generic Scene Copy API
 
-Copies settings between any two scene contexts (a time-of-day period, a weather period, or a location
-target). Driven by `ScenePageToolbar`, which puts the From/To submenus on every scene page.
+Copies settings between any two scene contexts (a time-of-day period, the interior scene, or one saved set
+of a weather or location target). Driven by `ScenePageToolbar`, which puts the From/To submenus on every
+scene page. Only a scene's active set is offered: its flat set, or one entry per period when time of day
+is on.
 
 A context is a `SceneContextId`: a `SceneContextType` plus whichever of `period` / `weatherId` /
 `locationType` + `locationFormKey` that type uses. `IsValidSceneContext()` rejects any mixed combination,
@@ -289,7 +300,7 @@ so a malformed context can never reach the mutation path.
 | ------ | ----- | ------- |
 | `GetCopySources(destination)` | yes | Every context that holds something usable, with a localized label and a compatible-setting count. Excludes the destination itself. Sorted by type, then label. |
 | `GetCopyDestinations(source)` | yes | Every context the source can copy into, including pages with nothing authored yet. |
-| `GetCopyCandidates(source, destination, periodScope)` | yes | Per-setting preview: display name, value, `compatible`, `conflicts`. Drives the confirmation dialog. |
+| `GetCopyCandidates(source, destination)` | yes | Per-setting preview: display name, value, `compatible`, `conflicts`. Drives the confirmation dialog. |
 | `CopySettings(source, destination, conflictPolicy)` | no | Performs the copy and returns a `CopyResult` (`copied` / `skipped` / `overwritten` / `incompatible` / `hadConflicts` / `cancelled`). |
 
 A copy always takes the whole source context. The per-setting variant upstream carries (`CopyScope::Setting`
@@ -310,13 +321,10 @@ returns `cancelled` without touching anything.
 
 **`Cancel` is kept without a caller, and deliberately so.** The toolbar aborts a copy by dismissing the
 preview before anything is staged, not by passing `CopyConflictPolicy::Cancel`: `StartCopy` builds the
-candidate list over the same `PeriodScope` the copy will use, so the modal already shows every conflict the
-fan-out would hit, and dismissing it is the same observable outcome for less noise (routing the button
-through the policy would fire a "0 copied, 0 overwritten" toast for an action the user just cancelled).
-`Cancel` stays because "abort" has to be decided over the whole operation, not per period:
-`CopySettingsAcrossPeriods` pre-checks every period before it stages anything. Removing it would bake the
-fan-out's partial-application semantics into the API and leave any future non-interactive caller with no way
-to ask for all-or-nothing.
+candidate list for the same pair of contexts the copy will use, so the modal already shows every conflict,
+and dismissing it is the same observable outcome for less noise (routing the button through the policy
+would fire a "0 copied, 0 overwritten" toast for an action the user just cancelled). `Cancel` stays so a
+future non-interactive caller can still ask for all-or-nothing.
 
 **Transactionality.** Everything is validated and staged into a pending list first; the destination config
 is only materialized once the copy is known to produce entries, and one `CommitSceneSettingChanges()` at the
@@ -336,7 +344,11 @@ Rooted at `Util::PathHelpers::GetSceneSettingsPath()` = `<CommunityShaders>/Scen
 | `SceneManager.json` | All user-authored entries (interior, TOD, weather, location) in one document. |
 | `InteriorOnly/`, `TimeOfDay/<Period>/` | Mod-shipped overwrite files per scene type. |
 | `Weather/<SPID>/` | Per-weather overwrites, folder keyed by `Util::FormIdToSpid`. |
-| `Locations/<form key>/` | Location **and** cell overwrites share one tree; the target's type comes from its form. |
+| `Locations/<form key>/` | Every location target type shares one tree; the target's type comes from its form. |
+
+A weather or location folder holds its flat set directly and its per-period set in `<Period>/` subfolders
+(`ForEachOverwriteSetDir`). The saved mode is written as `timeOfDayEnabled`; the older view-only
+`showTimeOfDay` flag is read once and migrated only when it was `true`.
 
 `SceneManager.json` is written atomically. If the existing document is present but not a JSON object, saves
 are **blocked** rather than clobbering it, and unknown fields on an entry are preserved through
@@ -405,7 +417,8 @@ rather than an authoring panel.
 ### Existing UI
 
 -   `src/CSEditor/SceneManager/SceneSettingsUI.cpp` is this fork's own editor: the time-of-day period bar with its
-    automatic time pause, the interior toggle, the per-feature list, and per-location windows. It uses only
+    automatic time pause, the interior toggle, the per-feature list, and per-location windows. Weather and
+    location pages carry a **Time of Day** toggle that switches the page's saved set. It uses only
     `GetCurrentGameHour` / `SetGameHour`, `GetCurrentPeriod`, `Get*RelevantFeatureNames`,
     `GetFeatureDisplayName`, and the `LocationTarget` accessors.
 -   `FeatureListRenderer` shows a scene-controlled indicator and a **Scene Specific Settings** pause toggle

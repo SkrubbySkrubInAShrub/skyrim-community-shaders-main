@@ -385,6 +385,7 @@ void SceneSettingsManager::ClearLocationTransitions()
 	lastLocationTransitionDurations.clear();
 	pendingLocationTransitionDurations.clear();
 	cachedLocationOverrides.clear();
+	cachedLocationPeriodValues.clear();
 	cachedLocationOverridesValid = false;
 	locationTransitionBatchesDirty = false;
 	lastLocationTransitionTick = -1.0f;
@@ -434,14 +435,19 @@ bool SceneSettingsManager::HasActiveSceneEntriesCached()
 		return std::any_of(sourceEntries.begin(), sourceEntries.end(),
 			[&](const SettingEntry& entry) { return IsResolvableEntry(entry, type); });
 	};
+	const auto hasResolvableInActiveSet = [&](const PeriodicSceneConfig& config, SceneType flatType) {
+		return std::any_of(config.entries.begin(), config.entries.end(), [&](const SettingEntry& entry) {
+			return config.IsPeriodActive(entry.period) && IsResolvableEntry(entry, GetEntrySceneType(entry, flatType));
+		});
+	};
 
 	hasActiveSceneEntries =
 		std::any_of(entries.begin(), entries.end(),
 			[&](const auto& item) { return hasResolvable(item.second, item.first); }) ||
 		std::any_of(weatherSceneConfigs.begin(), weatherSceneConfigs.end(),
-			[&](const auto& item) { return hasResolvable(item.second.entries, SceneType::TimeOfDay); }) ||
+			[&](const auto& item) { return hasResolvableInActiveSet(item.second, SceneType::TimeOfDay); }) ||
 		std::any_of(locationSceneConfigs.begin(), locationSceneConfigs.end(),
-			[&](const auto& item) { return hasResolvable(item.second.entries, SceneType::Location); });
+			[&](const auto& item) { return hasResolvableInActiveSet(item.second, SceneType::Location); });
 
 	activeEntryCacheDirty = false;
 	return hasActiveSceneEntries;
@@ -485,8 +491,13 @@ SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSet
 	if (rebuildLocationOverrides) {
 		for (const auto& target : locationTargets) {
 			auto it = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
-			if (it != locationSceneConfigs.end())
-				collectBaselines(it->second.entries, SceneType::Location);
+			if (it == locationSceneConfigs.end())
+				continue;
+			for (const auto& entry : it->second.entries)
+				if (it->second.IsPeriodActive(entry.period) &&
+					IsResolvableEntry(entry, GetEntrySceneType(entry, SceneType::Location)))
+					if (auto address = GetEntryAddress(entry); !baselineSettings.contains(address))
+						requiredBaselines.push_back(std::move(address));
 		}
 	}
 	std::sort(requiredBaselines.begin(), requiredBaselines.end());
@@ -504,9 +515,11 @@ SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSet
 	if (rebuildLocationOverrides) {
 		pendingLocationTransitionDurations.clear();
 		cachedLocationOverrides.clear();
-		ResolveLocationSettings(cachedLocationOverrides, locationTargets, true);
+		cachedLocationPeriodValues.clear();
+		ResolveLocationSettings(cachedLocationOverrides, cachedLocationPeriodValues, locationTargets, true);
 		cachedLocationOverridesValid = true;
 	}
+	BlendLocationPeriodValues(resolved, cachedLocationPeriodValues);
 	for (const auto& [address, value] : cachedLocationOverrides)
 		resolved[address] = value;
 	std::erase_if(resolved, [](const auto& item) { return item.second.is_null(); });
@@ -690,26 +703,34 @@ void SceneSettingsManager::ResolveInteriorSettings(ResolvedSettingMap& resolved)
 }
 
 void SceneSettingsManager::CollectPeriodValueGroups(
-	const std::vector<SettingEntry>& sourceEntries, PeriodSettingMap& values) const
+	const std::vector<SettingEntry>& sourceEntries, bool timeOfDayEnabled, PeriodSettingMap& values) const
 {
 	// Shipped overwrites are the layer's defaults; the user's own entry for the same address wins.
 	for (auto source : { EntrySource::Overwrite, EntrySource::User }) {
 		for (const auto& entry : sourceEntries) {
+			const bool flat = entry.period == TimeOfDayPeriod::Count;
 			const auto periodIndex = static_cast<int>(entry.period);
-			if (entry.source != source || periodIndex < 0 || periodIndex >= kPeriodCount ||
-				!IsEntryActive(entry))
+			if (entry.source != source || flat == timeOfDayEnabled || periodIndex < 0 ||
+				periodIndex > kPeriodCount || !IsEntryActive(entry))
 				continue;
-			// A tombstone clears its own period rather than filling it, so the layer beneath shows through.
+			// A flat entry stands for every period at once.
+			const int firstPeriod = flat ? 0 : periodIndex;
+			const int lastPeriod = flat ? kPeriodCount : periodIndex + 1;
+			// A tombstone clears its periods rather than filling them, so the layer beneath shows through.
 			if (entry.deleted) {
 				if (auto valuesIt = values.find(GetEntryAddress(entry)); valuesIt != values.end())
-					valuesIt->second[periodIndex].reset();
+					for (int slot = firstPeriod; slot < lastPeriod; ++slot)
+						valuesIt->second[slot].reset();
 				continue;
 			}
 			if (!IsResolvableEntry(entry, SceneType::TimeOfDay))
 				continue;
 			const auto value = entry.value.get<float>();
-			if (std::isfinite(value))
-				values[GetEntryAddress(entry)][periodIndex] = value;
+			if (!std::isfinite(value))
+				continue;
+			auto& periodValues = values[GetEntryAddress(entry)];
+			for (int slot = firstPeriod; slot < lastPeriod; ++slot)
+				periodValues[slot] = value;
 		}
 	}
 }
@@ -719,7 +740,7 @@ const SceneSettingsManager::PeriodSettingMap& SceneSettingsManager::BuildTimeOfD
 	if (timeOfDayValueGroups.revision == sceneValueRevision)
 		return timeOfDayValueGroups.values;
 	timeOfDayValueGroups.values.clear();
-	CollectPeriodValueGroups(GetEntries(SceneType::TimeOfDay), timeOfDayValueGroups.values);
+	CollectPeriodValueGroups(GetEntries(SceneType::TimeOfDay), true, timeOfDayValueGroups.values);
 	timeOfDayValueGroups.revision = sceneValueRevision;
 	return timeOfDayValueGroups.values;
 }
@@ -732,7 +753,7 @@ const SceneSettingsManager::PeriodSettingMap& SceneSettingsManager::BuildWeather
 		return cached.values;
 	cached.values.clear();
 	if (auto configIt = weatherSceneConfigs.find(weatherId); configIt != weatherSceneConfigs.end())
-		CollectPeriodValueGroups(configIt->second.entries, cached.values);
+		CollectPeriodValueGroups(configIt->second.entries, configIt->second.timeOfDayEnabled, cached.values);
 	cached.revision = sceneValueRevision;
 	return cached.values;
 }
@@ -807,43 +828,98 @@ void SceneSettingsManager::ResolveWeatherSettings(
 			blendAddress(address);
 }
 
-void SceneSettingsManager::ResolveLocationSettings(ResolvedSettingMap& resolved,
+void SceneSettingsManager::ResolveLocationSettings(ResolvedSettingMap& resolved, PeriodSettingMap& periodValues,
 	const std::vector<LocationTarget>& locationTargets, bool collectTransitionDurations)
 {
 	auto* transitionDurations = collectTransitionDurations ? &pendingLocationTransitionDurations : nullptr;
 	for (const auto& target : locationTargets) {
 		auto it = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
-		if (it == locationSceneConfigs.end())
-			continue;
-		OverlayAllEntries(resolved, it->second.entries, SceneType::Location, transitionDurations);
+		if (it != locationSceneConfigs.end())
+			ResolveLocationLink(it->second.entries, it->second.timeOfDayEnabled, resolved, periodValues,
+				transitionDurations);
 	}
+}
+
+void SceneSettingsManager::ResolveLocationLink(const std::vector<SettingEntry>& linkEntries, bool timeOfDayEnabled,
+	ResolvedSettingMap& resolved, PeriodSettingMap& periodValues,
+	std::map<SettingAddress, float>* transitionDurations) const
+{
+	if (!timeOfDayEnabled) {
+		OverlayAllEntries(resolved, linkEntries, SceneType::Location, transitionDurations);
+		// A narrower flat link replaces any blend a broader per-period link started.
+		std::erase_if(periodValues, [&](const auto& item) { return resolved.contains(item.first); });
+		return;
+	}
+	for (const auto& entry : linkEntries) {
+		if (entry.period == TimeOfDayPeriod::Count || !IsResolvableEntry(entry, SceneType::TimeOfDay))
+			continue;
+		auto address = GetEntryAddress(entry);
+		// A broader flat value is what this link's unset periods keep; a flat tombstone keeps the baseline.
+		if (auto flatIt = resolved.find(address); flatIt != resolved.end()) {
+			auto baselineIt = baselineSettings.find(address);
+			const auto* seed = IsNumericValue(flatIt->second)    ? &flatIt->second :
+			                   baselineIt != baselineSettings.end() ? &baselineIt->second :
+			                                                          nullptr;
+			if (seed && IsNumericValue(*seed))
+				periodValues[address].fill(seed->get<float>());
+			resolved.erase(flatIt);
+		}
+		if (transitionDurations && !entry.deleted)
+			RecordLocationTransitionDuration(entry, address, *transitionDurations);
+	}
+	CollectPeriodValueGroups(linkEntries, true, periodValues);
+}
+
+void SceneSettingsManager::BlendLocationPeriodValues(ResolvedSettingMap& resolved,
+	const PeriodSettingMap& periodValues) const
+{
+	const auto& factors = blendSnapshot.timeOfDayFactors;
+	for (const auto& [address, values] : periodValues) {
+		auto baselineIt = baselineSettings.find(address);
+		if (baselineIt == baselineSettings.end() || !IsNumericValue(baselineIt->second))
+			continue;
+		// Unset periods fall through to whatever time of day and weather resolved beneath.
+		float lowerValue = baselineIt->second.get<float>();
+		if (auto resolvedIt = resolved.find(address);
+			resolvedIt != resolved.end() && IsNumericValue(resolvedIt->second))
+			lowerValue = resolvedIt->second.get<float>();
+		float result = 0.0f;
+		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
+			result += factors[periodIndex] * values[periodIndex].value_or(lowerValue);
+		resolved[address] = result;
+	}
+}
+
+void SceneSettingsManager::RecordLocationTransitionDuration(const SettingEntry& entry,
+	const SettingAddress& address, std::map<SettingAddress, float>& transitionDurations) const
+{
+	if (entry.deleted) {
+		transitionDurations.erase(address);
+		return;
+	}
+	if (!IsNumericValue(entry.value))
+		return;
+	const auto duration = entry.transitionSeconds.value_or(locationTransitionSeconds);
+	transitionDurations[address] = std::clamp(std::isfinite(duration) ? duration : locationTransitionSeconds,
+		0.0f, kMaxLocationTransitionSeconds);
 }
 
 void SceneSettingsManager::OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 	SceneType type, EntrySource source, std::map<SettingAddress, float>* transitionDurations) const
 {
 	for (const auto& entry : sourceEntries) {
-		if (entry.source != source || !IsEntryActive(entry) ||
+		// Per-period entries blend through the period maps instead.
+		if (entry.source != source || entry.period != TimeOfDayPeriod::Count || !IsEntryActive(entry) ||
 			!IsSettingAllowedForType(type, entry.featureShortName, entry.settingPath, entry.settingKey))
 			continue;
 		auto address = GetEntryAddress(entry);
 		if (!baselineSettings.contains(address))
 			continue;
+		if (transitionDurations)
+			RecordLocationTransitionDuration(entry, address, *transitionDurations);
 		// A tombstone supplies nothing. Nulling the slot is how this map already marks an address the
 		// resolve did not fill, so BuildResolvedSettings prunes it and the baseline is restored.
-		if (entry.deleted) {
-			if (transitionDurations)
-				transitionDurations->erase(address);
-			resolved[std::move(address)] = nullptr;
-			continue;
-		}
-		if (transitionDurations && IsNumericValue(entry.value)) {
-			const auto duration = entry.transitionSeconds.value_or(locationTransitionSeconds);
-			(*transitionDurations)[address] = std::clamp(
-				std::isfinite(duration) ? duration : locationTransitionSeconds,
-				0.0f, kMaxLocationTransitionSeconds);
-		}
-		resolved[std::move(address)] = entry.value;
+		resolved[std::move(address)] = entry.deleted ? json(nullptr) : entry.value;
 	}
 }
 

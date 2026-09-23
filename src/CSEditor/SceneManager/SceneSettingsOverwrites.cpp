@@ -159,13 +159,24 @@ namespace SceneSettingsOverwrites
 
 	bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,
 		SceneSettingsManager::SceneType allowedType, bool requireNumeric,
-		std::vector<SceneSettingsManager::SettingEntry>& outEntries, FeatureSettingsCache* featureSettingsCache)
+		std::vector<SceneSettingsManager::SettingEntry>& outEntries, FeatureSettingsCache* featureSettingsCache,
+		std::optional<bool>* timeOfDayEnabled)
 	{
 		using SSM = SceneSettingsManager;
 
 		json data;
 		if (!ReadBoundedSceneJson(filePath, data))
 			return false;
+		if (auto metadataIt = data.find(kMetadataKey); timeOfDayEnabled && metadataIt != data.end() &&
+													   metadataIt->is_object()) {
+			if (auto modeIt = metadataIt->find(kTimeOfDayEnabledKey); modeIt != metadataIt->end()) {
+				if (modeIt->is_boolean())
+					*timeOfDayEnabled = modeIt->get<bool>();
+				else
+					logger::warn("[SceneSettings] Overwrite '{}' {} metadata must be boolean", filePath.string(),
+						kTimeOfDayEnabledKey);
+			}
+		}
 
 		std::string featureShortName = data.value(kFeatureKey, "");
 		if (featureShortName.empty()) {

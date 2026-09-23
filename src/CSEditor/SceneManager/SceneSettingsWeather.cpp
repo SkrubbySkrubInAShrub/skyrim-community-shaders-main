@@ -43,6 +43,9 @@ bool SceneSettingsManager::HasWeatherConfig(RE::FormID weatherId)
 void SceneSettingsManager::PrepareWeatherUserSettingsMutation(RE::FormID weatherId, bool replaceMalformedEntries)
 {
 	weatherUserSettingsModified = true;
+	// Pinning the mode keeps a later preset from flipping which set the user's edits land in.
+	if (auto configIt = weatherSceneConfigs.find(weatherId); configIt != weatherSceneConfigs.end())
+		configIt->second.userTimeOfDayEnabled = configIt->second.timeOfDayEnabled;
 	if (!unresolvedWeatherUserSettings.is_object())
 		unresolvedWeatherUserSettings = json::object();
 	const auto canonicalSpid = Util::FormIdToSpid(weatherId);
@@ -70,7 +73,8 @@ void SceneSettingsManager::PrepareWeatherUserSettingsMutation(RE::FormID weather
 std::optional<float> SceneSettingsManager::ResolveWeatherLowerValue(RE::FormID weatherId,
 	const SettingAddress& address, TimeOfDayPeriod period, EntrySource selectedSource)
 {
-	const auto periodIndex = static_cast<int>(period);
+	// A flat entry spans every period, so the time of day it sits on is the one playing now.
+	const auto periodIndex = static_cast<int>(period == TimeOfDayPeriod::Count ? GetCurrentPeriod() : period);
 	if (periodIndex < 0 || periodIndex >= kPeriodCount)
 		return std::nullopt;
 	auto baseline = GetBaselineValue(address);
@@ -147,28 +151,58 @@ bool SceneSettingsManager::HasWeatherEntryForPeriod(RE::FormID weatherId, const 
 	return false;
 }
 
-// --- Per-Weather Persistence ---
+// --- Time of Day Mode ---
 
-bool SceneSettingsManager::IsWeatherShowTimeOfDay(RE::FormID weatherId)
+bool SceneSettingsManager::IsSceneTimeOfDayEnabled(const SceneContextId& context) const
 {
-	if (!TryEnsureWeatherDataLoaded())
+	switch (context.type) {
+	case SceneContextType::TimeOfDay:
+		return true;
+	case SceneContextType::Weather:
+		{
+			auto it = weatherSceneConfigs.find(context.weatherId);
+			return it != weatherSceneConfigs.end() && it->second.timeOfDayEnabled;
+		}
+	case SceneContextType::Location:
+		return GetLocationConfig(context.locationType, context.locationFormKey).timeOfDayEnabled;
+	default:
 		return false;
-
-	auto it = weatherShowTimeOfDay.find(weatherId);
-	return it != weatherShowTimeOfDay.end() && it->second;
+	}
 }
 
-void SceneSettingsManager::SetWeatherShowTimeOfDay(RE::FormID weatherId, bool show)
+void SceneSettingsManager::SetSceneTimeOfDayEnabled(const SceneContextId& context, bool enabled)
 {
-	if (!weatherId || !TryEnsureWeatherDataLoaded())
+	if (IsSceneTimeOfDayEnabled(context) == enabled)
 		return;
 
-	auto it = weatherShowTimeOfDay.find(weatherId);
-	if (it != weatherShowTimeOfDay.end() && it->second == show)
+	PeriodicSceneConfig* config = nullptr;
+	if (context.type == SceneContextType::Weather && context.weatherId && TryEnsureWeatherDataLoaded()) {
+		PrepareWeatherUserSettingsMutation(context.weatherId, false);
+		config = &GetWeatherConfigMut(context.weatherId);
+	} else if (context.type == SceneContextType::Location && !context.locationFormKey.empty() &&
+			   TryEnsureLocationDataLoaded()) {
+		PrepareLocationUserSettingsMutation(context.locationType, context.locationFormKey, false);
+		const auto& existing = GetLocationConfig(context.locationType, context.locationFormKey);
+		const auto name = existing.name;
+		const auto cocCode = existing.cocCode;
+		config = &EnsureAuthoredLocationConfig(context.locationType, context.locationFormKey, name, cocCode);
+	}
+	if (!config)
 		return;
 
-	weatherShowTimeOfDay[weatherId] = show;
-	// A view preference touches no entry, so it only needs the document marked and written.
-	PrepareWeatherUserSettingsMutation(weatherId, false);
-	MarkDeferredSceneChanges();
+	config->userTimeOfDayEnabled = enabled;
+	config->timeOfDayEnabled = enabled;
+	// The mode picks which saved set resolves, so it changes live values like an entry edit would.
+	activeEntryCacheDirty = true;
+	BumpEntryPresentationRevision();
+	SaveAllUserSettings();
+	ReapplyIfActive();
+}
+
+void SceneSettingsManager::RefreshTimeOfDayModes()
+{
+	for (auto& [weatherId, config] : weatherSceneConfigs)
+		config.RefreshTimeOfDayMode();
+	for (auto& [configKey, config] : locationSceneConfigs)
+		config.RefreshTimeOfDayMode();
 }
