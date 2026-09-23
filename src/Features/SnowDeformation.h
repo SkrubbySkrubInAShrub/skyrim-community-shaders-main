@@ -1751,6 +1751,9 @@ public:
 	winrt::com_ptr<ID3D11Buffer> shellVisiblePatches;
 	winrt::com_ptr<ID3D11UnorderedAccessView> shellVisiblePatchesUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePatchesSRV;
+	winrt::com_ptr<ID3D11Buffer> shellVisiblePrev;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePrevSRV;
+	bool shellVisiblePrevValid = false;
 	bool EnsureVisiblePatchResources();
 	/** @brief Prepass-draw DS variants that also carry the patch id (SNOW_SHELL_PATCH_ID): [0] live, [1] bake, [2] bake check. */
 	ID3D11DomainShader* GetShellDSPatch(bool a_bake, bool a_check);
@@ -3510,7 +3513,11 @@ public:
 	uint32_t shellKillMask = 0;
 	/** @brief Measurement, runtime-only: time the Shell pass as Shell.Setup / Shell.Prepass / Shell.Fill / Shell.Main rows instead of one. */
 	bool shellSplitTiming = false;
-	/** @brief DevBench: applies shell measurement args (shellKill, shellSplitTiming, shellPrepass, shellBake, shellStats) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
+	/** @brief Measurement, runtime-only: the prepass tessellates only the patches the previous frame marked visible. Exact only for a still camera and scene: a skipped patch can never be marked again. */
+	bool shellPrepassLastFrame = false;
+	/** @brief Measurement, runtime-only: the shading draw zero-factors every patch, leaving its VS and HS cost. Breaks the image. */
+	bool shellMainCullAll = false;
+	/** @brief DevBench: applies shell measurement args (shellKill, shellSplitTiming, shellPrepass, shellBake, shellStats, shellVisibleCull, shellPrepassLastFrame, shellMainCullAll) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
 	json DevBenchShellArgs(const json& a_args);
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);

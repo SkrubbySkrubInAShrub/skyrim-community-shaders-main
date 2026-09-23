@@ -774,6 +774,28 @@ bool SnowDeformation::EnsureVisiblePatchResources()
 		Util::SetResourceName(shellVisiblePatchesUAV.get(), "SnowDeformation::ShellVisiblePatches UAV");
 		Util::SetResourceName(shellVisiblePatchesSRV.get(), "SnowDeformation::ShellVisiblePatches SRV");
 	}
+	if (shellPrepassLastFrame && !shellVisiblePrev) {
+		constexpr UINT patches = kShellGridDim * kShellGridDim;
+		D3D11_BUFFER_DESC bufDesc{};
+		bufDesc.ByteWidth = patches * sizeof(uint32_t);
+		bufDesc.Usage = D3D11_USAGE_DEFAULT;
+		bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+		bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		bufDesc.StructureByteStride = sizeof(uint32_t);
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.NumElements = patches;
+		if (SUCCEEDED(device->CreateBuffer(&bufDesc, nullptr, shellVisiblePrev.put())) &&
+			SUCCEEDED(device->CreateShaderResourceView(shellVisiblePrev.get(), &srvDesc, shellVisiblePrevSRV.put()))) {
+			Util::SetResourceName(shellVisiblePrev.get(), "SnowDeformation::ShellVisiblePrev");
+			Util::SetResourceName(shellVisiblePrevSRV.get(), "SnowDeformation::ShellVisiblePrev SRV");
+		} else {
+			shellVisiblePrev = nullptr;
+			shellVisiblePrevSRV = nullptr;
+		}
+		shellVisiblePrevValid = false;
+	}
 	return shellRasterPatch->rtv && shellRasterPatch->srv;
 }
 
@@ -1957,8 +1979,19 @@ void SnowDeformation::DrawShell()
 				context->OMSetRenderTargets(visibleCull ? 2 : 1, prepassRTVs, dsv);
 				if (visibleCull)
 					context->DSSetShader(dsPrepassPatch, nullptr, 0);
+				const bool prepassLastFrame = visibleCull && shellPrepassLastFrame && shellVisiblePrevValid && shellVisiblePrevSRV;
+				if (prepassLastFrame) {
+					ID3D11ShaderResourceView* prevSRV = shellVisiblePrevSRV.get();
+					context->HSSetShader(hsVisible, nullptr, 0);
+					context->HSSetShaderResources(60, 1, &prevSRV);
+				}
 				context->PSSetShader(psPrepass, nullptr, 0);
 				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+				if (prepassLastFrame) {
+					ID3D11ShaderResourceView* nullPrevSRV = nullptr;
+					context->HSSetShaderResources(60, 1, &nullPrevSRV);
+					context->HSSetShader(tessHS, nullptr, 0);
+				}
 
 				splitRow("SnowDeformation::Shell.Fill");
 				if (visibleCull) {
@@ -1986,6 +2019,10 @@ void SnowDeformation::DrawShell()
 					context->PSSetShaderResources(61, 1, &nullRasterSRV);
 					ID3D11UnorderedAccessView* nullUAV = nullptr;
 					context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 1, 1, &nullUAV, nullptr);
+					if (shellMainCullAll) {
+						const UINT zeros[4] = {};
+						context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
+					}
 				}
 
 				splitRow("SnowDeformation::Shell.Main");
@@ -2005,6 +2042,9 @@ void SnowDeformation::DrawShell()
 					ID3D11ShaderResourceView* nullVisibleSRV = nullptr;
 					context->HSSetShaderResources(60, 1, &nullVisibleSRV);
 				}
+				shellVisiblePrevValid = visibleCull && shellPrepassLastFrame && !shellMainCullAll && shellVisiblePrev;
+				if (shellVisiblePrevValid)
+					context->CopyResource(shellVisiblePrev.get(), shellVisiblePatches.get());
 
 				context->OMSetRenderTargets(8, rtvs, dsv);
 				context->OMSetDepthStencilState(shellDepthState.get(), 0);
