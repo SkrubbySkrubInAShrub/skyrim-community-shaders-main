@@ -398,12 +398,10 @@ jobs:
                           continue
 
                       try:
-                          data = get_json(f'https://api.nexusmods.com/v1/games/{game_id}/mods/{mod_id}/files.json')
+                          data = get_json(f"https://api.nexusmods.com/v3/mod-files/{row['file_id']}/versions")
                           api_ok = True
-                          files = data.get('files', [])
-                          check = [f for f in files if f.get('category_name') == 'MAIN'] or files
                           seen = []
-                          for f in check:
+                          for f in sorted(data['data']['versions'], key=lambda f: f.get('uploaded_at', '')):
                               v = f.get('version', '')
                               if v and v not in seen:
                                   seen.append(v)
@@ -455,24 +453,22 @@ jobs:
               id: version-check
               env:
                   MOD_ID: ${{ matrix.nexus_mod_id }}
+                  FILE_ID: ${{ matrix.file_id || '' }}
                   VERSION: ${{ matrix.mod_version || needs.prepare-nexus-matrix.outputs.version }}
-                  GAME_ID: skyrimspecialedition
                   API_KEY: ${{ secrets.UNEX_APIKEY }}
               run: |
-                  if [ -z "$API_KEY" ] || [ -z "$MOD_ID" ]; then
+                  if [ -z "$API_KEY" ] || [ -z "$FILE_ID" ]; then
                     echo "should_upload=true" >> $GITHUB_OUTPUT
                     exit 0
                   fi
-                  # v1 files.json does not expose v3 mod-file IDs, so the check spans the mod's MAIN files.
                   SHOULD_UPLOAD=$(curl -sf \
                     -H "apikey: $API_KEY" \
                     -H "Accept: application/json" \
-                    "https://api.nexusmods.com/v1/games/$GAME_ID/mods/$MOD_ID/files.json" \
+                    "https://api.nexusmods.com/v3/mod-files/$FILE_ID/versions" \
                     | python3 -c "
                   import json, sys, os
-                  files = json.load(sys.stdin).get('files', [])
-                  check = [f for f in files if f.get('category_name') == 'MAIN'] or files
-                  print('false' if os.environ['VERSION'] in [f.get('version', '') for f in check] else 'true')
+                  versions = [v.get('version', '') for v in json.load(sys.stdin)['data']['versions']]
+                  print('false' if os.environ['VERSION'] in versions else 'true')
                   " 2>/dev/null || echo "true")
                   echo "should_upload=${SHOULD_UPLOAD:-true}" >> $GITHUB_OUTPUT
                   if [ "$SHOULD_UPLOAD" = "false" ]; then
@@ -606,10 +602,10 @@ jobs:
                   def w(line=''):
                       summary.write(line + '\n')
 
-                  def nexus_versions(mod_id):
-                      if not api_key or not mod_id:
+                  def nexus_versions(file_id):
+                      if not api_key or not file_id:
                           return None
-                      url = f'https://api.nexusmods.com/v1/games/{game_id}/mods/{mod_id}/files.json'
+                      url = f'https://api.nexusmods.com/v3/mod-files/{file_id}/versions'
                       req = urllib.request.Request(url, headers={
                           'apikey': api_key,
                           'User-Agent': 'community-shaders-ci/1.0',
@@ -617,14 +613,7 @@ jobs:
                       })
                       try:
                           with urllib.request.urlopen(req, timeout=15) as resp:
-                              files = json.load(resp).get('files', [])
-                          check = [f for f in files if f.get('category_name') == 'MAIN'] or files
-                          seen = []
-                          for f in check:
-                              v = f.get('version', '')
-                              if v and v not in seen:
-                                  seen.append(v)
-                          return seen
+                              return [v.get('version', '') for v in json.load(resp)['data']['versions']]
                       except Exception:
                           return None
 
@@ -637,7 +626,7 @@ jobs:
                       label = row.get('mod_filename', name)
                       url = f'https://www.nexusmods.com/{game_id}/mods/{mod_id}'
                       artifact = f'nexus-upload-{name}'
-                      versions = nexus_versions(mod_id)
+                      versions = nexus_versions(row.get('file_id'))
                       if versions is None:
                           status, icon = 'unknown', '❓'
                           unknowns.append(label)
