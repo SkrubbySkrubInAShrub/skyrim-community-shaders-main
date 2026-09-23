@@ -1899,6 +1899,11 @@ void SnowDeformation::RollCpuCensus()
 	ema(s.traverseCalls, float(c.traverseCalls));
 	ema(s.skinLoopDraws, float(c.skinLoopDraws));
 	ema(s.skinLoopCBUpdates, float(c.skinLoopCBUpdates));
+	for (uint32_t i = 0; i < CpuCensus::kSpanCount; i++) {
+		ema(s.spanMs[i], float(c.spanTicks[i] * ticksToMs));
+		c.spanTicks[i] = 0;
+		c.spanCalls[i] = 0;
+	}
 	c.hookTicks = c.actorTicks = c.landTicks = c.depthTicks = c.traverseTicks = 0;
 	c.hookCalls = c.hookBitCalls = c.actors = c.landCalls = c.depthCalls = c.traverseCalls = 0;
 	c.skinLoopDraws = c.skinLoopCBUpdates = 0;

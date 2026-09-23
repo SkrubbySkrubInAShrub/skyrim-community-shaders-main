@@ -38,6 +38,26 @@ namespace
 		const std::string dumped = out.dump();
 		a_write(a_sink, dumped.c_str());
 	}
+
+	void CpuCensusTool(void*, const char*, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		json out;
+		try {
+			const auto& s = globals::features::snowDeformation.cpuShown;
+			json spans = json::array();
+			for (uint32_t i = 0; i < SnowDeformation::CpuCensus::kSpanCount; i++)
+				spans.push_back({ { "name", SnowDeformation::CpuCensus::kSpanNames[i] }, { "ms", s.spanMs[i] } });
+			out = { { "spans", spans },
+				{ "hookMs", s.hookMs }, { "hookCalls", s.hookCalls }, { "actorMs", s.actorMs }, { "actors", s.actors },
+				{ "landMs", s.landMs }, { "landCalls", s.landCalls }, { "depthMs", s.depthMs }, { "depthCalls", s.depthCalls },
+				{ "traverseMs", s.traverseMs }, { "traverseCalls", s.traverseCalls },
+				{ "frame_count", globals::state->frameCountAtomic.load(std::memory_order_relaxed) } };
+		} catch (const std::exception& e) {
+			out = { { "error", e.what() } };
+		}
+		const std::string dumped = out.dump();
+		a_write(a_sink, dumped.c_str());
+	}
 }
 #endif
 
@@ -50,6 +70,9 @@ void SnowDeformation::InstallDevBenchTools()
 	static constexpr const char* shaderTypesDesc =
 		R"({"description":"The F10 performance overlay's shader-type table: per BSShader type, smoothed draw calls and CPU wall time (ms) between draw submissions attributed to that type - NOT GPU time. live=false means the overlay is hidden and the numbers are stale (toggle it with F10).","readOnly":true,"inputSchema":{"type":"object","properties":{}}})";
 	dvb->RegisterTool("snowdeformation.shadertypes", shaderTypesDesc, &ShaderTypesTool, nullptr);
-	logger::info("[SNOW DEFORMATION] DevBench tool registered: snowdeformation.shadertypes");
+	static constexpr const char* cpuCensusDesc =
+		R"({"description":"Snow Deformation CPU census: 30-frame averages (ms, rdtsc calibrated to QPC) of named CPU spans - Prepass and DrawShell whole, DrawShell's consecutive segments - plus the capture hook, actor/land stamping, depth and traversal counters.","readOnly":true,"inputSchema":{"type":"object","properties":{}}})";
+	dvb->RegisterTool("snowdeformation.cpucensus", cpuCensusDesc, &CpuCensusTool, nullptr);
+	logger::info("[SNOW DEFORMATION] DevBench tools registered: snowdeformation.shadertypes, snowdeformation.cpucensus");
 #endif
 }

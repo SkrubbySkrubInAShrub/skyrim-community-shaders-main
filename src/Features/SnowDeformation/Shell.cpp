@@ -1047,6 +1047,8 @@ void SnowDeformation::DrawShell()
 	if (!vs || !ps)
 		return;
 
+	ScopedTicks _drawShellTicks(cpuCensus.spanTicks[CpuCensus::kSpanDrawShell], cpuCensus.spanCalls[CpuCensus::kSpanDrawShell]);
+	SpanClock spanClock;
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 	auto& fb = globals::game::frameBufferCached;
@@ -1306,12 +1308,18 @@ void SnowDeformation::DrawShell()
 	// height windows, then restore the viewport for the screen-space passes.
 	// Waits for the prime's object group: EnsureStaticsShaders would
 	// otherwise compile its ten variants synchronously right here.
+	spanClock.Lap(CpuCensus::kSpanShellSetup);
 	if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
+	spanClock.Lap(CpuCensus::kSpanObjectHeightMap);
 	RenderWaterCapture();
+	spanClock.Lap(CpuCensus::kSpanWaterCapture);
 	CoverWaterWindow();
+	spanClock.Lap(CpuCensus::kSpanWaterCover);
 	RenderBloodCapture();
+	spanClock.Lap(CpuCensus::kSpanBloodCapture);
 	RenderRuneCapture();
+	spanClock.Lap(CpuCensus::kSpanRuneCapture);
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	// The main pass's depth range, not the decal viewport the deferred span
@@ -1876,6 +1884,7 @@ void SnowDeformation::DrawShell()
 	// Their own raster state carries the skin depth bias: a skin and its
 	// mesh rasterise the same vertices, so without a bias the far ones
 	// z-fight.
+	spanClock.Lap(CpuCensus::kSpanShellGrid);
 	if (auto* skinRaster = GetSkinRasterState())
 		context->RSSetState(skinRaster);
 	if (shellStats) {
@@ -1883,6 +1892,7 @@ void SnowDeformation::DrawShell()
 		context->Begin(staticsStatsQuery[shellStatsRing][1].get());
 	}
 	DrawCapturedStatics();
+	spanClock.Lap(CpuCensus::kSpanStatics);
 	if (shellStats) {
 		context->End(staticsStatsQuery[shellStatsRing][1].get());
 		context->End(staticsStatsQuery[shellStatsRing][0].get());
@@ -1954,8 +1964,10 @@ void SnowDeformation::DrawShell()
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+	spanClock.Lap(CpuCensus::kSpanShellRestore);
 
 	RunLODProbePass();
+	spanClock.Lap(CpuCensus::kSpanLODProbe);
 
 	// SSGI seam shield mask for the composite: the window's fringe band,
 	// gated to real snow nearby (see SeamShieldCS).
@@ -2010,6 +2022,7 @@ void SnowDeformation::DrawShell()
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}
+	spanClock.Lap(CpuCensus::kSpanShellTail);
 }
 
 // ---- Distant-snow / LOD diagnostics ----

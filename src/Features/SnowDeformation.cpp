@@ -956,6 +956,8 @@ void SnowDeformation::Prepass()
 {
 	LoadTraceFramePulse();
 	RollCpuCensus();
+	ScopedTicks _prepassTicks(cpuCensus.spanTicks[CpuCensus::kSpanPrepass], cpuCensus.spanCalls[CpuCensus::kSpanPrepass]);
+	SpanClock spanClock;
 	ApplyRangeSettings();
 
 	// Frame boundary for the once-per-frame local shadow atlas copy.
@@ -1040,6 +1042,7 @@ void SnowDeformation::Prepass()
 	//
 	// Arcs age above the suspend: one left behind on leaving snow must still
 	// expire while the passes below sleep.
+	spanClock.Lap(CpuCensus::kSpanPrepassHead);
 	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 
 	// Bare must hold kShellGateBareFrames before suspending: the resume clears
@@ -1057,6 +1060,7 @@ void SnowDeformation::Prepass()
 		clearRequested = true;
 		logger::debug("[SNOW DEFORMATION] Deformation passes resumed, clearing map");
 	}
+	spanClock.Lap(CpuCensus::kSpanPrepassArcsAndGate);
 
 	PerFrame perFrameData{};
 
@@ -1163,16 +1167,23 @@ void SnowDeformation::Prepass()
 	// The clock was read above; a tile folded in this frame must be stamped with
 	// the decay the world has already accrued, and a backwards jump has to drop
 	// the store before anything reads it.
+	spanClock.Lap(CpuCensus::kSpanPrepassPerFrame);
 	TickTrenchClock();
 	TickAccumulation();
 	TickSnowCondition();
+	spanClock.Lap(CpuCensus::kSpanTrenchTicks);
 	SweepTrenchStore();
+	spanClock.Lap(CpuCensus::kSpanTrenchSweep);
 	DrainTrenchBands();
+	spanClock.Lap(CpuCensus::kSpanTrenchDrain);
 	FlushDepartingTrenches(scroll, perFrameData.ClearMap != 0);
+	spanClock.Lap(CpuCensus::kSpanTrenchFlush);
 	// Departure is not the only way ground becomes worth storing: dig and save
 	// without moving and nothing ever leaves. This keeps the store true.
 	RollTrenchWindow();
+	spanClock.Lap(CpuCensus::kSpanTrenchRoll);
 	perFrameData.InjectValid = BuildTrenchInject(scroll, perFrameData.ClearMap != 0);
+	spanClock.Lap(CpuCensus::kSpanTrenchInject);
 
 	// The two CPU gathers, named beside the dispatches below. Every GPU pass in
 	// this feature was already timed and neither of these was, which is the
@@ -1186,6 +1197,7 @@ void SnowDeformation::Prepass()
 	// Timed inside as two sequential passes (actors+bones, then the reference
 	// scan for props), so the bone walk's share can be read on its own.
 	GatherStamps(perFrameData);
+	spanClock.Lap(CpuCensus::kSpanGather);
 	// Moving props inside the contact window carve by their render mesh:
 	// drawn now, read by the stamp pass below. Dim 0 tells the pass there
 	// is no field this frame.
@@ -1225,7 +1237,9 @@ void SnowDeformation::Prepass()
 
 	// Marked here, consumed by NEXT frame's roll: the map these stamps are
 	// about to be written into is the one that frame will be copying.
+	spanClock.Lap(CpuCensus::kSpanContact);
 	MarkTrenchDirtyRows(perFrameData);
+	spanClock.Lap(CpuCensus::kSpanDirtyRows);
 
 
 	// Activity view: which texels the CS is about to claim changed, and in
@@ -1241,6 +1255,7 @@ void SnowDeformation::Prepass()
 	// inputs active since the verdict) keeps them running.
 	PollDeformActivity(context);
 	PollExtentReadback(context);
+	spanClock.Lap(CpuCensus::kSpanPolls);
 
 	// Stamps are "quiet" when the SET is unchanged since the last executed
 	// dispatch, not when it is empty - planted feet stamp every frame, so a
@@ -1369,6 +1384,7 @@ void SnowDeformation::Prepass()
 	const bool evolveNeeded = perFrameData.RefillAmount > 0.0f || !evolveQuiet ||
 	                          (debugForceDeformationUpdate || debugContactView);
 	evolveIdleLastFrame = !deformIdleSkipped && !evolveNeeded;
+	spanClock.Lap(CpuCensus::kSpanIdleLogic);
 
 	if (!deformIdleSkipped) {
 		perFrame->Update(perFrameData);
@@ -1708,6 +1724,7 @@ void SnowDeformation::Prepass()
 		}
 	}
 
+	spanClock.Lap(CpuCensus::kSpanDispatch);
 	// After the passes, so it copies the map this frame just wrote - including
 	// anything the ring injected into it.
 	UpdateTrenchDebugTexture();
@@ -1727,6 +1744,7 @@ void SnowDeformation::Prepass()
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(104, 1, &waterSRV);
+	spanClock.Lap(CpuCensus::kSpanPrepassTail);
 }
 
 ID3D11ComputeShader* SnowDeformation::GetExclusionFieldCS()

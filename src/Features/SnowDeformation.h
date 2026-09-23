@@ -2439,6 +2439,44 @@ public:
 		uint64_t stampHashRing[kHashRing] = {};
 		uint32_t stampHashHead = 0;
 		bool stampHashDumpRequested = false;
+		/** @brief Named CPU spans: Prepass and DrawShell whole, then DrawShell's consecutive segments (SpanClock laps). */
+		enum Span : uint32_t
+		{
+			kSpanPrepass,
+			kSpanDrawShell,
+			kSpanShellSetup,
+			kSpanObjectHeightMap,
+			kSpanWaterCapture,
+			kSpanWaterCover,
+			kSpanBloodCapture,
+			kSpanRuneCapture,
+			kSpanShellGrid,
+			kSpanStatics,
+			kSpanShellRestore,
+			kSpanLODProbe,
+			kSpanShellTail,
+			kSpanPrepassHead,
+			kSpanPrepassArcsAndGate,
+			kSpanPrepassPerFrame,
+			kSpanTrenchTicks,
+			kSpanTrenchSweep,
+			kSpanTrenchDrain,
+			kSpanTrenchFlush,
+			kSpanTrenchRoll,
+			kSpanTrenchInject,
+			kSpanGather,
+			kSpanContact,
+			kSpanDirtyRows,
+			kSpanPolls,
+			kSpanIdleLogic,
+			kSpanDispatch,
+			kSpanPrepassTail,
+			kSpanCount
+		};
+		static constexpr const char* kSpanNames[kSpanCount] = { "Prepass", "DrawShell", "DrawShell.Setup", "DrawShell.ObjectHeightMap", "DrawShell.WaterCapture", "DrawShell.WaterCover", "DrawShell.BloodCapture", "DrawShell.RuneCapture", "DrawShell.GridAndBind", "DrawShell.Statics", "DrawShell.Restore", "DrawShell.LODProbe", "DrawShell.Tail",
+			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail" };
+		int64_t spanTicks[kSpanCount] = {};
+		uint32_t spanCalls[kSpanCount] = {};
 	};
 	static inline CpuCensus cpuCensus;
 	struct CpuCensusShown
@@ -2446,6 +2484,7 @@ public:
 		float hookMs = 0.0f, hookCalls = 0.0f, actorMs = 0.0f, actors = 0.0f, landMs = 0.0f, landCalls = 0.0f;
 		float depthMs = 0.0f, depthCalls = 0.0f, traverseMs = 0.0f, traverseCalls = 0.0f;
 		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f;
+		float spanMs[CpuCensus::kSpanCount] = {};
 	};
 	CpuCensusShown cpuShown;
 	// rdtsc, not QPC: two QPC reads are ~50 ns and the hook runs thousands of
@@ -2462,6 +2501,18 @@ public:
 		{
 			acc += int64_t(__rdtsc() - t0);
 			calls++;
+		}
+	};
+	/** @brief Consecutive segments: each Lap charges the time since the previous lap (or construction) to one span. */
+	struct SpanClock
+	{
+		uint64_t t = __rdtsc();
+		void Lap(CpuCensus::Span a_span)
+		{
+			const uint64_t now = __rdtsc();
+			cpuCensus.spanTicks[a_span] += int64_t(now - t);
+			cpuCensus.spanCalls[a_span]++;
+			t = now;
 		}
 	};
 	template <class F>
