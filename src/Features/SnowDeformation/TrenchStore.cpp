@@ -212,6 +212,19 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 	if (texel <= 0.0f)
 		return;
 
+	// Against the CURRENT origin: these rows are consumed next frame, by which
+	// time the map being copied is the one this frame wrote.
+	auto markSpan = [&](float a_minY, float a_maxY) {
+		const int row0 = std::max((int)std::floor((a_minY - a_data.WindowOrigin.y) / texel), 0);
+		const int row1 = std::min((int)std::floor((a_maxY - a_data.WindowOrigin.y) / texel), dim - 1);
+		for (int row = row0; row <= row1; row++) {
+			uint32_t& word = trenchDirtyRows[(size_t)row >> 5];
+			const uint32_t bit = 1u << (row & 31);
+			cpuCensus.rowsMarkedTotal += (word & bit) ? 0 : 1;
+			word |= bit;
+		}
+	};
+
 	cpuCensus.stampsTotal += a_data.StampCount;
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
 		// Carves only. A melt stamp's depth is subtracted out of what the
@@ -222,22 +235,17 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 
 		// The capsule spans segStart to tip, so take both ends plus the radius.
 		const float radius = a_data.Stamps[i].w;
-		const float minY = std::min(a_data.Stamps[i].y, a_data.StampEnds[i].y) - radius;
-		const float maxY = std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + radius;
-
-		// Against the CURRENT origin: these rows are consumed next frame, by
-		// which time the map being copied is the one this frame wrote.
-		int row0 = (int)std::floor((minY - a_data.WindowOrigin.y) / texel);
-		int row1 = (int)std::floor((maxY - a_data.WindowOrigin.y) / texel);
-		row0 = std::max(row0, 0);
-		row1 = std::min(row1, dim - 1);
-		for (int row = row0; row <= row1; row++) {
-			uint32_t& word = trenchDirtyRows[(size_t)row >> 5];
-			const uint32_t bit = 1u << (row & 31);
-			cpuCensus.rowsMarkedTotal += (word & bit) ? 0 : 1;
-			word |= bit;
-		}
+		markSpan(std::min(a_data.Stamps[i].y, a_data.StampEnds[i].y) - radius,
+			std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + radius);
 	}
+
+	// Contact-window raster draws carve by mesh and never enter the stamp list;
+	// their bounds mark rows too (CODE-NOTES: trench roll blind spot).
+	for (const auto* draws : { &contactActors, &contactProps })
+		for (const auto& draw : *draws) {
+			cpuCensus.contactRectsTotal++;
+			markSpan(draw.minY, draw.maxY);
+		}
 }
 
 void SnowDeformation::RollTrenchWindow()

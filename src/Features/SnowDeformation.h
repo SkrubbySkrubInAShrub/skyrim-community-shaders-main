@@ -2481,6 +2481,8 @@ public:
 		uint64_t stampsTotal = 0;
 		uint64_t carveStampsTotal = 0;
 		uint64_t rowsMarkedTotal = 0;
+		/** @brief Cumulative raster-candidate (contact capture) rectangles that marked rows. */
+		uint64_t contactRectsTotal = 0;
 		/** @brief Actors that emitted stamps: this frame, and the latest frame that had any. Props and spells are not attributed. */
 		struct StampSource
 		{
