@@ -701,6 +701,11 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			const uint8_t quantised = depth >= kTrenchStoreEpsilon ?
 			                              (uint8_t)std::lround(std::clamp(depth, 0.0f, 1.0f) * 255.0f) :
 			                              (uint8_t)0;
+			// Raise-only, so a zero writes nothing; skipping it only defers the
+			// tile's lazy decay, which is exact at any call cadence. Most of a
+			// slice is untrodden: this was ~3 ms/frame at a 125 m window.
+			if (quantised == 0)
+				continue;
 
 			const float worldX = a_meta.origin.x + ((float)(a_meta.x0 + col) + 0.5f) * a_meta.texel;
 			const int gx0 = (int)std::floor((worldX - half) / storeTexel);
