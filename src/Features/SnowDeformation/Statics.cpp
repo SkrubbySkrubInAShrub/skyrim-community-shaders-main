@@ -1216,8 +1216,10 @@ struct SD_BSLightingShader_SetupGeometry
 	static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
 		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded)
+		if (snowDeformation.loaded) {
+			snowDeformation.OnLightingDraw(a_pass);
 			snowDeformation.SetProjectedSnowBit(shader, a_pass);
+		}
 
 		func(shader, a_pass, a_flags);
 

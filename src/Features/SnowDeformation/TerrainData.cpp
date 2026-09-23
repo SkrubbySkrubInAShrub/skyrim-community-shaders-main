@@ -1142,19 +1142,20 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 }
 
 // Times the game's deferred terrain draws, which the per-type overlay only sees
-// as CPU wall time between draws. One pass per RUN of consecutive terrain batches:
+// as CPU wall time between draws. One pass per RUN of consecutive terrain draws:
 // a pass per batch (~35 a frame) overran the profiler's shared 128-slot frame
-// budget. The run ends at the next non-terrain SetupTechnique of any shader,
-// or at DrawShell entry, the first profiled code after the opaque batches.
-// The profiler cannot nest; a run still open at the frame boundary is
-// dropped, never ended into the next frame's slots.
-void SnowDeformation::OnLightingSetupTechnique(uint32_t a_rawTechnique)
+// budget. Decided per draw from the pass's landscape property flag, the test
+// TerrainBlending uses: SetupTechnique's argument decoded as MTLand while the
+// shader held technique 0, and the run swallowed interior statics. The run
+// ends at the next non-terrain Lighting draw, any other shader's
+// SetupTechnique, or DrawShell entry. The profiler cannot nest; a run still
+// open at the frame boundary is dropped, never ended into the next frame's slots.
+void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 {
-	using Technique = SIE::ShaderCache::LightingShaderTechniques;
-	const auto technique = static_cast<Technique>((a_rawTechnique >> 24) & 0x3F);
 	// Deferred pass only: forward terrain (reflections) can be the frame's last
-	// setup, leaving a run open across later profiled passes.
-	const bool landscape = (technique == Technique::MTLand || technique == Technique::MTLandLODBlend) && globals::deferred->deferredPass;
+	// draw, leaving a run open across later profiled passes.
+	const bool landscape = globals::deferred->deferredPass && a_pass && a_pass->shaderProperty &&
+	                       a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 	if (!landscape) {
 		CloseLandscapeRun();
 		return;
@@ -1170,7 +1171,7 @@ void SnowDeformation::OnLightingSetupTechnique(uint32_t a_rawTechnique)
 			landscapeCensusPeakRuns = std::max(landscapeCensusPeakRuns, landscapeRunsThisFrame);
 			if (++landscapeCensusFrames == 600) {
 				landscapeCensusLogged = true;
-				logger::info("[SNOW DEFORMATION] landscape timer census over 600 terrain frames: {:.1f} runs/frame (peak {}), {:.1f} batches/frame, {} runs past the cap of {}, {} dropped at the frame boundary",
+				logger::info("[SNOW DEFORMATION] landscape timer census over 600 terrain frames: {:.1f} runs/frame (peak {}), {:.1f} terrain draws/frame, {} runs past the cap of {}, {} dropped at the frame boundary",
 					landscapeCensusRuns / 600.0, landscapeCensusPeakRuns, landscapeCensusBatches / 600.0, landscapeCensusCapped, kLandscapeRunCap, landscapeCensusDropped);
 			}
 		}
@@ -1234,18 +1235,6 @@ struct SD_BSLightingShader_SetupMaterial
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-struct SD_BSLightingShader_SetupTechnique
-{
-	static bool thunk(RE::BSShader* shader, uint32_t a_technique)
-	{
-		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded)
-			snowDeformation.OnLightingSetupTechnique(a_technique);
-		return func(shader, a_technique);
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
 // Any other shader setting up a technique ends the landscape run.
 template <int Slot>
 struct SD_OtherShader_SetupTechnique
@@ -1262,8 +1251,7 @@ struct SD_OtherShader_SetupTechnique
 
 void SnowDeformation::InstallLandscapeTimingHook()
 {
-	logger::info("[SNOW DEFORMATION] Hooking BSShader::SetupTechnique on 9 shader types (landscape timer)");
-	stl::write_vfunc<0x2, SD_BSLightingShader_SetupTechnique>(RE::VTABLE_BSLightingShader[0]);
+	logger::info("[SNOW DEFORMATION] Hooking BSShader::SetupTechnique on 8 non-Lighting shader types (landscape timer)");
 	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<0>>(RE::VTABLE_BSGrassShader[0]);
 	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<1>>(RE::VTABLE_BSEffectShader[0]);
 	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<2>>(RE::VTABLE_BSWaterShader[0]);

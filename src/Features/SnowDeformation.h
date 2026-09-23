@@ -3452,11 +3452,11 @@ public:
 	/** @brief Publishes the cached snow mask for the material about to be drawn via ExtraFeatureDescriptor bits 10-15. */
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 
-	/** @brief Lighting SetupTechnique: a deferred-pass MTLand/MTLandLODBlend batch opens or extends the landscape run (one profiler pass over consecutive terrain batches); anything else closes it. Implemented in TerrainData.cpp. */
-	void OnLightingSetupTechnique(uint32_t a_rawTechnique);
-	/** @brief Ends the open landscape run. Called before any non-landscape SetupTechnique on every BSShader type, and at DrawShell entry. */
+	/** @brief Before each Lighting draw (SetupGeometry): a deferred-pass draw with the landscape property flag opens or extends the landscape run (one profiler pass over consecutive terrain draws); any other Lighting draw closes it. Implemented in TerrainData.cpp. */
+	void OnLightingDraw(RE::BSRenderPass* a_pass);
+	/** @brief Ends the open landscape run. Called on non-terrain Lighting draws, any other shader's SetupTechnique, and DrawShell entry. */
 	void CloseLandscapeRun();
-	/** @brief Installs SetupTechnique hooks on every batch-rendered BSShader vtable. Called from PostPostLoad. */
+	/** @brief Installs SetupTechnique hooks on the non-Lighting batch-rendered BSShader vtables. Called from PostPostLoad. */
 	void InstallLandscapeTimingHook();
 	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
 	void InstallDevBenchTools();
