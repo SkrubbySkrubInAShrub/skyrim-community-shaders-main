@@ -1,5 +1,6 @@
 #include "FeatureOverwrites.h"
 
+#include "CSEditor/EditorWindow.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
@@ -169,9 +170,18 @@ namespace
 
 		const float width = ImGui::GetFontSize() * kExportPopupWidthEm;
 		ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, ImGui::GetMainViewport()->WorkSize.y));
-		auto popup = Util::CenteredPopupModal(title.c_str());
+		bool open = true;
+		auto popup = Util::CenteredPopupModal(title.c_str(), &open);
 		if (!popup)
 			return;
+
+		if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+			// The editor ignores Escape only while a popup is open, which this close is about to end.
+			if (auto* editor = EditorWindow::GetSingleton(); editor->open)
+				editor->suppressNextEditorEscape = true;
+			ImGui::CloseCurrentPopup();
+			return;
+		}
 
 		ImGui::InputText(T(TKEY("export.mod_name"), "Mod Name"), exportState.modName, IM_ARRAYSIZE(exportState.modName));
 		const auto modName = Util::FileHelpers::SanitizeFileName(exportState.modName);
