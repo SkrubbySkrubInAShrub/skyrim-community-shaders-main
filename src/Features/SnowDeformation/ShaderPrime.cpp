@@ -187,6 +187,7 @@ ID3D11DeviceChild* SnowDeformation::CompileSnowShader(const wchar_t* a_path, con
 
 void SnowDeformation::DataLoaded()
 {
+	InstallDevBenchTools();
 	int expected = 0;
 	if (!snowPrimeState.compare_exchange_strong(expected, 1, std::memory_order_acq_rel))
 		return;

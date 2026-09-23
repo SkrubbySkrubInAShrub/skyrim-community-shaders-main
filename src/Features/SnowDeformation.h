@@ -3373,6 +3373,8 @@ public:
 	void CloseLandscapeRun();
 	/** @brief Installs SetupTechnique hooks on every batch-rendered BSShader vtable. Called from PostPostLoad. */
 	void InstallLandscapeTimingHook();
+	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
+	void InstallDevBenchTools();
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */
 	static constexpr uint32_t kLandscapeRunCap = 8;
 	bool landscapeRunOpen = false;
