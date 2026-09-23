@@ -3519,6 +3519,8 @@ public:
 	bool shellMainCullAll = false;
 	/** @brief DevBench: applies shell measurement args (shellKill, shellSplitTiming, shellPrepass, shellBake, shellStats, shellVisibleCull, shellPrepassLastFrame, shellMainCullAll) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
 	json DevBenchShellArgs(const json& a_args);
+	/** @brief DevBench: applies volume measurement args (memorySeconds, showRings) and returns the volume's live state per level. Implemented in DevBenchTools.cpp. */
+	json DevBenchVolumeArgs(const json& a_args);
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */

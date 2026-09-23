@@ -91,6 +91,19 @@ namespace
 		a_write(a_sink, dumped.c_str());
 	}
 
+	void VolumeTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		json out;
+		try {
+			const json args = a_argsJson && *a_argsJson ? json::parse(a_argsJson) : json::object();
+			out = globals::features::snowDeformation.DevBenchVolumeArgs(args);
+		} catch (const std::exception& e) {
+			out = { { "error", e.what() } };
+		}
+		const std::string dumped = out.dump();
+		a_write(a_sink, dumped.c_str());
+	}
+
 	void TrenchProbeTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		json out;
@@ -135,6 +148,24 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 					   { "ps", s.psInvocations }, { "primitives", s.rasterizedPrimitives }, { "samplesPassed", s.samplesPassed } } } };
 }
 
+json SnowDeformation::DevBenchVolumeArgs(const json& a_args)
+{
+	if (a_args.contains("memorySeconds") && a_args["memorySeconds"].is_number())
+		voxelMemorySeconds = std::clamp(a_args["memorySeconds"].get<float>(), 0.5f, 30.0f);
+	if (a_args.contains("showRings") && a_args["showRings"].is_boolean())
+		showVolumeRings = a_args["showRings"].get<bool>();
+	json levels = json::array();
+	for (uint L = 0; L < VoxelLevelsLive(); L++) {
+		const auto& lv = voxelLevels[L];
+		levels.push_back({ { "level", L }, { "valid", lv.valid }, { "rebuilds", lv.rebuilds }, { "voxelSize", VoxelSizeForLevel(L) },
+			{ "dims", { lv.dims.x, lv.dims.y, lv.dims.z } }, { "origin", { lv.origin.x, lv.origin.y, lv.origin.z } } });
+	}
+	return { { "volumeSnow", settings.VolumeSnow }, { "shadersFailed", voxelShadersFailed }, { "memorySeconds", voxelMemorySeconds },
+		{ "showRings", showVolumeRings }, { "occupancyL0", voxelOccupancyValid ? json(voxelOccupancy) : json(nullptr) },
+		{ "dirtyBricks", settings.VolumeDirtyBricks }, { "staggeredCapture", settings.VolumeStaggeredCapture }, { "ringShape", settings.VolumeRingShape },
+		{ "capturedStatics", capturedStatics.size() }, { "levels", levels } };
+}
+
 void SnowDeformation::InstallDevBenchTools()
 {
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -153,6 +184,9 @@ void SnowDeformation::InstallDevBenchTools()
 	static constexpr const char* shellDesc =
 		R"({"description":"Landscape shell measurement switches (runtime-only). shellKill: bitmask zeroing PS features before the ShellCB upload (1 parallax, 2 normal map, 4 RMAOS, 8 crisp shadows, 16 screen-space shadows, 32 SSS remarch, 64 glints, 128 point lights, 256 skylighting, 512 albedo texture; the statics shell shares the CB). shellSplitTiming: Shell row split into Shell.Setup/Prepass/Fill/Main. shellPrepass, shellBake: the depth prepass and the vertex bake. shellVisibleCull: the shading pass tessellates only patches that won a prepass pixel. shellPrepassLastFrame: the prepass tessellates only last frame's visible patches (exact only for a still camera and scene). shellMainCullAll: the shading draw culls every patch (VS+HS cost only, breaks the image). shellStats: D3D11 pipeline statistics around the shell draws, returned in stats (read two frames late). No args = read state.","inputSchema":{"type":"object","properties":{"shellKill":{"type":"integer"},"shellSplitTiming":{"type":"boolean"},"shellPrepass":{"type":"boolean"},"shellBake":{"type":"boolean"},"shellStats":{"type":"boolean"},"shellVisibleCull":{"type":"boolean"},"shellPrepassLastFrame":{"type":"boolean"},"shellMainCullAll":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.shell", shellDesc, &ShellTool, nullptr);
+	static constexpr const char* volumeDesc =
+		R"({"description":"Volume snow measurement switches (runtime-only, not serialised). memorySeconds: Volume Memory, 0.5-30 s. showRings: Colour Rings. Returns the volume's state: shader failure, level-0 occupancy count, capture count, and per level valid/rebuilds/voxel size/dims/origin. No args = read state.","inputSchema":{"type":"object","properties":{"memorySeconds":{"type":"number"},"showRings":{"type":"boolean"}}}})";
+	dvb->RegisterTool("snowdeformation.volume", volumeDesc, &VolumeTool, nullptr);
 	logger::info("[SNOW DEFORMATION] DevBench tools registered: snowdeformation.shadertypes, snowdeformation.cpucensus");
 #endif
 }
