@@ -675,6 +675,11 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	TrenchTileKey cachedKey{ 0, INT32_MIN, INT32_MIN };
 	TrenchTile* cachedTile = nullptr;
 
+	// depth <= total, so a total below the epsilon (or negative) always stores
+	// zero. Positive half bits order like their values; either rounding of the
+	// epsilon to half leaves no half value on the wrong side.
+	static const DirectX::PackedVector::HALF kEpsilonHalf = DirectX::PackedVector::XMConvertFloatToHalf(kTrenchStoreEpsilon);
+
 	for (int row = 0; row < a_meta.h; row++) {
 		const auto* src = reinterpret_cast<const DirectX::PackedVector::HALF*>(
 			static_cast<const uint8_t*>(a_mapped.pData) + (size_t)row * a_mapped.RowPitch);
@@ -693,7 +698,10 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			// displacement. Scorch (negative y) is NOT subtracted - it was
 			// displaced and keeps its berm. Campfire melt never reaches here;
 			// that is the exclusion field, rederived each frame.
-			const float total = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4]);
+			const DirectX::PackedVector::HALF totalBits = src[(size_t)col * 4];
+			if ((totalBits & 0x8000) || totalBits < kEpsilonHalf)
+				continue;
+			const float total = DirectX::PackedVector::XMConvertHalfToFloat(totalBits);
 			const float melted = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4 + 1]);
 			const float depth = std::clamp(total - std::max(melted, 0.0f), 0.0f, 1.0f);
 			// Written, not maxed: the store is the map's record, so snow the
