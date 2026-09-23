@@ -212,11 +212,13 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 	if (texel <= 0.0f)
 		return;
 
+	cpuCensus.stampsTotal += a_data.StampCount;
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
 		// Carves only. A melt stamp's depth is subtracted out of what the
 		// store keeps anyway, so mirroring its rows early buys nothing.
 		if (a_data.StampEnds[i].z > 0.5f)
 			continue;
+		cpuCensus.carveStampsTotal++;
 
 		// The capsule spans segStart to tip, so take both ends plus the radius.
 		const float radius = a_data.Stamps[i].w;
@@ -229,8 +231,12 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 		int row1 = (int)std::floor((maxY - a_data.WindowOrigin.y) / texel);
 		row0 = std::max(row0, 0);
 		row1 = std::min(row1, dim - 1);
-		for (int row = row0; row <= row1; row++)
-			trenchDirtyRows[(size_t)row >> 5] |= 1u << (row & 31);
+		for (int row = row0; row <= row1; row++) {
+			uint32_t& word = trenchDirtyRows[(size_t)row >> 5];
+			const uint32_t bit = 1u << (row & 31);
+			cpuCensus.rowsMarkedTotal += (word & bit) ? 0 : 1;
+			word |= bit;
+		}
 	}
 }
 
@@ -278,6 +284,7 @@ void SnowDeformation::RollTrenchWindow()
 	if (trenchRollValid[ring]) {
 		D3D11_MAPPED_SUBRESOURCE stale{};
 		if (SUCCEEDED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, 0, &stale))) {
+			cpuCensus.trenchStorePath = CpuCensus::kStoreRollStale;
 			StoreTrenchBand(trenchRollMeta[ring], stale);
 			context->Unmap(trenchRollStaging[ring].get(), 0);
 		}
@@ -616,6 +623,12 @@ void SnowDeformation::ClearTrenchStoreLocked(const char* a_reason)
 	trenchMapPrimed = false;
 }
 
+float SnowDeformation::ProbeTrenchStore(float a_worldX, float a_worldY)
+{
+	std::scoped_lock lock(trenchStoreMutex);
+	return SampleTrenchStore(activeWorldspace.load(std::memory_order_acquire), a_worldX, a_worldY);
+}
+
 float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY)
 {
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
@@ -656,6 +669,7 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 
 void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped)
 {
+	cpuCensus.storeCalls[cpuCensus.trenchStorePath]++;
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 	const float half = a_meta.texel * 0.5f;
 
@@ -771,6 +785,8 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					const int lx = gx - key.x * kTrenchTileDim;
 					const int ly = gy - key.y * kTrenchTileDim;
 					uint8_t& stored = cachedTile->depth[(size_t)ly * kTrenchTileDim + lx];
+					if (quantised > stored)
+						cpuCensus.storeRaises[cpuCensus.trenchStorePath]++;
 					// RAISE ONLY. The map may teach the store what has been dug;
 					// it may not teach it that snow is gone.
 					//
@@ -810,6 +826,7 @@ void SnowDeformation::DrainTrenchBands()
 			// simply waits another frame rather than stalling the render thread.
 			if (FAILED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 				continue;
+			cpuCensus.trenchStorePath = CpuCensus::kStoreBand;
 			StoreTrenchBand(trenchBandMeta[ring][axis], mapped);
 			context->Unmap(trenchBandStaging[ring][axis].get(), 0);
 			trenchBandValid[ring][axis] = false;
@@ -822,6 +839,7 @@ void SnowDeformation::DrainTrenchBands()
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (FAILED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 			continue;
+		cpuCensus.trenchStorePath = CpuCensus::kStoreRoll;
 		StoreTrenchBand(trenchRollMeta[ring], mapped);
 		context->Unmap(trenchRollStaging[ring].get(), 0);
 		trenchRollValid[ring] = false;
@@ -876,6 +894,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(fullStaging.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+			cpuCensus.trenchStorePath = CpuCensus::kStoreJump;
 			StoreTrenchBand({ trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim }, mapped);
 			context->Unmap(fullStaging.get(), 0);
 		}
@@ -910,6 +929,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		if (trenchBandValid[ring][axis]) {
 			D3D11_MAPPED_SUBRESOURCE stale{};
 			if (SUCCEEDED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, 0, &stale))) {
+				cpuCensus.trenchStorePath = CpuCensus::kStoreBandStale;
 				StoreTrenchBand(trenchBandMeta[ring][axis], stale);
 				context->Unmap(trenchBandStaging[ring][axis].get(), 0);
 			}

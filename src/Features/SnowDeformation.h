@@ -2477,6 +2477,36 @@ public:
 			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail" };
 		int64_t spanTicks[kSpanCount] = {};
 		uint32_t spanCalls[kSpanCount] = {};
+		/** @brief Cumulative: every stamp uploaded, the carve (non-melt) ones MarkTrenchDirtyRows saw, and rows it newly marked dirty. */
+		uint64_t stampsTotal = 0;
+		uint64_t carveStampsTotal = 0;
+		uint64_t rowsMarkedTotal = 0;
+		/** @brief Actors that emitted stamps: this frame, and the latest frame that had any. Props and spells are not attributed. */
+		struct StampSource
+		{
+			uint32_t formID;
+			uint32_t stamps;
+		};
+		static constexpr uint32_t kStampSourceMax = 16;
+		StampSource stampSources[kStampSourceMax] = {};
+		uint32_t stampSourceCount = 0;
+		StampSource lastStampSources[kStampSourceMax] = {};
+		uint32_t lastStampSourceCount = 0;
+		uint32_t lastStampSourceFrame = 0;
+		/** @brief Cumulative StoreTrenchBand calls and texel raises per caller path (set in trenchStorePath before each call). */
+		enum StorePath : uint32_t
+		{
+			kStoreRoll,
+			kStoreRollStale,
+			kStoreBand,
+			kStoreBandStale,
+			kStoreJump,
+			kStorePathCount
+		};
+		static constexpr const char* kStorePathNames[kStorePathCount] = { "roll", "rollStale", "band", "bandStale", "jump" };
+		uint64_t storeCalls[kStorePathCount] = {};
+		uint64_t storeRaises[kStorePathCount] = {};
+		uint32_t trenchStorePath = kStoreRoll;
 	};
 	static inline CpuCensus cpuCensus;
 	struct CpuCensusShown
@@ -3426,6 +3456,8 @@ public:
 	void InstallLandscapeTimingHook();
 	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
 	void InstallDevBenchTools();
+	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
+	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */
 	static constexpr uint32_t kLandscapeRunCap = 8;
 	bool landscapeRunOpen = false;

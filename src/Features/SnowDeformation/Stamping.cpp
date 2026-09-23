@@ -7,6 +7,7 @@
 #include "Features/SnowDeformation/AlphaBuild.h"
 
 #include "Globals.h"
+#include "State.h"
 #include "Features/SnowDeformation/ShapeBounds.h"
 #include "Utils/ActorUtils.h"
 #include "Utils/Game.h"
@@ -1458,16 +1459,32 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 	};
 
+	cpuCensus.stampSourceCount = 0;
+	auto addStampsCounted = [&](RE::ActorHandle a_handle) {
+		const uint before = stampCount;
+		addStamps(a_handle);
+		auto& c = cpuCensus;
+		if (stampCount > before && c.stampSourceCount < CpuCensus::kStampSourceMax) {
+			auto actor = a_handle.get();
+			c.stampSources[c.stampSourceCount++] = { actor ? actor->formID : 0u, stampCount - before };
+		}
+	};
+
 	if (auto player = RE::PlayerCharacter::GetSingleton()) {
 		ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
-		addStamps(player->GetHandle());
+		addStampsCounted(player->GetHandle());
 	}
 
 	if (const auto processLists = RE::ProcessLists::GetSingleton()) {
 		for (auto& actorHandle : processLists->highActorHandles) {
 			ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
-			addStamps(actorHandle);
+			addStampsCounted(actorHandle);
 		}
+	}
+	if (cpuCensus.stampSourceCount > 0) {
+		std::copy_n(cpuCensus.stampSources, cpuCensus.stampSourceCount, cpuCensus.lastStampSources);
+		cpuCensus.lastStampSourceCount = cpuCensus.stampSourceCount;
+		cpuCensus.lastStampSourceFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	}
 	// One frame of lag: the probe follows whoever ended THIS gather nearest,
 	// and fills during the next, so the pick is settled before any row is
