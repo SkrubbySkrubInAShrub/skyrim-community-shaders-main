@@ -96,11 +96,13 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i), dim);
 		if (!lv.heightMap) {
 			const uint hdim = dim.x * 4;
+			// Two slices: the top surface, and the second layer under it
+			// (the capture PS).
 			D3D11_TEXTURE2D_DESC desc{
 				.Width = hdim,
 				.Height = hdim,
 				.MipLevels = 1,
-				.ArraySize = 1,
+				.ArraySize = 2,
 				.Format = DXGI_FORMAT_R32_UINT,
 				.SampleDesc = { .Count = 1 },
 				.Usage = D3D11_USAGE_DEFAULT,
@@ -108,13 +110,13 @@ bool SnowDeformation::EnsureVoxelResources()
 			};
 			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 				.Format = desc.Format,
-				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
+				.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = 1, .FirstArraySlice = 0, .ArraySize = 2 }
 			};
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
 				.Format = desc.Format,
-				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MipSlice = 0 }
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
+				.Texture2DArray = { .MipSlice = 0, .FirstArraySlice = 0, .ArraySize = 2 }
 			};
 			lv.heightMap = new Texture2D(desc, std::format("SnowDeformation::VoxelHeightMap{}", i).c_str());
 			lv.heightMap->CreateSRV(srvDesc);

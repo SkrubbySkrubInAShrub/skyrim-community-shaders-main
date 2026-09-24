@@ -256,7 +256,13 @@ RWTexture3D<float> Volume : register(u0);
 // reads the top surface's facing from here and not from the voxel's own
 // nibble, a plain store that whichever fragment landed last won (the
 // two-shape alternation, Josef, 2026-09-11).
-RWTexture2D<uint> HeightMap : register(u2);
+// Slice 0. Slice 1 is the SECOND layer: the highest up-facing surface a
+// headroom or more below slice 0, so a sill under an eave or a floor under
+// a balcony has a facing that is a max's too, not the nibble's last write
+// (the residue under cover after the race fix, Josef 2026-09-24). Slice 0
+// is read as it stands - last rebuild's, or this one's so far - so slice
+// 1 fills once the top is known, within a stagger period of it.
+RWTexture2DArray<uint> HeightMap : register(u2);
 
 void main(GS_OUTPUT input)
 {
@@ -267,7 +273,11 @@ void main(GS_OUTPUT input)
 		int mask4 = Dims.x * 4 - 1;
 		int2 sub = ((int2)floor(vox.xy * 4.0) + OriginVox.xy * 4) & mask4;
 		float worldZ = (vox.z + (float)OriginVox.z) * VoxelSize;
-		InterlockedMax(HeightMap[(uint2)sub], (asuint(worldZ + 32768.0) & ~0xFu) | nzq);
+		uint key = (asuint(worldZ + 32768.0) & ~0xFu) | nzq;
+		uint top = HeightMap[uint3((uint2)sub, 0)];
+		InterlockedMax(HeightMap[uint3((uint2)sub, 0)], key);
+		[branch] if (top != 0u && nzq > 7u && worldZ < asfloat(top & ~0xFu) - 32768.0 - HeadroomVox * VoxelSize)
+			InterlockedMax(HeightMap[uint3((uint2)sub, 1)], key);
 		return;
 	}
 	// Extent of the fragment along the projection axis, from the screen
@@ -307,9 +317,10 @@ Texture3D<float> FieldIn : register(t3);
 Texture3D<float> OccupancyIn : register(t4);
 // The capture's heightmap: the topmost surface over each sub-pixel, four a
 // voxel side, as the bits of (world z + 32768) with the surface's up-ness
-// in the low four bits (see the capture PS); 0 = nothing captured.
-Texture2D<uint> HeightMapIn : register(t10);
-RWTexture2D<uint> HeightMapOut : register(u8);
+// in the low four bits (see the capture PS); 0 = nothing captured. Slice
+// 1 = the second layer, the highest up-facing surface a headroom below it.
+Texture2DArray<uint> HeightMapIn : register(t10);
+RWTexture2DArray<uint> HeightMapOut : register(u8);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
 // Occupied-voxel count for the menu: one atomic per group, not per thread.
@@ -641,7 +652,7 @@ float OccNz(float v)
 		uint keys[16];
 		[unroll] for (int i = 0; i < 16; i++)
 		{
-			keys[i] = HeightMapIn[hb + uint2(i & 3, i >> 2)];
+			keys[i] = HeightMapIn[uint3(hb + uint2(i & 3, i >> 2), 0)];
 			[flatten] if (keys[i] != 0u)
 				hmax = max(hmax, (asfloat(keys[i] & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z);
 		}
@@ -663,6 +674,42 @@ float OccNz(float v)
 				}
 			}
 			nz = nsum / nn;
+		}
+		else
+		{
+			// UNDER COVER: the second layer, where this voxel holds its top.
+			// A third layer down (or a member whose top the second layer's
+			// columns do not carry) still reads the nibble.
+			float h2max = -1.0e4;
+			uint keys2[16];
+			[unroll] for (int i2 = 0; i2 < 16; i2++)
+			{
+				keys2[i2] = HeightMapIn[uint3(hb + uint2(i2 & 3, i2 >> 2), 1)];
+				[flatten] if (keys2[i2] != 0u)
+				{
+					float hz = (asfloat(keys2[i2] & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z;
+					[flatten] if (hz < (float)logical.z + 1.25)
+						h2max = max(h2max, hz);
+				}
+			}
+			[branch] if (h2max > (float)logical.z - 1.25)
+			{
+				float nsum = 0.0;
+				float nn = 0.0;
+				[unroll] for (int j2 = 0; j2 < 16; j2++)
+				{
+					[flatten] if (keys2[j2] != 0u)
+					{
+						float hz = (asfloat(keys2[j2] & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z;
+						[flatten] if (hz > h2max - 1.0 && hz < (float)logical.z + 1.25)
+						{
+							nsum += (float)(keys2[j2] & 15u) / 15.0 * 2.0 - 1.0;
+							nn += 1.0;
+						}
+					}
+				}
+				nz = nsum / max(nn, 1.0);
+			}
 		}
 		float facing = smoothstep(SlopeMinNz - 0.05, SlopeMinNz + 0.05, nz);
 		[branch] if (facing > 0.0)
@@ -723,7 +770,7 @@ float OccNz(float v)
 	uint2 hb = p * 4;
 	[unroll] for (int i = 0; i < 16; i++)
 	{
-		uint key = HeightMapIn[hb + uint2(i & 3, i >> 2)];
+		uint key = HeightMapIn[uint3(hb + uint2(i & 3, i >> 2), 0)];
 		hs[i] = key != 0u ? (asfloat(key & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z : -1.0e4;
 	}
 	// THE FIELD IS EXPONENTIAL IN HEIGHT: Coverage * exp(rate * (top - z)),
@@ -879,7 +926,7 @@ float ColumnTop(uint2 ph)
 	float n = 0.0;
 	[unroll] for (int i = 0; i < 4; i++)
 	{
-		uint key = HeightMapIn[hb + uint2(i, i)];
+		uint key = HeightMapIn[uint3(hb + uint2(i, i), 0)];
 		[flatten] if (key != 0u)
 		{
 			sum += (asfloat(key & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z;
@@ -1126,7 +1173,10 @@ float SliceRead(int3 logical)
 		{
 			uint2 hb = p.xy * 4;
 			[unroll] for (int i = 0; i < 16; i++)
-				HeightMapOut[hb + uint2(i & 3, i >> 2)] = 0u;
+			{
+				HeightMapOut[uint3(hb + uint2(i & 3, i >> 2), 0)] = 0u;
+				HeightMapOut[uint3(hb + uint2(i & 3, i >> 2), 1)] = 0u;
+			}
 		}
 	}
 	float v = inside ? VolumeIn[p] : 0.0;

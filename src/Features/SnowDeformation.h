@@ -2927,7 +2927,7 @@ public:
 	{
 		Texture3D* volume[2] = { nullptr, nullptr };
 		Texture3D* field = nullptr;
-		/** @brief R32_UINT, (4 dim)^2, world-anchored like the volume: the topmost captured surface over each sub-pixel as the bits of (world z + 32768) with the surface's up-ness in the low four bits, kept by an atomic max, so a column's height is deterministic and prefiltered over sixteen samples. The Z sweep prefers it; `height` is the fallback for a seed under an overhang. */
+		/** @brief R32_UINT, (4 dim)^2, two slices, world-anchored like the volume: slice 0 the topmost captured surface over each sub-pixel as the bits of (world z + 32768) with the surface's up-ness in the low four bits, kept by an atomic max, so a column's height is deterministic and prefiltered over sixteen samples; slice 1 the highest up-facing surface a headroom or more below it, the seed's facing under cover. */
 		Texture2D* heightMap = nullptr;
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
