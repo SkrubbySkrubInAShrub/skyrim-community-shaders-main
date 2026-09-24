@@ -914,6 +914,10 @@ public:
 	ID3D11ShaderResourceView* GetBloodClockSRV() const { return bloodClockTexture ? bloodClockTexture->srv.get() : nullptr; }
 	/** @brief Sum of RefillAmount over the session: the snowfall clock a deposit is dated by. */
 	float bloodBurialClock = 0.0f;
+	/** @brief Smallest refill applied in one dispatch: two R16F steps just below 1.0, so it always moves a stored value. */
+	static constexpr float kRefillStep = 1.0f / 1024.0f;
+	/** @brief Refill accumulated since the last dispatch that applied any. */
+	float refillBank = 0.0f;
 	/** @brief A blood draw seen by the capture hook this frame, drawn into the map after the object height raster. */
 	struct BloodCapture
 	{

@@ -1114,9 +1114,18 @@ void SnowDeformation::Prepass()
 	const float refillSeconds = gameClock.lastHours >= 0.0f ?
 	                                gameClock.elapsedHours * 3600.0f / std::max(gameClock.timescale, 1.0f) :
 	                                deltaTime;
-	perFrameData.RefillAmount = refillSeconds / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
+	const float frameRefill = refillSeconds / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
+	// A frame's refill (~2e-5 of full depth at 60 fps) is below what the R16F
+	// map stores near full depth and would round back every frame, so it is
+	// banked and spent in steps the map can hold.
+	refillBank += frameRefill;
+	perFrameData.RefillAmount = 0.0f;
+	if (refillBank >= kRefillStep) {
+		perFrameData.RefillAmount = refillBank;
+		refillBank = 0.0f;
+	}
 	// Blood is dated by the snowfall that has fallen since; nothing evolves it.
-	bloodBurialClock += perFrameData.RefillAmount;
+	bloodBurialClock += frameRefill;
 	// The same span, for the world's other self-driven clocks: the glaze thaw
 	// (which runs under a clear sky, so waiting skipped it entirely) and the
 	// unsupported-snow settle. NOT for stamp application - a fire must not
