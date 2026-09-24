@@ -397,8 +397,7 @@ namespace SharedData
 		// Recolored projected snow also wears the shell snow's normal (vanilla's
 		// own projected normal is a dead write). Mirror in SnowDeformation.h.
 		float ProjSnowNormalEnable;
-		// Landscape snowness from the height-blended weights. Mirror in SnowDeformation.h.
-		float LandSnownessPostBlend;
+		float ProjAlphaPad1;
 		float ProjAlphaPad2;
 	};
 

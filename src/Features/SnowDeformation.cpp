@@ -172,7 +172,6 @@
 	X(SnowTexturedRecolor) 	X(ProjAlphaDensity) \
 	X(ProjSnowNormals) \
 	X(UnprojectedShapesBare) \
-	X(LandSnownessAfterHeightBlend) \
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \
@@ -689,7 +688,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowTexturedEnable = (settings.EnableSnowDeformation && settings.SnowTexturedRecolor && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.ProjAlphaDensity = settings.ProjAlphaDensity ? 1.0f : 0.0f;
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
-	data.LandSnownessPostBlend = settings.LandSnownessAfterHeightBlend ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// skins are gated the same way in DrawCapturedStatics.

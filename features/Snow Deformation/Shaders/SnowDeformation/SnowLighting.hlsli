@@ -57,11 +57,11 @@ namespace SnowLighting
 		}
 	}
 
-	// Re-run after EM height blending has rewritten the weights.
+	// Re-run after EM height blending has rewritten the weights, so the
+	// verdict matches the layer actually shown.
 	void LandSnownessPostBlend(inout State s, float4 blendWeights1, float2 blendWeights2)
 	{
-		[branch] if (SharedData::snowDeformationSettings.LandSnownessPostBlend > 0.5)
-			LandSnowness(s, blendWeights1, blendWeights2);
+		LandSnowness(s, blendWeights1, blendWeights2);
 	}
 
 	void DebugLandOverlay(inout float3 baseColor, float2 worldXYRel, float snowness, float2 uvOriginal)

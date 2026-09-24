@@ -277,10 +277,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSnowCasts = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_casts_shadows_tooltip"), "The ground snow and road snow are drawn into the sun's shadows, so deep snow, banks and trench walls cast shadows onto the world and onto the snow itself. Off, the snow still receives shadows but casts none. The Low preset turns it off."));
 
-		ImGui::Checkbox(T(TKEY("land_snowness_post_blend"), "Snow Detection After Height Blending"), &settings.LandSnownessAfterHeightBlend);
-		if (auto _ttPostBlend = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("land_snowness_post_blend_tooltip"), "With Extended Materials' height blending on, the ground's textures blend by their height maps, so rocks and grass poke through snow where the plain blend would show snow. On, the ground's snow detection reads the texture actually shown after that blending; off, it reads the plain blend. Only the blue channel of Debugging Options > Landscape Shell > Terrain Overlay shows this; nothing else reads it yet. Needs height blending on."));
-
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("camera_above_snow"), "Keep Camera Above the Snow"), &settings.CameraAboveSnow);

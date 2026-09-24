@@ -1524,8 +1524,6 @@
     "feature.snow_deformation.key_feature_2": "Trails carved by the player, NPCs and creatures",
     "feature.snow_deformation.key_feature_3": "Snowfall-driven snow refill",
     "feature.snow_deformation.key_feature_4": "Compute-shader based, low performance impact",
-    "feature.snow_deformation.land_snowness_post_blend": "Snow Detection After Height Blending",
-    "feature.snow_deformation.land_snowness_post_blend_tooltip": "With Extended Materials' height blending on, the ground's textures blend by their height maps, so rocks and grass poke through snow where the plain blend would show snow. On, the ground's snow detection reads the texture actually shown after that blending; off, it reads the plain blend. Only the blue channel of Debugging Options > Landscape Shell > Terrain Overlay shows this; nothing else reads it yet. Needs height blending on.",
     "feature.snow_deformation.land_tri_probe": "Probe Landscape Triangulation",
     "feature.snow_deformation.land_tri_probe_tooltip": "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow shell must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log.",
     "feature.snow_deformation.landscape_class_group": "Landscape Texture Class",

@@ -641,8 +641,6 @@ public:
 		bool ProjSnowNormals = true;
 		/** @brief "Unpainted Shapes Stay Bare" (2026-09-22): a shape of a snow-MATO object that the game draws without projection writes the drape's read-back mask as "known, unpainted", instead of leaving 0 there and having the drape read "unknown" as licence to coat. Found with XPMF, which strips the projected flag from one shape of a building; the shape then overdraws its projected siblings' verdict. Positive snow MATOs only, so mesh replacers and drifts keep the reconstruct path. */
 		bool UnprojectedShapesBare = true;
-		/** @brief "Snow Detection After Height Blending" (A/B, 2026-09-24): landscape snowness is taken from the blend weights after Extended Materials' height blending rewrites them, so it matches the visible layer. Off = the vertex weights. */
-		bool LandSnownessAfterHeightBlend = true;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Enclosed Shelter": cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)). Tents, not overhangs. */
@@ -740,8 +738,7 @@ public:
 		float ProjAlphaDensity;
 		/** @brief Settings::ProjSnowNormals as 0/1. Mirror in SharedData.hlsli. */
 		float ProjSnowNormalEnable;
-		/** @brief Settings::LandSnownessAfterHeightBlend as 0/1. Mirror in SharedData.hlsli. */
-		float LandSnownessPostBlend;
+		float ProjAlphaPad1;
 		float ProjAlphaPad2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
