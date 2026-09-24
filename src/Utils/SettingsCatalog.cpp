@@ -158,4 +158,20 @@ namespace Util::Settings
 		};
 		return visit(visit, values, json::json_pointer{});
 	}
+
+	void CollectUnknownSettingKeys(const nlohmann::json& incoming, const nlohmann::json& known,
+		const std::string& prefix, std::vector<std::string>& unknownKeys)
+	{
+		if (!incoming.is_object())
+			return;
+		for (const auto& [key, value] : incoming.items()) {
+			if (key.starts_with('_'))
+				continue;
+			const auto path = prefix.empty() ? key : prefix + "." + key;
+			if (!known.is_object() || !known.contains(key))
+				unknownKeys.push_back(path);
+			else if (value.is_object())
+				CollectUnknownSettingKeys(value, known[key], path, unknownKeys);
+		}
+	}
 }

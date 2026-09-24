@@ -181,8 +181,8 @@ size_t SettingsOverrideManager::ApplyOverrides(const std::string& featureName, j
 	auto it = featureOverrideMap.find(featureName);
 	if (it != featureOverrideMap.end()) {
 		for (size_t index : it->second) {
-			const auto& override = overrides[index];
-			if (override.enabled) {
+			auto& override = overrides[index];
+			if (override.enabled && !RejectsUnknownKeys(override, featureJson)) {
 				try {
 					MergeJson(featureJson, override.overrideData);
 					appliedCount++;
@@ -897,6 +897,25 @@ void SettingsOverrideManager::MergeJson(json& target, const json& override)
 	} catch (const std::exception& e) {
 		logger::info("Error during merge operation: {}", e.what());
 	}
+}
+
+bool SettingsOverrideManager::RejectsUnknownKeys(OverrideInfo& override, const json& featureJson)
+{
+	assert(!override.isGlobal);
+	// MergeJson would drop unknown keys without error; an empty target has no shape, so keep the last verdict.
+	if (featureJson.is_object() && !featureJson.empty()) {
+		const bool alreadyReported = !override.unknownKeys.empty();
+		override.unknownKeys.clear();
+		Util::Settings::CollectUnknownSettingKeys(override.overrideData, featureJson, "", override.unknownKeys);
+		if (!override.unknownKeys.empty() && !alreadyReported) {
+			std::string keys;
+			for (const auto& key : override.unknownKeys)
+				keys += (keys.empty() ? "" : ", ") + key;
+			logger::warn("Skipped override from {} to {}: unrecognized keys {}", override.modName, override.featureName, keys);
+			ReportOverrideFailure(override.modName, override.featureName, "Unrecognized settings keys: " + keys);
+		}
+	}
+	return !override.unknownKeys.empty();
 }
 
 void SettingsOverrideManager::ReportOverrideFailure(const std::string& modName, const std::string& featureName, const std::string& errorMessage)

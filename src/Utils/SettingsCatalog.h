@@ -32,4 +32,14 @@ namespace Util::Settings
 
 	/** @brief Rebuilds the subtree of values named by the given JSON pointers, dropping empty branches. */
 	nlohmann::json SelectSettingPaths(const nlohmann::json& values, const std::vector<std::string>& paths);
+
+	/**
+	 * @brief Collects keys of incoming that known has no counterpart for, as dotted paths, recursing into groups.
+	 * @param incoming Partial settings object to check; `_`-prefixed metadata keys are ignored.
+	 * @param known Canonical settings blob, as written by the feature's SaveSettings.
+	 * @param prefix Dotted path of incoming within the whole blob.
+	 * @param unknownKeys Receives the unrecognized paths.
+	 */
+	void CollectUnknownSettingKeys(const nlohmann::json& incoming, const nlohmann::json& known,
+		const std::string& prefix, std::vector<std::string>& unknownKeys);
 }

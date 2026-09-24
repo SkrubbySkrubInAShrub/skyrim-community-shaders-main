@@ -121,7 +121,19 @@ What the session model gives that interception does not:
 This subsystem was **not audited**, only confirmed absent. Nothing here corresponds to it. If it is ever
 wanted, it is a design port, not a cherry-pick, because the UI it drives does not exist here either.
 
-### 4. Override files with unrecognized keys apply silently
+### 4. Override files with unrecognized keys apply silently (ported)
+
+Ported. `Util::Settings::CollectUnknownSettingKeys` checks each feature override against the feature's
+`SaveSettings` blob before `ApplyOverrides` merges it. An override naming any unknown key is skipped whole,
+logged as a warning with the dotted paths, and reported under Feature Issues.
+
+Adapted rather than copied: `ApplyOverrides` is also called on an empty object
+(`GetMergedOverrideSettings`), which has no shape to check against, so the verdict is stored on
+`OverrideInfo::unknownKeys` by the last shaped apply and reused there. `_`-prefixed keys are ignored, as
+`MergeJson` already skips them. Global overrides are not checked, since the main settings blob they merge into
+is not a canonical shape.
+
+The original finding, for reference:
 
 Upstream's `Util::Settings` carries two functions this fork has no counterpart for:
 
@@ -200,7 +212,7 @@ Differences that are deliberate. Do not "fix" these toward upstream without a de
     (`BuildUserOverride`, `SelectSettings`, `RestoreSettings`, `ApplyLayers`), this fork keeps per-feature
     user override files with a combined hash. `Util::Settings::SelectSettingPaths` exists in both. Since
     this fork's shape post-dates `05f084a4a4` (`4c8038dd4`), upstream's is not the newer design.
-    The one piece worth taking from it regardless is the unknown-key check, item 4 above.
+    The one piece worth taking from it regardless, the unknown-key check (item 4 above), has been ported.
 
 ## Needs a product decision: Overwrite versus User precedence
 

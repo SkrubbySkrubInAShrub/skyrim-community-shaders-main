@@ -37,6 +37,9 @@ public:
 
 		// Hash for change detection
 		std::string fileHash;
+
+		// Keys the feature does not serialize; while non-empty the override is not applied
+		std::vector<std::string> unknownKeys;
 	};
 
 	/** @brief Gets the singleton instance */
@@ -55,7 +58,8 @@ public:
 	/**
 	 * @brief Applies overrides to a specific feature's settings JSON
 	 * @param featureName The short name of the feature
-	 * @param featureJson The feature's JSON settings to modify
+	 * @param featureJson The feature's JSON settings to modify; when non-empty it is taken as the
+	 *        canonical shape, and overrides naming keys absent from it are skipped and reported
 	 * @return Number of overrides applied
 	 */
 	size_t ApplyOverrides(const std::string& featureName, json& featureJson);
@@ -282,6 +286,14 @@ private:
 	 * @param override The override JSON to apply
 	 */
 	void MergeJson(json& target, const json& override);
+
+	/**
+	 * @brief Reports whether an override names keys the feature does not serialize.
+	 * @param override The override to check; its unknownKeys verdict is refreshed when featureJson has a shape
+	 * @param featureJson Canonical settings blob, or an empty object to reuse the last verdict
+	 * @return True if the override must not be applied
+	 */
+	bool RejectsUnknownKeys(OverrideInfo& override, const json& featureJson);
 
 	std::vector<OverrideInfo> overrides;
 	std::unordered_map<std::string, std::vector<size_t>> featureOverrideMap;  // Maps feature name to override indices
