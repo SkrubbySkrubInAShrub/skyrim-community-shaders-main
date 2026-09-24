@@ -42,7 +42,9 @@ void SnowDeformation::CaptureShadowAtlas()
 		if (!shellShadowCastDebugOff && settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
+		globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
 		CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
+		globals::profiler->EndPass();
 		// Diagnostics: how many slices the copy carries (settings UI line).
 		if (shadowAtlasCopyTex) {
 			D3D11_TEXTURE2D_DESC atlasDesc;
