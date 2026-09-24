@@ -1062,6 +1062,16 @@ void SnowDeformation::Prepass()
 	}
 	spanClock.Lap(CpuCensus::kSpanPrepassArcsAndGate);
 
+	// Before the scroll is consumed. Latched until ClearShaderCache so a failed compile is not retried per frame.
+	if (deformationCSFailed)
+		return;
+	if (!GetDeformationRingCS() || !GetDeformationScanEvolveCS() || !GetDeformationTileArgsCS() || !GetDeformationEvolveCS() ||
+		!GetDeformationStampCS() || !GetDeformationStampAllCS() || !GetDeformationScanBermCS()) {
+		deformationCSFailed = true;
+		logger::error("[SNOW DEFORMATION] DeformationUpdateCS failed to compile, deformation passes disabled");
+		return;
+	}
+
 	PerFrame perFrameData{};
 
 	// The window origin and the toroidal map origin were advanced in
@@ -2039,6 +2049,7 @@ void SnowDeformation::ClearShaderCache()
 		std::scoped_lock lock(snowShaderCacheMutex);
 		snowSourcesFingerprint.clear();
 	}
+	deformationCSFailed = false;
 	if (deformationRingCS)
 		deformationRingCS->Release();
 	deformationRingCS = nullptr;

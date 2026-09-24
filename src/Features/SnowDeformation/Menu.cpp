@@ -1432,8 +1432,8 @@ void SnowDeformation::DrawSettings()
 				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
 				if (trenchDebugSRV)
 					ImGui::Image(trenchDebugSRV.get(), { 512.0f, 512.0f });
-				else
-					ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+				else if (auto* deformSRV = GetDeformationSRV())
+					ImGui::Image(deformSRV, { 512.0f, 512.0f });
 
 				// Where the player is, drawn ON the map. Without it "the trench did
 				// not load" and "the trench is eighty metres that way" look

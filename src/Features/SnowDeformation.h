@@ -869,7 +869,7 @@ public:
 	Texture2D* bermFieldTexture = nullptr;
 
 	/** @brief SRV of the deformation map (the single canonical texture), for shader sampling and debug UI. Physical (toroidal) layout - readers translate through DeformMapOrigin. */
-	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0]->srv.get(); }
+	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0] ? deformationTextures[0]->srv.get() : nullptr; }
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
 
@@ -1332,6 +1332,7 @@ public:
 	ID3D11ComputeShader* deformationStampCS = nullptr;
 	ID3D11ComputeShader* deformationStampAllCS = nullptr;
 	ID3D11ComputeShader* contactViewCS = nullptr;
+	bool deformationCSFailed = false;
 
 	// ---- Tile dispatch (DEFORMATION-UPDATE-PLAN S3) ----
 	/** @brief Stamp-pass tile list capacity. 256 stamps at walking bboxes are a few thousand tiles; past the cap the pass falls back to full-map rather than truncate (a truncated list is a silently frozen stamp). */

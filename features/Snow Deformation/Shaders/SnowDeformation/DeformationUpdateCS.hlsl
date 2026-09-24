@@ -846,6 +846,10 @@ bool StampTexel(uint2 phys)
 	// landing on it has to get through.
 	const float standingCrust = crust;
 
+	// Gate reach in stamp radii: pit arc legs and melt edge noise both extend past the radius.
+	const float gateScale = max(PIT_LOBE_MAX + PIT_LOBE_WIDTH, 1.0 + MeltEdgeNoise);
+	const float gateScaleSq = gateScale * gateScale;
+
 	for (uint i = 0; i < StampCount; i++) {
 		// Capsule stamp: distance to the segment from the actor's previous
 		// position, so trails are continuous regardless of movement speed.
@@ -867,12 +871,7 @@ bool StampTexel(uint2 phys)
 		bool isCone = modeNoBowl > STAMP_MODE_CONE - 0.5;
 		float mode = isCone ? modeNoBowl - STAMP_MODE_CONE : modeNoBowl;
 
-		// Melt edge noise can push the falloff outward, so the gate widens
-		// by it. Pits reach furthest of all - their arc legs run past the
-		// radius.
-		float gateRadius = radius * max(PIT_LOBE_MAX + PIT_LOBE_WIDTH,
-									 1.0 + MeltEdgeNoise);
-		[branch] if (distSq < gateRadius * gateRadius)
+		[branch] if (distSq < radius * radius * gateScaleSq)
 		{
 			float dist = sqrt(distSq);
 
