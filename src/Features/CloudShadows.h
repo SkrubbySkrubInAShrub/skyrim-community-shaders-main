@@ -35,11 +35,13 @@ public:
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
 
 	bool overrideSky = false;
+	/** @brief Set by any sky draw into the reflections cubemap, so its face's chain starts even without clouds. */
+	bool reflectionSkyDraw = false;
 	/**
 	 * @brief Applies sky shader render state overrides for cloud shadow capture.
 	 *
-	 * When overrideSky is set, redirects rendering to the cloud occlusion cubemap
-	 * and configures the appropriate blend state and depth resources.
+	 * Starts the face's deck chain on any reflection sky draw. When overrideSky is also
+	 * set, redirects rendering to the cloud occlusion cubemap with the matching blend state and depth.
 	 */
 	void SkyShaderHacks();
 

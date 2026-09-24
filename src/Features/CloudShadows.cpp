@@ -96,9 +96,9 @@ void CloudShadows::PropagateToCompletion(int side)
 
 void CloudShadows::SkyShaderHacks()
 {
-	if (!overrideSky)
+	if (!reflectionSkyDraw)
 		return;
-	overrideSky = false;
+	reflectionSkyDraw = false;
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
@@ -116,9 +116,10 @@ void CloudShadows::SkyShaderHacks()
 			break;
 		}
 
-	if (side >= 0) {
+	if (side >= 0)
 		CheckResourcesSide(side);
 
+	if (side >= 0 && overrideSky) {
 		int deck = currentDeckForDraw;
 		assert(deck >= 0 && deck < kMaxCloudDecks);
 		int previousDeck = chainLastDeck[side];
@@ -146,6 +147,7 @@ void CloudShadows::SkyShaderHacks()
 
 		chainLastDeck[side] = deck;
 	}
+	overrideSky = false;
 
 	// rtvs[3] is ours and was never referenced, so it is excluded from the release loop.
 	for (int i = 0; i < 3; ++i) {
@@ -177,16 +179,18 @@ void CloudShadows::ModifySky(RE::BSRenderPass* Pass)
 
 	auto& cubeMapRenderTarget = shadowState->GetRuntimeData().cubeMapRenderTarget;
 
-	auto skyProperty = static_cast<const RE::BSSkyShaderProperty*>(Pass->shaderProperty);
+	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS)
+		return;
 
+	// Any sky draw starts its face's chain, so a face that loses its clouds publishes the empty base.
+	reflectionSkyDraw = true;
+
+	auto skyProperty = static_cast<const RE::BSSkyShaderProperty*>(Pass->shaderProperty);
 	if (skyProperty->uiSkyObjectType != RE::BSSkyShaderProperty::SkyObject::SO_CLOUDS)
 		return;
 
 	int deck = FindCloudDeck(Pass);
 	if (deck < 0)
-		return;
-
-	if (cubeMapRenderTarget != RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS)
 		return;
 
 	currentDeckForDraw = deck;
