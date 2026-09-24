@@ -151,6 +151,16 @@ ExclusionResult EvaluateExclusionAt(uint index, float2 worldXY, float terrain)
 	return result;
 }
 
+// Distance from its centre past which an exclusion's influence is exactly
+// zero, for every type: fire noise widens a bowl to 1.4x its radius and
+// elongation stretches it by 1 + |xy| along the axis; a door's ellipse
+// reaches 1.2x (radius + forward extent); a sealed container, its corner.
+float ExclusionReach(uint index)
+{
+	float4 dirExtType = ExclusionDirExtType[index];
+	return 1.4 * max(ExclusionPosRadius[index].w, 1.0) * (1.0 + length(dirExtType.xy)) + 1.2 * max(abs(dirExtType.z), 1.0);
+}
+
 // Every exclusion in the buffer, combined.
 ExclusionResult EvaluateExclusions(float2 worldXY, float terrain)
 {

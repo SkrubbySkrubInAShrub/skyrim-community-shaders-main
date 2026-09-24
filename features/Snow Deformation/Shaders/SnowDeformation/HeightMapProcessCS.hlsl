@@ -241,11 +241,43 @@ float ShelterEnclosure(int2 texel, int2 dims, float terrain)
 	return smoothstep(SHELTER_CONE_LO, SHELTER_CONE_HI, covered / 34.0);
 }
 
+groupshared uint combineTileCount;
+groupshared uint combineTileList[MAX_EXCLUSIONS];
+
 // InA = raw tops, InB = raw bottoms. OutA = base field, OutB = shelter mask.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
-									 : SV_DispatchThreadID) {
+									 : SV_DispatchThreadID, uint3 gid
+									 : SV_GroupID, uint gi
+									 : SV_GroupIndex) {
 	uint2 dims;
 	OutA.GetDimensions(dims.x, dims.y);
+
+	// The exclusions that reach this 8x8 tile. Past its reach an exclusion's
+	// influence is exactly zero and the terms combine by max, so the culled
+	// list gives the answer the whole buffer would.
+	if (gi == 0)
+		combineTileCount = 0;
+	GroupMemoryBarrierWithGroupSync();
+	{
+		float2 cornerA = TexelWorldXY(gid.xy * 8, dims);
+		float2 cornerB = TexelWorldXY(gid.xy * 8 + 7, dims);
+		float2 tileMin = min(cornerA, cornerB);
+		float2 tileMax = max(cornerA, cornerB);
+		for (uint testI = gi; testI < ExclusionCount; testI += 64) {
+			float2 center = ExclusionPosRadius[testI].xy;
+			float reach = ExclusionReach(testI);
+			float2 closest = clamp(center, tileMin, tileMax);
+			[branch] if (dot(closest - center, closest - center) <= reach * reach)
+			{
+				uint slot;
+				InterlockedAdd(combineTileCount, 1, slot);
+				if (slot < MAX_EXCLUSIONS)
+					combineTileList[slot] = testI;
+			}
+		}
+	}
+	GroupMemoryBarrierWithGroupSync();
+
 	if (any(dtid.xy >= dims))
 		return;
 
@@ -298,10 +330,15 @@ float ShelterEnclosure(int2 texel, int2 dims, float terrain)
 	// thins toward a floor). Shared with the wide field bake so the near and
 	// far answers are the same function of the same constant buffer.
 	{
-		ExclusionResult exclusion = EvaluateExclusions(worldXY, terrain);
-		field = lerp(field, terrain, exclusion.Flatten);
-		suppress = max(suppress, exclusion.Suppress);
-		melt = max(melt, exclusion.Melt);
+		uint tileCount = min(combineTileCount, MAX_EXCLUSIONS);
+		float flatten = 0.0;
+		for (uint listI = 0; listI < tileCount; listI++) {
+			ExclusionResult one = EvaluateExclusionAt(combineTileList[listI], worldXY, terrain);
+			suppress = max(suppress, one.Suppress);
+			melt = max(melt, one.Melt);
+			flatten += one.Flatten * (1.0 - flatten);
+		}
+		field = lerp(field, terrain, flatten);
 	}
 
 	OutA[dtid.xy] = field;
