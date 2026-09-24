@@ -1688,6 +1688,22 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell"), "Landscape Shell"))) {
+			if (effectCost.running) {
+				ImGui::BeginDisabled();
+				ImGui::Button(std::format("Measuring... {} of {}", effectCost.step / 2 + 1, EffectCostProbe::kEffects).c_str());
+				ImGui::EndDisabled();
+			} else if (ImGui::Button(T(TKEY("effect_cost_probe"), "Measure Effect Costs"))) {
+				StartEffectCostProbe();
+			}
+			if (auto _ttEffectCost = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("effect_cost_probe_tooltip"), "Turns each snow shading effect off in turn for about two seconds and shows how much GPU time the snow saves without it. Covers the ground snow and the snow on objects, which share these effects. Stand still and keep the camera still while it runs (about 50 seconds); the effects visibly switch off one by one. Differences under about 0.03 ms are measurement noise."));
+			if (effectCost.done) {
+				// Diagnostics: plain text by existing convention (no i18n).
+				const auto [lo, hi] = std::minmax_element(std::begin(effectCost.withMs), std::end(effectCost.withMs));
+				WrapTextF("Snow shading + depth prepasses with everything on: %.3f ms (drift during the run %.3f ms)", effectCost.withMs[0], *hi - *lo);
+				for (uint32_t i = 0; i < EffectCostProbe::kEffects; i++)
+					WrapTextF("  %-28s %6.3f ms", EffectCostProbe::kNames[i], effectCost.withMs[i] - effectCost.withoutMs[i]);
+			}
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("ground_lift_debug_tooltip"), "Measurement aid: the ground snow rises onto the tops of nearby objects again, the way it did to meet the retired raised object shell - the sheets across doorways and along wall tops. Off, the ground snow keeps its own height and objects stand in it; roofs and walkways still keep the ground beneath them bare."));
@@ -1792,7 +1808,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);
 			if (auto _ttGridIdx = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
+				ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read Shadows - Ground (and the Ground - Shell rows with Tessellation off)."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_old_union_jack"), "Old Union-Jack Grid"), &shellOldUnionJack);
@@ -1851,7 +1867,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_shadow_cast_off_tooltip"), "A/B: the snow shell is not drawn into the sun shadow cascades this frame. Nothing else changes. If a shadow on an object vanishes with this on, the shell cast it."));
 			ImGui::Checkbox(T(TKEY("shell_caster_split"), "Split Caster Row"), &shellCasterSplitDebug);
 			if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));
+				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the snow shadow rows (Shadows - Ground, Shadows - Trench Patch) become one row per shadow cascade, so the near and far cascades can be read apart. Their sum is the pair of rows. The profiler cannot nest passes, which is why the two rows go away while this is on."));
 
 
 			ImGui::Checkbox(T(TKEY("debug_overlay"), "Terrain Overlay"), &debugTerrainOverlay);

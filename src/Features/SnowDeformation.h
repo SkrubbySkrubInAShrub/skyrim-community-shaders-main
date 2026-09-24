@@ -3559,7 +3559,25 @@ public:
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchorsNext;
 	/** @brief Measurement, runtime-only: bitmask zeroing shell PS feature flags before the ShellCB upload (bit 0 parallax, 1 normal map, 2 RMAOS, 3 crisp shadows, 4 screen-space shadows, 5 SSS remarch, 6 glints, 7 point lights, 8 skylighting, 9 albedo texture). The statics shell shares the CB, so it sees the kills too. */
 	uint32_t shellKillMask = 0;
-	/** @brief Measurement, runtime-only: time the Shell pass as Shell.Setup / Shell.Prepass / Shell.Fill / Shell.Main rows instead of one. */
+	/** @brief The effect-cost probe: turns each shellKillMask effect off in turn and reads how far the snow GPU rows drop. Started from Debugging Options > Landscape Shell or DevBench; ticks once per DrawShell. */
+	struct EffectCostProbe
+	{
+		static constexpr uint32_t kEffects = 10;
+		static constexpr const char* kNames[kEffects] = { "Parallax", "Normal map", "Roughness / AO maps", "Crisp shadows", "Screen-space shadows",
+			"Light scattering re-march", "Glints", "Point lights", "Skylighting", "Snow albedo texture" };
+		bool running = false;
+		bool done = false;
+		uint32_t step = 0;  // even = everything on, odd = effect step / 2 off
+		uint32_t frame = 0;
+		std::vector<float> samples;
+		uint32_t savedMask = 0;
+		float withMs[kEffects] = {};
+		float withoutMs[kEffects] = {};
+	};
+	EffectCostProbe effectCost;
+	void StartEffectCostProbe();
+	void TickEffectCostProbe();
+	/** @brief Measurement, runtime-only: time the Shell pass as its four stage rows (Ground - Shell Setup / Depth Prepass / Visible Patches / Shading) instead of one. */
 	bool shellSplitTiming = true;
 	/** @brief Measurement, runtime-only: the prepass tessellates only the patches the previous frame marked visible. Exact only for a still camera and scene: a skipped patch can never be marked again. */
 	bool shellPrepassLastFrame = false;

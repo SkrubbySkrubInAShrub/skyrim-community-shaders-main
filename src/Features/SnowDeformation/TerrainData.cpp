@@ -1154,7 +1154,8 @@ void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 {
 	// Deferred pass only: forward terrain (reflections) can be the frame's last
 	// draw, leaving a run open across later profiled passes.
-	const bool landscape = globals::deferred->deferredPass && a_pass && a_pass->shaderProperty &&
+	// Snow off: the game's terrain is not ours to report.
+	const bool landscape = settings.EnableSnowDeformation && globals::deferred->deferredPass && a_pass && a_pass->shaderProperty &&
 	                       a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
 	if (!landscape) {
 		CloseLandscapeRun();

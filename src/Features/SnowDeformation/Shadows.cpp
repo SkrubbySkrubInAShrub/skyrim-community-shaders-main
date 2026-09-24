@@ -518,26 +518,23 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	// Split-row instrument: one honest per-frame row per cascade and stage
-	// in place of the single ShellShadowCast row. The profiler has no
-	// nesting and folds repeated names into per-call samples, hence the
-	// per-cascade names.
+	// Stage-major: every cascade's ground, then every cascade's trench patch,
+	// one row each. Both are depth-only into the cascade, so the order cannot
+	// change what lands there. The debug split names each cascade instead:
+	// the profiler cannot nest and folds repeated names into per-call samples.
 	static const char* const kCasterGridRow[4] = { "SnowDeformation::Shadows - Ground Cascade 0", "SnowDeformation::Shadows - Ground Cascade 1", "SnowDeformation::Shadows - Ground Cascade 2", "SnowDeformation::Shadows - Ground Cascade 3" };
 	static const char* const kCasterPatchRow[4] = { "SnowDeformation::Shadows - Trench Patch Cascade 0", "SnowDeformation::Shadows - Trench Patch Cascade 1", "SnowDeformation::Shadows - Trench Patch Cascade 2", "SnowDeformation::Shadows - Trench Patch Cascade 3" };
 	const bool splitRow = shellCasterSplitDebug;
-	if (!splitRow)
-		globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Casters");
-	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
-		if (!shadowAtlasDSV[cascade])
-			continue;
 
+	// Points shellCB and the depth target at one cascade.
+	auto bindCascade = [&](uint32_t a_cascade) {
 		// lightTransform maps absolute world -> per-slice [0,1] UV + depth
 		// (row-vector XM convention, proven by GetVSMShadow2D). Append the
 		// UV->clip mapping and a small caster push AWAY from the light so
 		// receivers exactly at the shell surface (fence tops under their own
 		// snow) do not acne.
 		DirectX::XMMATRIX uvProj = DirectX::XMLoadFloat4x4(
-			reinterpret_cast<const DirectX::XMFLOAT4X4*>(&lightRuntime.shadowmapDescriptors[cascade].lightTransform));
+			reinterpret_cast<const DirectX::XMFLOAT4X4*>(&lightRuntime.shadowmapDescriptors[a_cascade].lightTransform));
 		constexpr float kCasterDepthPush = 0.0008f;
 		DirectX::XMMATRIX uvToClip = DirectX::XMMatrixSet(
 			2.0f, 0.0f, 0.0f, 0.0f,
@@ -559,16 +556,18 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		shadowCB.ShellDebugData = 0;
 		shellCB->Update(shadowCB);
 
-		context->OMSetRenderTargets(0, nullptr, shadowAtlasDSV[cascade].get());
+		context->OMSetRenderTargets(0, nullptr, shadowAtlasDSV[a_cascade].get());
+		return shadowCB;
+	};
 
-		// Terrain shell: vertex-buffer-less grid with the excess-height
-		// caster VS. b1 is cleared for the grid draw because the skin/patch
-		// draws below bind StaticsCB there: the grid declared a b1 of its
-		// own until the bow wave was retired, and every later cascade read
-		// the patch fill's world-space centre as wave params - phantom
-		// trail geometry in the far cascades (Josef's giant trench wedges).
-		// The grid reads no b1 now, so this only keeps a stale buffer from
-		// being visible to it if one is ever added back.
+	// Terrain shell: vertex-buffer-less grid with the excess-height caster
+	// VS. b1 is cleared for the grid: it declared a b1 of its own until the
+	// bow wave was retired, and a stale StaticsCB there once read the patch
+	// fill's world-space centre as wave params - phantom trail geometry in
+	// the far cascades (Josef's giant trench wedges). The grid reads no b1
+	// now, so this only keeps a stale buffer from being visible to it if
+	// one is ever added back.
+	{
 		ID3D11Buffer* nullCB1 = nullptr;
 		context->VSSetConstantBuffers(1, 1, &nullCB1);
 		context->IASetInputLayout(nullptr);
@@ -576,61 +575,73 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		UINT zero = 0;
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(vs, nullptr, 0);
+	}
+	if (!splitRow)
+		globals::profiler->BeginPass("SnowDeformation::Shadows - Ground");
+	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
+		if (!shadowAtlasDSV[cascade])
+			continue;
 		if (splitRow)
 			globals::profiler->BeginPass(kCasterGridRow[cascade]);
+		const ShellCB shadowCB = bindCascade(cascade);
 		DrawShellGrid(context, shadowCB);
 		if (splitRow)
 			globals::profiler->EndPass();
-
-		// The TRENCH PATCH casts too - attempt two of "road snow casts
-		// shadows" (Josef: trench walls throw no shadow onto their own
-		// floor). Attempt one stretched shadows across the surface because
-		// the caster pass zeroes the camera adjust and the distance-based
-		// precision pad ballooned to full depth - an uncarved slab. The
-		// PATCH+SNOW_SHADOW_CAST VS measures the pad from the snapped patch
-		// centre instead, kills casters under ~4 units of depth (trampled
-		// floors never self-shadow) and fades out over the same 40-70 m
-		// band as the skins. SV_VertexID grid, no IA state; t0 terrain,
-		// t1 deformation and t14 berm bake are already bound above for the
-		// shell grid, t11/t13 by the skin block; t12 (skin-depth raster,
-		// inside the saved t10-t13 range) is the patch's own addition.
-		// Same gate as the visible patch draw, one frame stale like the
-		// skins.
-		if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS();
-			patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
-			heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
-			settings.RoadMeshesDepth > 0.5f) {
-			if (splitRow)
-				globals::profiler->BeginPass(kCasterPatchRow[cascade]);
-			context->VSSetShader(patchCastVS, nullptr, 0);
-			ID3D11Buffer* patchCB1 = staticsCB->CB();
-			context->VSSetConstantBuffers(1, 1, &patchCB1);
-			ID3D11ShaderResourceView* patchCastSRVs[3] = {
-				heightTopRaw[heightCurrent]->srv.get(),
-				heightSkinDepth->srv.get(),
-				objectSnowCone ? objectSnowCone->srv.get() : nullptr
-			};
-			context->VSSetShaderResources(11, 3, patchCastSRVs);
-			// Far road level (t40): the same fallback the visible patch takes
-			// past the coarse window, so caster and surface stay one recipe.
-			ID3D11ShaderResourceView* patchCastFarSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;
-			context->VSSetShaderResources(40, 1, &patchCastFarSRV);
-			context->IASetInputLayout(nullptr);
-			ID3D11Buffer* patchNullVB = nullptr;
-			UINT vbZero = 0;
-			context->IASetVertexBuffers(0, 1, &patchNullVB, &vbZero, &vbZero);
-			StaticsCB pscb{};
-			FillPatchDrawCB(pscb);
-			staticsCB->Update(pscb);
-			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
-			if (splitRow)
-				globals::profiler->EndPass();
-		} else if (splitRow) {
-			globals::profiler->MarkPassSkipped(kCasterPatchRow[cascade]);
-		}
 	}
 	if (!splitRow)
 		globals::profiler->EndPass();
+
+	// The TRENCH PATCH casts too - attempt two of "road snow casts
+	// shadows" (Josef: trench walls throw no shadow onto their own
+	// floor). Attempt one stretched shadows across the surface because
+	// the caster pass zeroes the camera adjust and the distance-based
+	// precision pad ballooned to full depth - an uncarved slab. The
+	// PATCH+SNOW_SHADOW_CAST VS measures the pad from the snapped patch
+	// centre instead, kills casters under ~4 units of depth (trampled
+	// floors never self-shadow) and fades out over the same 40-70 m
+	// band as the skins. SV_VertexID grid, no IA state; t0 terrain,
+	// t1 deformation and t14 berm bake are already bound above for the
+	// shell grid, t11/t13 by the skin block; t12 (skin-depth raster,
+	// inside the saved t10-t13 range) is the patch's own addition.
+	// Same gate as the visible patch draw, one frame stale like the
+	// skins.
+	if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS();
+		patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
+		heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
+		settings.RoadMeshesDepth > 0.5f) {
+		if (!splitRow)
+			globals::profiler->BeginPass("SnowDeformation::Shadows - Trench Patch");
+		context->VSSetShader(patchCastVS, nullptr, 0);
+		ID3D11Buffer* patchCB1 = staticsCB->CB();
+		context->VSSetConstantBuffers(1, 1, &patchCB1);
+		ID3D11ShaderResourceView* patchCastSRVs[3] = {
+			heightTopRaw[heightCurrent]->srv.get(),
+			heightSkinDepth->srv.get(),
+			objectSnowCone ? objectSnowCone->srv.get() : nullptr
+		};
+		context->VSSetShaderResources(11, 3, patchCastSRVs);
+		// Far road level (t40): the same fallback the visible patch takes
+		// past the coarse window, so caster and surface stay one recipe.
+		ID3D11ShaderResourceView* patchCastFarSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;
+		context->VSSetShaderResources(40, 1, &patchCastFarSRV);
+		StaticsCB pscb{};
+		FillPatchDrawCB(pscb);
+		staticsCB->Update(pscb);
+		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
+			if (!shadowAtlasDSV[cascade])
+				continue;
+			if (splitRow)
+				globals::profiler->BeginPass(kCasterPatchRow[cascade]);
+			bindCascade(cascade);
+			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+			if (splitRow)
+				globals::profiler->EndPass();
+		}
+		if (!splitRow)
+			globals::profiler->EndPass();
+	} else if (!splitRow) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Trench Patch");
+	}
 
 	// ---- Restore everything.
 	// Including the CONSTANT BUFFER, not just pipeline state. The caster pass

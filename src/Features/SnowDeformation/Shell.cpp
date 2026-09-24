@@ -1150,8 +1150,55 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	};
 }
 
+void SnowDeformation::StartEffectCostProbe()
+{
+	auto& p = effectCost;
+	if (p.running)
+		return;
+	p = {};
+	p.running = true;
+	p.savedMask = shellKillMask;
+	shellKillMask = 0;
+}
+
+// Each effect is read as a pair, everything on then that effect off, so a
+// scene that drifts during the run cannot skew it. Each window settles, then
+// takes the median of the rows these switches reach - the ground and object
+// shading and their depth prepasses; the rest only add noise. The profiler
+// drops rows on some frames, and the median ignores those.
+void SnowDeformation::TickEffectCostProbe()
+{
+	auto& p = effectCost;
+	if (!p.running)
+		return;
+	constexpr uint32_t kSettleFrames = 20;
+	constexpr uint32_t kSampleFrames = 120;
+	float total = 0.0f;
+	for (const auto& r : globals::profiler->GetResults())
+		if (r.valid && r.name.starts_with("SnowDeformation::") && (r.name.ends_with(" Shading") || r.name.ends_with(" Depth Prepass")))
+			total += r.gpuTimeMs;
+	if (p.frame >= kSettleFrames)
+		p.samples.push_back(total);
+	if (++p.frame < kSettleFrames + kSampleFrames)
+		return;
+	std::nth_element(p.samples.begin(), p.samples.begin() + p.samples.size() / 2, p.samples.end());
+	const float median = p.samples.empty() ? 0.0f : p.samples[p.samples.size() / 2];
+	(p.step % 2 ? p.withoutMs : p.withMs)[p.step / 2] = median;
+	p.step++;
+	p.frame = 0;
+	p.samples.clear();
+	if (p.step < 2 * EffectCostProbe::kEffects) {
+		shellKillMask = p.step % 2 ? 1u << (p.step / 2) : 0u;
+	} else {
+		shellKillMask = p.savedMask;
+		p.running = false;
+		p.done = true;
+	}
+}
+
 void SnowDeformation::DrawShell()
 {
+	TickEffectCostProbe();
 	// First profiled code after the opaque batches; the profiler cannot nest.
 	CloseLandscapeRun();
 	if (!settings.EnableSnowDeformation)
