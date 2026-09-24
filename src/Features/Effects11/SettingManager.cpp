@@ -86,9 +86,11 @@ void SettingManager::RegisterSettingInternal(Setting& setting)
 		cat.settingOrder.push_back(setting.key);
 		allSettings.push_back(setting);
 	} else {
-		// Update existing setting info but keep the same ID
+		// Update existing setting info but keep the same ID and values
 		uint32_t existingID = it->second;
+		assert(allSettings[existingID].type == setting.type);
 		setting.id = existingID;
+		setting.currentValue = allSettings[existingID].currentValue;
 		setting.lastSavedValue = allSettings[existingID].lastSavedValue;
 		allSettings[existingID] = setting;
 	}
