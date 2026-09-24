@@ -2697,7 +2697,7 @@ public:
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
-	/** @brief Processed maps the shell samples (t4/t5): the slope-limited snow-height field and the smooth shelter/suppression mask, plus a cone-iteration scratch. */
+	/** @brief Processed maps the shell samples (t4/t5): the base snow-height field (the terrain window's bilinear height) and the smooth shelter/suppression mask, plus the object cone chains' ping-pong scratch. */
 	Texture2D* heightTopFiltered = nullptr;
 	Texture2D* heightBottomFiltered = nullptr;
 	Texture2D* heightScratch = nullptr;
@@ -2792,7 +2792,6 @@ public:
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	/** @brief WaterCoverCS: the raw water window minus its lone wet texels into waterVisibleTexture, and the near field into waterNearTexture. */
 	ID3D11ComputeShader* heightWaterCoverCS = nullptr;
-	ID3D11ComputeShader* heightConeCS = nullptr;
 	ID3D11ComputeShader* objectConeSeedCS = nullptr;
 	ID3D11ComputeShader* objectConeCS = nullptr;
 	/** @brief P3: bakes the half-res sky-openness field from the layer-1 tops (ObjectSkyOpenCS). */

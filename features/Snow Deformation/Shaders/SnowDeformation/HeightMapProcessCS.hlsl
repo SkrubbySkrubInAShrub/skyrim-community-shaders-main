@@ -12,16 +12,16 @@
 //            capture rasterizes into the cleared maps, and fills only what
 //            nothing drew into - see the ghost-merge note on the entry
 //            point.
-// CombineCS  builds the base snow-height field and the shelter mask: a
-//            structure floating well above the ground shelters what is under
-//            it, as a soft melt to a dusting rather than a coverage kill.
-//            Doors clear the field and add to the mask; fires write NEGATIVE
-//            mask values, a melt fraction that thins depth toward a floor, so
-//            fire pits keep a thin floor instead of sinking below terrain.
-// ConeCS     angle of repose: iterative min-plus cone transform. No point of
-//            the field may rise steeper than SlopePerUnit from its
-//            neighbors, so thin or tall features barely lift the field while
-//            broad raises settle into natural mounds.
+// CombineCS  builds the base snow-height field (the terrain window's
+//            bilinear height) and the shelter mask: a structure floating well
+//            above the ground shelters what is under it, as a soft melt to a
+//            dusting rather than a coverage kill. Doors clear the field and
+//            add to the mask; fires write NEGATIVE mask values, a melt
+//            fraction that thins depth toward a floor, so fire pits keep a
+//            thin floor instead of sinking below terrain.
+// ObjectConeSeedCS / ObjectConeCS  angle of repose over the object top
+//            raster: an iterative min-plus cone transform, so no point of the
+//            depth field rises steeper than SlopePerUnit from its rims.
 //
 // Sentinels: top empty = -100000, bottom empty = +100000.
 
@@ -412,9 +412,7 @@ float ShelterEnclosure(int2 texel, int2 dims, float terrain)
 	OutA[dtid.xy] = rim ? 0.0 : seed;
 }
 
-// InA = depth field. OutA = one repose iteration at ConeStep. ConeCS cannot be
-// reused here: its terrain clamp belongs to an absolute-height field and would
-// pin a depth field to world Z.
+// InA = depth field. OutA = one repose iteration at ConeStep.
 [numthreads(8, 8, 1)] void ObjectConeCS(uint3 dtid
 										: SV_DispatchThreadID) {
 	uint2 dims;
@@ -440,36 +438,6 @@ float ShelterEnclosure(int2 texel, int2 dims, float terrain)
 	}
 
 	OutA[dtid.xy] = max(h, 0.0);
-}
-
-// InA = field. OutA = slope-limited field (one iteration at ConeStep).
-[numthreads(8, 8, 1)] void ConeCS(uint3 dtid
-								  : SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-
-	float texel = HeightHalfExtent * 2.0 / dims.x;
-	float h = InA[dtid.xy];
-
-	[unroll] for (int dy = -1; dy <= 1; dy++)
-	{
-		[unroll] for (int dx = -1; dx <= 1; dx++)
-		{
-			if (dx == 0 && dy == 0)
-				continue;
-			int2 p = int2(dtid.xy) + int2(dx, dy) * int(ConeStep);
-			if (any(p < 0) || any(p >= int2(dims)))
-				continue;
-			float dist = length(float2(dx, dy)) * ConeStep * texel;
-			h = min(h, InA[uint2(p)] + SlopePerUnit * dist);
-		}
-	}
-
-	// The field can never sink below the actual terrain.
-	float terrain = SampleTerrainHeight(TexelWorldXY(dtid.xy, dims));
-	OutA[dtid.xy] = max(h, terrain);
 }
 
 // P3 (edge-research study): per-column SKY OPENNESS baked from the layer-1

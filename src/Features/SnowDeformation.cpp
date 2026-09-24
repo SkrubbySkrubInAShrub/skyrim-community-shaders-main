@@ -2309,9 +2309,6 @@ void SnowDeformation::ClearShaderCache()
 	if (heightCombineCS)
 		heightCombineCS->Release();
 	heightCombineCS = nullptr;
-	if (heightConeCS)
-		heightConeCS->Release();
-	heightConeCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)

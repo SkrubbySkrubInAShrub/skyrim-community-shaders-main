@@ -1546,8 +1546,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		heightCombineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightWaterCoverCS)
 		heightWaterCoverCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "WaterCoverCS"));
-	if (!heightConeCS)
-		heightConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ConeCS"));
 	if (!objectConeSeedCS)
 		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
@@ -1557,7 +1555,7 @@ bool SnowDeformation::EnsureStaticsShaders()
 	if (!objectConeDiffuseCS)
 		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
 
-	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
+	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS) {
 		staticsShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
 		return false;
@@ -2544,7 +2542,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Combine: raw tops/bottoms -> base field (topFiltered) + shelter mask
 	// (bottomFiltered); bare ground under floating walkways/roofs/bridges.
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
-	globals::profiler->BeginPass("SnowDeformation::ObjectHeightCones");
+	globals::profiler->BeginPass("SnowDeformation::ObjectHeightCombine");
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
@@ -2566,30 +2564,15 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetConstantBuffers(1, 1, &nullExclusionCB);
 	}
 
-	// Angle of repose: multi-scale min-plus cone passes (large steps first),
-	// ping-ponging topFiltered <-> heightScratch and ENDING in topFiltered.
-	// Steps are texels: the leading 64 preserves the cone's world reach at
-	// the 4-unit texel (was 32..1 at 8-unit texels); the trailing repeat
-	// keeps the pass count even.
-	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
-	// An even pass count is what lands the final result back in topFiltered.
-	static_assert(std::size(kConeSteps) % 2 == 0);
-	context->CSSetShader(heightConeCS, nullptr, 0);
-	Texture2D* coneIn = heightTopFiltered;
-	Texture2D* coneOut = heightScratch;
-	for (uint step : kConeSteps) {
-		processData.ConeStep = step;
-		heightProcessCB->Update(processData);
-		ID3D11ShaderResourceView* coneSRV = coneIn->srv.get();
-		ID3D11UnorderedAccessView* coneUAV = coneOut->uav.get();
-		context->CSSetShaderResources(0, 1, &coneSRV);
-		context->CSSetUnorderedAccessViews(0, 1, &coneUAV, nullptr);
-		context->Dispatch(dispatchDim, dispatchDim, 1);
-		context->CSSetShaderResources(0, 1, nullCsSRVs);
-		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-		std::swap(coneIn, coneOut);
-	}
 	globals::profiler->EndPass();
+
+	// Angle of repose for the object cones: multi-scale min-plus passes
+	// (large steps first), ping-ponging with heightScratch. Steps are texels:
+	// the leading 64 is the cone's world reach at the 4-unit texel; the
+	// trailing repeat keeps the pass count even.
+	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
+	// An even pass count is what lands each chain back in its own texture.
+	static_assert(std::size(kConeSteps) % 2 == 0);
 
 	// Object snow cone: the same repose transform run over the OBJECT top
 	// raster, giving the skin's edge taper a ready-made snow surface to read.
