@@ -94,6 +94,9 @@ struct GS_OUTPUT
 	uint Viewport : SV_ViewportArrayIndex;
 };
 
+// Layers the heightmap keeps under the top. Mirrors kVoxelUnderLayers.
+#define VOXEL_UNDER_LAYERS 4
+
 // A brick's index in the per-brick buffers (dirty, flags): physical, z-major.
 uint BrickIndex(uint3 physBrick)
 {
@@ -264,7 +267,7 @@ RWTexture3D<float> Volume : register(u0);
 // nibble, a plain store that whichever fragment landed last won (the
 // two-shape alternation, Josef, 2026-09-11).
 RWTexture2D<uint> HeightMap : register(u2);
-// THE LAYERS UNDER THE TOP: three slices at two sub-pixels a voxel side,
+// THE LAYERS UNDER THE TOP: VOXEL_UNDER_LAYERS slices at two sub-pixels a voxel side,
 // slice k the highest up-facing surface a headroom or more below slice
 // k - 1 (the top being slice 0 of the map above), each judged against the
 // layer above AS IT STANDS - last rebuild's, or this one's so far. A layer
@@ -301,7 +304,7 @@ void main(GS_OUTPUT input)
 			int mask2 = Dims.x * 2 - 1;
 			uint2 sub2 = (uint2)(((int2)floor(vox.xy * 2.0) + OriginVox.xy * 2) & mask2);
 			uint layer = 0u;
-			[unroll] for (uint k = 0u; k < 2u; k++)
+			[unroll] for (uint k = 0u; k < VOXEL_UNDER_LAYERS - 1u; k++)
 			{
 				uint held = HeightMapUnder[uint3(sub2, layer)];
 				[flatten] if (held != 0u && worldZ < asfloat(held & ~0xFu) - 32768.0 - gap)
@@ -357,7 +360,7 @@ Texture3D<float> OccupancyIn : register(t4);
 // voxel side, as the bits of (world z + 32768) with the surface's up-ness
 // in the low four bits (see the capture PS); 0 = nothing captured.
 Texture2D<uint> HeightMapIn : register(t10);
-// The three layers under the top, two sub-pixels a voxel side (the capture PS).
+// The layers under the top, two sub-pixels a voxel side (the capture PS).
 Texture2DArray<uint> HeightMapUnderIn : register(t11);
 RWTexture2D<uint> HeightMapOut : register(u8);
 RWTexture2DArray<uint> HeightMapUnderOut : register(u9);
@@ -711,14 +714,14 @@ float OccNz(float v)
 		}
 		else
 		{
-			// UNDER COVER: the layer holding this voxel's top, among the three
-			// under the top (four samples a voxel each). A fifth surface down,
-			// or a member whose top no layer's columns carry, still reads the
-			// nibble.
+			// UNDER COVER: the layer holding this voxel's top, among those under
+			// the top (four samples a voxel each). A surface below the last
+			// layer, or a member whose top no layer's columns carry, still reads
+			// the nibble.
 			uint2 hb2 = p.xy * 2;
 			float h2max = -1.0e4;
-			uint keys2[12];
-			[unroll] for (int i2 = 0; i2 < 12; i2++)
+			uint keys2[4 * VOXEL_UNDER_LAYERS];
+			[unroll] for (int i2 = 0; i2 < 4 * VOXEL_UNDER_LAYERS; i2++)
 			{
 				keys2[i2] = HeightMapUnderIn[uint3(hb2 + uint2(i2 & 1, (i2 >> 1) & 1), i2 >> 2)];
 				[flatten] if (keys2[i2] != 0u)
@@ -732,7 +735,7 @@ float OccNz(float v)
 			{
 				float nsum = 0.0;
 				float nn = 0.0;
-				[unroll] for (int j2 = 0; j2 < 12; j2++)
+				[unroll] for (int j2 = 0; j2 < 4 * VOXEL_UNDER_LAYERS; j2++)
 				{
 					[flatten] if (keys2[j2] != 0u)
 					{
@@ -1211,7 +1214,7 @@ float SliceRead(int3 logical)
 			[unroll] for (int i = 0; i < 16; i++)
 				HeightMapOut[hb + uint2(i & 3, i >> 2)] = 0u;
 			uint2 hb2 = p.xy * 2;
-			[unroll] for (int j = 0; j < 12; j++)
+			[unroll] for (int j = 0; j < 4 * VOXEL_UNDER_LAYERS; j++)
 				HeightMapUnderOut[uint3(hb2 + uint2(j & 1, (j >> 1) & 1), j >> 2)] = 0u;
 		}
 	}

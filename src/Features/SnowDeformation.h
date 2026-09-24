@@ -2921,8 +2921,8 @@ public:
 	static constexpr float kVoxelEdgeNoiseCell = 12.0f;
 	/** @brief Air a seed needs above it, world units: a roof's or a beam's underside shell has its member's own inside above it, one voxel of air, and seeded snow that grew out through the eave. */
 	static constexpr float kVoxelHeadroomUnits = 8.0f;
-	/** @brief Layers under the top the heightmap keeps: a porch, a roof, a sill, a roof again (Josef, 2026-09-24). */
-	static constexpr uint kVoxelUnderLayers = 3;
+	/** @brief Layers under the top the heightmap keeps: a porch, a roof, a sill, a roof again, and one spare (Josef, 2026-09-24). Mirrors VOXEL_UNDER_LAYERS in SnowVoxelCapture.hlsl and SnowStaticsShell.hlsl. */
+	static constexpr uint kVoxelUnderLayers = 4;
 	static constexpr uint kVoxelMaxLevels = 6;
 	/** @brief One clipmap level: occupancy ping-pong, its blob field, and the draw's brick list. Level L's voxel is VoxelSizeLive() * 2^L. */
 	struct VoxelLevel

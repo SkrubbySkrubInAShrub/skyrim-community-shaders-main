@@ -2556,6 +2556,8 @@ Texture3D<float> DbgVoxOcc : register(t46);
 Texture3D<float> DbgVoxField : register(t47);
 Texture2D<uint> DbgVoxHeight : register(t48);
 Texture2DArray<uint> DbgVoxHeightUnder : register(t54);
+// Mirrors kVoxelUnderLayers / SnowVoxelCapture's VOXEL_UNDER_LAYERS.
+#define VOXEL_UNDER_LAYERS 4
 Texture2D<float2> DbgShelter : register(t49);
 Texture2D<float> DbgSky : register(t51);
 
@@ -4632,11 +4634,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 							}
 							else
 							{
-								// Under cover: the three layers under the top (VoxelSeedCS).
+								// Under cover: the layers under the top (VoxelSeedCS).
 								uint2 hb2 = ph.xy * 2;
 								float h2max = -1.0e4;
-								uint keys2[12];
-								[unroll] for (int i2 = 0; i2 < 12; i2++)
+								uint keys2[4 * VOXEL_UNDER_LAYERS];
+								[unroll] for (int i2 = 0; i2 < 4 * VOXEL_UNDER_LAYERS; i2++)
 								{
 									keys2[i2] = DbgVoxHeightUnder[uint3(hb2 + uint2(i2 & 1, (i2 >> 1) & 1), i2 >> 2)];
 									[flatten] if (keys2[i2] != 0u)
@@ -4650,7 +4652,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 								{
 									float nsum = 0.0;
 									float nn = 0.0;
-									[unroll] for (int j2 = 0; j2 < 12; j2++)
+									[unroll] for (int j2 = 0; j2 < 4 * VOXEL_UNDER_LAYERS; j2++)
 									{
 										[flatten] if (keys2[j2] != 0u)
 										{
