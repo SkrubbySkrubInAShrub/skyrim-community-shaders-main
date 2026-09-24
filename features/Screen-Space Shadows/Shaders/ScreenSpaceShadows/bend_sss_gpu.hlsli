@@ -190,6 +190,15 @@ static void ComputeWavefrontExtents(DispatchParameters inParameters, int3 inGrou
 // Number of bilinear sample reads performed per-thread
 #define READ_COUNT (SAMPLE_COUNT / WAVE_SIZE + 2)
 
+// Trailing samples ramp in a depth bias so occlusion fades out instead of cutting off at the ray end
+#if SAMPLE_COUNT >= 32
+#	define FADE_OUT_SAMPLES 8
+#else
+#	define FADE_OUT_SAMPLES (SAMPLE_COUNT / 4)
+#endif
+#define MAIN_SAMPLES (SAMPLE_COUNT - FADE_OUT_SAMPLES)
+#define FADE_OUT_BIAS 0.75
+
 // Common shared data
 groupshared half DepthData[READ_COUNT * WAVE_SIZE];
 
@@ -332,11 +341,18 @@ void WriteScreenSpaceShadow(DispatchParameters inParameters, int3 inGroupID, int
 
 	start_depth = start_depth * depth_scale - z_sign;
 
-	[unroll] for (i = 0; i < SAMPLE_COUNT; i++)
+	[unroll] for (i = 0; i < MAIN_SAMPLES; i++)
 	{
 		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale);
 
 		// By using 4 values, the average shadow can be taken, which can help soften single-pixel shadows.
+		shadow_value[i & 3] = min(shadow_value[i & 3], depth_delta);
+	}
+
+	[unroll] for (i = MAIN_SAMPLES; i < SAMPLE_COUNT; i++)
+	{
+		half fade_out = (half)(i + 1 - MAIN_SAMPLES) / (half)(FADE_OUT_SAMPLES + 1) * FADE_OUT_BIAS;
+		half depth_delta = abs(start_depth - DepthData[sample_index + i] * depth_scale) + fade_out;
 		shadow_value[i & 3] = min(shadow_value[i & 3], depth_delta);
 	}
 
