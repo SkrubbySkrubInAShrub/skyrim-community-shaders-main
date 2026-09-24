@@ -166,7 +166,7 @@ namespace
 	constexpr QualityPreset kQualityPresets[4] = {
 		{ 1024u, 60.0f, 60.0f, 0.0f, 0.0f, 24.0f, false, false, false, false, false, false },
 		{ 2048u, 60.0f, 100.0f, 1.0f, 0.5f, 20.0f, false, false, false, false, false, true },
-		{ 2048u, 90.0f, 250.0f, 1.0f, 0.5f, 16.0f, false, false, false, true, true, true },
+		{ 2048u, 90.0f, 250.0f, 1.0f, 0.5f, 16.0f, false, false, false, false, true, true },
 		{ 2048u, 125.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true, true },
 	};
 }
@@ -223,7 +223,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. Ultra is the default: nothing is taken away. High turns off the shading extras you mostly see in close-up shots (Re-march Shadows on the Shell, Snow Sparkle, Snow Contact Shadows) and shortens Trenches to 90 m. Medium also turns off Snow Self-Shadowing and Object Snow Near Detail, with Trenches at 60 m and Object Snow at 100 m. Low also turns off Snow Casts Shadows and parallax, with Object Snow at 60 m and a 1024 Deformation Map. Every preset also sets the Object Snow Tessellation Cap, turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. Ultra is the default: nothing is taken away. High turns off the shading extras you mostly see in close-up shots (Re-march Shadows on the Shell, Snow Sparkle, Snow Contact Shadows) and Snow Self-Shadowing, and shortens Trenches to 90 m. Medium also turns off Object Snow Near Detail, with Trenches at 60 m and Object Snow at 100 m. Low also turns off Snow Casts Shadows and parallax, with Object Snow at 60 m and a 1024 Deformation Map. Every preset also sets the Object Snow Tessellation Cap, turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[4] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High"), T(TKEY("preset_ultra"), "Ultra") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < 4; i++) {
