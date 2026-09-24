@@ -1353,7 +1353,7 @@ void SnowDeformation::DrawShell()
 	cbData.SnowSpecularLevel = snowSpecularLevel;
 	// Sparkle: the shell's specular runs TruePBR's glint NDF when its shared
 	// noise texture exists (bound to t20 below for the whole pass).
-	cbData.EnableGlints = globals::features::truePBR.glintsNoiseTexture ? 1.0f : 0.0f;
+	cbData.EnableGlints = (settings.SnowGlints && globals::features::truePBR.glintsNoiseTexture) ? 1.0f : 0.0f;
 	cbData.BorderNoise = settings.SnowBorderNoise;
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
@@ -1404,7 +1404,7 @@ void SnowDeformation::DrawShell()
 	// WHITE every Prepass even when disabled, so multiplying is always safe
 	// once the texture exists.
 	auto& screenSpaceShadowsFeature = globals::features::screenSpaceShadows;
-	cbData.ScreenSpaceShadowsActive = (screenSpaceShadowsFeature.loaded && screenSpaceShadowsFeature.screenSpaceShadowsTexture) ? 1.0f : 0.0f;
+	cbData.ScreenSpaceShadowsActive = (settings.SnowScreenSpaceShadows && screenSpaceShadowsFeature.loaded && screenSpaceShadowsFeature.screenSpaceShadowsTexture) ? 1.0f : 0.0f;
 
 	cbData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);

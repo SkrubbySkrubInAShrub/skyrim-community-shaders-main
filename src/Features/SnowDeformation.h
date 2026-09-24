@@ -580,6 +580,14 @@ public:
 		bool ShellSSSRemarch = true;
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades, the SSS mask and the re-march shade the snow. A/B for dark blotches on open snow at a low sun. */
 		bool ShellHorizonMarch = true;
+		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */
+		bool SnowGlints = true;
+		/** @brief "Snow Contact Shadows": both shells multiply in Community Shaders' screen-space shadow mask (needs Screen-Space Shadows). A quality-preset lever. */
+		bool SnowScreenSpaceShadows = true;
+		/** @brief "Snow Casts Shadows": the landscape shell and the trench patch are drawn into the sun's shadow cascades. Off = the snow still receives shadows but casts none. A quality-preset lever. */
+		bool SnowCastsShadows = true;
+		/** @brief "Object Snow Near Detail": the object height raster's near level (1 unit a texel over FineRasterHalfExtent) and its cone chain. Off = the skin reads the coarse level everywhere. A quality-preset lever. */
+		bool ObjectSnowNearDetail = true;
 		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
 		bool ShellSSSRemarchThickness = true;
 		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
@@ -2717,6 +2725,11 @@ public:
 	bool FarLevelActive() const { return settings.RoadHeightfield && settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
 	bool fineLevelDisabled = false;
+	bool FineLevelOn() const { return !fineLevelDisabled && settings.ObjectSnowNearDetail; }
+	/** @brief Quality presets, Low (0) to Ultra (3); Ultra is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
+	void ApplyQualityPreset(int a_preset);
+	/** @brief The preset every lever currently matches, or -1 (custom). */
+	int MatchingQualityPreset() const;
 	/** @brief Debugging Options A/B: the landscape shell rises onto captured object tops again (the lift that met the retired object shell). Off, it keeps its own height through objects; the shelter mask and the buried-shadow discriminator still read the field. */
 	bool groundLiftDebug = false;
 	// ---- Height-field probe (Debugging Options): the six object maps read

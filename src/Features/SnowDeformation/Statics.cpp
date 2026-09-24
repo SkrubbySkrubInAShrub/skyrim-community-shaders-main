@@ -2164,7 +2164,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	const uint32_t captureCount = (uint32_t)capturedStatics.size();
 	// Three blocks per capture: the coarse raster, the peel, and the near
 	// clipmap's raster (the same draw against a quarter-width window).
-	const bool fineLevel = !fineLevelDisabled && heightTopRawFine && objectSnowConeFine;
+	const bool fineLevel = FineLevelOn() && heightTopRawFine && objectSnowConeFine;
 	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
 	// Far road level: the road captures alone against the loaded-cell square,
 	// one block each, appended after the per-capture blocks. The window snaps
@@ -2806,7 +2806,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
-	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
+	a_scb.FineHalfExtent = (FineLevelOn() && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
 	// Far road level (t40, bound by the skin pass): the road skin's
 	// RoadOwnsColumn steps aside on far roads through it.
 	a_scb.FarWindowCenterX = farWindowCenter.x;
@@ -3404,8 +3404,8 @@ void SnowDeformation::DrawCapturedStatics()
 	// texel over the inner window. Every reader that takes them falls back to
 	// t13/t11 outside it, so a null bind here is simply the coarse behaviour.
 	ID3D11ShaderResourceView* fineSRVs[2] = {
-		(!fineLevelDisabled && objectSnowConeFine && objectSnowConeFine->srv) ? objectSnowConeFine->srv.get() : nullptr,
-		(!fineLevelDisabled && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr
+		(FineLevelOn() && objectSnowConeFine && objectSnowConeFine->srv) ? objectSnowConeFine->srv.get() : nullptr,
+		(FineLevelOn() && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr
 	};
 	context->VSSetShaderResources(33, 2, fineSRVs);
 	context->DSSetShaderResources(33, 2, fineSRVs);

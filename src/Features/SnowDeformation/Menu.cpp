@@ -144,6 +144,72 @@ namespace
 #endif
 }
 
+namespace
+{
+	// Low to Ultra. Ultra is the shipped defaults; each step down drops the
+	// effects that cost the most for the least visible difference.
+	struct QualityPreset
+	{
+		uint32_t mapDim;
+		float trenchesM;
+		float skinsM;
+		float parallaxDepth;
+		float parallaxShadow;
+		float skinTessCapPx;
+		bool scatteringRemarch;
+		bool sparkle;
+		bool contactShadows;
+		bool selfShadowing;
+		bool nearDetail;
+		bool castsShadows;
+	};
+	constexpr QualityPreset kQualityPresets[4] = {
+		{ 1024u, 60.0f, 60.0f, 0.0f, 0.0f, 24.0f, false, false, false, false, false, false },
+		{ 2048u, 60.0f, 100.0f, 1.0f, 0.5f, 20.0f, false, false, false, false, false, true },
+		{ 2048u, 90.0f, 250.0f, 1.0f, 0.5f, 16.0f, false, false, false, true, true, true },
+		{ 2048u, 125.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true, true },
+	};
+}
+
+void SnowDeformation::ApplyQualityPreset(int a_preset)
+{
+	const auto& p = kQualityPresets[std::clamp(a_preset, 0, 3)];
+	if (settings.DeformMapResolution != p.mapDim) {
+		settings.DeformMapResolution = p.mapDim;
+		deformMapDimDirty = true;
+	}
+	if (settings.RangeTrenchesM != p.trenchesM) {
+		settings.RangeTrenchesM = p.trenchesM;
+		trenchRangeDirty = true;
+	}
+	settings.RangeSkinsM = p.skinsM;
+	settings.Tessellation = true;
+	settings.ParallaxDepth = p.parallaxDepth;
+	settings.ParallaxShadowStrength = p.parallaxShadow;
+	settings.SkinTessCapPx = p.skinTessCapPx;
+	settings.VolumeSnow = false;
+	settings.ShellSSSRemarch = p.scatteringRemarch;
+	settings.SnowGlints = p.sparkle;
+	settings.SnowScreenSpaceShadows = p.contactShadows;
+	settings.ShellHorizonMarch = p.selfShadowing;
+	settings.ObjectSnowNearDetail = p.nearDetail;
+	settings.SnowCastsShadows = p.castsShadows;
+}
+
+int SnowDeformation::MatchingQualityPreset() const
+{
+	for (int i = 0; i < 4; i++) {
+		const auto& p = kQualityPresets[i];
+		if (settings.DeformMapResolution == p.mapDim && settings.RangeTrenchesM == p.trenchesM && settings.RangeSkinsM == p.skinsM &&
+			settings.Tessellation && settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
+			settings.SkinTessCapPx == p.skinTessCapPx && !settings.VolumeSnow && settings.ShellSSSRemarch == p.scatteringRemarch &&
+			settings.SnowGlints == p.sparkle && settings.SnowScreenSpaceShadows == p.contactShadows && settings.ShellHorizonMarch == p.selfShadowing &&
+			settings.ObjectSnowNearDetail == p.nearDetail && settings.SnowCastsShadows == p.castsShadows)
+			return i;
+	}
+	return -1;
+}
+
 void SnowDeformation::DrawSettings()
 {
 	ImGui::TextDisabled("%s", T(TKEY("credit"), "Snow Deformation - by josefplyr1"));
@@ -153,40 +219,26 @@ void SnowDeformation::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
 
-	// Quality presets: vectors from the 2026-09-20 sweep (FPS-STABILISATION-PLAN.md §7.2).
 	{
-		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, float a_parallaxDepth, float a_parallaxShadow, float a_skinTessCapPx) {
-			if (settings.DeformMapResolution != a_mapDim) {
-				settings.DeformMapResolution = a_mapDim;
-				deformMapDimDirty = true;
-			}
-			if (settings.RangeTrenchesM != a_trenchesM) {
-				settings.RangeTrenchesM = a_trenchesM;
-				trenchRangeDirty = true;
-			}
-			settings.RangeSkinsM = a_skinsM;
-			settings.Tessellation = true;
-			settings.ParallaxDepth = a_parallaxDepth;
-			settings.ParallaxShadowStrength = a_parallaxShadow;
-			settings.SkinTessCapPx = a_skinTessCapPx;
-			settings.VolumeSnow = false;
-		};
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click: Deformation Map Resolution, the two Distant Snow ranges, the two Parallax dials and the Object Snow Tessellation Cap. The Trenches range is the main cost; the rest is small. Every preset also turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value, and any of these can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("preset_low"), "Low")))
-			applyPreset(1024u, 60.0f, 100.0f, 0.0f, 0.0f, 24.0f);
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("preset_medium"), "Medium")))
-			applyPreset(2048u, 75.0f, 150.0f, 1.0f, 0.5f, 20.0f);
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("preset_high"), "High")))
-			applyPreset(2048u, 95.0f, 250.0f, 1.0f, 0.5f, 16.0f);
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("preset_ultra"), "Ultra")))
-			applyPreset(2048u, 125.0f, 750.0f, 1.0f, 0.5f, 16.0f);
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. Ultra is the default: nothing is taken away. High turns off the shading extras you mostly see in close-up shots (Re-march Shadows on the Shell, Snow Sparkle, Snow Contact Shadows) and shortens Trenches to 90 m. Medium also turns off Snow Self-Shadowing and Object Snow Near Detail, with Trenches at 60 m and Object Snow at 100 m. Low also turns off Snow Casts Shadows and parallax, with Object Snow at 60 m and a 1024 Deformation Map. Every preset also sets the Object Snow Tessellation Cap, turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+		const char* presetLabels[4] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High"), T(TKEY("preset_ultra"), "Ultra") };
+		const int activePreset = MatchingQualityPreset();
+		for (int i = 0; i < 4; i++) {
+			ImGui::SameLine();
+			if (i == activePreset)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			if (ImGui::Button(presetLabels[i]))
+				ApplyQualityPreset(i);
+			if (i == activePreset)
+				ImGui::PopStyleColor();
+		}
+		if (activePreset < 0) {
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", T(TKEY("preset_custom"), "(Custom)"));
+		}
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
@@ -214,6 +266,16 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextDisabled("%s", T(TKEY("snow_pbr_config_none"), "(no match - built-in snow)"));
 		else
 			ImGui::TextDisabled("%s%s", T(TKEY("snow_pbr_config_using"), "using: "), snowPBRSetName.c_str());
+
+		ImGui::Checkbox(T(TKEY("snow_glints"), "Snow Sparkle"), &settings.SnowGlints);
+		if (auto _ttGlints = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_glints_tooltip"), "The glitter of light catching single snow crystals, on the ground snow and on object snow, using Community Shaders' TruePBR glints (needs TruePBR). The High, Medium and Low presets turn it off."));
+		ImGui::Checkbox(T(TKEY("snow_screen_space_shadows"), "Snow Contact Shadows"), &settings.SnowScreenSpaceShadows);
+		if (auto _ttSnowSSS = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_screen_space_shadows_tooltip"), "Community Shaders' Screen-Space Shadows on the ground snow and object snow: the small, sharp shadows where grass, feet and objects meet the snow (needs Screen-Space Shadows). Off, the snow is shaded by the sun's shadows and its own self-shadowing only. The High, Medium and Low presets turn it off."));
+		ImGui::Checkbox(T(TKEY("snow_casts_shadows"), "Snow Casts Shadows"), &settings.SnowCastsShadows);
+		if (auto _ttSnowCasts = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_casts_shadows_tooltip"), "The ground snow and road snow are drawn into the sun's shadows, so deep snow, banks and trench walls cast shadows onto the world and onto the snow itself. Off, the snow still receives shadows but casts none. The Low preset turns it off."));
 
 		ImGui::Checkbox(T(TKEY("land_snowness_post_blend"), "Snow Detection After Height Blending"), &settings.LandSnownessAfterHeightBlend);
 		if (auto _ttPostBlend = Util::HoverTooltipWrapper())
@@ -272,6 +334,10 @@ void SnowDeformation::DrawSettings()
 
 		// Object snow is the recolor of the game's own projected snow and the
 		// drape the skin lays over it; nothing of ours stands above a mesh.
+		ImGui::Checkbox(T(TKEY("object_snow_near_detail"), "Object Snow Near Detail"), &settings.ObjectSnowNearDetail);
+		if (auto _ttNearDetail = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("object_snow_near_detail_tooltip"), "Within about 15 m of the camera, object snow reads its shape from a map four times finer, so snow on rocks, steps and ledges keeps its small edges and rims. Off, the coarser map is used everywhere: slightly softer shapes up close, a little less GPU time. The Medium and Low presets turn it off."));
+
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints solidly (its own half blend and up) takes the full snow, all or nothing; a faint dusting stays bare. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
