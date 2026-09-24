@@ -2554,7 +2554,8 @@ cbuffer VoxelSeedDebugCB : register(b3)
 }
 Texture3D<float> DbgVoxOcc : register(t46);
 Texture3D<float> DbgVoxField : register(t47);
-Texture2DArray<uint> DbgVoxHeight : register(t48);
+Texture2D<uint> DbgVoxHeight : register(t48);
+Texture2DArray<uint> DbgVoxHeightUnder : register(t54);
 Texture2D<float2> DbgShelter : register(t49);
 Texture2D<float> DbgSky : register(t51);
 
@@ -4605,7 +4606,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 							uint keys[16];
 							[unroll] for (int i = 0; i < 16; i++)
 							{
-								keys[i] = DbgVoxHeight[uint3(hb + uint2(i & 3, i >> 2), 0)];
+								keys[i] = DbgVoxHeight[hb + uint2(i & 3, i >> 2)];
 								[flatten] if (keys[i] != 0u)
 									hmax = max(hmax, (asfloat(keys[i] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z);
 							}
@@ -4631,12 +4632,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 							}
 							else
 							{
-								// Under cover: the heightmap's second slice (VoxelSeedCS).
+								// Under cover: the three layers under the top (VoxelSeedCS).
+								uint2 hb2 = ph.xy * 2;
 								float h2max = -1.0e4;
-								uint keys2[16];
-								[unroll] for (int i2 = 0; i2 < 16; i2++)
+								uint keys2[12];
+								[unroll] for (int i2 = 0; i2 < 12; i2++)
 								{
-									keys2[i2] = DbgVoxHeight[uint3(hb + uint2(i2 & 3, i2 >> 2), 1)];
+									keys2[i2] = DbgVoxHeightUnder[uint3(hb2 + uint2(i2 & 1, (i2 >> 1) & 1), i2 >> 2)];
 									[flatten] if (keys2[i2] != 0u)
 									{
 										float hz = (asfloat(keys2[i2] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z;
@@ -4648,7 +4650,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 								{
 									float nsum = 0.0;
 									float nn = 0.0;
-									[unroll] for (int j2 = 0; j2 < 16; j2++)
+									[unroll] for (int j2 = 0; j2 < 12; j2++)
 									{
 										[flatten] if (keys2[j2] != 0u)
 										{

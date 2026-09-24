@@ -2921,14 +2921,18 @@ public:
 	static constexpr float kVoxelEdgeNoiseCell = 12.0f;
 	/** @brief Air a seed needs above it, world units: a roof's or a beam's underside shell has its member's own inside above it, one voxel of air, and seeded snow that grew out through the eave. */
 	static constexpr float kVoxelHeadroomUnits = 8.0f;
+	/** @brief Layers under the top the heightmap keeps: a porch, a roof, a sill, a roof again (Josef, 2026-09-24). */
+	static constexpr uint kVoxelUnderLayers = 3;
 	static constexpr uint kVoxelMaxLevels = 6;
 	/** @brief One clipmap level: occupancy ping-pong, its blob field, and the draw's brick list. Level L's voxel is VoxelSizeLive() * 2^L. */
 	struct VoxelLevel
 	{
 		Texture3D* volume[2] = { nullptr, nullptr };
 		Texture3D* field = nullptr;
-		/** @brief R32_UINT, (4 dim)^2, two slices, world-anchored like the volume: slice 0 the topmost captured surface over each sub-pixel as the bits of (world z + 32768) with the surface's up-ness in the low four bits, kept by an atomic max, so a column's height is deterministic and prefiltered over sixteen samples; slice 1 the highest up-facing surface a headroom or more below it, the seed's facing under cover. */
+		/** @brief R32_UINT, (4 dim)^2, world-anchored like the volume: the topmost captured surface over each sub-pixel as the bits of (world z + 32768) with the surface's up-ness in the low four bits, kept by an atomic max, so a column's height is deterministic and prefiltered over sixteen samples. */
 		Texture2D* heightMap = nullptr;
+		/** @brief R32_UINT, (2 dim)^2, kVoxelUnderLayers slices: layer k the highest up-facing surface a headroom or more below layer k - 1 (the top map being layer 0), the same key and max; the seed's facing under cover. */
+		Texture2D* heightMapUnder = nullptr;
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
 		/** @brief Dirty bricks: a uint per physical brick, set by the scroll (reused slots) and the occupancy compare, cleared each rebuild. */

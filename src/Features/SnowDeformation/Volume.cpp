@@ -18,7 +18,7 @@ bool SnowDeformation::EnsureVoxelResources()
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
 		const auto want = VoxelDimsForLevel(i);
-		levelsReady = levelsReady && lv.dims.x == want.x && lv.dims.y == want.y && lv.dims.z == want.z && lv.volume[0] && lv.volume[1] && lv.field && lv.heightMap && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
+		levelsReady = levelsReady && lv.dims.x == want.x && lv.dims.y == want.y && lv.dims.z == want.z && lv.volume[0] && lv.volume[1] && lv.field && lv.heightMap && lv.heightMapUnder && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
 	}
 	const auto wantMax = VoxelDimsMax();
 	if (levelsReady && voxelSupport && voxelSupportDims.x == wantMax.x && voxelSupportDims.y == wantMax.y && voxelSupportDims.z == wantMax.z && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
@@ -76,6 +76,8 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = nullptr;
 			delete lv.heightMap;
 			lv.heightMap = nullptr;
+			delete lv.heightMapUnder;
+			lv.heightMapUnder = nullptr;
 			delete lv.bricks;
 			lv.bricks = nullptr;
 			delete lv.drawArgs;
@@ -96,13 +98,41 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i), dim);
 		if (!lv.heightMap) {
 			const uint hdim = dim.x * 4;
-			// Two slices: the top surface, and the second layer under it
-			// (the capture PS).
 			D3D11_TEXTURE2D_DESC desc{
 				.Width = hdim,
 				.Height = hdim,
 				.MipLevels = 1,
-				.ArraySize = 2,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_R32_UINT,
+				.SampleDesc = { .Count = 1 },
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+			};
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			};
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			lv.heightMap = new Texture2D(desc, std::format("SnowDeformation::VoxelHeightMap{}", i).c_str());
+			lv.heightMap->CreateSRV(srvDesc);
+			lv.heightMap->CreateUAV(uavDesc);
+			const UINT zeros[4] = { 0, 0, 0, 0 };
+			context->ClearUnorderedAccessViewUint(lv.heightMap->uav.get(), zeros);
+		}
+		if (!lv.heightMapUnder) {
+			// The three layers under the top: two sub-pixels a voxel side, a
+			// quarter of the top map's memory each (the capture PS).
+			const uint hdim = dim.x * 2;
+			D3D11_TEXTURE2D_DESC desc{
+				.Width = hdim,
+				.Height = hdim,
+				.MipLevels = 1,
+				.ArraySize = kVoxelUnderLayers,
 				.Format = DXGI_FORMAT_R32_UINT,
 				.SampleDesc = { .Count = 1 },
 				.Usage = D3D11_USAGE_DEFAULT,
@@ -111,18 +141,18 @@ bool SnowDeformation::EnsureVoxelResources()
 			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 				.Format = desc.Format,
 				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
-				.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = 1, .FirstArraySlice = 0, .ArraySize = 2 }
+				.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = 1, .FirstArraySlice = 0, .ArraySize = kVoxelUnderLayers }
 			};
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
 				.Format = desc.Format,
 				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
-				.Texture2DArray = { .MipSlice = 0, .FirstArraySlice = 0, .ArraySize = 2 }
+				.Texture2DArray = { .MipSlice = 0, .FirstArraySlice = 0, .ArraySize = kVoxelUnderLayers }
 			};
-			lv.heightMap = new Texture2D(desc, std::format("SnowDeformation::VoxelHeightMap{}", i).c_str());
-			lv.heightMap->CreateSRV(srvDesc);
-			lv.heightMap->CreateUAV(uavDesc);
+			lv.heightMapUnder = new Texture2D(desc, std::format("SnowDeformation::VoxelHeightMapUnder{}", i).c_str());
+			lv.heightMapUnder->CreateSRV(srvDesc);
+			lv.heightMapUnder->CreateUAV(uavDesc);
 			const UINT zeros[4] = { 0, 0, 0, 0 };
-			context->ClearUnorderedAccessViewUint(lv.heightMap->uav.get(), zeros);
+			context->ClearUnorderedAccessViewUint(lv.heightMapUnder->uav.get(), zeros);
 		}
 		if (!lv.bricks) {
 			const uint capacity = (dim.x / 8) * (dim.y / 8) * (dim.z / 8);
@@ -591,11 +621,13 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			ID3D11UnorderedAccessView* uavs[3] = { lv.volume[lv.current]->uav.get(), nullptr, countHere ? voxelCountUAV.get() : nullptr };
 			ID3D11UnorderedAccessView* dirtyUAV = lv.dirty->uav.get();
 			ID3D11UnorderedAccessView* heightMapUAV = lv.heightMap->uav.get();
+			ID3D11UnorderedAccessView* heightMapUnderUAV = lv.heightMapUnder->uav.get();
 			context->CSSetConstantBuffers(0, 1, &cbPtr);
 			context->CSSetShaderResources(0, 1, &srv);
 			context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
 			context->CSSetUnorderedAccessViews(8, 1, &heightMapUAV, nullptr);
+			context->CSSetUnorderedAccessViews(9, 1, &heightMapUnderUAV, nullptr);
 			context->CSSetShader(voxelScrollCS, nullptr, 0);
 			context->Dispatch(gx, gy, gz);
 			ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
@@ -603,6 +635,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
 			context->CSSetUnorderedAccessViews(8, 1, &nullUAV, nullptr);
+			context->CSSetUnorderedAccessViews(9, 1, &nullUAV, nullptr);
 			context->CSSetShader(nullptr, nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &nullCB);
 			// Copy this frame's count, map LAST frame's copy without waiting.
@@ -656,9 +689,10 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				{ 0.0f, 0.0f, float(lv.dims.x * 4), float(lv.dims.x * 4), 0.0f, 1.0f }
 			};
 			context->RSSetViewports(2, viewports);
-			// u0 occupancy, u2 the heightmap (u1 was the per-voxel height, gone).
-			ID3D11UnorderedAccessView* rasterUAVs[3] = { lv.volume[lv.current]->uav.get(), nullptr, lv.heightMap->uav.get() };
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 3, rasterUAVs, nullptr);
+			// u0 occupancy, u1 the layers under the top, u2 the heightmap, u3
+			// the dirty bricks (a raised layer marks its column).
+			ID3D11UnorderedAccessView* rasterUAVs[4] = { lv.volume[lv.current]->uav.get(), lv.heightMapUnder->uav.get(), lv.heightMap->uav.get(), lv.dirty->uav.get() };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 4, rasterUAVs, nullptr);
 			// STAGGERED CAPTURE. A static already in the volume stays there on
 			// the memory nibble (a tick every 16 of this level's rebuilds, 15
 			// to expire), so drawing it every rebuild only paid for the same
@@ -716,8 +750,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				context->DrawIndexed(indexCount, 0, 0);
 			}
 
-			ID3D11UnorderedAccessView* nullRasterUAVs[3] = { nullptr, nullptr, nullptr };
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 3, nullRasterUAVs, nullptr);
+			ID3D11UnorderedAccessView* nullRasterUAVs[4] = { nullptr, nullptr, nullptr, nullptr };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 4, nullRasterUAVs, nullptr);
 		}
 		context->GSSetShader(nullptr, nullptr, 0);
 		ID3D11Buffer* restoreVSCB0 = savedVSCB0.get();
@@ -803,8 +837,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// Seeds: occupancy + the shelter/sky maps -> scratch, on D0; the
 		// raster's heightmap at t10 for the top surface's facing (Z and the
 		// sideways passes read it too).
-		ID3D11ShaderResourceView* heightMapSRV = lv.heightMap->srv.get();
-		context->CSSetShaderResources(10, 1, &heightMapSRV);
+		ID3D11ShaderResourceView* heightMapSRVs[2] = { lv.heightMap->srv.get(), lv.heightMapUnder->srv.get() };
+		context->CSSetShaderResources(10, 2, heightMapSRVs);
 		ID3D11ShaderResourceView* mapSRVs[2] = {
 			seedMaps ? heightBottomFiltered->srv.get() : nullptr,
 			seedMaps ? objectSkyOpen->srv.get() : nullptr
@@ -848,7 +882,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetShaderResources(5, 1, &nullSRV);
 		context->CSSetShaderResources(4, 1, &nullSRV);
-		context->CSSetShaderResources(10, 1, &nullSRV);
+		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
+		context->CSSetShaderResources(10, 2, nullHeightSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// The brick flags on D3's bricks (kept between rebuilds)...
 		context->CSSetShaderResources(3, 1, &fieldSRV);

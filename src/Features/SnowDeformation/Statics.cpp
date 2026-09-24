@@ -3322,7 +3322,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// seed maps for the skin PS, the level's constants at b3.
 	ID3D11Buffer* savedPSCB3 = nullptr;
 	const bool volumeSeedView = staticsDebugView == 10 && settings.VolumeSnow && voxelLevels[0].valid &&
-	                            voxelLevels[0].volume[voxelLevels[0].current] && voxelLevels[0].field && voxelLevels[0].heightMap;
+	                            voxelLevels[0].volume[voxelLevels[0].current] && voxelLevels[0].field && voxelLevels[0].heightMap && voxelLevels[0].heightMapUnder;
 	if (volumeSeedView) {
 		if (!voxelDebugCB) {
 			D3D11_BUFFER_DESC cbDesc{};
@@ -3344,6 +3344,8 @@ void SnowDeformation::DrawCapturedStatics()
 		context->PSSetShaderResources(46, 4, seedSRVs);
 		ID3D11ShaderResourceView* skySRV = (objectSkyOpen && objectSkyOpen->srv) ? objectSkyOpen->srv.get() : nullptr;
 		context->PSSetShaderResources(51, 1, &skySRV);
+		ID3D11ShaderResourceView* underSRV = lv.heightMapUnder->srv.get();
+		context->PSSetShaderResources(54, 1, &underSRV);
 	}
 
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
@@ -3990,6 +3992,7 @@ void SnowDeformation::DrawCapturedStatics()
 	if (volumeSeedView) {
 		ID3D11ShaderResourceView* nullSeedSRVs[6] = {};
 		context->PSSetShaderResources(46, 6, nullSeedSRVs);
+		context->PSSetShaderResources(54, 1, nullSeedSRVs);
 		context->PSSetConstantBuffers(3, 1, &savedPSCB3);
 		if (savedPSCB3)
 			savedPSCB3->Release();
