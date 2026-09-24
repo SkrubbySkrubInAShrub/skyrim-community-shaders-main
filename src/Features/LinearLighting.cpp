@@ -7,6 +7,7 @@
 #include "Effects11/SettingManager.h"
 #include "Globals.h"
 #include "Utils/Game.h"
+#include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.linear_lighting."
 
@@ -40,10 +41,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
+	auto drawWaterGammaSlider = [&] { ImGui::SliderFloat(T(TKEY("water_gamma"), "Water Gamma"), &settings.waterGamma, 0.1f, 3.0f, "%.2f"); };
+
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
 			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+			ImGui::SeparatorText(T(TKEY("gamma_settings"), "Gamma Settings"));
+			drawWaterGammaSlider();
+			Util::AddTooltip(T(TKEY("water_gamma_enb_tooltip"), "Still applied under ENB.\nENB darkens surface albedo but not water colors, so without this water reads too bright, most visibly in interiors.\nLower the value to brighten water, raise it to darken."));
 			return;
 		}
 	}
@@ -57,7 +63,7 @@ void LinearLighting::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("fog_transparency_gamma"), "Fog Transparency Gamma"), &settings.fogAlphaGamma, 0.1f, 3.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("sky_gamma"), "Sky Gamma"), &settings.skyGamma, 0.1f, 3.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("vl_gamma"), "Volumetric Lighting Gamma"), &settings.vlGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("water_gamma"), "Water Gamma"), &settings.waterGamma, 0.1f, 3.0f, "%.2f");
+			drawWaterGammaSlider();
 
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
@@ -162,6 +168,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	if (!loaded) {
 		auto data = PerFrameData{};
 		data.enableLinearLighting = false;
+		data.waterGamma = 1.0f;
 		return data;
 	}
 	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
@@ -196,7 +203,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 			data.effectGamma = 1.0f;
 			data.effectAlphaGamma = 1.0f;
 			data.skyGamma = 1.0f;
-			data.waterGamma = 1.0f;
 			data.vlGamma = 1.0f;
 		}
 	}
