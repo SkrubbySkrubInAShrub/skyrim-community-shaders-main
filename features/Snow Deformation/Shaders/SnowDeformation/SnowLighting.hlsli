@@ -38,11 +38,10 @@ namespace SnowLighting
 
 #if defined(LANDSCAPE)
 	// Per-tile snow detection: how much of this pixel's landscape blend is
-	// snow material. Also computed for the debug overlay while the feature is
-	// disabled - snow detection is exactly what the overlay exists to verify.
+	// snow material. Only the terrain overlay reads it.
 	void LandSnowness(inout State s, float4 blendWeights1, float2 blendWeights2)
 	{
-		[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation || (SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
+		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
 		{
 #	if defined(TRUE_PBR)
 			// PBR terrain replaces the vanilla per-layer snow constants, so the
@@ -56,6 +55,13 @@ namespace SnowLighting
 			s.landSnowness = saturate(dot(blendWeights1, LandscapeTexture1to4IsSnow) + blendWeights2.x * LandscapeTexture5to6IsSnow.x + blendWeights2.y * LandscapeTexture5to6IsSnow.y);
 #	endif
 		}
+	}
+
+	// Re-run after EM height blending has rewritten the weights.
+	void LandSnownessPostBlend(inout State s, float4 blendWeights1, float2 blendWeights2)
+	{
+		[branch] if (SharedData::snowDeformationSettings.LandSnownessPostBlend > 0.5)
+			LandSnowness(s, blendWeights1, blendWeights2);
 	}
 
 	void DebugLandOverlay(inout float3 baseColor, float2 worldXYRel, float snowness, float2 uvOriginal)

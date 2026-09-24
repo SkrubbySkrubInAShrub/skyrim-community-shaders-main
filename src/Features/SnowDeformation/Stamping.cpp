@@ -629,6 +629,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
+	// Refs the stamp budget cut short; their anchors carry to the next frame.
+	std::unordered_set<uint32_t> budgetCutRefs;
 	stampStats = {};
 
 	// The map is 2048 whatever the Trenches range, so past ~100 m a texel
@@ -714,6 +716,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// Counted per actor turned away whole, which is what the Trenches
 		// range slider risks: a wider gather radius against a fixed budget.
 		if (stampCount >= actorCeiling) {
+			budgetCutRefs.insert(formID);
 			stampStats.budgetTurnedAway++;
 			if (probing)
 				skeletonProbe.verdict = "gated: stamp budget exhausted";
@@ -1311,8 +1314,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			uint32_t limbIndex = 0;
 			for (auto& limb : bones->limbs) {
 				const uint32_t thisIndex = limbIndex++;
-				if (stampCount >= actorCeiling)
+				if (stampCount >= actorCeiling) {
+					budgetCutRefs.insert(formID);
 					break;
+				}
 				auto* nodeA = limb.a.get();
 				auto* nodeB = limb.b.get();
 				if (!nodeA || !nodeB)
@@ -1378,8 +1383,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (SnowShapes::GetShapeBound(a_object, centerPos, radius)) {
 					// Stable per-skeleton traversal order keys the trail history.
 					const uint32_t thisIndex = shapeIndex++;
-					if (stampCount >= actorCeiling)
+					if (stampCount >= actorCeiling) {
+						budgetCutRefs.insert(formID);
 						return RE::BSVisit::BSVisitControl::kStop;
+					}
 					if (centerPos.z - radius > bandRefZ + kStampSurfaceBand)
 						return RE::BSVisit::BSVisitControl::kContinue;
 					if (radius < kMinStampShapeRadius || radius > kMaxStampShapeRadius)
@@ -1578,8 +1585,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// up, whose trench is what shows it.
 		if (!propMoved && !ItemSinkWantsPrint(a_ref))
 			return;
-		if (stampCount >= actorCeiling)
+		if (stampCount >= actorCeiling) {
+			budgetCutRefs.insert(formID);
 			return;  // keep collecting anchors
+		}
 
 		// Fast-falling props must not carve under their arc; supported
 		// ones stamp wherever they lie, including on top of statics.
@@ -1633,8 +1642,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			float radius;
 			if (SnowShapes::GetShapeBound(a_object, centerPos, radius)) {
 				const uint32_t thisIndex = shapeIndex++;
-				if (stampCount >= actorCeiling)
+				if (stampCount >= actorCeiling) {
+					budgetCutRefs.insert(formID);
 					return RE::BSVisit::BSVisitControl::kStop;
+				}
 				if (centerPos.z - radius > supportZ + kStampSurfaceBand)
 					return RE::BSVisit::BSVisitControl::kContinue;
 				// Small item shapes (daggers, gems) are real: floored at
@@ -1677,6 +1688,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		// Shape types with no bound extractor (MOPP/list): one stamp from
 		// the root's bound sphere.
+		if (shapeIndex == 0 && stampCount >= actorCeiling)
+			budgetCutRefs.insert(formID);
 		if (shapeIndex == 0 && stampCount < actorCeiling) {
 			const auto& bound = root->worldBound;
 			float radius = std::clamp(bound.radius, kMinStampShapeRadius, kMaxStampShapeRadius);
@@ -1870,6 +1883,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampCount++;
 	}
 
+	// Budget-cut refs keep their anchors so the next stamp bridges the skipped frames.
+	// Not feet: an unplanted foot must drop its anchor or it drags a line between prints.
+	if (!budgetCutRefs.empty()) {
+		for (const auto& [key, anchor] : stampPrevPositions) {
+			const bool footKey = (key & 0xFFFFull) != 0xFFFFull && (key & kFootKeyBit) != 0;
+			if (!footKey && budgetCutRefs.contains(uint32_t(key >> 16)))
+				currentPositions.try_emplace(key, anchor);
+		}
+	}
 	stampPrevPositions = std::move(currentPositions);
 	perFrameData.StampCount = stampCount;
 	globals::profiler->EndPass();

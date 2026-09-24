@@ -1265,6 +1265,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 		}
 	}
+#			if defined(SNOW_DEFORMATION)
+	SnowLighting::LandSnownessPostBlend(snowState, input.LandBlendWeights1, input.LandBlendWeights2.xy);
+#			endif
 #		endif  // EMAT
 #	endif      // LANDSCAPE
 
