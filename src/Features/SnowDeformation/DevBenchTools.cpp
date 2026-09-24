@@ -156,6 +156,8 @@ json SnowDeformation::DevBenchVolumeArgs(const json& a_args)
 		showVolumeRings = a_args["showRings"].get<bool>();
 	if (a_args.contains("forceRebuild") && a_args["forceRebuild"].is_boolean())
 		debugForceVolumeRebuild = a_args["forceRebuild"].get<bool>();
+	if (a_args.contains("stats") && a_args["stats"].is_boolean())
+		voxelPipelineStatsEnabled = a_args["stats"].get<bool>();
 	json levels = json::array();
 	for (uint L = 0; L < VoxelLevelsLive(); L++) {
 		const auto& lv = voxelLevels[L];
@@ -166,6 +168,8 @@ json SnowDeformation::DevBenchVolumeArgs(const json& a_args)
 	return { { "volumeSnow", settings.VolumeSnow }, { "shadersFailed", voxelShadersFailed }, { "memorySeconds", voxelMemorySeconds },
 		{ "showRings", showVolumeRings }, { "occupancyL0", voxelOccupancyValid ? json(voxelOccupancy) : json(nullptr) },
 		{ "forceRebuild", debugForceVolumeRebuild }, { "idleSkipped", voxelIdleSkipped }, { "idleBlockers", voxelIdleBlockers }, { "skipRate", voxelSkipRate },
+		{ "stats", { { "enabled", voxelPipelineStatsEnabled }, { "valid", voxelStatsLast.valid }, { "vs", voxelStatsLast.vsInvocations }, { "ps", voxelStatsLast.psInvocations },
+					   { "primitives", voxelStatsLast.rasterizedPrimitives }, { "samplesPassed", voxelStatsLast.samplesPassed } } },
 		{ "dirtyBricks", settings.VolumeDirtyBricks }, { "staggeredCapture", settings.VolumeStaggeredCapture }, { "ringShape", settings.VolumeRingShape },
 		{ "capturedStatics", capturedStatics.size() }, { "levels", levels } };
 }
@@ -189,7 +193,7 @@ void SnowDeformation::InstallDevBenchTools()
 		R"({"description":"Landscape shell measurement switches (runtime-only). shellKill: bitmask zeroing PS features before the ShellCB upload (1 parallax, 2 normal map, 4 RMAOS, 8 crisp shadows, 16 screen-space shadows, 32 SSS remarch, 64 glints, 128 point lights, 256 skylighting, 512 albedo texture; the statics shell shares the CB). shellSplitTiming: Shell row split into Shell.Setup/Prepass/Fill/Main. shellPrepass, shellBake: the depth prepass and the vertex bake. shellVisibleCull: the shading pass tessellates only patches that won a prepass pixel. shellPrepassLastFrame: the prepass tessellates only last frame's visible patches (exact only for a still camera and scene). shellMainCullAll: the shading draw culls every patch (VS+HS cost only, breaks the image). shellStats: D3D11 pipeline statistics around the shell draws, returned in stats (read two frames late). No args = read state.","inputSchema":{"type":"object","properties":{"shellKill":{"type":"integer"},"shellSplitTiming":{"type":"boolean"},"shellPrepass":{"type":"boolean"},"shellBake":{"type":"boolean"},"shellStats":{"type":"boolean"},"shellVisibleCull":{"type":"boolean"},"shellPrepassLastFrame":{"type":"boolean"},"shellMainCullAll":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.shell", shellDesc, &ShellTool, nullptr);
 	static constexpr const char* volumeDesc =
-		R"({"description":"Volume snow measurement switches (runtime-only, not serialised). memorySeconds: Volume Memory, 0.5-30 s. showRings: Colour Rings. forceRebuild: rebuild every ring on its cadence (the idle gate's A/B; false = gate on). Returns the volume's state: shader failure, level-0 occupancy count, capture count, and per level valid/rebuilds/voxel size/dims/origin. No args = read state.","inputSchema":{"type":"object","properties":{"memorySeconds":{"type":"number"},"showRings":{"type":"boolean"},"forceRebuild":{"type":"boolean"}}}})";
+		R"({"description":"Volume snow measurement switches (runtime-only, not serialised). memorySeconds: Volume Memory, 0.5-30 s. showRings: Colour Rings. forceRebuild: rebuild every ring on its cadence (the idle gate's A/B; false = gate on). stats: pipeline statistics + occlusion around the volume draw, returned in stats (PS invocations over samples passed = marches per written pixel; read two frames late). Returns the volume's state: shader failure, level-0 occupancy count, capture count, and per level valid/rebuilds/voxel size/dims/origin. No args = read state.","inputSchema":{"type":"object","properties":{"memorySeconds":{"type":"number"},"showRings":{"type":"boolean"},"forceRebuild":{"type":"boolean"},"stats":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.volume", volumeDesc, &VolumeTool, nullptr);
 	logger::info("[SNOW DEFORMATION] DevBench tools registered: snowdeformation.shadertypes, snowdeformation.cpucensus");
 #endif

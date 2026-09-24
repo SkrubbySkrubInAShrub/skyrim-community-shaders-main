@@ -96,6 +96,10 @@ struct GS_OUTPUT
 
 // Layers the heightmap keeps under the top. Mirrors kVoxelUnderLayers.
 #define VOXEL_UNDER_LAYERS 4
+// BrickFlags bits above the sub-cell mask: any solid voxel in the brick;
+// any snow field in it.
+#define FLAG_OCC 0x100u
+#define FLAG_FIELD 0x200u
 
 // A brick's index in the per-brick buffers (dirty, flags): physical, z-major.
 uint BrickIndex(uint3 physBrick)
@@ -277,9 +281,10 @@ RWTexture2D<uint> HeightMap : register(u2);
 // (Josef 2026-09-24), each has a facing that is a max's too, not the
 // nibble's last write - the residue under cover after the race fix.
 RWTexture2DArray<uint> HeightMapUnder : register(u1);
-// Marked where a layer's value rose: the column's seeds can change with
-// no occupancy change, which the compare pass cannot see.
+// Marked where a layer's value rose, or an empty voxel turns solid: the
+// occupancy is written in place and nothing compares it afterwards.
 RWByteAddressBuffer DirtyBricks : register(u3);
+RWByteAddressBuffer BrickFlags : register(u4);
 
 void main(GS_OUTPUT input)
 {
@@ -343,7 +348,16 @@ void main(GS_OUTPUT input)
 		if (any(p < 0) || any(p >= Dims.xyz))
 			continue;
 		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
+		// IN PLACE: a voxel that was empty marks its brick dirty and
+		// occupied; a second fragment landing on it only over-marks.
+		float was = Volume[phys];
 		Volume[phys] = packed;
+		[branch] if (was <= 0.0)
+		{
+			uint idx = BrickIndex(phys >> 3) * 4;
+			DirtyBricks.InterlockedOr(idx, 1u);
+			BrickFlags.InterlockedOr(idx, FLAG_OCC);
+		}
 	}
 }
 
@@ -370,7 +384,6 @@ RWTexture2D<float> SliceOut : register(u1);
 RWByteAddressBuffer OccupancyCount : register(u2);
 
 groupshared uint gOccupied;
-groupshared uint gScrolledIn;
 
 // ---- Dirty bricks. Physical throughout: the window origin snaps to whole
 // bricks, so a physical brick is exactly one logical brick, and a scroll
@@ -406,8 +419,6 @@ uint2 ListColumn(uint offset, uint index)
 // A dirty column is still a 32-brick stack of mostly air; a pass whose
 // inputs cannot reach a brick from any FIELD brick skips its loads and
 // writes the zeros its persistent outputs need. ----
-#define FLAG_OCC 0x100u
-#define FLAG_FIELD 0x200u
 groupshared uint gNear;
 groupshared uint gZBrick[32];
 
@@ -435,34 +446,23 @@ bool BricksNear(uint3 brick, int rx, int ry, int rz, uint bit, uint gi)
 	return gNear != 0u;
 }
 
-// After the raster: which bricks' occupancy changed since the last rebuild
-// (t4 = the previous volume), solid/empty only - the facing nibble can flip
-// between two triangles' last writes and the life nibble ticks, and neither
-// moves the snow. One atomic per brick.
-groupshared uint gChanged;
+// On a whole rebuild (the 900-rebuild refresh, Dirty Bricks off): every
+// brick's OCC bit from the occupancy itself. Between those the raster, the
+// decay and the scroll keep it as they write - the compare against a copy
+// of the last rebuild's occupancy went with the copy (2026-09-24).
 groupshared uint gSolid;
-[numthreads(8, 8, 8)] void VoxelDiffCS(uint3 p
-									   : SV_DispatchThreadID, uint gi
-									   : SV_GroupIndex) {
+[numthreads(8, 8, 8)] void VoxelOccFlagsCS(uint3 p
+										   : SV_DispatchThreadID, uint gi
+										   : SV_GroupIndex) {
 	if (gi == 0)
-	{
-		gChanged = 0;
 		gSolid = 0;
-	}
 	GroupMemoryBarrierWithGroupSync();
-	bool wasSolid = OccupancyIn[p] > 0.0;
-	bool isSolid = VolumeIn[p] > 0.0;
-	if (wasSolid != isSolid)
-		InterlockedOr(gChanged, 1u);
-	if (isSolid)
+	if (VolumeIn[p] > 0.0)
 		InterlockedOr(gSolid, 1u);
 	GroupMemoryBarrierWithGroupSync();
 	if (gi == 0)
 	{
 		uint idx = BrickIndex(p >> 3) * 4;
-		if (gChanged != 0)
-			DirtyBricks.InterlockedOr(idx, 1u);
-		// OCC for every brick, every rebuild: the seed pass's gate.
 		if (gSolid != 0)
 			BrickFlags.InterlockedOr(idx, FLAG_OCC);
 		else
@@ -1184,60 +1184,103 @@ float SliceRead(int3 logical)
 // Physical voxels never move; the origin does. A voxel whose logical
 // position was inside last frame's window keeps its value, decayed; one
 // that scrolled in is cleared.
-[numthreads(8, 8, 8)] void VoxelScrollCS(uint3 p
+// THE WINDOW MOVES IN PLACE. A physical slot is one world voxel until the
+// window has moved a whole extent past it, so a move copies nothing: the
+// slots it brings in from the far side hold the old world and are zeroed,
+// marked dirty and unoccupied - one brick-aligned slab per moved axis
+// (ScrollDelta.w = the axis this dispatch covers, thread x along it; 3 =
+// every slot, a clear). The copy of every voxel every rebuild was the
+// volume's largest standing cost (2026-09-24).
+[numthreads(8, 8, 8)] void VoxelScrollCS(uint3 tid
 										 : SV_DispatchThreadID, uint gi
 										 : SV_GroupIndex) {
+	int axis = ScrollDelta.w;
+	int3 t = (int3)tid;
+	int3 logical;
+	[branch] if (axis == 3)
+		logical = t;
+	else
+	{
+		int d = axis == 0 ? ScrollDelta.x : (axis == 1 ? ScrollDelta.y : ScrollDelta.z);
+		int dimA = axis == 0 ? Dims.x : (axis == 1 ? Dims.y : Dims.z);
+		int base = d > 0 ? dimA - d : 0;
+		logical = axis == 0 ? int3(base + t.x, t.y, t.z) : (axis == 1 ? int3(t.y, base + t.x, t.z) : int3(t.y, t.z, base + t.x));
+	}
+	if (any(logical < 0) || any(logical >= Dims.xyz))
+		return;
+	uint3 ph = Phys(logical);
+	VolumeOut[ph] = 0.0;
+	// The heightmap holds absolute z, so only an XY move (or a clear) retires
+	// a column's sub-pixels; one thread per column does it.
+	[branch] if (axis != 2 && logical.z == 0)
+	{
+		uint2 hb = ph.xy * 4;
+		[unroll] for (int i = 0; i < 16; i++)
+			HeightMapOut[hb + uint2(i & 3, i >> 2)] = 0u;
+		uint2 hb2 = ph.xy * 2;
+		[unroll] for (int j = 0; j < 4 * VOXEL_UNDER_LAYERS; j++)
+			HeightMapUnderOut[uint3(hb2 + uint2(j & 1, (j >> 1) & 1), j >> 2)] = 0u;
+	}
+	// The group is one brick: the slabs and the origin are brick-aligned.
 	if (gi == 0)
 	{
+		uint idx = BrickIndex(ph >> 3) * 4;
+		DirtyBricks.InterlockedOr(idx, 1u);
+		BrickFlags.InterlockedAnd(idx, ~FLAG_OCC);
+	}
+}
+
+// THE MEMORY TICK, in place: on a tick rebuild the life nibble counts down
+// over the bricks that hold anything, one group a brick, the rest leaving
+// on their flag. A voxel that expires marks its brick dirty; OCC follows
+// what is left. Level 0's tick also counts the occupied voxels for the menu.
+groupshared uint gTick;
+groupshared uint gExpired;
+[numthreads(8, 8, 8)] void VoxelDecayCS(uint3 p
+										: SV_DispatchThreadID, uint gi
+										: SV_GroupIndex) {
+	uint idx = BrickIndex(p >> 3) * 4;
+	if (gi == 0)
+	{
+		gTick = BrickFlags.Load(idx) & FLAG_OCC;
+		gExpired = 0;
+		gSolid = 0;
 		gOccupied = 0;
-		gScrolledIn = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
-
-	int3 mask = Dims.xyz - 1;
-	int3 logical = ((int3)p - OriginVox.xyz) & mask;
-	int3 old = logical + ScrollDelta.xyz;
-	bool inside = OriginVox.w == 0 && all(old >= 0) && all(old < Dims.xyz);
-	// A slot reused for a voxel 256 away holds the OLD world's field: dirty,
-	// whatever the occupancy compare says. One atomic per brick.
-	if (!inside)
-		InterlockedOr(gScrolledIn, 1u);
-	// The heightmap holds absolute z, so only an XY scroll (or a clear)
-	// retires a column's sub-pixels; one thread per column does it.
-	[branch] if (p.z == 0)
+	bool live = gTick != 0u;
+	[branch] if (live)
 	{
-		int2 old2 = logical.xy + ScrollDelta.xy;
-		bool keep = OriginVox.w == 0 && all(old2 >= 0) && all(old2 < Dims.xy);
-		[branch] if (!keep)
+		float v = VolumeOut[p];
+		[branch] if (v > 0.0)
 		{
-			uint2 hb = p.xy * 4;
-			[unroll] for (int i = 0; i < 16; i++)
-				HeightMapOut[hb + uint2(i & 3, i >> 2)] = 0u;
-			uint2 hb2 = p.xy * 2;
-			[unroll] for (int j = 0; j < 4 * VOXEL_UNDER_LAYERS; j++)
-				HeightMapUnderOut[uint3(hb2 + uint2(j & 1, (j >> 1) & 1), j >> 2)] = 0u;
+			uint q = (uint)round(v * 255.0);
+			uint life = q & 15u;
+			life = life > 0u ? life - 1u : 0u;
+			[branch] if (life == 0u)
+			{
+				v = 0.0;
+				InterlockedOr(gExpired, 1u);
+			}
+			else
+			{
+				v = (float)((q & 0xF0u) | life) / 255.0;
+				InterlockedOr(gSolid, 1u);
+				InterlockedAdd(gOccupied, 1u);
+			}
+			VolumeOut[p] = v;
 		}
 	}
-	float v = inside ? VolumeIn[p] : 0.0;
-	// Memory is the low nibble: down one on tick frames (Decay = 1), gone
-	// at zero; the raster rewrites a re-seen voxel at 15 after this.
-	[flatten] if (v > 0.0 && Decay > 0.5)
-	{
-		uint q = (uint)round(v * 255.0);
-		uint life = q & 15u;
-		life = life > 0u ? life - 1u : 0u;
-		v = life == 0u ? 0.0 : (float)((q & 0xF0u) | life) / 255.0;
-	}
-	VolumeOut[p] = v;
-
-	if (v > 0.0)
-		InterlockedAdd(gOccupied, 1u);
 	GroupMemoryBarrierWithGroupSync();
-	if (gi == 0)
+	if (gi == 0 && live)
 	{
+		if (gExpired != 0u)
+			DirtyBricks.InterlockedOr(idx, 1u);
+		if (gSolid != 0u)
+			BrickFlags.InterlockedOr(idx, FLAG_OCC);
+		else
+			BrickFlags.InterlockedAnd(idx, ~FLAG_OCC);
 		OccupancyCount.InterlockedAdd(0, gOccupied);
-		if (gScrolledIn != 0)
-			DirtyBricks.InterlockedOr(BrickIndex(p >> 3) * 4, 1u);
 	}
 }
 

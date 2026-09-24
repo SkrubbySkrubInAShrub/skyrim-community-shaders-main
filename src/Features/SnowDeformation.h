@@ -1720,6 +1720,14 @@ public:
 	bool shellStatsIssued[kShellStatsRing] = {};
 	int shellStatsRing = 0;
 	ShellStatsResult shellStatsLast;
+	/** @brief Measurement, runtime-only: the same two queries around the volume draw. PS invocations over samples passed is the marches a written pixel costs. */
+	bool voxelPipelineStatsEnabled = false;
+	winrt::com_ptr<ID3D11Query> voxelStatsQuery[kShellStatsRing][2];
+	bool voxelStatsIssued[kShellStatsRing] = {};
+	int voxelStatsRing = 0;
+	ShellStatsResult voxelStatsLast;
+	bool EnsureVoxelStatsQueries();
+	void ReadVoxelStatsQueries(ID3D11DeviceContext* a_context);
 	ShellStatsResult staticsStatsLast;
 	bool EnsureShellStatsQueries();
 	void ReadShellStatsQueries(ID3D11DeviceContext* a_context);
@@ -2912,7 +2920,8 @@ public:
 	static constexpr uint kVoxelListBytes = 64 + 3 * 16384;
 	/** @brief Every this-many rebuilds of a level are whole: the seed weights read the shelter/sky maps, which change without the occupancy changing. Rare on purpose: a whole rebuild also re-reads every voxel's captured height and facing, and overlapping triangles write those in GPU-arbitrary order, so each re-capture can differ by a hair - the incremental path never looks, the whole one does, and the snow shifts (Josef, 2026-09-07). The real fix is a deterministic capture (ordered writes or atomics); until then, 900 = 15 s on the finest ring. */
 	static constexpr uint32_t kVoxelFullRefreshRebuilds = 900;
-	ID3D11ComputeShader* voxelDiffCS = nullptr;
+	ID3D11ComputeShader* voxelOccFlagsCS = nullptr;
+	ID3D11ComputeShader* voxelDecayCS = nullptr;
 	ID3D11ComputeShader* voxelDirtyColsCS = nullptr;
 	ID3D11ComputeShader* voxelBrickFlagsCS = nullptr;
 	/** @brief The last fraction of that reach is the hand-over band: the level dithers out over it while the level outside dithers in, complementary per pixel. The outermost dithers to nothing. */

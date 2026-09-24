@@ -23,13 +23,30 @@ bool SnowDeformation::EnsureVoxelResources()
 	const auto wantMax = VoxelDimsMax();
 	if (levelsReady && voxelSupport && voxelSupportDims.x == wantMax.x && voxelSupportDims.y == wantMax.y && voxelSupportDims.z == wantMax.z && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
 		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS &&
-		voxelDiffCS && voxelDirtyColsCS && voxelBrickFlagsCS)
+		voxelOccFlagsCS && voxelDecayCS && voxelDirtyColsCS && voxelBrickFlagsCS)
 		return true;
 	if (voxelShadersFailed)
 		return false;
 	LoadTraceScope _loadTrace(this, "Volume: EnsureVoxelResources");
 	auto* device = globals::d3d::device;
 	auto* context = globals::d3d::context;
+	// The occupancy is read back through its own UAV (the raster's was-empty
+	// test, the decay's tick), a typed load past R32 that is optional in
+	// D3D11; CS already leans on it for R8_UINT and R16G16_UNORM.
+	static int r8TypedLoads = -1;
+	if (r8TypedLoads < 0) {
+		D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support2{};
+		support2.InFormat = DXGI_FORMAT_R8_UNORM;
+		const bool ok = SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &support2, sizeof(support2))) &&
+		                (support2.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0;
+		r8TypedLoads = ok ? 1 : 0;
+		if (!ok)
+			logger::warn("[SNOW DEFORMATION] Voxel volume disabled: no typed UAV loads for R8_UNORM on this GPU");
+	}
+	if (!r8TypedLoads) {
+		voxelShadersFailed = true;
+		return false;
+	}
 
 	// Fresh VRAM is not blank: cleared so a never-written volume reads
 	// empty rather than as whatever lived there before.
@@ -349,17 +366,18 @@ bool SnowDeformation::EnsureVoxelResources()
 	compileCS(voxelBlurZCS, "VoxelBlurZCS", "SnowDeformation::VoxelBlurZCS");
 	compileCS(voxelBlurCS, "VoxelBlurCS", "SnowDeformation::VoxelBlurCS");
 	compileCS(voxelBrickListCS, "VoxelBrickListCS", "SnowDeformation::VoxelBrickListCS");
-	compileCS(voxelDiffCS, "VoxelDiffCS", "SnowDeformation::VoxelDiffCS");
+	compileCS(voxelOccFlagsCS, "VoxelOccFlagsCS", "SnowDeformation::VoxelOccFlagsCS");
+	compileCS(voxelDecayCS, "VoxelDecayCS", "SnowDeformation::VoxelDecayCS");
 	compileCS(voxelDirtyColsCS, "VoxelDirtyColsCS", "SnowDeformation::VoxelDirtyColsCS");
 	compileCS(voxelBrickFlagsCS, "VoxelBrickFlagsCS", "SnowDeformation::VoxelBrickFlagsCS");
 	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurZCS || !voxelBlurCS || !voxelBrickListCS ||
-		!voxelDiffCS || !voxelDirtyColsCS || !voxelBrickFlagsCS) {
+		!voxelOccFlagsCS || !voxelDecayCS || !voxelDirtyColsCS || !voxelBrickFlagsCS) {
 		voxelShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurZCS {} BlurCS {} BrickListCS {} DiffCS {} DirtyColsCS {} BrickFlagsCS {})",
+		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurZCS {} BlurCS {} BrickListCS {} OccFlagsCS {} DecayCS {} DirtyColsCS {} BrickFlagsCS {})",
 			voxelVS ? "ok" : "FAILED", voxelGS ? "ok" : "FAILED", voxelPS ? "ok" : "FAILED",
 			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED",
 			voxelSeedCS ? "ok" : "FAILED", voxelBlurZCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED", voxelBrickListCS ? "ok" : "FAILED",
-			voxelDiffCS ? "ok" : "FAILED", voxelDirtyColsCS ? "ok" : "FAILED", voxelBrickFlagsCS ? "ok" : "FAILED");
+			voxelOccFlagsCS ? "ok" : "FAILED", voxelDecayCS ? "ok" : "FAILED", voxelDirtyColsCS ? "ok" : "FAILED", voxelBrickFlagsCS ? "ok" : "FAILED");
 		return false;
 	}
 	return true;
@@ -731,49 +749,70 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->UpdateSubresource(lv.lists->resource.get(), 0, &box, header, 0, 0);
 		}
 
-		const uint previous = lv.current;
-		lv.current ^= 1;
 		{
-			// Level 0 carries the menu's occupancy count.
-			const bool countHere = counting && L == 0;
-			if (countHere) {
-				const UINT zeros[4] = { 0, 0, 0, 0 };
-				context->ClearUnorderedAccessViewUint(voxelCountUAV.get(), zeros);
-			}
-			ID3D11ShaderResourceView* srv = lv.volume[previous]->srv.get();
-			ID3D11UnorderedAccessView* uavs[3] = { lv.volume[lv.current]->uav.get(), nullptr, countHere ? voxelCountUAV.get() : nullptr };
+			ID3D11UnorderedAccessView* volumeUAV = lv.volume[0]->uav.get();
 			ID3D11UnorderedAccessView* dirtyUAV = lv.dirty->uav.get();
+			ID3D11UnorderedAccessView* flagsUAV = lv.flags->uav.get();
 			ID3D11UnorderedAccessView* heightMapUAV = lv.heightMap->uav.get();
 			ID3D11UnorderedAccessView* heightMapUnderUAV = lv.heightMapUnder->uav.get();
 			context->CSSetConstantBuffers(0, 1, &cbPtr);
-			context->CSSetShaderResources(0, 1, &srv);
-			context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
+			context->CSSetUnorderedAccessViews(0, 1, &volumeUAV, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
+			context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 			context->CSSetUnorderedAccessViews(8, 1, &heightMapUAV, nullptr);
 			context->CSSetUnorderedAccessViews(9, 1, &heightMapUnderUAV, nullptr);
+			// The slots the move brings in, one brick-aligned slab per moved
+			// axis; a move past the extent, or a cleared level, is the window.
 			context->CSSetShader(voxelScrollCS, nullptr, 0);
-			context->Dispatch(gx, gy, gz);
-			ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
-			context->CSSetShaderResources(0, 1, &nullSRV);
-			context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
+			const bool whole = clearAll || std::abs(delta.x) >= (int)lv.dims.x || std::abs(delta.y) >= (int)lv.dims.y || std::abs(delta.z) >= (int)lv.dims.z;
+			if (whole) {
+				cb.ScrollDelta.w = 3;
+				voxelCB->Update(cb);
+				context->Dispatch(gx, gy, gz);
+			} else {
+				const int d[3] = { delta.x, delta.y, delta.z };
+				for (int axis = 0; axis < 3; axis++) {
+					if (d[axis] == 0)
+						continue;
+					cb.ScrollDelta.w = axis;
+					voxelCB->Update(cb);
+					const UINT slab = (UINT)std::abs(d[axis]) / 8;
+					context->Dispatch(slab, axis == 0 ? gy : gx, axis == 2 ? gy : gz);
+				}
+			}
+			// The memory tick, over the bricks that hold anything; level 0's
+			// carries the menu's occupancy count.
+			if (cb.Decay > 0.5f) {
+				const bool countHere = counting && L == 0;
+				ID3D11UnorderedAccessView* countUAV = countHere ? voxelCountUAV.get() : nullptr;
+				if (countHere) {
+					const UINT zeros[4] = { 0, 0, 0, 0 };
+					context->ClearUnorderedAccessViewUint(voxelCountUAV.get(), zeros);
+				}
+				context->CSSetUnorderedAccessViews(2, 1, &countUAV, nullptr);
+				context->CSSetShader(voxelDecayCS, nullptr, 0);
+				context->Dispatch(gx, gy, gz);
+				context->CSSetUnorderedAccessViews(2, 1, &nullUAV, nullptr);
+				// Copy this tick's count, map LAST tick's copy without waiting.
+				if (countHere) {
+					context->CopyResource(voxelCountStaging[voxelCountCursor].get(), voxelCountBuffer.get());
+					voxelCountCursor ^= 1;
+					D3D11_MAPPED_SUBRESOURCE mapped{};
+					if (SUCCEEDED(context->Map(voxelCountStaging[voxelCountCursor].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+						voxelOccupancy = *static_cast<const uint32_t*>(mapped.pData);
+						context->Unmap(voxelCountStaging[voxelCountCursor].get(), 0);
+						voxelOccupancyValid = true;
+					}
+				}
+			}
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
+			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
 			context->CSSetUnorderedAccessViews(8, 1, &nullUAV, nullptr);
 			context->CSSetUnorderedAccessViews(9, 1, &nullUAV, nullptr);
 			context->CSSetShader(nullptr, nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &nullCB);
-			// Copy this frame's count, map LAST frame's copy without waiting.
-			if (countHere) {
-				context->CopyResource(voxelCountStaging[voxelCountCursor].get(), voxelCountBuffer.get());
-				voxelCountCursor ^= 1;
-				D3D11_MAPPED_SUBRESOURCE mapped{};
-				if (SUCCEEDED(context->Map(voxelCountStaging[voxelCountCursor].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
-					voxelOccupancy = *static_cast<const uint32_t*>(mapped.pData);
-					context->Unmap(voxelCountStaging[voxelCountCursor].get(), 0);
-					voxelOccupancyValid = true;
-				}
-			}
 		}
-
 	}
 	if (anyUpdated)
 		globals::profiler->EndPass();
@@ -815,9 +854,10 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			};
 			context->RSSetViewports(2, viewports);
 			// u0 occupancy, u1 the layers under the top, u2 the heightmap, u3
-			// the dirty bricks (a raised layer marks its column).
-			ID3D11UnorderedAccessView* rasterUAVs[4] = { lv.volume[lv.current]->uav.get(), lv.heightMapUnder->uav.get(), lv.heightMap->uav.get(), lv.dirty->uav.get() };
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 4, rasterUAVs, nullptr);
+			// the dirty bricks and u4 the flags (a raised layer or a voxel
+			// turning solid marks its brick).
+			ID3D11UnorderedAccessView* rasterUAVs[5] = { lv.volume[0]->uav.get(), lv.heightMapUnder->uav.get(), lv.heightMap->uav.get(), lv.dirty->uav.get(), lv.flags->uav.get() };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 5, rasterUAVs, nullptr);
 			// STAGGERED CAPTURE. A static already in the volume stays there on
 			// the memory nibble (a tick every 16 of this level's rebuilds, 15
 			// to expire), so drawing it every rebuild only paid for the same
@@ -875,8 +915,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				context->DrawIndexed(indexCount, 0, 0);
 			}
 
-			ID3D11UnorderedAccessView* nullRasterUAVs[4] = { nullptr, nullptr, nullptr, nullptr };
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 4, nullRasterUAVs, nullptr);
+			ID3D11UnorderedAccessView* nullRasterUAVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 5, nullRasterUAVs, nullptr);
 		}
 		context->GSSetShader(nullptr, nullptr, 0);
 		ID3D11Buffer* restoreVSCB0 = savedVSCB0.get();
@@ -912,8 +952,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		lv.rebuilds++;
 		const bool forceAll = !settings.VolumeDirtyBricks || (lv.rebuilds % kVoxelFullRefreshRebuilds) == 0;
 		cb.ForceDirty = float((forceAll ? 1u : 0u) | (settings.VolumeSparseBricks ? 0u : 2u));
-		Texture3D* scratch = lv.volume[lv.current ^ 1];
-		Texture3D* occupancy = lv.volume[lv.current];
+		Texture3D* scratch = lv.volume[1];
+		Texture3D* occupancy = lv.volume[0];
 		ID3D11ShaderResourceView* occSRV = occupancy->srv.get();
 		ID3D11ShaderResourceView* scratchSRV = scratch->srv.get();
 		ID3D11ShaderResourceView* fieldSRV = lv.field->srv.get();
@@ -923,7 +963,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		ID3D11UnorderedAccessView* scratchUAV = scratch->uav.get();
 		ID3D11UnorderedAccessView* fieldUAV = lv.field->uav.get();
 		ID3D11UnorderedAccessView* supportUAV = voxelSupport->uav.get();
-		ID3D11UnorderedAccessView* dirtyUAV = lv.dirty->uav.get();
 		ID3D11UnorderedAccessView* listsUAV = lv.lists->uav.get();
 		ID3D11UnorderedAccessView* flagsUAV = lv.flags->uav.get();
 		ID3D11Buffer* listsBuffer = lv.lists->resource.get();
@@ -931,20 +970,16 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		voxelCB->Update(cb);
 		context->CSSetConstantBuffers(0, 1, &cbPtr);
 
-		// What the raster changed: this rebuild's occupancy (t0) against
-		// the last one's (t4), still in the dead volume. Every rebuild,
-		// dirty or not: it also keeps each brick's OCC bit in the flags.
-		{
+		// A whole rebuild re-derives every brick's OCC bit from the occupancy;
+		// between those the raster, the decay and the scroll keep it as they
+		// write, and the dirt with it.
+		if (forceAll) {
 			context->CSSetShaderResources(0, 1, &occSRV);
-			context->CSSetShaderResources(4, 1, &scratchSRV);
-			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
 			context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
-			context->CSSetShader(voxelDiffCS, nullptr, 0);
+			context->CSSetShader(voxelOccFlagsCS, nullptr, 0);
 			context->Dispatch(gx, gy, gz);
-			context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
 			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
 			context->CSSetShaderResources(0, 1, &nullSRV);
-			context->CSSetShaderResources(4, 1, &nullSRV);
 		}
 		// The dirty columns and their dilations -> dispatch args + lists.
 		context->CSSetShaderResources(6, 1, &dirtySRV);
@@ -1086,6 +1121,45 @@ void SnowDeformation::UpdateVoxelSliceTexture()
 	context->CSSetConstantBuffers(0, 1, &nullCB);
 }
 
+bool SnowDeformation::EnsureVoxelStatsQueries()
+{
+	if (voxelStatsQuery[kShellStatsRing - 1][1])
+		return true;
+	auto device = globals::d3d::device;
+	for (int ring = 0; ring < kShellStatsRing; ++ring) {
+		for (int kind = 0; kind < 2; ++kind) {
+			D3D11_QUERY_DESC desc{};
+			desc.Query = kind == 0 ? D3D11_QUERY_PIPELINE_STATISTICS : D3D11_QUERY_OCCLUSION;
+			if (FAILED(device->CreateQuery(&desc, voxelStatsQuery[ring][kind].put()))) {
+				logger::error("SnowDeformation: volume statistics query creation failed");
+				for (auto& r : voxelStatsQuery)
+					for (auto& q : r)
+						q = nullptr;
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+void SnowDeformation::ReadVoxelStatsQueries(ID3D11DeviceContext* a_context)
+{
+	const int ring = (voxelStatsRing + 1) % kShellStatsRing;
+	if (!voxelStatsIssued[ring])
+		return;
+	D3D11_QUERY_DATA_PIPELINE_STATISTICS stats{};
+	UINT64 samples = 0;
+	if (a_context->GetData(voxelStatsQuery[ring][0].get(), &stats, sizeof(stats), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+		a_context->GetData(voxelStatsQuery[ring][1].get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+		return;
+	voxelStatsLast.vsInvocations = stats.VSInvocations;
+	voxelStatsLast.psInvocations = stats.PSInvocations;
+	voxelStatsLast.rasterizedPrimitives = stats.CInvocations;
+	voxelStatsLast.samplesPassed = samples;
+	voxelStatsLast.valid = true;
+	voxelStatsIssued[ring] = false;
+}
+
 void SnowDeformation::DrawVoxelSnow()
 {
 	if (!settings.VolumeSnow || !voxelDrawCB || !voxelWrapSampler || !voxelShellVS || !voxelShellPS)
@@ -1137,6 +1211,14 @@ void SnowDeformation::DrawVoxelSnow()
 	context->GSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(voxelShellPS, nullptr, 0);
 
+	// Measurement: PS invocations over samples passed = marches a written
+	// pixel costs, the shell's own instrument (its 7.8 found the culling).
+	const bool stats = voxelPipelineStatsEnabled && EnsureVoxelStatsQueries();
+	if (stats) {
+		ReadVoxelStatsQueries(context);
+		context->Begin(voxelStatsQuery[voxelStatsRing][0].get());
+		context->Begin(voxelStatsQuery[voxelStatsRing][1].get());
+	}
 	globals::profiler->BeginPass("SnowDeformation::VolumeSnow");
 	ID3D11Buffer* cb2 = voxelDrawCB->CB();
 	for (uint L = 0; L < levels; L++) {
@@ -1177,6 +1259,12 @@ void SnowDeformation::DrawVoxelSnow()
 		context->DrawInstancedIndirect(lv.drawArgs->resource.get(), 0);
 	}
 	globals::profiler->EndPass();
+	if (stats) {
+		context->End(voxelStatsQuery[voxelStatsRing][1].get());
+		context->End(voxelStatsQuery[voxelStatsRing][0].get());
+		voxelStatsIssued[voxelStatsRing] = true;
+		voxelStatsRing = (voxelStatsRing + 1) % kShellStatsRing;
+	}
 
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	ID3D11SamplerState* nullSampler = nullptr;
