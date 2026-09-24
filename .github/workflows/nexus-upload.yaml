@@ -35,6 +35,10 @@ on:
 permissions:
     contents: read
 
+env:
+    # Nexus version categories that no longer count as present for the skip/exists checks.
+    NEXUS_UNAVAILABLE_CATEGORIES: archived,removed
+
 jobs:
     prepare-nexus-matrix:
         runs-on: ubuntu-latest
@@ -356,6 +360,7 @@ jobs:
                   version = os.environ.get('VERSION', '')
                   game_id = os.environ.get('NEXUS_GAME_ID', 'skyrimspecialedition')
                   api_key = os.environ.get('UNEX_APIKEY', '')
+                  unavailable = os.environ['NEXUS_UNAVAILABLE_CATEGORIES'].split(',')
                   summary = open(os.environ['GITHUB_STEP_SUMMARY'], 'a')
 
                   def w(line=''):
@@ -389,9 +394,6 @@ jobs:
                       url = f'https://www.nexusmods.com/{game_id}/mods/{mod_id}'
                       link = f'[{label}]({url})'
 
-                      if not api_key or not mod_id:
-                          w(f'| {link} | `{planned}` | ⚠️ skipped | — |')
-                          continue
                       if not row.get('unique_mod_id') or not row.get('file_id'):
                           w(f'| {link} | `{planned}` | ❓ unresolved Nexus IDs | — |')
                           failed.append(label)
@@ -401,7 +403,8 @@ jobs:
                           data = get_json(f"https://api.nexusmods.com/v3/mod-files/{row['file_id']}/versions")
                           api_ok = True
                           seen = []
-                          for f in sorted(data['data']['versions'], key=lambda f: f.get('uploaded_at', '')):
+                          available = [f for f in data['data']['versions'] if f.get('category') not in unavailable]
+                          for f in sorted(available, key=lambda f: f.get('uploaded_at', '')):
                               v = f.get('version', '')
                               if v and v not in seen:
                                   seen.append(v)
@@ -467,7 +470,9 @@ jobs:
                     "https://api.nexusmods.com/v3/mod-files/$FILE_ID/versions" \
                     | python3 -c "
                   import json, sys, os
-                  versions = [v.get('version', '') for v in json.load(sys.stdin)['data']['versions']]
+                  unavailable = os.environ['NEXUS_UNAVAILABLE_CATEGORIES'].split(',')
+                  versions = [v.get('version', '') for v in json.load(sys.stdin)['data']['versions']
+                              if v.get('category') not in unavailable]
                   print('false' if os.environ['VERSION'] in versions else 'true')
                   " 2>/dev/null || echo "true")
                   echo "should_upload=${SHOULD_UPLOAD:-true}" >> $GITHUB_OUTPUT
@@ -613,7 +618,9 @@ jobs:
                       })
                       try:
                           with urllib.request.urlopen(req, timeout=15) as resp:
-                              return [v.get('version', '') for v in json.load(resp)['data']['versions']]
+                              unavailable = os.environ['NEXUS_UNAVAILABLE_CATEGORIES'].split(',')
+                              return [v.get('version', '') for v in json.load(resp)['data']['versions']
+                                      if v.get('category') not in unavailable]
                       except Exception:
                           return None
 
