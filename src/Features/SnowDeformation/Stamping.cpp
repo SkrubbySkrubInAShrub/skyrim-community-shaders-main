@@ -618,7 +618,7 @@ static ShapeStamp ShapeStampFor(RE::bhkNiCollisionObject* a_object, float2 a_cur
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
-	globals::profiler->BeginPass("SnowDeformation::GatherStamps");
+	globals::profiler->BeginPass("SnowDeformation::Trails - Gather Actors");
 	uint stampCount = 0;
 	// Actors and props stop short of the pool so spells always have somewhere
 	// to land. They are read first and in engine order, so without this a
@@ -1501,7 +1501,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 	// The reference scan, timed apart from the actor walk above: it visits
 	// every reference in range each frame whether or not anything moves.
-	globals::profiler->BeginPass("SnowDeformation::GatherProps");
+	globals::profiler->BeginPass("SnowDeformation::Trails - Gather Props");
 	// Loose props carve while moving. The cheap root-position gate runs
 	// before any collision traversal. The reference scan itself is the cost
 	// (0.31 ms to visit 144 refs and find 0 movers, measured), so it runs

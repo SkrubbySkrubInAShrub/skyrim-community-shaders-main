@@ -2286,7 +2286,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
 	};
 
-	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
+	globals::profiler->BeginPass("SnowDeformation::Objects - Height Map");
 	SD_DrawBinds binds;
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
@@ -2339,7 +2339,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
-	globals::profiler->BeginPass("SnowDeformation::ObjectHeightGhost");
+	globals::profiler->BeginPass("SnowDeformation::Objects - Height Ghost");
 	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent]);
 	globals::profiler->EndPass();
 
@@ -2352,7 +2352,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->ClearRenderTargetView(heightTopRawFine->rtv.get(), topClear);
 		ID3D11RenderTargetView* fineRTVs[1] = { heightTopRawFine->rtv.get() };
 		context->OMSetRenderTargets(1, fineRTVs, nullptr);
-		globals::profiler->BeginPass("SnowDeformation::ObjectHeightMapFine");
+		globals::profiler->BeginPass("SnowDeformation::Objects - Height Map Fine");
 		SD_DrawBinds fineBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
@@ -2405,7 +2405,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->ClearRenderTargetView(heightTopRawFar->rtv.get(), topClear);
 		ID3D11RenderTargetView* farRTVs[1] = { heightTopRawFar->rtv.get() };
 		context->OMSetRenderTargets(1, farRTVs, nullptr);
-		globals::profiler->BeginPass("SnowDeformation::ObjectHeightMapFar");
+		globals::profiler->BeginPass("SnowDeformation::Objects - Height Map Roads");
 		SD_DrawBinds farBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			if (farRecordIndex[ci] == ~0u)
@@ -2447,7 +2447,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->EndPass();
 		context->OMSetRenderTargets(3, nullRTVs, nullptr);
 	} else {
-		globals::profiler->MarkPassSkipped("SnowDeformation::ObjectHeightMapFar");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Map Roads");
 	}
 
 	// The layer-2 PEEL: re-rasterize the captures against the finished
@@ -2467,7 +2467,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// fields; the capture pass binds b1 to the VS only.
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
-		globals::profiler->BeginPass("SnowDeformation::ObjectHeightPeel");
+		globals::profiler->BeginPass("SnowDeformation::Objects - Height Peel");
 		SD_DrawBinds peelBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
@@ -2518,7 +2518,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// Same merge for the peeled layer, before the next peel reads it.
 		// The bottom slot is the scratch: ScrollCS writes a bottoms result
 		// the cone chains below overwrite anyway.
-		globals::profiler->BeginPass("SnowDeformation::ObjectHeightPeelGhost");
+		globals::profiler->BeginPass("SnowDeformation::Objects - Peel Ghost");
 		mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch);
 		globals::profiler->EndPass();
 	}
@@ -2542,7 +2542,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Combine: raw tops/bottoms -> base field (topFiltered) + shelter mask
 	// (bottomFiltered); bare ground under floating walkways/roofs/bridges.
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
-	globals::profiler->BeginPass("SnowDeformation::ObjectHeightCombine");
+	globals::profiler->BeginPass("SnowDeformation::Objects - Shelter Mask");
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
@@ -2581,7 +2581,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
 		// The seed floor: objects carry no depth, so their columns seed at the
 		// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
-		globals::profiler->BeginPass("SnowDeformation::ObjectSnowCone");
+		globals::profiler->BeginPass("SnowDeformation::Objects - Snow Slopes");
 		processData.ObjectSnowDepth = 0.1f;
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
@@ -2621,22 +2621,26 @@ void SnowDeformation::RenderObjectHeightMap()
 			}
 		};
 
-		context->CSSetShader(objectConeCS, nullptr, 0);
-		Texture2D* objIn = objectSnowCone;
-		Texture2D* objOut = heightScratch;
-		for (uint step : kConeSteps) {
-			processData.ConeStep = step;
-			heightProcessCB->Update(processData);
-			ID3D11ShaderResourceView* objSRV = objIn->srv.get();
-			ID3D11UnorderedAccessView* objUAV = objOut->uav.get();
-			context->CSSetShaderResources(0, 1, &objSRV);
-			context->CSSetUnorderedAccessViews(0, 1, &objUAV, nullptr);
-			context->Dispatch(dispatchDim, dispatchDim, 1);
-			context->CSSetShaderResources(0, 1, nullCsSRVs);
-			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-			std::swap(objIn, objOut);
-		}
-		settleCone(objIn, objOut);
+		// The repose chain over a seeded cone; it lands back in a_cone.
+		auto repose = [&](Texture2D* a_cone, HeightProcessCB& a_data) {
+			Texture2D* in = a_cone;
+			Texture2D* out = heightScratch;
+			context->CSSetShader(objectConeCS, nullptr, 0);
+			for (uint step : kConeSteps) {
+				a_data.ConeStep = step;
+				heightProcessCB->Update(a_data);
+				ID3D11ShaderResourceView* passSRV = in->srv.get();
+				ID3D11UnorderedAccessView* passUAV = out->uav.get();
+				context->CSSetShaderResources(0, 1, &passSRV);
+				context->CSSetUnorderedAccessViews(0, 1, &passUAV, nullptr);
+				context->Dispatch(dispatchDim, dispatchDim, 1);
+				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+				std::swap(in, out);
+			}
+			settleCone(in, out);
+		};
+		repose(objectSnowCone, processData);
 		globals::profiler->EndPass();
 
 		// The same seed + repose chain over the near clipmap's top, at one
@@ -2648,7 +2652,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// top itself, which makes every upward break a plane boundary. That
 		// is what a detail level wants: a rock's own steps rim.
 		if (fineLevel) {
-			globals::profiler->BeginPass("SnowDeformation::ObjectSnowConeFine");
+			globals::profiler->BeginPass("SnowDeformation::Objects - Snow Slopes Fine");
 			HeightProcessCB fineData = processData;
 			fineData.HeightHalfExtent = FineRasterHalfExtent();
 			fineData.ConeStep = 1;
@@ -2666,37 +2670,19 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetShaderResources(3, 1, nullCsSRVs);
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 
-			context->CSSetShader(objectConeCS, nullptr, 0);
-			Texture2D* fineIn = objectSnowConeFine;
-			Texture2D* fineOut = heightScratch;
-			for (uint step : kConeSteps) {
-				fineData.ConeStep = step;
-				heightProcessCB->Update(fineData);
-				ID3D11ShaderResourceView* fineSRV = fineIn->srv.get();
-				ID3D11UnorderedAccessView* fineUAV = fineOut->uav.get();
-				context->CSSetShaderResources(0, 1, &fineSRV);
-				context->CSSetUnorderedAccessViews(0, 1, &fineUAV, nullptr);
-				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 1, nullCsSRVs);
-				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-				std::swap(fineIn, fineOut);
-			}
-			// The chain must land back in objectSnowConeFine; kConeSteps'
-			// even length is what guarantees it, and the coarse chain above
-			// depends on the same invariant.
-			settleCone(fineIn, fineOut);
+			repose(objectSnowConeFine, fineData);
 			// The coarse chain's constants are what every later pass expects.
 			heightProcessCB->Update(processData);
 			globals::profiler->EndPass();
 		} else {
-			globals::profiler->MarkPassSkipped("SnowDeformation::ObjectSnowConeFine");
+			globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes Fine");
 		}
 
 		// P3: bake the sky-openness field from the layer-1 tops, after the
 		// cone chains so the raster is final for this frame. Half-res
 		// output; the consumers bilinear it.
 		if (objectSkyOpenCS && objectSkyOpen) {
-			globals::profiler->BeginPass("SnowDeformation::ObjectSkyOpen");
+			globals::profiler->BeginPass("SnowDeformation::Objects - Sky Openness");
 			context->CSSetShader(objectSkyOpenCS, nullptr, 0);
 			ID3D11ShaderResourceView* openSRV = heightTopRaw[heightCurrent]->srv.get();
 			ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
@@ -3234,9 +3220,9 @@ void SnowDeformation::DrawCapturedStatics()
 	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
 	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty()) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::StaticsShell");
-		globals::profiler->MarkPassSkipped("SnowDeformation::BloodOverlay");
-		globals::profiler->MarkPassSkipped("SnowDeformation::TrenchPatch");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Setup");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Blood - Overlay");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Trench Patch");
 		return;
 	}
 	// Not on the world map: skins strobed there as the panning camera
@@ -3366,7 +3352,7 @@ void SnowDeformation::DrawCapturedStatics()
 		context->PSSetShaderResources(54, 1, &underSRV);
 	}
 
-	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
+	globals::profiler->BeginPass("SnowDeformation::Objects - Setup");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
 	// the "why is THIS rock bare" cases; name the reason in the log.
 	static std::unordered_set<std::string> loggedSkips;
@@ -3651,6 +3637,11 @@ void SnowDeformation::DrawCapturedStatics()
 			cOffset, cCount, cPool, cBase, cap.decalDepth });
 	}
 
+	auto statsRow = [](const char* a_name) {
+		globals::profiler->EndPass();
+		globals::profiler->BeginPass(a_name);
+	};
+	statsRow("SnowDeformation::Objects - Occlusion Cull");
 	// Whole-skin occlusion cull: bounding spheres against a max-depth
 	// pyramid of the scene, on the GPU, same frame. Writes each skin's
 	// indirect draw arguments; the loops below draw through them.
@@ -3801,6 +3792,7 @@ void SnowDeformation::DrawCapturedStatics()
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
 	}
 
+	statsRow("SnowDeformation::Objects - Records");
 	// The skin loop runs once (no prepass) or twice: non-carving skins
 	// depth-only into the private copy, then every skin shading against it -
 	// non-carving under EQUAL with writes off, carving under the shipping
@@ -3923,6 +3915,7 @@ void SnowDeformation::DrawCapturedStatics()
 			bindSkinStages(skinStagesTess);
 		};
 
+		statsRow("SnowDeformation::Objects - Depth Prepass");
 		// The decal overlay leaves the landscape shell's pixels to the blood
 		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
@@ -3936,6 +3929,7 @@ void SnowDeformation::DrawCapturedStatics()
 		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		drawSkins(true);
+		statsRow("SnowDeformation::Objects - Shading");
 
 		if (staticsDebugView == 9) {
 			// Depth fight view: no depth test; every skin paints its verdict
@@ -3954,10 +3948,12 @@ void SnowDeformation::DrawCapturedStatics()
 			drawSkins(false);
 		}
 
+		statsRow("SnowDeformation::Objects - Depth Write-back");
 		fill(dsv.get(), shellTestDepthSRV.get());
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	} else {
+		statsRow("SnowDeformation::Objects - Shading");
 		drawSkins(false);
 	}
 	globals::profiler->EndPass();
@@ -4030,9 +4026,9 @@ void SnowDeformation::DrawCapturedStatics()
 	// vertex killed.
 	const bool patchWanted = patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f && !GroundShellsSuspended();
 	if (patchWanted && capturedRoads == 0)
-		globals::profiler->MarkPassSkipped("SnowDeformation::TrenchPatch");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Trench Patch");
 	if (patchWanted && capturedRoads > 0) {
-		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
+		globals::profiler->BeginPass("SnowDeformation::Trails - Trench Patch");
 		// Tessellated patch: quad patches with trench-aware factors, so the
 		// object trenches pick up the same wall smoothness and rim relief as
 		// the landscape shell. Self-sufficient bindings, same rationale as
@@ -4179,7 +4175,7 @@ void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 	                  shellTerrainVersion == exclusionBakeTerrainVersion &&
 	                  memcmp(&a_list, exclusionBakeList.get(), sizeof(ExclusionsCB)) == 0;
 	if (same) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::ExclusionField");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Far Clearings");
 		return;
 	}
 	exclusionFieldValid = false;
@@ -4203,7 +4199,7 @@ void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
 
-	globals::profiler->BeginPass("SnowDeformation::ExclusionField");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Far Clearings");
 	context->Dispatch(kExclusionFieldDim / 16, kExclusionFieldDim / 16, 1);
 	globals::profiler->EndPass();
 
@@ -4423,7 +4419,7 @@ void SnowDeformation::RenderWaterCapture()
 	const bool fineNeeded = waterFineTexture && (!same || !waterFineValid ||
 											   fineCenter.x != waterFineCenter.x || fineCenter.y != waterFineCenter.y || fineHalf != waterFineHalf);
 	if (same && !fineNeeded) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::WaterCapture");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Water - Capture");
 		capturedWater.clear();
 		return;
 	}
@@ -4450,7 +4446,7 @@ void SnowDeformation::RenderWaterCapture()
 		return;
 	}
 
-	globals::profiler->BeginPass("SnowDeformation::WaterCapture");
+	globals::profiler->BeginPass("SnowDeformation::Water - Capture");
 	// The fine raster is Lighting's t104; off the PS before it becomes a target.
 	ID3D11ShaderResourceView* nullWaterSRV = nullptr;
 	context->PSSetShaderResources(104, 1, &nullWaterSRV);
@@ -4566,7 +4562,7 @@ void SnowDeformation::CoverWaterWindow()
 		context->ClearUnorderedAccessViewFloat(waterNearTexture->uav.get(), farNear);
 		return;
 	}
-	globals::profiler->BeginPass("SnowDeformation::WaterCover");
+	globals::profiler->BeginPass("SnowDeformation::Water - Cover");
 	ID3D11ShaderResourceView* srvs[3] = { waterHeightTexture->srv.get(), nullptr, shellTerrainTexture->srv.get() };
 	ID3D11UnorderedAccessView* uavs[2] = { waterVisibleTexture->uav.get(), waterNearTexture->uav.get() };
 	ID3D11Buffer* processCB = heightProcessCB->CB();
@@ -4808,7 +4804,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		return true;
 	};
 
-	globals::profiler->BeginPass("SnowDeformation::ContactCapture");
+	globals::profiler->BeginPass("SnowDeformation::Trails - Contact Props");
 	for (const auto& prop : contactProps) {
 		// Re-resolved, not held: see ContactProp. A body whose 3D went away
 		// this frame simply drops out.
@@ -4846,7 +4842,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	if (contactSweepStates.size() > 512)
 		contactSweepStates.clear();
 	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
-		globals::profiler->BeginPass("SnowDeformation::ContactSkin");
+		globals::profiler->BeginPass("SnowDeformation::Trails - Contact Bodies");
 		context->VSSetShader(contactSkinVS, nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);

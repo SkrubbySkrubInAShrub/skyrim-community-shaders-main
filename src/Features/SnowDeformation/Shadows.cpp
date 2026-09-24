@@ -522,11 +522,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// in place of the single ShellShadowCast row. The profiler has no
 	// nesting and folds repeated names into per-call samples, hence the
 	// per-cascade names.
-	static const char* const kCasterGridRow[4] = { "SnowDeformation::CasterGrid0", "SnowDeformation::CasterGrid1", "SnowDeformation::CasterGrid2", "SnowDeformation::CasterGrid3" };
-	static const char* const kCasterPatchRow[4] = { "SnowDeformation::CasterPatch0", "SnowDeformation::CasterPatch1", "SnowDeformation::CasterPatch2", "SnowDeformation::CasterPatch3" };
+	static const char* const kCasterGridRow[4] = { "SnowDeformation::Shadows - Ground Cascade 0", "SnowDeformation::Shadows - Ground Cascade 1", "SnowDeformation::Shadows - Ground Cascade 2", "SnowDeformation::Shadows - Ground Cascade 3" };
+	static const char* const kCasterPatchRow[4] = { "SnowDeformation::Shadows - Trench Patch Cascade 0", "SnowDeformation::Shadows - Trench Patch Cascade 1", "SnowDeformation::Shadows - Trench Patch Cascade 2", "SnowDeformation::Shadows - Trench Patch Cascade 3" };
 	const bool splitRow = shellCasterSplitDebug;
 	if (!splitRow)
-		globals::profiler->BeginPass("SnowDeformation::ShellShadowCast");
+		globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Casters");
 	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
 		if (!shadowAtlasDSV[cascade])
 			continue;

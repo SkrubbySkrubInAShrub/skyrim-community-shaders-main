@@ -626,7 +626,7 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	for (const auto& tile : bloodTiles)
 		work = work || (tile.live && (!tile.draws.empty() || tile.discs));
 	if (work) {
-		globals::profiler->BeginPass("SnowDeformation::BloodTiles");
+		globals::profiler->BeginPass("SnowDeformation::Blood - Tiles");
 		winrt::com_ptr<ID3D11ComputeShader> savedCS;
 		context->CSGetShader(savedCS.put(), nullptr, nullptr);
 		winrt::com_ptr<ID3D11Buffer> savedCB;

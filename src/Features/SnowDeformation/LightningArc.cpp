@@ -179,7 +179,7 @@ void SnowDeformation::DrawLightningArcs()
 	if (!context || !renderer)
 		return;
 
-	globals::profiler->BeginPass("SnowDeformation::LightningArcs");
+	globals::profiler->BeginPass("SnowDeformation::Spells - Lightning Arcs");
 
 	// The composite has already run, so the lit scene is in kMAIN and this is
 	// light added on top of it. Depth comes from the main buffer so the bolt

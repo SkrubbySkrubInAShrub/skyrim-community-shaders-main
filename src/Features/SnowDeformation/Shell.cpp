@@ -1567,7 +1567,7 @@ void SnowDeformation::DrawShell()
 			winrt::com_ptr<ID3D11Resource> depthRes;
 			preDepthSRV->GetResource(depthRes.put());
 			context->OMSetRenderTargets(0, nullptr, nullptr);
-			globals::profiler->BeginPass("SnowDeformation::PreSnowDepth");
+			globals::profiler->BeginPass("SnowDeformation::Ground - Depth Copy");
 			context->CopyResource(preSnowDepth.get(), depthRes.get());
 			globals::profiler->EndPass();
 			preSnowDepthThisFrame = true;
@@ -1829,9 +1829,9 @@ void SnowDeformation::DrawShell()
 	}
 	const bool tessellate = tessVS && tessHS && tessDS;
 	if (!shellGround)
-		globals::profiler->MarkPassSkipped("SnowDeformation::ShellVertexBake");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Vertex Bake");
 	if (shellGround && tessellate && bake) {
-		globals::profiler->BeginPass("SnowDeformation::ShellVertexBake");
+		globals::profiler->BeginPass("SnowDeformation::Ground - Vertex Bake");
 		context->CSSetConstantBuffers(0, 1, cbs);
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
 		context->CSSetShaderResources(0, 6, shellSRVs);
@@ -1877,9 +1877,9 @@ void SnowDeformation::DrawShell()
 		context->Begin(shellStatsQuery[shellStatsRing][1].get());
 	}
 	if (!shellGround) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Shell");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell");
 	} else {
-		globals::profiler->BeginPass(shellSplitTiming ? "SnowDeformation::Shell.Setup" : "SnowDeformation::Shell");
+		globals::profiler->BeginPass(shellSplitTiming ? "SnowDeformation::Ground - Shell Setup" : "SnowDeformation::Ground - Shell");
 		if (tessellate) {
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 			context->VSSetShader(tessVS, nullptr, 0);
@@ -1972,7 +1972,7 @@ void SnowDeformation::DrawShell()
 				if (visibleCull)
 					psPrepass = psPrepassPatch;
 
-				splitRow("SnowDeformation::Shell.Prepass");
+				splitRow("SnowDeformation::Ground - Shell Depth Prepass");
 				const float rasterClear[4] = {};
 				context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
 				ID3D11RenderTargetView* prepassRTVs[2] = { shellRasterDepth->rtv.get(), visibleCull ? shellRasterPatch->rtv.get() : nullptr };
@@ -1995,7 +1995,7 @@ void SnowDeformation::DrawShell()
 					context->HSSetShader(tessHS, nullptr, 0);
 				}
 
-				splitRow("SnowDeformation::Shell.Fill");
+				splitRow("SnowDeformation::Ground - Shell Visible Patches");
 				if (visibleCull) {
 					const UINT zeros[4] = {};
 					context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
@@ -2027,7 +2027,7 @@ void SnowDeformation::DrawShell()
 					}
 				}
 
-				splitRow("SnowDeformation::Shell.Main");
+				splitRow("SnowDeformation::Ground - Shell Shading");
 				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 				context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
@@ -2189,7 +2189,7 @@ void SnowDeformation::DrawShell()
 			context->CSSetShaderResources(5, 1, &maskSRV);
 			context->CSSetUnorderedAccessViews(1, 1, &maskUAV, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::SeamShield");
+			globals::profiler->BeginPass("SnowDeformation::Ground - Seam Shield");
 			context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
 			globals::profiler->EndPass();
 			ID3D11ShaderResourceView* nullMaskSRV = nullptr;
@@ -2212,7 +2212,7 @@ void SnowDeformation::DrawShell()
 	const bool rasterMarks = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
 	const bool syncable = rasterMarks || preSnowDepthThisFrame;
 	if (!syncable)
-		globals::profiler->MarkPassSkipped("SnowDeformation::DepthSync");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Sync");
 	if (syncable && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
 		if (auto cs = GetDepthSyncCS()) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
@@ -2224,7 +2224,7 @@ void SnowDeformation::DrawShell()
 			context->CSSetUnorderedAccessViews(0, 2, syncUAVs, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
 			const auto& depthDesc = tb.blendedDepthTexture->desc;
-			globals::profiler->BeginPass("SnowDeformation::DepthSync");
+			globals::profiler->BeginPass("SnowDeformation::Ground - Depth Sync");
 			context->Dispatch((depthDesc.Width + 7) / 8, (depthDesc.Height + 7) / 8, 1);
 			globals::profiler->EndPass();
 
@@ -2336,7 +2336,7 @@ void SnowDeformation::RunLODProbePass()
 			ID3D11UnorderedAccessView* probeUAV = lodProbeUAV.get();
 			context->CSSetUnorderedAccessViews(0, 1, &probeUAV, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::LODProbes");
+			globals::profiler->BeginPass("SnowDeformation::Ground - LOD Probes");
 			context->Dispatch((kLODProbeCount + 63) / 64, 1, 1);
 			globals::profiler->EndPass();
 

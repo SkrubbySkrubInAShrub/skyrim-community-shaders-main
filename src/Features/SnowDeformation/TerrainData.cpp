@@ -968,7 +968,7 @@ void SnowDeformation::BuildTerrainFineWindow()
 	context->CSSetShaderResources(8, 1, &src);
 	context->CSSetUnorderedAccessViews(5, 1, &dst, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
-	globals::profiler->BeginPass("SnowDeformation::TerrainFine");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Terrain Fine");
 	context->Dispatch((kShellFineDim + 7) / 8, (kShellFineDim + 7) / 8, 1);
 	globals::profiler->EndPass();
 	ID3D11Buffer* nullCB = nullptr;
@@ -1095,7 +1095,7 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetUnorderedAccessViews(0, 1, &windowUAV, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
-	globals::profiler->BeginPass("SnowDeformation::WindowFill");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Terrain Window");
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
 	globals::profiler->EndPass();
 	shellTerrainVersion++;
@@ -1189,7 +1189,7 @@ void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 	}
 	landscapeRunsThisFrame++;
 	landscapeRunOpen = true;
-	globals::profiler->BeginPass("SnowDeformation::LandscapeLighting");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Game Terrain Draws");
 }
 
 void SnowDeformation::CloseLandscapeRun()

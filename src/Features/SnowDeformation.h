@@ -3560,7 +3560,7 @@ public:
 	/** @brief Measurement, runtime-only: bitmask zeroing shell PS feature flags before the ShellCB upload (bit 0 parallax, 1 normal map, 2 RMAOS, 3 crisp shadows, 4 screen-space shadows, 5 SSS remarch, 6 glints, 7 point lights, 8 skylighting, 9 albedo texture). The statics shell shares the CB, so it sees the kills too. */
 	uint32_t shellKillMask = 0;
 	/** @brief Measurement, runtime-only: time the Shell pass as Shell.Setup / Shell.Prepass / Shell.Fill / Shell.Main rows instead of one. */
-	bool shellSplitTiming = false;
+	bool shellSplitTiming = true;
 	/** @brief Measurement, runtime-only: the prepass tessellates only the patches the previous frame marked visible. Exact only for a still camera and scene: a skipped patch can never be marked again. */
 	bool shellPrepassLastFrame = false;
 	/** @brief Measurement, runtime-only: the shading draw zero-factors every patch, leaving its VS and HS cost. Breaks the image. */
