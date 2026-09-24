@@ -88,10 +88,16 @@ void SettingManager::RegisterSettingInternal(Setting& setting)
 	} else {
 		// Update existing setting info but keep the same ID and values
 		uint32_t existingID = it->second;
-		assert(allSettings[existingID].type == setting.type);
+		const auto& existing = allSettings[existingID];
 		setting.id = existingID;
-		setting.currentValue = allSettings[existingID].currentValue;
-		setting.lastSavedValue = allSettings[existingID].lastSavedValue;
+		// A type change would leave a mismatched variant, so the new default wins
+		if (existing.type == setting.type) {
+			setting.currentValue = existing.currentValue;
+			setting.lastSavedValue = existing.lastSavedValue;
+		} else {
+			logger::warn("[SettingManager] Setting {}:{} re-registered with a different type, resetting to default", setting.category, setting.key);
+			setting.lastSavedValue = setting.currentValue;
+		}
 		allSettings[existingID] = setting;
 	}
 }
