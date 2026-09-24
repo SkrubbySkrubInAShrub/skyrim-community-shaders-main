@@ -10,9 +10,7 @@ loading screen, apply verification, the cached apply document; rev3 brought loca
 caching and the generic scene copy API). The port is **backend only**: upstream's authoring UI was never taken, and
 Community Shaders branding was kept throughout. This fork grows its own editor in `src/CSEditor/`. See
 [What was dropped](#what-was-dropped) and [Known gaps](#known-gaps) before assuming a missing piece is a
-bug, and
-[Comparison against open-shaders `05f084a4a4`](./scene-settings-open-shaders-comparison.md) for what
-upstream has grown since the port and what it would cost to take.
+bug.
 
 **On-disk compatibility with upstream is a hard requirement:** a `SceneManager.json` authored in
 open-shaders must load in Community Shaders with every setting honored, and vice versa. Any divergence
@@ -26,7 +24,7 @@ Everything belonging to the system lives under `src/CSEditor/SceneManager/`.
 | ---- | ---- |
 | `SceneSettingsManager.h` | The public interface: storage, persistence, resolver, apply/restore, blending. |
 | `SceneSettingsPolicy.h` | Hand-maintained allow/deny lists consumed by the manager. |
-| `SceneManager.{h,cpp}` | Thin `Feature` wrapper that drives the manager's lifecycle. |
+| `SceneManager.{h,cpp}` | The `Feature` that *is* the manager: it inherits `SceneSettingsManager`, forwards the lifecycle hooks and draws the debug view. |
 | `cmake/generate_scene_settings_catalog.py` | Build-time generator; parses `src/**/*.{h,hpp,cpp,cxx}`. |
 | `features/Scene Manager/` | `CORE` marker + `SceneManager.ini` (version `1-0-0`). |
 | `tests/test_scene_settings_catalog_generator.py` | Generator unit tests (hermetic + catalog assertions). |
@@ -45,7 +43,7 @@ translation units so no single file stays unreadable. Find a member by what it d
 
 | TU | Holds |
 | -- | ----- |
-| `SceneSettingsManager.cpp` | Singleton, lifecycle, `Update()`, name/path resolution. |
+| `SceneSettingsManager.cpp` | Singleton (the constructor registers `this`, so it is `globals::features::sceneManager`), lifecycle, `Update()`, name/path resolution. |
 | `SceneSettingsResolve.cpp` | `ResolveAndApply()` and the apply/restore pipeline. |
 | `SceneSettingsSerialization.cpp` | `SceneManager.json` load and save. |
 | `SceneSettingsDiscovery.cpp` | Overwrite-file scanning and preset baking. |
@@ -90,7 +88,7 @@ This makes the framework **feature-agnostic**: a feature exposes scene-controlla
 persisting them and drawing them with a recognized ImGui call. There is no registration API and no
 per-feature code to write. This is what replaced the deleted `WeatherVariableRegistry`.
 
-Current catalog on this fork: **325 entries**, 298 of them scene-controllable across 28 features.
+Current catalog on this fork: **345 entries**, 318 of them scene-controllable across 29 features.
 
 ## Runtime flow
 
@@ -137,8 +135,8 @@ valid at its source), so the exposure is the on-disk contract: `IsSceneSettingVa
 *type* of a value, not its range, and a hand-edited or foreign `SceneManager.json` can carry anything.
 
 `ClampCatalogNumericValue()` closes that in `ApplyCatalogSceneSettings()`, the one place any scene value
-reaches a feature. It covers `EditorSemantic::Numeric` entries carrying `hasNumericBounds` (207 of the
-current catalog's 325). Bounds are authored in **display** space, so the range is converted once through
+reaches a feature. It covers `EditorSemantic::Numeric` entries carrying `hasNumericBounds` (223 of the
+current catalog's 345). Bounds are authored in **display** space, so the range is converted once through
 `ConvertCatalogNumericDisplayToStored()` rather than round-tripping every value; both transforms are
 monotonic, so the min stays the min. An integer-typed value clamps to the whole numbers inside the range,
 since an integer control cannot land on a fractional bound.
@@ -279,8 +277,9 @@ skipped until the pending values actually change.
 a feature's *base* settings must hold one, otherwise it captures an overridden value as if it were the user's
 choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
 exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, one internal manager
-path (`GetFeatureSettingValue`), and six DevBench bridge endpoints. Add one to any new code path that
-serializes feature settings.
+path (`GetFeatureSettingValue`), the two settings reads in the `FeatureOverwrites` export dialog, and six
+DevBench bridge endpoints. Add one to any new code path that serializes feature settings.
+`SceneFeatureReplica` deliberately holds none: a scene page must show the live, scene-applied values.
 
 In `State::SaveToJson` / `State::LoadFromJson` the guard is declared **before** `m_mutex` is taken, so the
 resolve it triggers on destruction does not run while the lock is held.
@@ -358,11 +357,14 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
 
 `src/CSEditor/SceneManager/SceneSettingsPolicy.h` is hand-maintained and pruned to features that exist in this fork:
 
--   `kSettingBlacklist` — settings that must never be scene-overridden, matched by catalog address prefix.
-    Upstream's entries all pointed at features this fork does not have, so the list is this fork's own:
-    the `ExponentialHeightFog` volumetric entries, which shape the froxel grid and its history buffers.
-    Scene overrides travel through `SaveSettings` → JSON patch → `LoadSettings`, which never re-runs the
-    allocation those settings size, so blending them mid-frame is not something the feature can honor.
+-   `kSettingBlacklist` — settings that must never be scene-overridden, matched by catalog address prefix;
+    a bare feature name excludes the whole feature. Upstream's entries all pointed at features this fork
+    does not have, so the list is this fork's own:
+    -   the `ExponentialHeightFog` volumetric entries, which shape the froxel grid and its history buffers.
+        Scene overrides travel through `SaveSettings` → JSON patch → `LoadSettings`, which never re-runs the
+        allocation those settings size, so blending them mid-frame is not something the feature can honor.
+    -   `ImageBasedLighting`'s `DisableInWorldMap` and `DisableInLoadingScreen`.
+    -   all of `GrassOptimizations`, `TerrainVariation` and `VolumetricLighting`.
 -   `kLocationFeatureWhitelist` (4) and `kTimeOfDayFeatureWhitelist` (7) — which features those scene types
     may target.
 
@@ -431,13 +433,17 @@ rather than an authoring panel.
     is live, so it follows the restore with `CaptureExternalFeatureChanges` to re-baseline; without that the
     next resolve puts the old values back.
 -   `CSEditor` flags a weather that has scene settings via `HasWeatherConfig`.
--   `src/CSEditor/SceneManager/SceneWidgetInterceptor.cpp` detours the ImGui calls and replays a feature's real
-    `DrawSettings()` bound to a scene context, so entry authoring needs no per-scene tables:
-    `SceneWidgetBinding::Guard` creates, edits, pauses and deletes entries in place.
+-   `SceneFeatureReplica::Draw()` replays a feature's real `DrawSettings()` inside a
+    `SceneWidgetInterceptor::Scope`, whose ImGui detours bind every control to the scene context, so entry
+    authoring needs no per-scene tables: `SceneWidgetBinding::Guard` creates, edits, pauses and deletes
+    entries in place. A control that draws a rescaled temporary instead of its settings member declares a
+    `ProxyScope` so it still binds.
     `GutterPolicy::GroupMember` is kept although no intercepted feature currently draws a radio group: it is
     what stops several calls against one address (`RadioButton`) from each drawing their own gutter toggle,
     and the alternative to keeping it is a latent double-gutter bug the first time a feature adds one.
--   `src/CSEditor/SceneManager/ScenePageToolbar.cpp` drives the [copy API](#generic-scene-copy-api) and preset export.
+-   `src/CSEditor/SceneManager/ScenePageToolbar.cpp` drives the [copy API](#generic-scene-copy-api) and opens
+    the preset export dialog (`ScenePresetExport`). `SceneTransitionField` is the one clamped duration field
+    shared by the toolbar and the widget gutter.
 
 ## Known gaps
 
