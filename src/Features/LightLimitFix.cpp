@@ -571,14 +571,19 @@ void LightLimitFix::UpdateLights()
 					if (bsLight->IsShadowLight()) {
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
 						light.lightFlags.set(LightFlags::ShadowCaster);
-						if (settings.EnableLocalShadows && localShadowCache) {
+						const bool localShadowsActive = settings.EnableLocalShadows && localShadowCache;
+						if (localShadowsActive) {
 							if (auto* caster = FindLocalShadowCaster(shadowLight); caster && caster->slice >= 0 && caster->lastRenderedFrame != 0) {
 								light.localShadowIndex = static_cast<uint32_t>(caster->slice);
 								light.lightFlags.set(LightFlags::LocalShadow);
 							}
-						} else {
-							TryAssignShadowMask(light, shadowLight);
 						}
+						// Lights without a cached slice (cache full or not yet copied) fall back to the engine shadow mask.
+						if (light.lightFlags.none(LightFlags::LocalShadow))
+							TryAssignShadowMask(light, shadowLight);
+						// Without the cache an unslotted light has no shadow at all, so drop it rather than leak light through walls.
+						if (!localShadowsActive && light.lightFlags.none(LightFlags::Shadow))
+							return;
 					}
 
 					SetLightPosition(light, niLight->world.translate);
