@@ -101,6 +101,7 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(LightData);
 
 	static constexpr uint32_t SHADOW_MASK_CHANNEL_COUNT = 4;
+	static constexpr uint32_t NO_SHADOW_MASK_INDEX = 255;
 	static constexpr uint32_t ENGINE_SHADOW_SLOTS = 4;
 	static constexpr uint32_t ENGINE_SHADOW_MAP_SLICES = 8;
 	static constexpr uint32_t MIN_LOCAL_SHADOW_SLOTS = 4;
@@ -121,6 +122,40 @@ public:
 	static constexpr float LOCAL_SHADOW_MAX_SLACK = 24.0f;
 	static constexpr float LOCAL_SHADOW_DEFAULT_POISSON_RADIUS = 4.0f;
 	static constexpr float LOCAL_SHADOW_TELEPORT_DISTANCE = 128.0f;
+	static constexpr float LOCAL_SHADOW_TELEPORT_RADIUS_FRACTION = 0.25f;
+	static constexpr std::array<uint32_t, 3> LOCAL_SHADOW_RESOLUTION_OPTIONS = { 512, 1024, 2048 };
+	static constexpr std::array<uint32_t, 3> LOCAL_SHADOW_SAMPLE_OPTIONS = { 1, 4, 8 };
+	static constexpr uint32_t LOCAL_SHADOW_MIN_RESOLUTION = 128;
+	static constexpr float LOCAL_SHADOW_FILTER_SCALE_MIN = 0.25f;
+	static constexpr float LOCAL_SHADOW_FILTER_SCALE_MAX = 2.0f;
+	static constexpr float LOCAL_SHADOW_BIAS_SCALE_MIN = 0.0f;
+	static constexpr float LOCAL_SHADOW_BIAS_SCALE_MAX = 4.0f;
+	static constexpr float LOCAL_SHADOW_MAX_POISSON_RADIUS = 16.0f;
+	/** @brief Base depth bias per engine texel, scaled by the light's shadowBiasScale and the user bias scale. */
+	static constexpr float LOCAL_SHADOW_DEPTH_BIAS = 0.00025f;
+	static constexpr float LOCAL_SHADOW_DEFAULT_SPOT_FALLOFF = 2.0f;
+	/** @brief Score tiers: never-rendered casters outrank moved casters, which outrank actor-lit and static casters. */
+	static constexpr float LOCAL_SHADOW_NEWCOMER_SCORE = 1000000.0f;
+	static constexpr float LOCAL_SHADOW_MOVED_SCORE = 100000.0f;
+	static constexpr float LOCAL_SHADOW_MOVE_THRESHOLD = 12.0f;
+	static constexpr float LOCAL_SHADOW_MOVE_RADIUS_FRACTION = 0.02f;
+	static constexpr float LOCAL_SHADOW_STATIC_IMPORTANCE_BASE = 0.25f;
+	static constexpr float LOCAL_SHADOW_ACTOR_MAX_SPEED = 64.0f;
+	static constexpr float LOCAL_SHADOW_ACTOR_REST_SPEED = 0.5f;
+	static constexpr float LOCAL_SHADOW_ACTOR_PROXIMITY_DISTANCE = 512.0f;
+	static constexpr float LOCAL_SHADOW_ACTOR_EDGE_WEIGHT = 0.25f;
+	static constexpr float LOCAL_SHADOW_ACTOR_STALENESS_WEIGHT = 0.15f;
+	static constexpr float LOCAL_SHADOW_ACTOR_STICKY_BONUS = 0.5f;
+	static constexpr float LOCAL_SHADOW_INTERVAL_EMA_WEIGHT = 0.3f;
+	static constexpr float LOCAL_SHADOW_INTERVAL_EMA_MAX = 60.0f;
+	static constexpr uint32_t LOCAL_SHADOW_REJECT_BASE_FRAMES = 15;
+	static constexpr uint32_t LOCAL_SHADOW_REJECT_MAX_STREAK = 4;
+	static constexpr float LOCAL_SHADOW_MAX_FRAME_TIME = 0.1f;
+	static constexpr uint32_t LOCAL_SHADOW_LOG_INTERVAL_FRAMES = 600;
+	/** @brief Must match numthreads in LocalShadowCopyCS.hlsl. */
+	static constexpr uint32_t LOCAL_SHADOW_COPY_GROUP_SIZE = 8;
+	/** @brief Squared eye offset above which the pass is treated as the rebased first-person pass. */
+	static constexpr float FIRST_PERSON_EYE_OFFSET_SQUARED = 1.0f;
 
 	struct alignas(16) LocalShadowData
 	{
@@ -208,7 +243,7 @@ public:
 		uint LightsVisualisationMode;
 		float pad0[2];
 		uint ClusterSize[4];
-		uint EnableLocalShadows;
+		uint pad1;
 		uint LocalShadowSamples;
 		float LocalShadowFilterRadius;
 		float LocalShadowTexelSize;
@@ -343,7 +378,15 @@ public:
 	uint32_t localShadowStatTracked = 0;
 	uint32_t localShadowStatCached = 0;
 	uint32_t localShadowStatRendered = 0;
-	uint32_t localShadowStatCollisions = 0;
+
+	/** @brief True when local shadows are enabled and the cache texture exists. */
+	bool IsLocalShadowCacheActive() const { return settings.EnableLocalShadows && localShadowCache; }
+	/** @brief Engine shadow slots left for local lights once the sun takes its slot. */
+	uint32_t GetEngineShadowCapacity() const { return localShadowSunActive ? ENGINE_SHADOW_SLOTS - 1 : ENGINE_SHADOW_SLOTS; }
+	/** @brief True when the engine found the caster in range within the camera hold window. */
+	static bool IsLocalShadowCasterInView(const LocalShadowCaster& a_caster, uint32_t a_frame);
+	/** @brief Texel size of the cache format, which is always R16_UNORM or R32_FLOAT. */
+	static uint32_t GetLocalShadowBytesPerTexel(DXGI_FORMAT a_format) { return a_format == DXGI_FORMAT_R16_UNORM ? 2 : 4; }
 
 	/**
 	 * @brief Picks which shadow casters the engine may render this frame so the cache covers every caster over time.
@@ -373,7 +416,7 @@ public:
 	LocalShadowCaster* FindLocalShadowCaster(RE::BSShadowLight* a_light);
 	/** @brief Flags a light as an engine shadow-mask light only when it owns one of the four mask channels. */
 	static void TryAssignShadowMask(LightData& a_light, RE::BSShadowLight* a_shadowLight);
-	/** @brief Returns the shadow mask channel of a light, or 255 when it has none. */
+	/** @brief Returns the shadow mask channel of a light, or NO_SHADOW_MASK_INDEX when it has none. */
 	static uint32_t GetShadowMaskIndex(RE::BSShadowLight* a_shadowLight);
 
 	/** @brief Adjusts the saturation of an RGB color value. */
