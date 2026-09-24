@@ -2060,6 +2060,20 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		exclusionData.ExclusionCount = exclusionCount;
 		statExclusionCount = exclusionCount;
+		{
+			uint64_t h = 1469598103934665603ull;
+			auto mix = [&](const void* a_p, size_t a_n) {
+				const auto* b = static_cast<const uint8_t*>(a_p);
+				for (size_t i = 0; i < a_n; i++) {
+					h ^= b[i];
+					h *= 1099511628211ull;
+				}
+			};
+			mix(exclusionData.PosRadius, sizeof(float4) * exclusionCount);
+			mix(exclusionData.DirExtType, sizeof(float4) * exclusionCount);
+			mix(&exclusionCount, sizeof(exclusionCount));
+			exclusionListHash = h;
+		}
 		doorsCB->Update(exclusionData);
 		// Every frame, never on a cadence (the window follows the camera);
 		// the bake itself skips while its inputs match.

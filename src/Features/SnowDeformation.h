@@ -2951,6 +2951,14 @@ public:
 		bool valid = false;
 		/** @brief This frame rebuilt the level's occupancy, so its field and bricks are due too. */
 		bool updated = false;
+		/** @brief This frame was a rebuild frame the idle gate skipped: the draw list still refreshes. */
+		bool skipped = false;
+		/** @brief The idle gate's memory of the last rebuild's inputs, and how many rebuild frames in a row they have held. */
+		uint64_t captureHashLast = 0;
+		uint32_t captureCountLast = 0;
+		uint64_t exclusionHashLast = 0;
+		uint64_t cbHashLast = 0;
+		uint32_t stableRebuilds = 0;
 		DirectX::XMINT3 origin = { 0, 0, 0 };
 	};
 	VoxelLevel voxelLevels[kVoxelMaxLevels];
@@ -3019,6 +3027,15 @@ public:
 	bool showVoxelSlice = false;
 	/** @brief Runtime-only: the volume snow tinted by the ring that drew it. */
 	bool showVolumeRings = false;
+	/** @brief Debug, not serialised: rebuild every ring on its cadence whatever its inputs did - the idle gate's A/B. */
+	bool debugForceVolumeRebuild = false;
+	/** @brief Every level due this frame skipped its rebuild (the idle gate). */
+	bool voxelIdleSkipped = false;
+	/** @brief Why a level rebuilt, OR of the levels: 1 origin moved, 2 captures changed, 4 exclusions changed, 8 constants changed, 16 settling, 32 forced, 64 first build. */
+	uint32_t voxelIdleBlockers = 0;
+	float voxelSkipRate = -1.0f;
+	uint32_t voxelSkipTallyFrames = 0;
+	uint32_t voxelSkipTallySkipped = 0;
 	/** @brief 0 top-down (XY), 1 side XZ, 2 side YZ. */
 	int voxelSliceAxis = 1;
 	/** @brief Slice plane offset from the camera, world units. */
@@ -3190,6 +3207,8 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
 	ConstantBuffer* doorsCB = nullptr;
+	/** @brief The list as last uploaded, hashed: the volume's idle gate reads it. */
+	uint64_t exclusionListHash = 0;
 	/** @brief Inputs of the last exclusion-field bake: terrain window cell, terrain texture version, the list as uploaded. The bake skips while all match and the snapped centre is unchanged - the texture already holds the same bits. */
 	int exclusionBakeCellX = INT_MIN;
 	int exclusionBakeCellY = INT_MIN;

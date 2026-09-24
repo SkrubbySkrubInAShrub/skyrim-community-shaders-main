@@ -435,6 +435,20 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("voxel_show_rings"), "Colour Rings"), &showVolumeRings);
 			if (auto _ttVoxRings = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_show_rings_tooltip"), "Tints the volume snow by the ring that drew it: green, blue, yellow, magenta, cyan, red from the nearest out. The dithered hand-over bands show as a speckled mix. Not saved."));
+			ImGui::Checkbox(T(TKEY("voxel_force_rebuild"), "Force Volume Rebuild"), &debugForceVolumeRebuild);
+			if (auto _ttVoxForce = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("voxel_force_rebuild_tooltip"), "Rebuilds every ring on its cadence even when nothing it reads has changed. Off, a ring whose window, captured objects, exclusions and settings have all held still for a memory's worth of rebuilds skips the rebuild entirely - the A/B for that gate. On while judging flicker with Dirty Bricks off, or the gate freezes the picture you are judging."));
+			if (voxelSkipRate >= 0.0f) {
+				WrapTextF("Volume rebuilds: idle (skipped) - %.0f%% of last 300 frames", voxelSkipRate * 100.0f);
+				if (!voxelIdleSkipped && voxelIdleBlockers) {
+					static constexpr const char* kBlockerNames[7] = { "window moved", "captures changed", "exclusions changed", "constants changed", "settling", "forced", "first build" };
+					std::string why;
+					for (int bit = 0; bit < 7; bit++)
+						if (voxelIdleBlockers & (1u << bit))
+							why += (why.empty() ? "" : ", ") + std::string(kBlockerNames[bit]);
+					WrapTextDisabledF("Rebuilding now: %s", why.c_str());
+				}
+			}
 			ImGui::Checkbox(T(TKEY("voxel_show_slice"), "Show Slice"), &showVoxelSlice);
 			if (auto _ttVoxSlice = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_show_slice_tooltip"), "Draws a picture of what the volume holds."));
