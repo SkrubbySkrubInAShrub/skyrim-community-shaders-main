@@ -464,6 +464,13 @@ not exist in the feature's own panel, which breaks the invariant the whole inter
 page shows the feature's real `DrawSettings()`, replayed. Do not re-add an emission without a caller that
 justifies the second rendering path.
 
+## TODO
+
+-   More UI elements so users can understand which layer is winning, when, and where.
+-   A unified preset system with E11.
+-   Preset metadata and preset JSONs.
+-   Presets are read from a single folder only, and every preset file is loaded at all times.
+
 ## Testing
 
 ```bash
