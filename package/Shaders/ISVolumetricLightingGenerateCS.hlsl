@@ -94,8 +94,9 @@ cbuffer PerTechnique : register(b0)
 	float phaseContribution = lerp(1, phaseFactor, PhaseContribution);
 
 	float lightAlignment = saturate(dot(viewDirection, SharedData::DirLightDirection.xyz));
-	float godRayLobe = pow(lightAlignment, SharedData::volumetricLightingSettings.GodRayExponent);
-	float godRayContribution = 1 + SharedData::volumetricLightingSettings.GodRayGain * godRayLobe;
+	float godRayContribution = 1;
+	if (SharedData::volumetricLightingSettings.GodRayGain != 0)
+		godRayContribution += SharedData::volumetricLightingSettings.GodRayGain * pow(lightAlignment, SharedData::volumetricLightingSettings.GodRayExponent);
 
 	float shadowContribution = noShadow;
 
