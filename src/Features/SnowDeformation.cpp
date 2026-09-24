@@ -1507,7 +1507,9 @@ void SnowDeformation::Prepass()
 			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				globals::profiler->BeginPass("SnowDeformation::EvolveSnapshot");
 				context->CopyResource(scratch->resource.get(), map->resource.get());
+				globals::profiler->EndPass();
 
 				// Scan: occupancy (SRV, so drop its UAV bind) + halo -> list.
 				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);

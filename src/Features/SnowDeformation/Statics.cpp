@@ -2280,6 +2280,14 @@ void SnowDeformation::RenderObjectHeightMap()
 	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), uint32_t(captureRecords.size()));
 	uint32_t captureParity = 0;
 
+	// A capture wholly outside a window rasterizes to nothing there; the list
+	// reaches the object-snow range, far past the raster windows.
+	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
+		const auto& wb = a_geometry->worldBound;
+		return std::abs(wb.center.x - heightWindowCenter.x) > a_halfExtent + wb.radius ||
+		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
+	};
+
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
 	SD_DrawBinds binds;
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
@@ -2288,6 +2296,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		if (!geometry)
 			continue;
 		if (cap.lodBatch)
+			continue;
+		if (outsideWindow(geometry, halfExtent))
 			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
@@ -2331,7 +2341,9 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
+	globals::profiler->BeginPass("SnowDeformation::ObjectHeightGhost");
 	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent]);
+	globals::profiler->EndPass();
 
 	// Near clipmap level 0: the same captures against a quarter-width window,
 	// so the layer-1 top lands at one world unit per texel. No ghost and no
@@ -2351,12 +2363,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				continue;
 			if (cap.lodBatch)
 				continue;
-			// Everything outside the narrow window would rasterize to nothing;
-			// most of the capture list is, so the reject is most of the saving.
-			const auto& wb = geometry->worldBound;
-			const float fineHalf = FineRasterHalfExtent();
-			if (std::abs(wb.center.x - heightWindowCenter.x) > fineHalf + wb.radius ||
-				std::abs(wb.center.y - heightWindowCenter.y) > fineHalf + wb.radius)
+			if (outsideWindow(geometry, FineRasterHalfExtent()))
 				continue;
 			auto triShape = geometry->AsTriShape();
 			if (!triShape)
@@ -2471,6 +2478,8 @@ void SnowDeformation::RenderObjectHeightMap()
 				continue;
 			if (cap.lodBatch)
 				continue;
+			if (outsideWindow(geometry, halfExtent))
+				continue;
 			auto triShape = geometry->AsTriShape();
 			if (!triShape)
 				continue;
@@ -2511,7 +2520,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		// Same merge for the peeled layer, before the next peel reads it.
 		// The bottom slot is the scratch: ScrollCS writes a bottoms result
 		// the cone chains below overwrite anyway.
+		globals::profiler->BeginPass("SnowDeformation::ObjectHeightPeelGhost");
 		mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch);
+		globals::profiler->EndPass();
 	}
 
 	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive, captureParity);
@@ -2533,6 +2544,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Combine: raw tops/bottoms -> base field (topFiltered) + shelter mask
 	// (bottomFiltered); bare ground under floating walkways/roofs/bridges.
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
+	globals::profiler->BeginPass("SnowDeformation::ObjectHeightCones");
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
@@ -2577,6 +2589,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 		std::swap(coneIn, coneOut);
 	}
+	globals::profiler->EndPass();
 
 	// Object snow cone: the same repose transform run over the OBJECT top
 	// raster, giving the skin's edge taper a ready-made snow surface to read.
@@ -2585,6 +2598,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
 		// The seed floor: objects carry no depth, so their columns seed at the
 		// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
+		globals::profiler->BeginPass("SnowDeformation::ObjectSnowCone");
 		processData.ObjectSnowDepth = 0.1f;
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
@@ -2640,6 +2654,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			std::swap(objIn, objOut);
 		}
 		settleCone(objIn, objOut);
+		globals::profiler->EndPass();
 
 		// The same seed + repose chain over the near clipmap's top, at one
 		// unit per texel. Two inputs differ from the coarse chain: InB (the
@@ -2650,6 +2665,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// top itself, which makes every upward break a plane boundary. That
 		// is what a detail level wants: a rock's own steps rim.
 		if (fineLevel) {
+			globals::profiler->BeginPass("SnowDeformation::ObjectSnowConeFine");
 			HeightProcessCB fineData = processData;
 			fineData.HeightHalfExtent = FineRasterHalfExtent();
 			fineData.ConeStep = 1;
@@ -2688,12 +2704,16 @@ void SnowDeformation::RenderObjectHeightMap()
 			settleCone(fineIn, fineOut);
 			// The coarse chain's constants are what every later pass expects.
 			heightProcessCB->Update(processData);
+			globals::profiler->EndPass();
+		} else {
+			globals::profiler->MarkPassSkipped("SnowDeformation::ObjectSnowConeFine");
 		}
 
 		// P3: bake the sky-openness field from the layer-1 tops, after the
 		// cone chains so the raster is final for this frame. Half-res
 		// output; the consumers bilinear it.
 		if (objectSkyOpenCS && objectSkyOpen) {
+			globals::profiler->BeginPass("SnowDeformation::ObjectSkyOpen");
 			context->CSSetShader(objectSkyOpenCS, nullptr, 0);
 			ID3D11ShaderResourceView* openSRV = heightTopRaw[heightCurrent]->srv.get();
 			ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
@@ -2703,6 +2723,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->Dispatch(openDim, openDim, 1);
 			context->CSSetShaderResources(0, 1, nullCsSRVs);
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+			globals::profiler->EndPass();
 		}
 	}
 
@@ -4854,6 +4875,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			if (!root)
 				continue;
 			const uint drawsBeforeActor = contactSkinDrawsLast;
+			ScopedTicks _actorTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactActor], cpuCensus.spanCalls[CpuCensus::kSpanContactActor]);
 			// First person hides the player's third-person root, but that skeleton
 			// still animates: the body under the camera is what walks in the snow.
 			const bool firstPersonPlayer = firstPerson && ref->IsPlayerRef();
@@ -4863,7 +4885,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			} tally;
 			int geometryIndex = -1;
 			bool skinnedVSBound = true;
-			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+			auto visitGeometry = [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+				ScopedTicks _geometryTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactGeometry], cpuCensus.spanCalls[CpuCensus::kSpanContactGeometry]);
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
 				// RaceMenu overlays ('[Ovl0]'..'[Ovl5]', '[SOvl0]') are clones of the
@@ -4941,6 +4964,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
 				tally.skinned++;
+				ScopedTicks _skinnedTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactSkinned], cpuCensus.spanCalls[CpuCensus::kSpanContactSkinned]);
 				if (!skinnedVSBound) {
 					context->VSSetShader(contactSkinVS, nullptr, 0);
 					skinnedVSBound = true;
@@ -5018,6 +5042,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						Util::SetResourceName(contactDynamicVB.get(), "SnowDeformation::ContactDynamicPositions");
 						contactDynamicVBBytes = vbDesc.ByteWidth;
 					}
+					ScopedTicks _dynamicTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactDynamic], cpuCensus.spanCalls[CpuCensus::kSpanContactDynamic]);
 					D3D11_MAPPED_SUBRESOURCE mapped{};
 					if (FAILED(context->Map(contactDynamicVB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 						tally.dynamicUnread++;
@@ -5234,6 +5259,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 
 					if (indexing == 2 && boneCount <= kContactMaxBones) {
 						if (!globalUploaded) {
+							ScopedTicks _uploadTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactUpload], cpuCensus.spanCalls[CpuCensus::kSpanContactUpload]);
 							for (uint32_t b = 0; b < boneCount; ++b) {
 								const RE::NiTransform& m = composedFor(uint16_t(b), p, uint16_t(b));
 								const auto& rot = m.rotate;
@@ -5252,6 +5278,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					const bool samePalette = paletteBones && paletteCount == part.numBones &&
 					                         std::memcmp(paletteBones, part.bones, size_t(part.numBones) * sizeof(uint16_t)) == 0;
 					if (!samePalette) {
+						ScopedTicks _uploadTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactUpload], cpuCensus.spanCalls[CpuCensus::kSpanContactUpload]);
 						for (uint16_t j = 0; j < part.numBones; ++j) {
 							const RE::NiTransform& m = composedFor(part.bones[j], p, j);
 							const auto& rot = m.rotate;
@@ -5267,6 +5294,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					}
 					}
 
+					ScopedTicks _drawTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactDraw], cpuCensus.spanCalls[CpuCensus::kSpanContactDraw]);
 					UINT offset = 0;
 					auto* vb = reinterpret_cast<ID3D11Buffer*>(buff->vertexBuffer);
 					auto* ib = reinterpret_cast<ID3D11Buffer*>(buff->indexBuffer);
@@ -5281,7 +5309,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					contactSkinDrawsLast++;
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
-			});
+			};
+			// By reference: the walk copies its std::function at every node, and
+			// this closure is past the small buffer, so each copy was a heap one.
+			RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
 			// Nothing printed from a body the game draws: hand the actor to the bone
 			// stamps for a while rather than leave it carving nothing at all.
 			const bool rootHidden = root->GetAppCulled() && !firstPersonPlayer;

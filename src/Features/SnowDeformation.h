@@ -2507,10 +2507,17 @@ public:
 			kSpanIdleLogic,
 			kSpanDispatch,
 			kSpanPrepassTail,
+			kSpanContactActor,
+			kSpanContactUpload,
+			kSpanContactDynamic,
+			kSpanContactDraw,
+			kSpanContactGeometry,
+			kSpanContactSkinned,
 			kSpanCount
 		};
 		static constexpr const char* kSpanNames[kSpanCount] = { "Prepass", "DrawShell", "DrawShell.Setup", "DrawShell.ObjectHeightMap", "DrawShell.WaterCapture", "DrawShell.WaterCover", "DrawShell.BloodCapture", "DrawShell.RuneCapture", "DrawShell.GridAndBind", "DrawShell.Statics", "DrawShell.Restore", "DrawShell.LODProbe", "DrawShell.Tail",
-			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail" };
+			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail",
+			"Contact.Actor", "Contact.Upload", "Contact.Dynamic", "Contact.Draw", "Contact.Geometry", "Contact.Skinned" };
 		int64_t spanTicks[kSpanCount] = {};
 		uint32_t spanCalls[kSpanCount] = {};
 		/** @brief Cumulative: every stamp uploaded, the carve (non-melt) ones MarkTrenchDirtyRows saw, and rows it newly marked dirty. */
@@ -2555,6 +2562,7 @@ public:
 		float depthMs = 0.0f, depthCalls = 0.0f, traverseMs = 0.0f, traverseCalls = 0.0f;
 		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f;
 		float spanMs[CpuCensus::kSpanCount] = {};
+		float spanCalls[CpuCensus::kSpanCount] = {};
 	};
 	CpuCensusShown cpuShown;
 	// rdtsc, not QPC: two QPC reads are ~50 ns and the hook runs thousands of
@@ -2589,7 +2597,8 @@ public:
 	static void TimedTraverse(RE::NiAVObject* a_root, F&& a_visitor)
 	{
 		ScopedTicks _t(cpuCensus.traverseTicks, cpuCensus.traverseCalls);
-		RE::BSVisit::TraverseScenegraphCollision(a_root, std::forward<F>(a_visitor));
+		// By reference: the walk copies its std::function at every node.
+		RE::BSVisit::TraverseScenegraphCollision(a_root, std::ref(a_visitor));
 	}
 	void RollCpuCensus();
 	bool landTriProbeArmed = false;

@@ -1567,7 +1567,9 @@ void SnowDeformation::DrawShell()
 			winrt::com_ptr<ID3D11Resource> depthRes;
 			preDepthSRV->GetResource(depthRes.put());
 			context->OMSetRenderTargets(0, nullptr, nullptr);
+			globals::profiler->BeginPass("SnowDeformation::PreSnowDepth");
 			context->CopyResource(preSnowDepth.get(), depthRes.get());
+			globals::profiler->EndPass();
 			preSnowDepthThisFrame = true;
 		}
 	}
@@ -2187,7 +2189,9 @@ void SnowDeformation::DrawShell()
 			context->CSSetShaderResources(5, 1, &maskSRV);
 			context->CSSetUnorderedAccessViews(1, 1, &maskUAV, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
+			globals::profiler->BeginPass("SnowDeformation::SeamShield");
 			context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
+			globals::profiler->EndPass();
 			ID3D11ShaderResourceView* nullMaskSRV = nullptr;
 			ID3D11UnorderedAccessView* nullMaskUAV = nullptr;
 			context->CSSetShaderResources(5, 1, &nullMaskSRV);

@@ -53,7 +53,7 @@ namespace
 			const auto& s = globals::features::snowDeformation.cpuShown;
 			json spans = json::array();
 			for (uint32_t i = 0; i < SnowDeformation::CpuCensus::kSpanCount; i++)
-				spans.push_back({ { "name", SnowDeformation::CpuCensus::kSpanNames[i] }, { "ms", s.spanMs[i] } });
+				spans.push_back({ { "name", SnowDeformation::CpuCensus::kSpanNames[i] }, { "ms", s.spanMs[i] }, { "calls", s.spanCalls[i] } });
 			const auto& cc = SnowDeformation::cpuCensus;
 			json stampers = json::array();
 			for (uint32_t i = 0; i < cc.lastStampSourceCount; i++) {
