@@ -1027,8 +1027,6 @@
     "feature.light_limit_fix.light_limit_vis": "Light Limit Visualization",
     "feature.light_limit_fix.lights_vis_mode": "Lights Visualisation Mode",
     "feature.light_limit_fix.lights_vis_mode_tooltip": " - Visualise the light limit. Red when the \"strict\" light limit is reached (portal-strict lights).\n - Visualise the number of strict lights.\n - Visualise the number of clustered lights.\n - Visualize the Shadow Mask.\n",
-    "feature.light_limit_fix.local_shadow_bias": "Shadow Bias Scale",
-    "feature.light_limit_fix.local_shadow_bias_tooltip": "Scales the depth bias of every light. Raise it if surfaces show striped self-shadowing, lower it if shadows detach from their casters.",
     "feature.light_limit_fix.local_shadow_filter_scale": "Shadow Filter Scale",
     "feature.light_limit_fix.local_shadow_filter_scale_tooltip": "Scales the softening radius set by fPoissonRadiusScale in the game INI. 1.0 matches the game's own shadow-casting lights.",
     "feature.light_limit_fix.local_shadow_resolution": "Shadow Cache Resolution",

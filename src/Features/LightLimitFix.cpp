@@ -23,8 +23,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LocalShadowSlots,
 	LocalShadowResolution,
 	LocalShadowSamples,
-	LocalShadowFilterScale,
-	LocalShadowBiasScale)
+	LocalShadowFilterScale)
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 128;
 
@@ -82,11 +81,6 @@ void LightLimitFix::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("local_shadow_filter_scale"), "Shadow Filter Scale"), &settings.LocalShadowFilterScale, LOCAL_SHADOW_FILTER_SCALE_MIN, LOCAL_SHADOW_FILTER_SCALE_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("local_shadow_filter_scale_tooltip"), "Scales the softening radius set by fPoissonRadiusScale in the game INI. 1.0 matches the game's own shadow-casting lights."));
-		}
-
-		ImGui::SliderFloat(T(TKEY("local_shadow_bias"), "Shadow Bias Scale"), &settings.LocalShadowBiasScale, LOCAL_SHADOW_BIAS_SCALE_MIN, LOCAL_SHADOW_BIAS_SCALE_MAX, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("local_shadow_bias_tooltip"), "Scales the depth bias of every light. Raise it if surfaces show striped self-shadowing, lower it if shadows detach from their casters."));
 		}
 	}
 
@@ -1742,8 +1736,7 @@ void LightLimitFix::CopyLocalShadowMaps()
 		}
 
 		const float biasTexelScale = static_cast<float>(scale);
-		const float userBiasScale = std::clamp(settings.LocalShadowBiasScale, LOCAL_SHADOW_BIAS_SCALE_MIN, LOCAL_SHADOW_BIAS_SCALE_MAX);
-		caster->shadowParams = { static_cast<float>(type), caster->radius, info.biasScale * LOCAL_SHADOW_DEPTH_BIAS * biasTexelScale * userBiasScale, 1.0f };
+		caster->shadowParams = { static_cast<float>(type), caster->radius, info.biasScale * LOCAL_SHADOW_DEPTH_BIAS * biasTexelScale, 1.0f };
 		caster->shadowParams2 = { spotFalloff, 0.0f, 0.0f, 0.0f };
 		if (caster->lastRenderedFrame != 0)
 			caster->intervalEma += LOCAL_SHADOW_INTERVAL_EMA_WEIGHT * (std::min(static_cast<float>(frame - caster->lastRenderedFrame), LOCAL_SHADOW_INTERVAL_EMA_MAX) - caster->intervalEma);

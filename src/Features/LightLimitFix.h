@@ -128,10 +128,8 @@ public:
 	static constexpr uint32_t LOCAL_SHADOW_MIN_RESOLUTION = 128;
 	static constexpr float LOCAL_SHADOW_FILTER_SCALE_MIN = 0.25f;
 	static constexpr float LOCAL_SHADOW_FILTER_SCALE_MAX = 2.0f;
-	static constexpr float LOCAL_SHADOW_BIAS_SCALE_MIN = 0.0f;
-	static constexpr float LOCAL_SHADOW_BIAS_SCALE_MAX = 4.0f;
 	static constexpr float LOCAL_SHADOW_MAX_POISSON_RADIUS = 16.0f;
-	/** @brief Base depth bias per engine texel, scaled by the light's shadowBiasScale and the user bias scale. */
+	/** @brief Base depth bias per engine texel, scaled by the light's shadowBiasScale to match the engine's own bias. */
 	static constexpr float LOCAL_SHADOW_DEPTH_BIAS = 0.00025f;
 	static constexpr float LOCAL_SHADOW_DEFAULT_SPOT_FALLOFF = 2.0f;
 	/** @brief Score tiers: never-rendered casters outrank moved casters, which outrank actor-lit and static casters. */
@@ -445,7 +443,6 @@ public:
 		uint LocalShadowResolution = 0;
 		uint LocalShadowSamples = 8;
 		float LocalShadowFilterScale = 1.0f;
-		float LocalShadowBiasScale = 0.25f;
 	};
 
 	uint clusterSize[3] = { 16 };
