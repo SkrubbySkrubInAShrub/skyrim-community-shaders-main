@@ -1697,12 +1697,36 @@ void SnowDeformation::DrawShell()
 	UINT prevViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 	context->RSGetViewports(&prevViewportCount, prevViewports);
 
+	// Only the loaded square is asked: the shell ends at its seam, and land
+	// past it never loads, so a test over the whole span never settles. A
+	// loaded cell still baking opens the gate at once; bare must hold for
+	// kShellGateBareFrames before the grid draw and its dependents (bake,
+	// stats, depth sync) are skipped. The CB upload above stays - the
+	// statics and the caster read it.
+	// An interior has no landscape, so the square under the player is
+	// unbaked for ever and read as unknown (Alternate Start's dungeon ran the
+	// shell, bake and sync at full cost).
+	if (InInteriorCell()) {
+		shellSnowVerdict = kSnowGateBare;
+	} else {
+		int sqMinX, sqMinY, sqMaxX, sqMaxY;
+		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
+		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
+		                       kSnowGateUnknown;
+	}
+	shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
+	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+
 	// Rasterize this frame's captured statics top-down into the object
 	// height windows, then restore the viewport for the screen-space passes.
 	// Waits for the prime's object group: EnsureStaticsShaders would
 	// otherwise compile its ten variants synchronously right here.
+	// Every reader of these fields (shell, skins, trench patch, caster,
+	// volume) is off in a bare square with nothing captured.
 	spanClock.Lap(CpuCensus::kSpanShellSetup);
-	if (!SnowShadersPending(2) && EnsureStaticsShaders())
+	if (!shellGround && capturedStatics.empty() && !settings.VolumeSnow)
+		SkipObjectHeightMap();
+	else if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
 	spanClock.Lap(CpuCensus::kSpanObjectHeightMap);
 	RenderWaterCapture();
@@ -1783,26 +1807,6 @@ void SnowDeformation::DrawShell()
 		// reads the recolor's real weight from LandMasksCopy instead.
 		preSkinNormalsCopySRV = nullptr;
 	}
-
-	// Only the loaded square is asked: the shell ends at its seam, and land
-	// past it never loads, so a test over the whole span never settles. A
-	// loaded cell still baking opens the gate at once; bare must hold for
-	// kShellGateBareFrames before the grid draw and its dependents (bake,
-	// stats, depth sync) are skipped. The CB upload above stays - the
-	// statics and the caster read it.
-	// An interior has no landscape, so the square under the player is
-	// unbaked for ever and read as unknown (Alternate Start's dungeon ran the
-	// shell, bake and sync at full cost).
-	if (InInteriorCell()) {
-		shellSnowVerdict = kSnowGateBare;
-	} else {
-		int sqMinX, sqMinY, sqMaxX, sqMaxY;
-		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
-		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
-		                       kSnowGateUnknown;
-	}
-	shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
-	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 
 	// Main depth before any snow draw: DepthSync syncs the pixels the snow
 	// passes (shell, skins, patch) move nearer than this copy. Targets are

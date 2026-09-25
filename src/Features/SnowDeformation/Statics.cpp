@@ -1770,6 +1770,20 @@ void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, boo
 	}
 }
 
+void SnowDeformation::SkipObjectHeightMap()
+{
+	// The next run clears and rebuilds, as after a teleport.
+	heightMapValid = false;
+	static constexpr const char* kRows[] = {
+		"SnowDeformation::Objects - Height Map", "SnowDeformation::Objects - Height Ghost", "SnowDeformation::Objects - Height Map Fine",
+		"SnowDeformation::Objects - Height Map Roads", "SnowDeformation::Objects - Height Peel", "SnowDeformation::Objects - Peel Ghost",
+		"SnowDeformation::Objects - Shelter Mask", "SnowDeformation::Objects - Snow Slopes", "SnowDeformation::Objects - Snow Slopes Fine",
+		"SnowDeformation::Objects - Sky Openness", "SnowDeformation::Ground - Far Clearings"
+	};
+	for (const char* row : kRows)
+		globals::profiler->MarkPassSkipped(row);
+}
+
 void SnowDeformation::RenderObjectHeightMap()
 {
 	LoadTraceScope _loadTrace(this, "Statics: RenderObjectHeightMap");
