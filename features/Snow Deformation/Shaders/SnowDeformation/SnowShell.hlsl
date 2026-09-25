@@ -1557,16 +1557,17 @@ struct TessControlPoint
 
 static const uint2 kShellPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 
-// Rotating the corner order by one puts the tessellator's factor-1 split on
-// the other world diagonal, so each patch can take its land quad's split:
-// '/' where the world 32-quad index sum is even. Bit 3 flips the sense.
+// The tessellator splits a factor-1 quad along its domain (1,0)-(0,1)
+// diagonal; rotating the corner order by one puts that split on the other
+// world diagonal, so each patch takes its land quad's split: '/' where the
+// world 32-quad index sum is even. Bit 3 restores the opposite split (A/B).
 uint ShellPatchRotation(uint2 quadXY)
 {
 	float2 gl0 = ShellGridVertexLocal(quadXY);
 	int2 q = (int2)floor((gl0 + 0.5) / 32.0);
 	bool slash = ((q.x + q.y) & 1) == 0;
-	bool flip = (ShellFlags.x & 8) != 0;
-	return (slash != flip) ? 0u : 1u;
+	bool unflip = (ShellFlags.x & 8) != 0;
+	return (slash != unflip) ? 1u : 0u;
 }
 
 TessControlPoint ShellPatchControlPoint(uint2 quadXY, uint corner)

@@ -1865,9 +1865,9 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_flat_ds_debug_tooltip"), "Measurement aid, WRONG-LOOKING BY DESIGN: the tessellated shell's domain shader returns terrain height plus class depth with none of the field work (deformation, berms, undulation, bow wave, relief), so trenches and all surface detail vanish while it is on. Hold the camera still and read the Shell row: the drop is an upper bound on what the vertex stages cost, which decides whether evaluating the surface once per vertex is worth building. Tessellation must be on."));
 
 
-			ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
+			ImGui::Checkbox(T(TKEY("shell_tess_diagonal_unflip"), "Unflip Tessellated Diagonal"), &shellTessDiagonalUnflip);
 			if (auto _ttDiag = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals. Measured: the hardware splits an untessellated patch along the other diagonal than the shell assumed, so with this off those patches cross the ground's split; tick it to match. A checkerboard of sag on the 32-unit band around 1,600-1,900 units in the height-delta view is what it fixes."));
+				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_unflip_tooltip"), "A/B for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell's untessellated patches take the same split. Tick to restore the old, opposite split, which crossed the ground's; it shows as a checkerboard of sag on the 32-unit band around 1,600-1,900 units in the Depth Delta Heatmap."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);
