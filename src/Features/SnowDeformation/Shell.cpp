@@ -1332,7 +1332,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// off, bit 3 the tessellated patches' old, land-crossing diagonal, bit 4
 	// churn by parallax, bit 5 far relief off.
 	a_cb.ShellFlags = { (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2) |
-							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalUnflip ? 8 : 0) | (shellChurnParallax ? 16 : 0) | (shellFarTessDisabled ? 32 : 0),
+							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalUnflip ? 8 : 0) | (shellChurnParallaxOff ? 0 : 16) | (shellFarTessDisabled ? 32 : 0),
 		0 };
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
@@ -1523,7 +1523,7 @@ void SnowDeformation::DrawShell()
 	// stale, so the class switch goes off with it.
 	const bool extentLive = !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture;
 	const float trampleStart = std::clamp(settings.TrampleStart, 0.0f, 0.98f);
-	cbData.TrampleStyle = { extentLive ? std::clamp(settings.TrampledFloorLowering, 0.0f, 1.0f) : 1.0f,
+	cbData.TrampleStyle = { 0.0f,
 		extentLive ? std::clamp(settings.TrampledFlattening, 0.0f, 1.0f) : 1.0f,
 		trampleStart,
 		std::clamp(settings.TrampleFull, trampleStart + 0.01f, 1.0f) };

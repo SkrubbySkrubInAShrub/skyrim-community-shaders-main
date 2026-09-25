@@ -134,14 +134,14 @@ float TrampleField(float2 worldXY)
 	return smoothstep(TrampleStyle.z, TrampleStyle.w, TrampleExtent(worldXY));
 }
 
-// Trampled ground: x scales the trench floor fraction, y scales the churn on
-// the trench floor; both 1 = off. Open snow (d = 0) never pays for the read.
-float2 TrampleScales(float2 worldXY, float deformation)
+// Trampled ground scales the churn on the trench floor; 1 = off. Open snow
+// (d = 0) never pays for the read.
+float TrampleChurnScale(float2 worldXY, float deformation)
 {
-	float2 scales = float2(1.0, 1.0);
-	[branch] if (min(TrampleStyle.x, TrampleStyle.y) < 0.999 && deformation > 0.001)
-		scales = lerp(float2(1.0, 1.0), saturate(TrampleStyle.xy), TrampleField(worldXY));
-	return scales;
+	float scale = 1.0;
+	[branch] if (TrampleStyle.y < 0.999 && deformation > 0.001)
+		scale = lerp(1.0, saturate(TrampleStyle.y), TrampleField(worldXY));
+	return scale;
 }
 
 // Churn lump noise; the caller passes its size knob (ChurnSizeScale /
@@ -165,7 +165,7 @@ static const float kClodSizeScale = 1.5;
 float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
 {
 	float trench = smoothstep(0.05, 0.5, deformation);
-	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleScales(worldXY, deformation).y, trench);
+	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleChurnScale(worldXY, deformation), trench);
 }
 
 // ---- Deformation surface-state readers (spell marks). One bilinear tap;
@@ -462,7 +462,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
-	float floorFrac = saturate(BorderStyle.y) * TrampleScales(worldXY, d).x;
+	float floorFrac = saturate(BorderStyle.y);
 	float floorDepth = min(uncarvedDepth, uncarvedDepth * floorFrac);
 	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
 

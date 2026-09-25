@@ -329,9 +329,9 @@ public:
 		/** @brief Scale on Havok collision-shape radii: 20 = the shapes' actual size; the 10 default halves them, which is the intended in-game read (full-size prints read bloated). */
 		float StampRadius = 10.0f;
 		/** @brief Width multiplier on foot-bone stamps (length stays anatomical). */
-		float FootPrintScale = 1.5f;
+		float FootPrintScale = 1.0f;
 		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
-		float TrenchWallSharpness = 50.0f;
+		float TrenchWallSharpness = 66.0f;
 		/** @brief Unsupported-snow settle speed, 0-1. Strips left standing between separate trails sink toward whichever side is shallower once BOTH sides are dug away; walls and open snow never move. Default OFF until A/B'd - it changes the map every subsystem reads (TRENCH-REALISM-PLAN.md Stage 3b). */
 		float SlumpRate = 0.1f;
 		/** @brief Multiplier on the snowfall-driven refill rate. 0 disables refilling. */
@@ -522,7 +522,7 @@ public:
 		/** @brief On = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; off = a clean binary cut. */
 		bool SnowBorderDithering = true;
 		/** @brief Snow left under a fully trampled trench as a FRACTION of the local uncarved depth (0.33 = a third: 10 units in 30). Replaced the absolute-units floor 2026-09-10: deep snow keeps snow around the foot instead of a canyon to the ground, and a road's 10-unit layer can never wear through to the mesh. */
-		float TrenchFloorFraction = 0.50f;
+		float TrenchFloorFraction = 0.10f;
 		/** @brief Percent of its own thickness a heavy, rounded dropped item presses into its trench floor (WEIGHT-SINK-PLAN.md). Flat items take a fraction of it by shape. */
 		float ItemEmbedPercent = 50.0f;
 		/** @brief Dropped items rest in the snow by weight and shape; off, they lie on the ground under it as the game leaves them. */
@@ -557,13 +557,11 @@ public:
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
-		float FreshSnowSoftness = 1.0f;
+		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
-		float FreshSnowChurn = 0.5f;
+		float FreshSnowChurn = 0.33f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
 		float FreshSnowSettleHours = 24.0f;
-		/** @brief Trampled ground: multiplier on TrenchFloorFraction where trails overlap into a trampled area (0.5 = the floor sits half as high there). 1 = off. */
-		float TrampledFloorLowering = 0.5f;
 		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
 		float TrampledFlattening = 0.5f;
 		/** @brief Trampled ground: disturbance-extent reading where the trampled shape begins. Promoted from a debug aid to a real setting 2026-09-21, so it ships and persists; the CPU mirror reads the same pair. */
@@ -590,8 +588,8 @@ public:
 		bool ObjectSnowNearDetail = true;
 		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
 		bool ShellSSSRemarchThickness = true;
-		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
-		float ShellSSSRemarchCasterCap = 20.0f;
+		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 15 accepts short grass only; 200 accepts everything. */
+		float ShellSSSRemarchCasterCap = 15.0f;
 		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
 		bool ShellBareGroundCull = true;
 		/** @brief The third-person camera is pulled in along its own line when the game places it under the landscape shell (Havok has no snow to collide with). */
@@ -888,27 +886,6 @@ public:
 	/** @brief Shell SRV slot of the trample extent field, bound wherever the berm field (t14) is. */
 	static constexpr UINT kExtentFieldSlot = 56;
 
-	/** @brief What an extent readback was baked under; tiles are physical, so the pair stays self-consistent after later scrolls. */
-	struct ExtentMirrorMeta
-	{
-		float2 windowOrigin = { 0, 0 };
-		DirectX::XMINT2 mapOrigin = { 0, 0 };
-		float texel = 1.0f;
-		uint32_t tiles = 0;
-	};
-	static constexpr uint kExtentReadSlots = 2;
-	winrt::com_ptr<ID3D11Texture2D> extentStaging[kExtentReadSlots];
-	bool extentStagingPending[kExtentReadSlots] = {};
-	ExtentMirrorMeta extentStagingMeta[kExtentReadSlots];
-	uint32_t extentReadCountdown = 0;
-	/** @brief CPU copy of the extent field for ItemSink, a few frames old. Guarded by extentMirrorLock. */
-	std::mutex extentMirrorLock;
-	std::vector<float> extentMirror;
-	ExtentMirrorMeta extentMirrorMeta;
-	/** @brief Render thread: maps any finished extent readback into the mirror. */
-	void PollExtentReadback(ID3D11DeviceContext* a_context);
-	/** @brief The trampled-area factor (0 trail .. 1 trampled) the shells apply at a world XY, from the mirror; 0 when there is none. Any thread. */
-	float SampleTrampleField(float a_worldX, float a_worldY);
 
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
 	/** @brief Blood map beside the deformation map: same dim, same toroidal origin. R8G8B8A8 sRGB: rgb = pigment, a = concentration. */
@@ -1476,10 +1453,10 @@ public:
 	bool shellLandHeightDisabled = false;
 	/** @brief A/B, runtime-only: the tessellated patches' old corner rotation (bit 3), which put factor-1 patches on the opposite diagonal to the land (the tessellator splits along domain (1,0)-(0,1), measured 2026-09-25). */
 	bool shellTessDiagonalUnflip = false;
-	/** @brief Runtime-only: the shell's deformation tessellation keeps no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). Default 16, with shellChurnParallax (Josef, 2026-09-25). */
+	/** @brief Runtime-only: the shell's deformation tessellation keeps no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). Default 16, with the churn parallax on (Josef, 2026-09-25). */
 	float shellTessTargetPx = 16.0f;
-	/** @brief Runtime-only, default on: churn and berm clods by parallax (ShellFlags bit 4). The shell geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
-	bool shellChurnParallax = true;
+	/** @brief Runtime-only A/B, "Disable Churn Parallax": the churn and berm clods go back into the shell geometry. Off (default) = churn by parallax (ShellFlags bit 4): the geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
+	bool shellChurnParallaxOff = false;
 	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
 	bool shellOldUnionJack = false;
 
@@ -1631,7 +1608,7 @@ public:
 		float4 BloodLook2;
 		/** @brief Blood detail tiles: xy spare (the retired soak), z = the tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
-		/** @brief Trampled ground: x = Settings::TrampledFloorLowering, y = Settings::TrampledFlattening (both 1 when the extent bake is not live), zw = the extent bracket trail -> field. Read through TrampleScales. Appended last; mirror in both shells. */
+		/** @brief Trampled ground: x spare (the retired Floor Lowering), y = Settings::TrampledFlattening (1 when the extent bake is not live), zw = the extent bracket trail -> field. Read through TrampleChurnScale. Appended last; mirror in both shells. */
 		float4 TrampleStyle;
 		/** @brief Shell tessellation screen-size cap: x = target pixels per segment (0 = the distance factor alone), yz = viewport half size in pixels. Appended last; mirror in both shells. */
 		float4 TessScreen;
@@ -4534,8 +4511,6 @@ protected:
 		RE::NiPoint3 restPos;
 		/** @brief Trench store read on a ring around the item, refreshed every 8th frame. */
 		float carveAround = 0.0f;
-		/** @brief Trampled-area factor at the item, refreshed with carveAround: it rests on the floor the shells draw there. */
-		float trampleField = 0.0f;
 		/** @brief Under where today's snow would put it: it stops printing, or its own trench would keep the snow off it. */
 		bool buried = false;
 		bool wasAsleep = false;

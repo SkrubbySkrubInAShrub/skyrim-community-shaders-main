@@ -297,7 +297,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("sss_remarch_cap"), "Caster Height Cap"), &settings.ShellSSSRemarchCasterCap, 10.0f, 200.0f, "%.0f units");
 			if (auto _ttCap = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
+				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 15 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
 
 			ImGui::SliderFloat(T(TKEY("shelter_max_height"), "Shelter Max Height"), &settings.ShelterMaxHeight, 100.0f, 1000.0f, "%.0f units");
 			if (auto _ttShelterMax = Util::HoverTooltipWrapper())
@@ -887,10 +887,6 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("trampled_group"), "Trampled Ground"));
 
-		ImGui::SliderFloat(T(TKEY("trampled_floor_lowering"), "Floor Lowering"), &settings.TrampledFloorLowering, 0.0f, 1.0f, "%.2fx");
-		if (auto _ttTrampleFloor = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trampled_floor_lowering_tooltip"), "Where many trails overlap into a trampled area, the trench floor sits lower than in a lone trail: this multiplies Trench Floor there. At 0.50x a Trench Floor of 0.50 becomes 0.25 in the middle of a trampled area, easing in from its edge. A single trail is never touched. 1.00x = off."));
-
 		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttTrampleFlat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Where many trails overlap into a trampled area, the broken lumps on the trench floor are walked flatter: this multiplies Churn Height on the floor there, easing in the bigger the trampled area is. At 0.50x a Churn Height of 4 becomes 2. Lumps on the berms and in a single trail are never touched. 1.00x = off."));
@@ -925,7 +921,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
 			if (auto _ttFw = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best."));
+				ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. 1.00 = the foot's own width (default); higher reads as snow collapsing wider than the foot."));
 
 			ImGui::SliderFloat(T(TKEY("snow_slumping"), "Snow Slumping"), &settings.SlumpRate, 0.0f, 1.0f, "%.2f");
 			if (auto _ttSlump = Util::HoverTooltipWrapper())
@@ -1870,10 +1866,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_unflip_tooltip"), "A/B for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell's untessellated patches take the same split. Tick to restore the old, opposite split, which crossed the ground's; it shows as a checkerboard of sag on the 32-unit band around 1,600-1,900 units in the Depth Delta Heatmap."));
 			ImGui::SliderFloat(T(TKEY("shell_tess_target_px"), "Tessellation Target"), &shellTessTargetPx, 0.0f, 16.0f, shellTessTargetPx > 0.0f ? "%.0f px" : "off");
 			if (auto _ttTessTarget = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "Trampled snow: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each. Default 16 px, paired with Churn Lumps by Parallax; off is the old distance-only rule. Lower keeps more real relief at a higher cost; trench and berm shapes hold at every setting. Measured on a trampled battlefield at 1720x720: 16 px with parallax took the snow shell from 3.34 to 2.11 ms."));
-			ImGui::Checkbox(T(TKEY("shell_churn_parallax"), "Churn Lumps by Parallax"), &shellChurnParallax);
+				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "Trampled snow: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each. Default 16 px, paired with the churn parallax (see Disable Churn Parallax); off is the old distance-only rule. Lower keeps more real relief at a higher cost; trench and berm shapes hold at every setting. Measured on a trampled battlefield at 1720x720: 16 px with parallax took the snow shell from 3.34 to 2.11 ms."));
+			ImGui::Checkbox(T(TKEY("shell_churn_parallax_off"), "Disable Churn Parallax"), &shellChurnParallaxOff);
 			if (auto _ttChurnParallax = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_churn_parallax_tooltip"), "Trampled snow, on by default: the churn lumps and berm clods leave the geometry and are drawn by a short ray march in the pixel shader instead, so they need no small triangles. Seen from above they match the geometry. At low, grazing views they keep part of the lumpiness a high Tessellation Target smooths away, but not the lumps' outlines. Trench and berm shapes stay real geometry."));
+				ImGui::Text("%s", T(TKEY("shell_churn_parallax_off_tooltip"), "A/B for trampled snow. By default the churn lumps and berm clods are drawn by a short ray march in the pixel shader, not by geometry, so they need no small triangles; tick this to put them back into the geometry. Seen from above the two match. At low, grazing views the geometry also gives the lumps their outlines, which the march cannot; with the default 16 px Tessellation Target that detail is mostly gone either way. Trench and berm shapes are real geometry in both."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);

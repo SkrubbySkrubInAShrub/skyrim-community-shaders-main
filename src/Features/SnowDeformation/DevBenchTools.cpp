@@ -166,7 +166,7 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 	if (a_args.contains("tessTargetPx") && a_args["tessTargetPx"].is_number())
 		shellTessTargetPx = std::clamp(a_args["tessTargetPx"].get<float>(), 0.0f, 64.0f);
 	if (a_args.contains("churnParallax") && a_args["churnParallax"].is_boolean())
-		shellChurnParallax = a_args["churnParallax"].get<bool>();
+		shellChurnParallaxOff = !a_args["churnParallax"].get<bool>();
 	if (a_args.contains("tessDiagonalUnflip") && a_args["tessDiagonalUnflip"].is_boolean())
 		shellTessDiagonalUnflip = a_args["tessDiagonalUnflip"].get<bool>();
 	if (a_args.contains("lodDebugView") && a_args["lodDebugView"].is_number_integer())
@@ -193,7 +193,7 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 		{ "shadowAtlasLive", !shadowAtlasLiveReadOff }, { "shadowAtlasCopyActive", shadowAtlasLiveReadOff && shadowCopyWantedFrames > 0 }, { "shadowAtlasCopyHeld", shadowAtlasCopyTex != nullptr },
 		{ "pointShadowLive", !pointShadowLiveReadOff }, { "pointShadowCopyHeld", pointShadowAtlasCopyTex != nullptr },
 		{ "casterFullGrid", shellCasterFullGrid }, { "casterIndices", shellGridCasterIndexCount }, { "hullTrust", !shellHullTrustOff }, { "gatherEveryScroll", exclusionGatherEveryScroll }, { "exclusionCount", statExclusionCount }, { "exclusionWalk", { { "slot", exclusionGatherSlot }, { "slots", exclusionGatherSlots } } }, { "hiZCopyPath", hiZCopyPath }, { "patchSplit", shellPatchSplit }, { "patchSplitActive", shellPatchSplitThisFrame }, { "patchCounts", { { "flat", shellPatchFlatCount }, { "tessellated", shellPatchTessCount } } },
-		{ "tessDiagonalUnflip", shellTessDiagonalUnflip }, { "lodDebugView", lodDebugView }, { "lodHistogram", lodHist }, { "prepassExit", !shellPrepassExitOff }, { "skinPrepassExit", !staticsPrepassExitOff }, { "tessTargetPx", shellTessTargetPx }, { "churnParallax", shellChurnParallax }, { "tessViewportHalf", { lastShellCBData ? lastShellCBData->TessScreen.y : 0.0f, lastShellCBData ? lastShellCBData->TessScreen.z : 0.0f } },
+		{ "tessDiagonalUnflip", shellTessDiagonalUnflip }, { "lodDebugView", lodDebugView }, { "lodHistogram", lodHist }, { "prepassExit", !shellPrepassExitOff }, { "skinPrepassExit", !staticsPrepassExitOff }, { "tessTargetPx", shellTessTargetPx }, { "churnParallax", !shellChurnParallaxOff }, { "tessViewportHalf", { lastShellCBData ? lastShellCBData->TessScreen.y : 0.0f, lastShellCBData ? lastShellCBData->TessScreen.z : 0.0f } },
 		{ "qualityPreset", preset < 0 ? "custom" : kPresetNames[preset] },
 		{ "effectCost", { { "running", effectCost.running }, { "done", effectCost.done }, { "step", effectCost.step }, { "costs", effectCosts } } },
 		{ "stats", { { "valid", s.valid }, { "vs", s.vsInvocations }, { "hs", s.hsInvocations }, { "ds", s.dsInvocations },

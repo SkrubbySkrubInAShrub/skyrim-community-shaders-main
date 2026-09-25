@@ -219,8 +219,8 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook2;
 	// xy spare; z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
-	// Trampled ground: x = trench floor scale, y = floor churn scale (1 = off),
-	// zw = the extent bracket trail -> field. See TrampleScales.
+	// Trampled ground: x spare, y = floor churn scale (1 = off), zw = the
+	// extent bracket trail -> field. See TrampleChurnScale.
 	float4 TrampleStyle;
 	// x = tessellation target, pixels per segment (0 = distance only);
 	// yz = viewport half size in pixels.
@@ -2508,7 +2508,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// override, and is the one voice allowed to overrule it.
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
 	{
-		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y) * TrampleScales(GridOrigin + gridLocal, pixelCarve).x);
+		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
 		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
 		[branch] if (remaining < 4.0)
 		{

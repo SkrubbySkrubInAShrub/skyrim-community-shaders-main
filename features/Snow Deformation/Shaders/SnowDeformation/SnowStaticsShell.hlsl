@@ -193,7 +193,7 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook;
 	float4 BloodLook2;
 	float4 BloodLook3;  // landscape shell only (SnowShell.hlsl)
-	// Trampled ground (see SnowShell.hlsl); consumed inside CarveProfile.
+	// Trampled ground (see SnowShell.hlsl); consumed inside ChurnWeight.
 	float4 TrampleStyle;
 	float4 TessScreen;  // landscape shell only (SnowShell.hlsl)
 }
