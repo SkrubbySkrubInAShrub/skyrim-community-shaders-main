@@ -3730,23 +3730,50 @@ void SnowDeformation::DrawCapturedStatics()
 		context->OMSetRenderTargets(0, nullptr, nullptr);
 		ID3D11Buffer* cullCB = skinCullCB->CB();
 		context->CSSetConstantBuffers(0, 1, &cullCB);
-		context->CSSetShader(hiZBuild, nullptr, 0);
 		ID3D11ShaderResourceView* nullCullSRVs[4] = {};
 		ID3D11UnorderedAccessView* nullCullUAVs[2] = {};
-		for (uint32_t level = 0; level < skinCullLevels; level++) {
-			ccb.Level = float(level);
+		auto* hiZBuildUAV = hiZCopyPath ? nullptr : GetHiZBuildCS(true);
+		if (hiZBuildUAV && skinCullHiZUAVs.size() == skinCullLevels) {
+			// Level 0 folds the viewport-masked depth into mip 0; every later
+			// level reads the previous mip through its UAV and writes its own,
+			// so the chain is never bound as an SRV while it is written.
+			ccb.Level = 0.0f;
 			skinCullCB->Update(ccb);
-			// Read level-1 of the chain, write the level's scratch, copy it in:
-			// the chain is never bound as input and output of one dispatch.
-			ID3D11ShaderResourceView* src = level == 0 ? mainDepthSRV : skinCullHiZSRVs[level - 1].get();
-			ID3D11UnorderedAccessView* dst = skinCullHiZScratch[level]->uav.get();
-			context->CSSetShaderResources(1, 1, &src);
-			context->CSSetUnorderedAccessViews(2, 1, &dst, nullptr);
-			const auto& sd = skinCullHiZScratch[level]->desc;
-			context->Dispatch((sd.Width + 7) / 8, (sd.Height + 7) / 8, 1);
+			context->CSSetShader(hiZBuild, nullptr, 0);
+			ID3D11UnorderedAccessView* mip0 = skinCullHiZUAVs[0].get();
+			context->CSSetShaderResources(1, 1, &mainDepthSRV);
+			context->CSSetUnorderedAccessViews(2, 1, &mip0, nullptr);
+			context->Dispatch((skinCullHiZ->desc.Width + 7) / 8, (skinCullHiZ->desc.Height + 7) / 8, 1);
 			context->CSSetShaderResources(1, 1, nullCullSRVs);
 			context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
-			context->CopySubresourceRegion(skinCullHiZ->resource.get(), level, 0, 0, 0, skinCullHiZScratch[level]->resource.get(), 0, nullptr);
+			context->CSSetShader(hiZBuildUAV, nullptr, 0);
+			for (uint32_t level = 1; level < skinCullLevels; level++) {
+				ID3D11UnorderedAccessView* prev = skinCullHiZUAVs[level - 1].get();
+				ID3D11UnorderedAccessView* dst = skinCullHiZUAVs[level].get();
+				context->CSSetUnorderedAccessViews(6, 1, &prev, nullptr);
+				context->CSSetUnorderedAccessViews(2, 1, &dst, nullptr);
+				const uint32_t w = std::max(1u, skinCullHiZ->desc.Width >> level);
+				const uint32_t h = std::max(1u, skinCullHiZ->desc.Height >> level);
+				context->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+			}
+			context->CSSetUnorderedAccessViews(6, 1, nullCullUAVs, nullptr);
+			context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
+		} else {
+			context->CSSetShader(hiZBuild, nullptr, 0);
+			for (uint32_t level = 0; level < skinCullLevels; level++) {
+				ccb.Level = float(level);
+				skinCullCB->Update(ccb);
+				// Read level-1 of the chain, write the level's scratch, copy it in.
+				ID3D11ShaderResourceView* src = level == 0 ? mainDepthSRV : skinCullHiZSRVs[level - 1].get();
+				ID3D11UnorderedAccessView* dst = skinCullHiZScratch[level]->uav.get();
+				context->CSSetShaderResources(1, 1, &src);
+				context->CSSetUnorderedAccessViews(2, 1, &dst, nullptr);
+				const auto& sd = skinCullHiZScratch[level]->desc;
+				context->Dispatch((sd.Width + 7) / 8, (sd.Height + 7) / 8, 1);
+				context->CSSetShaderResources(1, 1, nullCullSRVs);
+				context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
+				context->CopySubresourceRegion(skinCullHiZ->resource.get(), level, 0, 0, 0, skinCullHiZScratch[level]->resource.get(), 0, nullptr);
+			}
 		}
 
 		context->CSSetShader(skinCull, nullptr, 0);
@@ -5362,13 +5389,17 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	context->RSSetState(savedRaster.get());
 }
 
-ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS()
+ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS(bool a_fromUAV)
 {
-	if (!hiZBuildCS) {
-		logger::debug("Compiling DepthSyncCS HiZBuildCS");
-		hiZBuildCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "HiZBuildCS"));
+	auto*& slot = a_fromUAV ? hiZBuildUAVCS : hiZBuildCS;
+	if (!slot) {
+		logger::debug("Compiling DepthSyncCS HiZBuildCS{}", a_fromUAV ? " (from UAV)" : "");
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (a_fromUAV)
+			defines.push_back({ "HIZ_FROM_UAV", "" });
+		slot = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", defines, "cs_5_0", "HiZBuildCS"));
 	}
-	return hiZBuildCS;
+	return slot;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetSkinCullCS()
@@ -5404,6 +5435,7 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 			delete scratch;
 		skinCullHiZScratch.clear();
 		skinCullHiZSRVs.clear();
+		skinCullHiZUAVs.clear();
 	}
 	if (!skinCullHiZ) {
 		uint32_t levels = 1;
@@ -5417,7 +5449,7 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		desc.Format = DXGI_FORMAT_R32_FLOAT;
 		desc.SampleDesc.Count = 1;
 		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		skinCullHiZ = new Texture2D(desc, "SnowDeformation::SkinCullHiZ");
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 			.Format = desc.Format,
@@ -5449,6 +5481,16 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 				return false;
 			Util::SetResourceName(srv.get(), "SnowDeformation::SkinCullHiZ level SRV");
 			skinCullHiZSRVs.push_back(srv);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC levelUavDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = level }
+			};
+			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			if (FAILED(device->CreateUnorderedAccessView(skinCullHiZ->resource.get(), &levelUavDesc, uav.put())))
+				return false;
+			Util::SetResourceName(uav.get(), "SnowDeformation::SkinCullHiZ level UAV");
+			skinCullHiZUAVs.push_back(uav);
 		}
 		skinCullLevels = levels;
 		D3D11_TEXTURE2D_DESC topDesc{};

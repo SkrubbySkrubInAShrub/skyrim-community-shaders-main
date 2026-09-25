@@ -92,12 +92,18 @@ cbuffer SkinCullCB : register(b0)
 
 Texture2D<float> HiZSource : register(t1);
 RWTexture2D<float> HiZDest : register(u2);
+// HIZ_FROM_UAV: levels past the first read the previous mip of the chain
+// itself (a UAV, since the chain cannot also be bound as an SRV).
+RWTexture2D<float> HiZPrev : register(u6);
 
 // Level 0 reads the raw depth, whose texture can be larger than the area
 // the frame rendered into (dynamic resolution): outside the viewport the
 // clear value 1.0 would pass as an occluder-free far plane. Masked to 0.
 float HiZTap(uint2 p)
 {
+#ifdef HIZ_FROM_UAV
+	return HiZPrev[p];
+#else
 	float d = HiZSource[p];
 	[branch] if (CullLevel < 0.5)
 	{
@@ -106,6 +112,7 @@ float HiZTap(uint2 p)
 			d = 0.0;
 	}
 	return d;
+#endif
 }
 
 [numthreads(8, 8, 1)] void HiZBuildCS(uint3 id : SV_DispatchThreadID)
@@ -115,7 +122,11 @@ float HiZTap(uint2 p)
 	if (any(id.xy >= dstDims))
 		return;
 	uint2 srcDims;
+#ifdef HIZ_FROM_UAV
+	HiZPrev.GetDimensions(srcDims.x, srcDims.y);
+#else
 	HiZSource.GetDimensions(srcDims.x, srcDims.y);
+#endif
 	uint2 p0 = id.xy * 2;
 	uint2 p1 = min(p0 + 1, srcDims - 1);
 	uint2 p2 = min(p0 + 2, srcDims - 1);

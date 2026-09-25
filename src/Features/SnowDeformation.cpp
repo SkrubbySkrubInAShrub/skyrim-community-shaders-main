@@ -2217,6 +2217,9 @@ void SnowDeformation::ClearShaderCache()
 	if (hiZBuildCS)
 		hiZBuildCS->Release();
 	hiZBuildCS = nullptr;
+	if (hiZBuildUAVCS)
+		hiZBuildUAVCS->Release();
+	hiZBuildUAVCS = nullptr;
 	if (skinCullCS)
 		skinCullCS->Release();
 	skinCullCS = nullptr;
@@ -2232,6 +2235,7 @@ void SnowDeformation::ClearShaderCache()
 		delete scratch;
 	skinCullHiZScratch.clear();
 	skinCullHiZSRVs.clear();
+	skinCullHiZUAVs.clear();
 	for (auto& st : skinCullArgsStaging)
 		st = nullptr;
 	for (auto& st : skinCullHiZTopStaging)

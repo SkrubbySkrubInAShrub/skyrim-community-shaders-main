@@ -3382,6 +3382,10 @@ public:
 	/** @brief One single-mip scratch per level: the build reads level k-1 of the chain and writes scratch k, then copies it into the chain. A texture cannot be an input and an output of the same dispatch, mips included. */
 	std::vector<Texture2D*> skinCullHiZScratch;
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinCullHiZSRVs;
+	/** @brief One UAV per mip of the chain: each level is written in place and read by the next through it. */
+	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
+	/** @brief A/B, runtime-only: build the chain through the scratch copies again. */
+	bool hiZCopyPath = false;
 	uint32_t skinCullLevels = 0;
 	uint32_t skinCullDrawnLast = 0;
 	uint32_t skinCullCulledLast = 0;
@@ -3391,7 +3395,8 @@ public:
 	uint32_t skinCullReasonLast[8] = {};
 	float skinCullHiZTopLast = -1.0f;
 	winrt::com_ptr<ID3D11Texture2D> skinCullHiZTopStaging[kSkinCullRing];
-	ID3D11ComputeShader* GetHiZBuildCS();
+	ID3D11ComputeShader* GetHiZBuildCS(bool a_fromUAV = false);
+	ID3D11ComputeShader* hiZBuildUAVCS = nullptr;
 	ID3D11ComputeShader* GetSkinCullCS();
 	ID3D11ComputeShader* hiZBuildCS = nullptr;
 	ID3D11ComputeShader* skinCullCS = nullptr;
