@@ -2179,16 +2179,33 @@ float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ, fl
 	return sceneIsStatic ? 1e6 : above;
 }
 
+bool ShellFarClampWindow(float shellZ, float sceneZ)
+{
+	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
+	return shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow;
+}
+
+bool ShellNearClampWindow(float shellZ, float sceneZ)
+{
+	return shellZ > sceneZ && shellZ - sceneZ < 0.75;
+}
+
 float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve, float sceneAbove)
 {
 	float depth = rasterZ;
-	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
 	bool clampMode = (ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && sceneAbove < kShellClampOccluderSlack;
-	[branch] if (clampMode && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
+	[branch] if (clampMode && ShellFarClampWindow(shellZ, sceneZ))
 		depth = min(rasterZ, rawSceneDepth - 1e-5);
-	else if (clampMode && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
+	else if (clampMode && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && ShellNearClampWindow(shellZ, sceneZ))
 		depth = min(rasterZ, rawSceneDepth - 1e-5);
 	return depth;
+}
+
+// Out of both windows the export is the raster depth; behind the scene (the
+// blended depth is the main depth to within rounding) it fails LESS_EQUAL.
+bool ShellPrepassHidden(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ)
+{
+	return !ShellFarClampWindow(shellZ, sceneZ) && !ShellNearClampWindow(shellZ, sceneZ) && rasterZ > rawSceneDepth + 1e-6;
 }
 
 
@@ -2266,11 +2283,28 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Same convention as MotionBlur::GetSSMotionVector.
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
+	float2 gridLocal = input.GridLocal;
+	// Depth reads shared by the hidden-fragment exit, the edge dissolve, the
+	// proximity fade and the conservative depth clamp at the tail.
+	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
+	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
+	float shellZ = input.CurrentClip.w;
+	// The prepass's only derivatives, taken above its exit.
+	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+#if defined(SNOW_SHELL_DEPTH_PREPASS) && !defined(SNOW_PREPASS_KEEP_HIDDEN)
+	// The depth export denies early-Z; a hidden fragment skips the alpha cut.
+	[branch] if (ShellPrepassHidden(input.Position.z, rawSceneDepth, shellZ, sceneZ))
+	{
+		discard;
+		return (PS_PREPASS_OUTPUT)0;
+	}
+#endif
+
 	// Coverage alpha recomputed per PIXEL from the terrain field (Terrain
 	// Blending-style): smooth at texture resolution, independent of vertex
 	// interpolation. The temporally-varying stochastic test then dithers the
 	// boundary and TAA resolves it into a true cross-fade.
-	float2 gridLocal = input.GridLocal;
 	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
 	// dither agree with the shaped geometry.
 	float pixelWaterCap;
@@ -2306,12 +2340,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelBare = saturate(1.0 - pixelCoverage);
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
-
-	// Depth reads shared by the edge dissolve, the proximity fade below and
-	// the conservative depth clamp at the tail.
-	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
-	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
-	float shellZ = input.CurrentClip.w;
 
 	// User-tunable contest fringe (units): how far around the contact point
 	// the height contest operates.
@@ -2392,10 +2420,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): shape the COMBINED
 	// alpha once, after the overrides, so every partial band commits by grain
 	// whatever produced it. Shaping components individually leaves an override's
-	// own edge unshaped. Shaping preserves 0 and 1, so overrides still win. Mip
-	// outside the branch for derivatives.
-	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+	// own edge unshaped. Shaping preserves 0 and 1, so overrides still win. The
+	// height mip (edgeSnowMip) is taken at the top, above the prepass exit.
 	// Geometric edge contest: keep a pixel where the sheet's surface (toe'd
 	// height + grain) stands above the dirt's grain surface. Gated on our own
 	// distance fade, not EM's height-blending checkbox - keying it there let

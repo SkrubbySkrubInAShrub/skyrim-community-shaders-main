@@ -1762,8 +1762,12 @@ public:
 	ID3D11PixelShader* GetShellPSNoDepth();
 
 	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's clamped depth into the main buffer (alpha cut + export clamp) and its raster depth into shellRasterDepth; the fill pass copies that into shellTestDepth, a private depth buffer the shading pass tests EQUAL against with writes off, so occluded, self-hidden and alpha-cut fragments are rejected by hardware early-Z. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11PixelShader* GetShellPSPrepass(bool a_patch = false);
+	ID3D11PixelShader* GetShellPSPrepass(bool a_patch = false, bool a_keepHidden = false);
 	ID3D11PixelShader* shellPSPrepass = nullptr;
+	/** @brief SNOW_PREPASS_KEEP_HIDDEN variants [plain, patch id]: the prepass runs the alpha cut on fragments already behind the scene (A/B). */
+	ID3D11PixelShader* shellPSPrepassKeepHidden[2] = {};
+	/** @brief A/B, runtime-only: the prepass keeps its hidden fragments (the variants above). */
+	bool shellPrepassExitOff = false;
 	/** @brief Prepass variant that also writes the winning patch id (SNOW_SHELL_PREPASS_PATCH), used only with the visible-patch cull. */
 	ID3D11PixelShader* shellPSPrepassPatch = nullptr;
 	ID3D11VertexShader* GetShellFillVS();

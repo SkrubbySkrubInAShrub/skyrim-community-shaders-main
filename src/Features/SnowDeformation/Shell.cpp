@@ -691,17 +691,19 @@ ID3D11HullShader* SnowDeformation::GetShellHSFar(bool a_bake)
 	return slot;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSPrepass(bool a_patch)
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepass(bool a_patch, bool a_keepHidden)
 {
-	auto*& slot = a_patch ? shellPSPrepassPatch : shellPSPrepass;
+	auto*& slot = a_keepHidden ? shellPSPrepassKeepHidden[a_patch ? 1 : 0] : (a_patch ? shellPSPrepassPatch : shellPSPrepass);
 	if (!slot) {
-		logger::debug("Compiling SnowShell PS (depth prepass{})", a_patch ? ", patch id" : "");
+		logger::debug("Compiling SnowShell PS (depth prepass{}{})", a_patch ? ", patch id" : "", a_keepHidden ? ", hidden kept" : "");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
 		if (a_patch) {
 			defines.emplace_back("SNOW_SHELL_PREPASS_PATCH", "");
 			defines.emplace_back("SNOW_SHELL_PATCH_ID", "");
 		}
+		if (a_keepHidden)
+			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
 		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return slot;
@@ -2184,7 +2186,9 @@ void SnowDeformation::DrawShell()
 			// measured slower than no prepass at all.
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			const bool prepassWanted = !shellDepthPrepassDisabled && !shellDepthClampDisabled && !lodHeatmap;
-			auto* psPrepass = prepassWanted ? GetShellPSPrepass() : nullptr;
+			// The hidden-fragment exit reads Terrain Blending's blended depth as the main depth.
+			const bool keepHidden = shellPrepassExitOff || !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
+			auto* psPrepass = prepassWanted ? GetShellPSPrepass(false, keepHidden) : nullptr;
 			auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
 			auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
 			auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
@@ -2212,7 +2216,7 @@ void SnowDeformation::DrawShell()
 				auto* hsTrust = hsVisible && !shellHullTrustOff ? GetShellHSVisible(bake, true) : nullptr;
 				auto* hsMain = hsTrust ? hsTrust : hsVisible;
 				auto* fillPSVisible = hsVisible ? GetShellFillPSVisible() : nullptr;
-				auto* psPrepassPatch = fillPSVisible ? GetShellPSPrepass(true) : nullptr;
+				auto* psPrepassPatch = fillPSVisible ? GetShellPSPrepass(true, keepHidden) : nullptr;
 				auto* dsPrepassPatch = psPrepassPatch ? GetShellDSPatch(bake, shellVertexBakeCheck) : nullptr;
 				const bool visibleCull = dsPrepassPatch != nullptr;
 				if (visibleCull)
