@@ -753,6 +753,159 @@ ID3D11HullShader* SnowDeformation::GetShellHSVisible(bool a_bake, bool a_trust)
 	return slot;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetShellPatchListCS()
+{
+	if (!shellPatchListCS) {
+		logger::debug("Compiling DepthSyncCS PatchListCS");
+		shellPatchListCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "PATCH_LIST_CS", "" } }, "cs_5_0", "PatchListCS"));
+	}
+	return shellPatchListCS;
+}
+
+ID3D11VertexShader* SnowDeformation::GetShellTessVSList()
+{
+	if (!shellTessVSList) {
+		logger::debug("Compiling SnowShell tess control-point VS (patch list)");
+		shellTessVSList = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_TESS", "" }, { "SNOW_TESS_LIST", "" } }, "vs_5_0"));
+	}
+	return shellTessVSList;
+}
+
+ID3D11HullShader* SnowDeformation::GetShellHSListMain()
+{
+	if (!shellHSListMain) {
+		logger::debug("Compiling SnowShell HS (patch list, trust)");
+		shellHSListMain = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_HS_BAKE", "" }, { "SNOW_HS_TRUST", "" } }, "hs_5_0"));
+	}
+	return shellHSListMain;
+}
+
+ID3D11VertexShader* SnowDeformation::GetShellFlatVS()
+{
+	if (!shellFlatVS) {
+		logger::debug("Compiling SnowShell flat-patch VS");
+		shellFlatVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_VS_FLAT", "" } }, "vs_5_0"));
+	}
+	return shellFlatVS;
+}
+
+bool SnowDeformation::EnsurePatchListResources()
+{
+	if (shellFlatPatches && shellTessPatches && shellFlatArgs && shellTessArgs)
+		return true;
+	auto device = globals::d3d::device;
+	constexpr UINT patches = kShellGridDim * kShellGridDim;
+	auto structured = [&](winrt::com_ptr<ID3D11Buffer>& a_buf, winrt::com_ptr<ID3D11UnorderedAccessView>& a_uav, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const char* a_name) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = patches * sizeof(uint32_t);
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(uint32_t);
+		if (FAILED(device->CreateBuffer(&desc, nullptr, a_buf.put()))) {
+			logger::info("[SNOW DEFORMATION] patch list: {} creation failed", a_name);
+			return false;
+		}
+		Util::SetResourceName(a_buf.get(), a_name);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = patches;
+		if (FAILED(device->CreateUnorderedAccessView(a_buf.get(), &uavDesc, a_uav.put())))
+			return false;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.NumElements = patches;
+		return SUCCEEDED(device->CreateShaderResourceView(a_buf.get(), &srvDesc, a_srv.put()));
+	};
+	auto args = [&](winrt::com_ptr<ID3D11Buffer>& a_buf, winrt::com_ptr<ID3D11UnorderedAccessView>& a_uav, const char* a_name) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = 16;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, a_buf.put()))) {
+			logger::info("[SNOW DEFORMATION] patch list: {} creation failed", a_name);
+			return false;
+		}
+		Util::SetResourceName(a_buf.get(), a_name);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = 4;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		return SUCCEEDED(device->CreateUnorderedAccessView(a_buf.get(), &uavDesc, a_uav.put()));
+	};
+	bool ok = structured(shellFlatPatches, shellFlatPatchesUAV, shellFlatPatchesSRV, "SnowDeformation::ShellFlatPatches") &&
+	          structured(shellTessPatches, shellTessPatchesUAV, shellTessPatchesSRV, "SnowDeformation::ShellTessPatches") &&
+	          args(shellFlatArgs, shellFlatArgsUAV, "SnowDeformation::ShellFlatArgs") &&
+	          args(shellTessArgs, shellTessArgsUAV, "SnowDeformation::ShellTessArgs");
+	if (ok) {
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = 16;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (int r = 0; r < kShellPatchArgsRing && ok; r++)
+			for (int k = 0; k < 2 && ok; k++)
+				ok = SUCCEEDED(device->CreateBuffer(&stagingDesc, nullptr, shellPatchArgsStaging[r][k].put()));
+	}
+	if (!ok) {
+		logger::info("[SNOW DEFORMATION] patch list resources failed; the whole-grid shading draw stays");
+		shellFlatPatches = nullptr;
+		shellTessPatches = nullptr;
+		shellFlatArgs = nullptr;
+		shellTessArgs = nullptr;
+		shellPatchSplit = false;
+	}
+	return ok;
+}
+
+// The counts of the frame kShellPatchArgsRing frames back, without a stall.
+void SnowDeformation::ReadPatchListCounts(ID3D11DeviceContext* a_context)
+{
+	const int readRing = (shellPatchArgsRing + 1) % kShellPatchArgsRing;
+	for (int k = 0; k < 2; k++) {
+		auto* staging = shellPatchArgsStaging[readRing][k].get();
+		if (!staging)
+			continue;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(a_context->Map(staging, 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+			const uint32_t vertices = static_cast<const uint32_t*>(mapped.pData)[0];
+			(k == 0 ? shellPatchFlatCount : shellPatchTessCount) = vertices / (k == 0 ? 6u : 4u);
+			a_context->Unmap(staging, 0);
+		}
+	}
+}
+
+void SnowDeformation::DrawShellPatchLists(ID3D11DeviceContext* a_context, ID3D11VertexShader* a_tessVS, ID3D11DomainShader* a_ds)
+{
+	ID3D11ShaderResourceView* tessListSRV = shellTessPatchesSRV.get();
+	a_context->VSSetShaderResources(62, 1, &tessListSRV);
+	a_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+	a_context->VSSetShader(shellTessVSList, nullptr, 0);
+	a_context->HSSetShader(shellHSListMain, nullptr, 0);
+	a_context->DSSetShader(a_ds, nullptr, 0);
+	a_context->DrawInstancedIndirect(shellTessArgs.get(), 0);
+
+	a_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D11ShaderResourceView* flatSRVs[3] = { shellFlatPatchesSRV.get(), shellVertexBake->srv.get(), shellVertexBakeSlope->srv.get() };
+	a_context->VSSetShaderResources(62, 1, &flatSRVs[0]);
+	a_context->VSSetShaderResources(9, 1, &flatSRVs[1]);
+	a_context->VSSetShaderResources(23, 1, &flatSRVs[2]);
+	a_context->VSSetShader(shellFlatVS, nullptr, 0);
+	a_context->HSSetShader(nullptr, nullptr, 0);
+	a_context->DSSetShader(nullptr, nullptr, 0);
+	a_context->DrawInstancedIndirect(shellFlatArgs.get(), 0);
+
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	a_context->VSSetShaderResources(62, 1, &nullSRV);
+	a_context->VSSetShaderResources(9, 1, &nullSRV);
+	a_context->VSSetShaderResources(23, 1, &nullSRV);
+	a_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+	a_context->VSSetShader(a_tessVS, nullptr, 0);
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellFillPSVisible()
 {
 	if (!shellFillPSVisible) {
@@ -2119,6 +2272,32 @@ void SnowDeformation::DrawShell()
 						context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
 					}
 				}
+				// Patch split: the visible patches into a flat and a tessellated
+				// list, by the prepass hull's own verdict.
+				const bool split = visibleCull && shellPatchSplit && bake && !shellVertexBakeCheck && EnsurePatchListResources() &&
+				                   GetShellPatchListCS() && GetShellTessVSList() && GetShellHSListMain() && GetShellFlatVS();
+				shellPatchSplitThisFrame = split;
+				if (split) {
+					ReadPatchListCounts(context);
+					const UINT zeros[4] = {};
+					context->ClearUnorderedAccessViewUint(shellFlatArgsUAV.get(), zeros);
+					context->ClearUnorderedAccessViewUint(shellTessArgsUAV.get(), zeros);
+					ID3D11ShaderResourceView* visibleInSRV = shellVisiblePatchesSRV.get();
+					context->CSSetShaderResources(60, 1, &visibleInSRV);
+					ID3D11UnorderedAccessView* listUAVs[4] = { shellFlatPatchesUAV.get(), shellTessPatchesUAV.get(), shellFlatArgsUAV.get(), shellTessArgsUAV.get() };
+					context->CSSetUnorderedAccessViews(0, 4, listUAVs, nullptr);
+					context->CSSetShader(shellPatchListCS, nullptr, 0);
+					context->Dispatch((kShellGridDim * kShellGridDim + 63) / 64, 1, 1);
+					ID3D11UnorderedAccessView* nullListUAVs[4] = {};
+					context->CSSetUnorderedAccessViews(0, 4, nullListUAVs, nullptr);
+					ID3D11ShaderResourceView* nullVisibleInSRV = nullptr;
+					context->CSSetShaderResources(60, 1, &nullVisibleInSRV);
+					context->CSSetShader(nullptr, nullptr, 0);
+					// The counts, read back kShellPatchArgsRing frames later.
+					context->CopyResource(shellPatchArgsStaging[shellPatchArgsRing][0].get(), shellFlatArgs.get());
+					context->CopyResource(shellPatchArgsStaging[shellPatchArgsRing][1].get(), shellTessArgs.get());
+					shellPatchArgsRing = (shellPatchArgsRing + 1) % kShellPatchArgsRing;
+				}
 
 				splitRow("SnowDeformation::Ground - Shell Shading");
 				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
@@ -2132,7 +2311,10 @@ void SnowDeformation::DrawShell()
 				}
 				context->DSSetShader(tessDS, nullptr, 0);
 				context->PSSetShader(psPrepassMain, nullptr, 0);
-				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+				if (split)
+					DrawShellPatchLists(context, tessVS, tessDS);
+				else
+					context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 				if (visibleCull) {
 					ID3D11ShaderResourceView* nullVisibleSRV = nullptr;
 					context->HSSetShaderResources(60, 1, &nullVisibleSRV);

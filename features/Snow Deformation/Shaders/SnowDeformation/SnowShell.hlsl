@@ -1433,7 +1433,7 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, hxp - hxn, hyp - hyn);
 }
 
-#if defined(VSHADER) && !defined(SNOW_TESS)
+#if defined(VSHADER) && !defined(SNOW_TESS) && !defined(SNOW_VS_FLAT)
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
 #ifdef SNOW_GRID_NONINDEXED
@@ -1555,27 +1555,63 @@ struct TessControlPoint
 	uint2 GridXY : TEXCOORD1;
 };
 
-#if defined(VSHADER) && defined(SNOW_TESS)
-TessControlPoint main(uint vertexID : SV_VertexID)
-{
-	static const uint2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	uint quadIndex = vertexID / 4;
-	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
+static const uint2 kShellPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 
-	// The tessellator splits a factor-1 quad along its domain (0,0)-(1,1)
-	// diagonal. Rotating the corner order by one puts that diagonal on the
-	// other world diagonal, so each patch can take its land quad's split:
-	// '/' where the world 32-quad index sum is even. Bit 3 flips the sense
-	// (the tessellator's own diagonal is assumed, not documented).
+// Rotating the corner order by one puts the tessellator's factor-1 split on
+// the other world diagonal, so each patch can take its land quad's split:
+// '/' where the world 32-quad index sum is even. Bit 3 flips the sense.
+uint ShellPatchRotation(uint2 quadXY)
+{
 	float2 gl0 = ShellGridVertexLocal(quadXY);
 	int2 q = (int2)floor((gl0 + 0.5) / 32.0);
 	bool slash = ((q.x + q.y) & 1) == 0;
 	bool flip = (ShellFlags.x & 8) != 0;
-	uint rot = (slash != flip) ? 0u : 1u;
+	return (slash != flip) ? 0u : 1u;
+}
+
+TessControlPoint ShellPatchControlPoint(uint2 quadXY, uint corner)
+{
 	TessControlPoint cp;
-	cp.GridXY = quadXY + kPatchCorners[(vertexID + rot) % 4];
+	cp.GridXY = quadXY + kShellPatchCorners[corner % 4];
 	cp.GridLocal = ShellGridVertexLocal(cp.GridXY);
 	return cp;
+}
+
+#if defined(VSHADER) && defined(SNOW_TESS)
+#ifdef SNOW_TESS_LIST
+// The shading pass's tessellated patches (PatchListCS), drawn indirect.
+StructuredBuffer<uint> TessPatches : register(t62);
+#endif
+
+TessControlPoint main(uint vertexID : SV_VertexID)
+{
+#ifdef SNOW_TESS_LIST
+	uint quadIndex = TessPatches[vertexID / 4];
+#else
+	uint quadIndex = vertexID / 4;
+#endif
+	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
+	return ShellPatchControlPoint(quadXY, vertexID + ShellPatchRotation(quadXY));
+}
+#endif
+
+#if defined(VSHADER) && defined(SNOW_VS_FLAT)
+// The shading pass's flat patches (every hull factor 1 in the prepass): the
+// two triangles the tessellator emits for them, on its (1,0)-(0,1) domain
+// diagonal, corners read from the bake exactly as the domain shader's
+// corner path reads them.
+StructuredBuffer<uint> FlatPatches : register(t62);
+
+VS_OUTPUT main(uint vertexID : SV_VertexID)
+{
+	static const uint kFlatTriangles[6] = { 0, 1, 3, 1, 2, 3 };
+	uint quadIndex = FlatPatches[vertexID / 6];
+	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
+	TessControlPoint cp = ShellPatchControlPoint(quadXY, kFlatTriangles[vertexID % 6] + ShellPatchRotation(quadXY));
+	int3 bakeTexel = int3(cp.GridXY, 0);
+	float4 baked = ShellVertexBake.Load(bakeTexel);
+	float2 slope = ShellVertexBakeSlope.Load(bakeTexel);
+	return FinishShellVertexSloped(cp.GridLocal, baked.x, baked.y, baked.z, slope.x, slope.y);
 }
 #endif
 
@@ -1980,9 +2016,11 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 {
 #ifdef SNOW_SHELL_PATCH_ID
 	// Same index the hull sees as SV_PrimitiveID (vertexID / 4 in the VS):
-	// the patch's (0,0) grid corner, whatever the rotation.
+	// the patch's (0,0) grid corner, whatever the rotation. Bit 31: every
+	// hull factor is 1, so the shading pass may draw it untessellated.
 	const uint2 dsQuadXY = min(min(patch[0].GridXY, patch[1].GridXY), min(patch[2].GridXY, patch[3].GridXY));
-	const uint dsPatchId = dsQuadXY.y * GridDim + dsQuadXY.x + 1;
+	const bool dsFlat = max(max(max(factors.Edge[0], factors.Edge[1]), max(factors.Edge[2], factors.Edge[3])), max(factors.Inside[0], factors.Inside[1])) <= 1.0;
+	const uint dsPatchId = (dsQuadXY.y * GridDim + dsQuadXY.x + 1) | (dsFlat ? 0x80000000u : 0u);
 #	define SHELL_DS_OUT(expr) { VS_OUTPUT dsOut = (expr); dsOut.PatchId = dsPatchId; return dsOut; }
 #else
 #	define SHELL_DS_OUT(expr) return (expr)

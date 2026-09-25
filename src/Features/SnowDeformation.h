@@ -1777,6 +1777,30 @@ public:
 	Texture2D* shellRasterPatch = nullptr;
 	winrt::com_ptr<ID3D11Buffer> shellVisiblePatches;
 	winrt::com_ptr<ID3D11UnorderedAccessView> shellVisiblePatchesUAV;
+
+	/** @brief Patch split (runtime, default ON): the prepass's domain shader marks patches whose hull factors are all 1 (patch id bit 31), the fill carries the mark into the visible flags (1 flat, 2 tessellated), PatchListCS compacts the visible patches into two lists, and the shading pass draws the flat list with a plain VS (the tessellator's two triangles, corners from the bake) and only the tessellated list through the hull and domain shaders. The flat list is the prepass hull's own verdict. */
+	winrt::com_ptr<ID3D11Buffer> shellFlatPatches, shellTessPatches, shellFlatArgs, shellTessArgs;
+	winrt::com_ptr<ID3D11UnorderedAccessView> shellFlatPatchesUAV, shellTessPatchesUAV, shellFlatArgsUAV, shellTessArgsUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellFlatPatchesSRV, shellTessPatchesSRV;
+	static constexpr int kShellPatchArgsRing = 3;
+	winrt::com_ptr<ID3D11Buffer> shellPatchArgsStaging[kShellPatchArgsRing][2];
+	int shellPatchArgsRing = 0;
+	uint32_t shellPatchFlatCount = 0;
+	uint32_t shellPatchTessCount = 0;
+	bool shellPatchSplit = true;
+	bool shellPatchSplitThisFrame = false;
+	bool EnsurePatchListResources();
+	void ReadPatchListCounts(ID3D11DeviceContext* a_context);
+	/** @brief The shading pass's two lists: the tessellated one through the list VS, the trust hull and a_ds, then the flat one with the plain VS. Leaves the patch-list topology and a_tessVS bound. */
+	void DrawShellPatchLists(ID3D11DeviceContext* a_context, ID3D11VertexShader* a_tessVS, ID3D11DomainShader* a_ds);
+	ID3D11ComputeShader* GetShellPatchListCS();
+	ID3D11VertexShader* GetShellTessVSList();
+	ID3D11HullShader* GetShellHSListMain();
+	ID3D11VertexShader* GetShellFlatVS();
+	ID3D11ComputeShader* shellPatchListCS = nullptr;
+	ID3D11VertexShader* shellTessVSList = nullptr;
+	ID3D11HullShader* shellHSListMain = nullptr;
+	ID3D11VertexShader* shellFlatVS = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePatchesSRV;
 	winrt::com_ptr<ID3D11Buffer> shellVisiblePrev;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePrevSRV;

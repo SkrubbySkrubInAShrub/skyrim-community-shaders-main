@@ -2173,6 +2173,18 @@ void SnowDeformation::ClearShaderCache()
 	if (shellHSVisibleTrustBake)
 		shellHSVisibleTrustBake->Release();
 	shellHSVisibleTrustBake = nullptr;
+	if (shellPatchListCS)
+		shellPatchListCS->Release();
+	shellPatchListCS = nullptr;
+	if (shellTessVSList)
+		shellTessVSList->Release();
+	shellTessVSList = nullptr;
+	if (shellHSListMain)
+		shellHSListMain->Release();
+	shellHSListMain = nullptr;
+	if (shellFlatVS)
+		shellFlatVS->Release();
+	shellFlatVS = nullptr;
 	if (shellDS)
 		shellDS->Release();
 	shellDS = nullptr;

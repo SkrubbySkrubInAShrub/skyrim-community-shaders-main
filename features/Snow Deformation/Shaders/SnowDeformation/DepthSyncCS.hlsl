@@ -54,8 +54,9 @@ float4 FillVS(uint vertexID : SV_VertexID) : SV_Position
 }
 
 #ifdef FILL_VISIBLE_PATCHES
-// The prepass's winning patch per pixel (+1, 0 = none), folded into one
-// visible flag per patch for the shading pass's hull.
+// The prepass's winning patch per pixel (+1, 0 = none; bit 31 = every hull
+// factor 1), folded into one flag per patch for the shading pass: 1 flat,
+// 2 tessellated, 0 not visible.
 Texture2D<uint> FillPatch : register(t61);
 RWStructuredBuffer<uint> VisiblePatchesOut : register(u1);
 #endif
@@ -65,7 +66,7 @@ float FillPS(float4 pos : SV_Position) : SV_Depth
 #ifdef FILL_VISIBLE_PATCHES
 	const uint patch = FillPatch.Load(int3(pos.xy, 0));
 	[branch] if (patch != 0)
-		VisiblePatchesOut[patch - 1] = 1;
+		VisiblePatchesOut[(patch & 0x7FFFFFFF) - 1] = (patch >> 31) != 0 ? 1 : 2;
 #endif
 	return FillSource.Load(int3(pos.xy, 0));
 }
@@ -496,6 +497,43 @@ groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
 		SkinArgs.Store(argBase, total);
 		SkinArgs.Store(argBase + 4, total > 0 ? 1 : 0);
 		SkinArgs.Store(argBase + 8, b.ScratchBase);
+	}
+}
+#endif
+
+#ifdef PATCH_LIST_CS
+// The shading pass's two patch lists from the visible flags. The indirect
+// argument buffers' vertex counts are the running totals, so the returned
+// old count is the slot.
+StructuredBuffer<uint> VisibleIn : register(t60);
+RWStructuredBuffer<uint> FlatPatchesOut : register(u0);
+RWStructuredBuffer<uint> TessPatchesOut : register(u1);
+RWByteAddressBuffer FlatArgs : register(u2);
+RWByteAddressBuffer TessArgs : register(u3);
+
+[numthreads(64, 1, 1)] void PatchListCS(uint3 id : SV_DispatchThreadID)
+{
+	// DrawInstancedIndirect: one instance.
+	[branch] if (id.x == 0)
+	{
+		FlatArgs.Store(4, 1u);
+		TessArgs.Store(4, 1u);
+	}
+	uint count, stride;
+	VisibleIn.GetDimensions(count, stride);
+	if (id.x >= count)
+		return;
+	const uint visible = VisibleIn[id.x];
+	uint old;
+	[branch] if (visible == 1)
+	{
+		FlatArgs.InterlockedAdd(0, 6, old);
+		FlatPatchesOut[old / 6] = id.x;
+	}
+	else if (visible == 2)
+	{
+		TessArgs.InterlockedAdd(0, 4, old);
+		TessPatchesOut[old / 4] = id.x;
 	}
 }
 #endif
