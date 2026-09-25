@@ -1798,13 +1798,16 @@ void SnowDeformation::RenderObjectHeightMap()
 	heightMapValid = true;
 
 	// Exclusion zones. Static sources (doors, campfires, heat sources,
-	// dropped torches) refresh on window scroll and on a 60-frame cadence;
-	// load doors (teleport data) are cave/building entrances; deeper
-	// recesses, bigger clears. Heat sources come from Survival Mode's
-	// warm-up-objects formlist when the plugin is present, plus model-path
-	// matching that also covers non-Survival installs.
-	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
-	if (windowScrolled || (doorRefreshCounter++ % 60) == 0) {
+	// dropped torches) refresh once a second and at once on a window jump
+	// (load, teleport, reach change); walking scrolls the window nearly
+	// every frame and the gather walks every loaded reference. Heat
+	// sources come from Survival Mode's warm-up-objects formlist when the
+	// plugin is present, plus model-path matching that also covers
+	// non-Survival installs.
+	constexpr int kGatherJumpTexels = 32;
+	const bool windowJumped = processData.ClearAll != 0 ||
+	                          std::abs(processData.ScrollDelta.x) > kGatherJumpTexels || std::abs(processData.ScrollDelta.y) > kGatherJumpTexels;
+	if (windowJumped || (doorRefreshCounter++ % 60) == 0) {
 		if (!survivalHeatSourcesResolved) {
 			survivalHeatSourcesResolved = true;
 			if (auto* dataHandler = RE::TESDataHandler::GetSingleton())
