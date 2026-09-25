@@ -12,7 +12,7 @@
 
 // Statics.cpp: runtime shader compile returning the bytecode (input layouts
 // need it), and the vertex position size a vertex descriptor implies.
-ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr);
+ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr, const char* a_extraDefine5 = nullptr);
 uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 
 struct SnowDeformation : Feature
@@ -3371,6 +3371,11 @@ public:
 	ID3D11PixelShader* staticsPSNoDepth = nullptr;
 	/** @brief Depth-prepass twin of the no-export shader (SNOW_STATICS_DEPTH_PREPASS): the alpha cut with no colour and no export. Non-carving skins draw once with it into a private copy of the scene depth, then once with the shipping shader under EQUAL against it, so hardware early-Z admits exactly the pixels the prepass wrote; carving draws keep their own export and LESS_EQUAL in the shading loop, since a shader-computed depth cannot be matched against a second compile of itself; the private depth is then written back. Bit-identical by construction: both passes run the same raster path. */
 	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
+	/** @brief SNOW_STATICS_KEEP_HIDDEN twin of the prepass shader, without the hidden-quad exit (A/B, compiled on first use). */
+	ID3D11PixelShader* staticsPSPrepassKeepHidden = nullptr;
+	ID3D11PixelShader* GetStaticsPSPrepassKeepHidden();
+	/** @brief A/B, runtime-only: the skins' prepass runs the alpha cut on quads already behind the main depth. */
+	bool staticsPrepassExitOff = false;
 	/** @brief A/B measurement: returns the object skins to their single draw loop. Runtime-only. */
 	bool staticsDepthPrepassDisabled = false;
 	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */

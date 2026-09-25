@@ -2517,9 +2517,9 @@ float CoverageNoise(float2 worldXY)
 // helper the terrain shell binds at t3. Never the bound DSV, so sampling it
 // while writing depth is legal.
 Texture2D<float> SceneDepth : register(t3);
-// Debug view 9 only: the main depth the prepass copied from, and the private
-// copy after the prepass.
-Texture2D<float> DebugMainDepth : register(t43);
+// The main depth the prepass copied from (the prepass's hidden-quad exit and
+// debug view 9), and, view 9 only, the private copy after the prepass.
+Texture2D<float> PreSkinMainDepth : register(t43);
 Texture2D<float> DebugPrepassDepth : register(t44);
 
 // Debug view 10 only: volume level 0 (mirror of VoxelVolumeCB, Dbg-prefixed
@@ -3641,6 +3641,21 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 #endif
 
 #if !defined(VOXEL)
+#if defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_STATICS_KEEP_HIDDEN)
+// Every lane of the quad lies behind the depth the private buffer started
+// from, even pulled by the most the skin raster state's bias can (r at its
+// largest for z <= 1; the non-decal state clamps at 1e-5), so each fails
+// LESS_EQUAL. Voting per quad keeps later derivatives valid.
+bool SkinQuadHidden(float z, float2 pixel)
+{
+	float slope = max(abs(ddx_fine(z)), abs(ddy_fine(z)));
+	float reach = DecalMode > 0.5 ? (abs(DebugSkinDepth.x) + 1.5) * exp2(-23.0) + (abs(DebugSkinDepth.y) + 0.65) * slope * 1.01 : 1e-5;
+	float hidden = (z - reach > PreSkinMainDepth.Load(int3(pixel, 0)) + 2e-7) ? 1.0 : 0.0;
+	float hx = ddx_fine(hidden);
+	return hidden > 0.5 && hx == 0.0 && ddy_fine(hidden) == 0.0 && ddy_fine(hx) == 0.0;
+}
+#endif
+
 // Depth prepass (SNOW_STATICS_DEPTH_PREPASS): the alpha cut and nothing else,
 // no colour, no export - the hardware writes the raster depth exactly as the
 // shipping no-export twin does. Only non-carving draws take it; a carving
@@ -3654,6 +3669,14 @@ void main(VS_OUTPUT input)
 PS_OUTPUT main(VS_OUTPUT input)
 #endif
 {
+#if defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_STATICS_KEEP_HIDDEN)
+	// No early-Z under the alpha cut's discard; a hidden quad skips the cut.
+	[branch] if (SkinQuadHidden(input.Position.z, input.Position.xy))
+	{
+		discard;
+		return;
+	}
+#endif
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
 	float3 normalWS = normalize(input.NormalWS);
@@ -4709,7 +4732,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float bias = decal ? max((-DebugSkinDepth.x - 1.0) * ulp - (DebugSkinDepth.y + 0.65) * slope, -100.0) :
 			                     max(-DebugSkinDepth.x * ulp - DebugSkinDepth.y * slope, -1e-5);
 			float own = z + bias;
-			float mainZ = DebugMainDepth.Load(int3(input.Position.xy, 0));
+			float mainZ = PreSkinMainDepth.Load(int3(input.Position.xy, 0));
 			float wonZ = DebugPrepassDepth.Load(int3(input.Position.xy, 0));
 			float margin = mainZ - own;
 			bool won = wonZ < mainZ;

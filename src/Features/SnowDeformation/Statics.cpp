@@ -1239,18 +1239,20 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4)
+ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4, const char* a_extraDefine5)
 {
 	// Blob disk cache (see ShaderPrime.cpp): the fixed flag set below is part
 	// of the "sdblob" env token, and the full key round-trips through the
 	// stored file so a fingerprint or define change reads as a miss.
 	auto& snow = globals::features::snowDeformation;
-	// The fourth define is appended only when present so every existing
-	// cache key keeps its text.
+	// The fourth and fifth defines are appended only when present so every
+	// existing cache key keeps its text.
 	auto defs = std::format("{};{};{};{}", a_stageDefine,
 		a_extraDefine ? a_extraDefine : "", a_extraDefine2 ? a_extraDefine2 : "", a_extraDefine3 ? a_extraDefine3 : "");
 	if (a_extraDefine4)
 		defs += std::format(";{}", a_extraDefine4);
+	if (a_extraDefine5)
+		defs += std::format(";{}", a_extraDefine5);
 	const auto pathUtf8 = Util::WStringToString(a_path);
 	const auto cacheFile = std::format("{}_{}_blob_{:016x}.bin",
 		std::filesystem::path(a_path).stem().string(), a_target,
@@ -1294,6 +1296,7 @@ ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, cons
 		{ a_extraDefine2 ? a_extraDefine2 : "DX11", "" },
 		{ a_extraDefine3 ? a_extraDefine3 : "DX11", "" },
 		{ a_extraDefine4 ? a_extraDefine4 : "DX11", "" },
+		{ a_extraDefine5 ? a_extraDefine5 : "DX11", "" },
 		{ "WINPC", "" },
 		{ "DX11", "" },
 		{ nullptr, nullptr }
@@ -1363,6 +1366,20 @@ ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
 		}
 	}
 	return patchShadowVS;
+}
+
+ID3D11PixelShader* SnowDeformation::GetStaticsPSPrepassKeepHidden()
+{
+	if (!staticsPSPrepassKeepHidden) {
+		const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
+		const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", ehfDefine, iblDefine,
+			"SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_KEEP_HIDDEN"));
+		if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSPrepassKeepHidden)))
+			Util::SetResourceName(staticsPSPrepassKeepHidden, "SnowDeformation::StaticsShellPS Prepass KeepHidden");
+	}
+	return staticsPSPrepassKeepHidden;
 }
 
 bool SnowDeformation::EnsureStaticsShaders()
@@ -3656,6 +3673,10 @@ void SnowDeformation::DrawCapturedStatics()
 	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
 	uint32_t skinParity = 0;
 
+	ID3D11PixelShader* prepassPS = staticsPrepassExitOff ? GetStaticsPSPrepassKeepHidden() : nullptr;
+	if (!prepassPS)
+		prepassPS = staticsPSPrepassNoDepth;
+
 	auto drawSkins = [&](bool a_prepass) {
 		boundStaticsPS = nullptr;
 		uint32_t drawIndex = 0;
@@ -3705,7 +3726,7 @@ void SnowDeformation::DrawCapturedStatics()
 			const bool needsDepth = !staticsEarlyZSpike && staticsDebugView != 9 && cap.road;
 			if (a_prepass && needsDepth)
 				continue;
-			ID3D11PixelShader* wantPS = a_prepass ? staticsPSPrepassNoDepth :
+			ID3D11PixelShader* wantPS = a_prepass ? prepassPS :
 			                                        ((!needsDepth && staticsPSNoDepth) ? staticsPSNoDepth : staticsPS);
 			if (wantPS != boundStaticsPS) {
 				context->PSSetShader(wantPS, nullptr, 0);
@@ -3769,7 +3790,11 @@ void SnowDeformation::DrawCapturedStatics()
 		fill(shellTestDepthDSV.get(), mainDepthSRV);
 		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
+		// The hidden-quad exit reads the depth the private buffer was filled from.
+		context->PSSetShaderResources(43, 1, &mainDepthSRV);
 		drawSkins(true);
+		ID3D11ShaderResourceView* nullPreSkinSRV = nullptr;
+		context->PSSetShaderResources(43, 1, &nullPreSkinSRV);
 		statsRow("SnowDeformation::Objects - Shading");
 
 		if (staticsDebugView == 9) {
