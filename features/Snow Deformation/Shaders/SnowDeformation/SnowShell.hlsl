@@ -979,23 +979,31 @@ float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2
 {
 	float rise = dir.z - dot(dir.xy, g);
 	float hMax = churnAmp + clodAmp;
-	[branch] if (rise > -0.02)
-		return 0.0;
-	float span = -2.0 * hMax / rise;
-	float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
-	float dt = span / steps;
-	float prevT = hMax / rise;
-	float prevGap = hMax - ChurnHeights(worldXY + dir.xy * prevT, churnAmp, clodAmp);
-	[loop] for (float i = 1.0; i <= steps; i += 1.0)
+	// Single exit: a return inside [branch] trips X4000.
+	float t = 0.0;
+	[branch] if (rise <= -0.02)
 	{
-		float t = hMax / rise + dt * i;
-		float gap = rise * t - ChurnHeights(worldXY + dir.xy * t, churnAmp, clodAmp);
-		[branch] if (gap <= 0.0)
-			return lerp(prevT, t, prevGap / max(prevGap - gap, 1e-6));
-		prevT = t;
-		prevGap = gap;
+		float span = -2.0 * hMax / rise;
+		float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
+		float dt = span / steps;
+		float prevT = hMax / rise;
+		float prevGap = hMax - ChurnHeights(worldXY + dir.xy * prevT, churnAmp, clodAmp);
+		t = prevT;
+		[loop] for (float i = 1.0; i <= steps; i += 1.0)
+		{
+			float ti = hMax / rise + dt * i;
+			float gap = rise * ti - ChurnHeights(worldXY + dir.xy * ti, churnAmp, clodAmp);
+			[branch] if (gap <= 0.0)
+			{
+				t = lerp(prevT, ti, prevGap / max(prevGap - gap, 1e-6));
+				break;
+			}
+			prevT = ti;
+			prevGap = gap;
+			t = ti;
+		}
 	}
-	return prevT;
+	return t;
 }
 
 // Class borders are hard edges in the baked depth/coverage data: a +30
