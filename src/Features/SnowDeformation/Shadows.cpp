@@ -604,11 +604,13 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// shell grid, t11/t13 by the skin block; t12 (skin-depth raster,
 	// inside the saved t10-t13 range) is the patch's own addition.
 	// Same gate as the visible patch draw, one frame stale like the
-	// skins.
+	// skins: capturedRoads is last frame's count here (Prepass resets it
+	// after the mask passes), the frame whose rasters this VS reads, and
+	// with none the VS kills every vertex.
 	if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS();
 		patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
 		heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
-		settings.RoadMeshesDepth > 0.5f) {
+		settings.RoadMeshesDepth > 0.5f && capturedRoads > 0) {
 		if (!splitRow)
 			globals::profiler->BeginPass("SnowDeformation::Shadows - Trench Patch");
 		context->VSSetShader(patchCastVS, nullptr, 0);
