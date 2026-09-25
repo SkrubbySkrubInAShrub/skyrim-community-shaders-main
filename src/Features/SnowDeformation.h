@@ -2165,6 +2165,8 @@ public:
 		bool alphaTested;
 		/** @brief Snow-textured shape without projection data (Settings::SnowTexturedRecolor): Lighting recolors it by texel and writes the weight, so its skin coats off that read-back like an LOD batch. */
 		bool snowTex;
+		/** @brief The projected MATO classifies as snow (the record's cached class). */
+		bool matoSnow;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -2551,11 +2553,12 @@ public:
 			kSpanContactDraw,
 			kSpanContactGeometry,
 			kSpanContactSkinned,
+			kSpanExclusionGather,
 			kSpanCount
 		};
 		static constexpr const char* kSpanNames[kSpanCount] = { "Prepass", "DrawShell", "DrawShell.Setup", "DrawShell.ObjectHeightMap", "DrawShell.WaterCapture", "DrawShell.WaterCover", "DrawShell.BloodCapture", "DrawShell.RuneCapture", "DrawShell.GridAndBind", "DrawShell.Statics", "DrawShell.Restore", "DrawShell.LODProbe", "DrawShell.Tail",
 			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail",
-			"Contact.Actor", "Contact.Upload", "Contact.Dynamic", "Contact.Draw", "Contact.Geometry", "Contact.Skinned" };
+			"Contact.Actor", "Contact.Upload", "Contact.Dynamic", "Contact.Draw", "Contact.Geometry", "Contact.Skinned", "DrawShell.ExclusionGather" };
 		int64_t spanTicks[kSpanCount] = {};
 		uint32_t spanCalls[kSpanCount] = {};
 		/** @brief Cumulative: every stamp uploaded, the carve (non-melt) ones MarkTrenchDirtyRows saw, and rows it newly marked dirty. */
@@ -2594,6 +2597,8 @@ public:
 		uint32_t trenchStorePath = kStoreRoll;
 	};
 	static inline CpuCensus cpuCensus;
+	static inline bool cpuCensusArmed = false;
+	uint32_t cpuCensusArmedUntil = 0;
 	struct CpuCensusShown
 	{
 		float hookMs = 0.0f, hookCalls = 0.0f, actorMs = 0.0f, actors = 0.0f, landMs = 0.0f, landCalls = 0.0f;
@@ -2606,17 +2611,20 @@ public:
 	// rdtsc, not QPC: two QPC reads are ~50 ns and the hook runs thousands of
 	// times a frame, so the instrument was a fifth of what it measured.
 	// Calibrated against QPC once per frame in RollCpuCensus.
+	/** @brief Counts only while the census is armed (read by the menu or DevBench within the last 120 frames). */
 	struct ScopedTicks
 	{
 		int64_t& acc;
 		uint32_t& calls;
 		uint64_t t0;
 		ScopedTicks(int64_t& a_acc, uint32_t& a_calls) :
-			acc(a_acc), calls(a_calls), t0(__rdtsc()) {}
+			acc(a_acc), calls(a_calls), t0(cpuCensusArmed ? __rdtsc() : 0) {}
 		~ScopedTicks()
 		{
-			acc += int64_t(__rdtsc() - t0);
-			calls++;
+			if (t0) {
+				acc += int64_t(__rdtsc() - t0);
+				calls++;
+			}
 		}
 	};
 	/** @brief Consecutive segments: each Lap charges the time since the previous lap (or construction) to one span. */
@@ -3290,6 +3298,9 @@ public:
 	ConstantBuffer* doorsCB = nullptr;
 	/** @brief The list as last uploaded, hashed: the volume's idle gate reads it. */
 	uint64_t exclusionListHash = 0;
+	bool doorsCBUploaded = false;
+	/** @brief A/B, runtime-only: gather exclusion sources on every window scroll again. */
+	bool exclusionGatherEveryScroll = false;
 	/** @brief Inputs of the last exclusion-field bake: terrain window cell, terrain texture version, the list as uploaded. The bake skips while all match and the snapped centre is unchanged - the texture already holds the same bits. */
 	int exclusionBakeCellX = INT_MIN;
 	int exclusionBakeCellY = INT_MIN;
@@ -4138,9 +4149,11 @@ protected:
 	struct LoadTraceScope
 	{
 		LoadTraceScope(SnowDeformation* a_owner, const char* a_name) :
-			name(a_name), start(std::chrono::steady_clock::now())
+			name(a_name)
 		{
 			owner = a_owner->loadTraceActive.load(std::memory_order_acquire) ? a_owner : nullptr;
+			if (owner)
+				start = std::chrono::steady_clock::now();
 		}
 		~LoadTraceScope()
 		{
@@ -4152,7 +4165,7 @@ protected:
 
 		SnowDeformation* owner;
 		const char* name;
-		std::chrono::steady_clock::time_point start;
+		std::chrono::steady_clock::time_point start{};
 	};
 
 	struct LoadTracePhase

@@ -960,6 +960,7 @@ void SnowDeformation::Prepass()
 {
 	LoadTraceFramePulse();
 	RollCpuCensus();
+	cpuCensusArmed = globals::state->frameCount <= cpuCensusArmedUntil;
 	ScopedTicks _prepassTicks(cpuCensus.spanTicks[CpuCensus::kSpanPrepass], cpuCensus.spanCalls[CpuCensus::kSpanPrepass]);
 	SpanClock spanClock;
 	ApplyRangeSettings();

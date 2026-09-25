@@ -1206,7 +1206,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed;
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow });
 	capturedRoads += road ? 1u : 0u;
 	capturedLoaded += lodBatch ? 0u : 1u;
 }
@@ -1808,9 +1808,11 @@ void SnowDeformation::RenderObjectHeightMap()
 	// plugin is present, plus model-path matching that also covers
 	// non-Survival installs.
 	constexpr int kGatherJumpTexels = 32;
+	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
 	const bool windowJumped = processData.ClearAll != 0 ||
 	                          std::abs(processData.ScrollDelta.x) > kGatherJumpTexels || std::abs(processData.ScrollDelta.y) > kGatherJumpTexels;
-	if (windowJumped || (doorRefreshCounter++ % 60) == 0) {
+	if (windowJumped || (exclusionGatherEveryScroll && windowScrolled) || (doorRefreshCounter++ % 60) == 0) {
+		ScopedTicks _gatherTicks(cpuCensus.spanTicks[CpuCensus::kSpanExclusionGather], cpuCensus.spanCalls[CpuCensus::kSpanExclusionGather]);
 		if (!survivalHeatSourcesResolved) {
 			survivalHeatSourcesResolved = true;
 			if (auto* dataHandler = RE::TESDataHandler::GetSingleton())
@@ -2076,9 +2078,12 @@ void SnowDeformation::RenderObjectHeightMap()
 			mix(exclusionData.PosRadius, sizeof(float4) * exclusionCount);
 			mix(exclusionData.DirExtType, sizeof(float4) * exclusionCount);
 			mix(&exclusionCount, sizeof(exclusionCount));
+			if (h != exclusionListHash || !doorsCBUploaded) {
+				doorsCB->Update(exclusionData);
+				doorsCBUploaded = true;
+			}
 			exclusionListHash = h;
 		}
-		doorsCB->Update(exclusionData);
 		// Every frame, never on a cadence (the window follows the camera);
 		// the bake itself skips while its inputs match.
 		RenderExclusionField(exclusionData);
@@ -2836,8 +2841,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// the mesh-replacer default reconstructs a weight the game never paints.
 	// LOD batches read the brightness recolor's written weight instead.
 	a_scb.SteepThin = std::clamp(settings.SteepFaceThinning, 0.0f, 1.0f);
-	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch || a_cap.snowTex) && a_cap.geometry &&
-	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
+	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch || a_cap.snowTex) && a_cap.geometry && a_cap.matoSnow) ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
@@ -3219,7 +3223,7 @@ void SnowDeformation::DrawCapturedStatics()
 	if (SnowShadersPending(2))
 		return;
 	ServiceLandTriProbe();
-	{
+	if (cpuCensusArmed) {
 		// Order-free: the game hands the passes over in a different order
 		// each frame, so entries hash on their own and the sum is the list.
 		uint64_t h = 0;
@@ -3559,6 +3563,7 @@ void SnowDeformation::DrawCapturedStatics()
 		uint32_t indexPoolOffset;
 		uint32_t scratchBase;
 		bool decalDepth;
+		winrt::com_ptr<ID3D11ShaderResourceView> smoothSRV;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
@@ -3645,8 +3650,9 @@ void SnowDeformation::DrawCapturedStatics()
 			continue;
 		}
 		// Smoothed normals (and the mesh box beside them) are built on first
-		// sight; the draw loop's own call then hits the cache.
-		EnsureSmoothedNormals(geometry);
+		// sight; the draw loop reads the view kept here.
+		winrt::com_ptr<ID3D11ShaderResourceView> smoothSRV;
+		smoothSRV.copy_from(EnsureSmoothedNormals(geometry));
 		auto cacheIt = smoothedNormalsCache.find(rendererData->vertexBuffer);
 		const bool cached = cacheIt != smoothedNormalsCache.end() && cacheIt->second.ready;
 		uint32_t cOffset = 0, cCount = 0, cPool = 0, cBase = 0;
@@ -3669,7 +3675,7 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? cacheIt->second.boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth });
+			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV });
 	}
 
 	auto statsRow = [](const char* a_name) {
@@ -3838,14 +3844,18 @@ void SnowDeformation::DrawCapturedStatics()
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinSmoothSRVs(skinDraws.size());
 	for (size_t si = 0; si < skinDraws.size(); si++) {
 		const auto& d = skinDraws[si];
-		skinSmoothSRVs[si].copy_from(EnsureSmoothedNormals(d.geometry));
+		skinSmoothSRVs[si] = d.smoothSRV;
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, skinRecords[si]);
-		// Stable per object: the submission order moves with the camera.
-		const auto& tr = d.cap->world.translate;
-		uint32_t idHash = uint32_t(std::hash<std::string_view>{}(d.geometry ? std::string_view(d.geometry->name.c_str()) : std::string_view{}));
-		idHash ^= std::bit_cast<uint32_t>(tr.x) * 0x9E3779B1u ^ std::bit_cast<uint32_t>(tr.y) * 0x85EBCA77u ^ std::bit_cast<uint32_t>(tr.z);
-		skinRecords[si].DebugSkinId = (d.decalDepth ? -1.0f : 1.0f) * float(1 + idHash % 4093u);
+		// Debug views only. Stable per object: the submission order moves
+		// with the camera.
+		skinRecords[si].DebugSkinId = 0.0f;
+		if (staticsDebugView != 0) {
+			const auto& tr = d.cap->world.translate;
+			uint32_t idHash = uint32_t(std::hash<std::string_view>{}(d.geometry ? std::string_view(d.geometry->name.c_str()) : std::string_view{}));
+			idHash ^= std::bit_cast<uint32_t>(tr.x) * 0x9E3779B1u ^ std::bit_cast<uint32_t>(tr.y) * 0x85EBCA77u ^ std::bit_cast<uint32_t>(tr.z);
+			skinRecords[si].DebugSkinId = (d.decalDepth ? -1.0f : 1.0f) * float(1 + idHash % 4093u);
+		}
 	}
 	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
 	uint32_t skinParity = 0;

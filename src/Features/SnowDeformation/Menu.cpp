@@ -4,6 +4,7 @@
 #include <imgui_stdlib.h>
 
 #include "Features/SnowDeformation/AlphaBuild.h"
+#include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -1438,6 +1439,7 @@ void SnowDeformation::DrawSettings()
 			// CPU census (PERF-RESEARCH §11.1), 30-frame averages. The hook line
 			// is the one cost no profiler row carries.
 			{
+				cpuCensusArmedUntil = globals::state->frameCount + 120;
 				const auto& s = cpuShown;
 				WrapTextF("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
 					s.hookMs, s.hookCalls, s.actors, s.actorMs, s.landCalls, s.landMs, s.depthCalls, s.depthMs, s.traverseCalls, s.traverseMs);
