@@ -993,6 +993,15 @@ void SnowDeformation::Prepass()
 		if (auto* worldSpace = tes->GetRuntimeData2().worldSpace)
 			cityWorldspace = worldSpace->parentWorld != nullptr;
 
+	// Copy A/B gate for both shadow copies. Prepass runs after the shadow
+	// mask passes, so this is read at next frame's; the hold keeps a coat
+	// popping in and out from flapping between the crisp and fallback paths.
+	const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+	if (shellMayDraw || !capturedStatics.empty())
+		shadowCopyWantedFrames = kShellGateBareFrames;
+	else if (shadowCopyWantedFrames > 0)
+		shadowCopyWantedFrames--;
+
 	// New frame: publish last frame's statics-capture count and reset the
 	// list before this frame's opaque rendering fills it again.
 	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);

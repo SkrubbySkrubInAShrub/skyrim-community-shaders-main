@@ -1597,6 +1597,8 @@
     "feature.snow_deformation.pit_depth_tooltip": "How deep a discharge pocks the snow, as a fraction of the layer. Lightning scatters snow rather than boring into it, so this sits below a footprint - and unlike a melt it does not deepen with time, however long a cloak crackles over one spot.",
     "feature.snow_deformation.pit_radius": "Lightning Pit Radius",
     "feature.snow_deformation.pit_radius_tooltip": "Reach of a single discharge before its arc legs, which fork out past it. Bigger spells scale up from here.",
+    "feature.snow_deformation.point_shadow_live_read_off": "Turn Live Local Shadow Reading OFF",
+    "feature.snow_deformation.point_shadow_live_read_off_tooltip": "A/B: the snow normally reads the shadow maps of torches, hearths and other shadow-casting local lights where the game drew them. Tick to copy each light's map every frame instead, as older builds did (the Shadows - Local Atlas Copy row: 128 MB per light a frame at 8192, and a 512 MB copy held). If local-light shadows on snow look wrong somewhere and ticking this fixes it, something redraws those maps before the snow reads them.",
     "feature.snow_deformation.preset_custom": "(Custom)",
     "feature.snow_deformation.preset_high": "High",
     "feature.snow_deformation.preset_low": "Low",

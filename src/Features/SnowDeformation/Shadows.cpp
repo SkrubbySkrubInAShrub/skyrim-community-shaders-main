@@ -15,7 +15,6 @@ void SnowDeformation::CaptureShadowAtlas()
 	// crisp/VSM flapping is not.
 	if (!settings.EnableSnowDeformation || !globals::state->HasDirectionalShadows()) {
 		shadowAtlasLiveSRV = nullptr;
-		atlasCopyWantedFrames = 0;
 		return;
 	}
 
@@ -28,20 +27,13 @@ void SnowDeformation::CaptureShadowAtlas()
 		if (!shellShadowCastDebugOff && settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
-		// Copy A/B only: last frame's draw verdicts gate it, the hold stops crisp/VSM flapping.
-		const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
-		const bool staticsMayDraw = statCapturedStatics.load(std::memory_order_relaxed) > 0 || !capturedStatics.empty();
-		if (shellMayDraw || staticsMayDraw)
-			atlasCopyWantedFrames = kShellGateBareFrames;
-		else if (atlasCopyWantedFrames > 0)
-			atlasCopyWantedFrames--;
 		if (!shadowAtlasLiveReadOff) {
 			shadowAtlasLiveSRV = liveAtlasSRV;
 			shadowAtlasCopySRV = nullptr;
 			shadowAtlasCopyTex = nullptr;
 		} else {
 			shadowAtlasLiveSRV = nullptr;
-			if (atlasCopyWantedFrames > 0) {
+			if (shadowCopyWantedFrames > 0) {
 				globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
 				CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
 				globals::profiler->EndPass();
@@ -76,10 +68,9 @@ void SnowDeformation::CaptureShadowAtlas()
 
 void SnowDeformation::CapturePointShadowMask()
 {
-	// Called while the game renders a LOCAL light's shadow mask: the only
-	// moment the light's descriptor is live (renderTarget reads -1 once the
-	// engine returns the maps, and the local slices are NOT in the sun
-	// cascade atlas) and PS t4 genuinely holds the local atlas.
+	// A local light's descriptor is live only during its mask pass
+	// (renderTarget reads -1 once the engine returns the maps); PS t4 holds
+	// the local map array then, a texture of its own beside the sun atlas.
 	if (!settings.EnableSnowDeformation || REL::Module::IsVR())
 		return;
 
@@ -99,53 +90,63 @@ void SnowDeformation::CapturePointShadowMask()
 		return;
 	D3D11_TEXTURE2D_DESC liveDesc;
 	liveTex->GetDesc(&liveDesc);
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+	liveAtlasSRV->GetDesc(&srvDesc);
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+	srvDesc.Texture2DArray.MostDetailedMip = 0;
+	srvDesc.Texture2DArray.MipLevels = 1;
+	srvDesc.Texture2DArray.FirstArraySlice = 0;
 
-	// Dedicated 4-slice destination, one slice per mask channel: cloning
-	// the whole local atlas held ~1 GB and copied it every frame the fire
-	// was on screen; only the slices the active lights own are copied, one
-	// full subresource each (partial boxes are illegal on depth resources).
-	bool recreate = !pointShadowAtlasCopyTex || !pointShadowAtlasCopySRV;
-	if (pointShadowAtlasCopyTex) {
-		D3D11_TEXTURE2D_DESC haveDesc;
-		pointShadowAtlasCopyTex->GetDesc(&haveDesc);
-		recreate |= haveDesc.Width != liveDesc.Width || haveDesc.Height != liveDesc.Height || haveDesc.Format != liveDesc.Format;
-	}
-	if (recreate) {
+	if (!pointShadowLiveReadOff) {
 		pointShadowAtlasCopySRV = nullptr;
 		pointShadowAtlasCopyTex = nullptr;
-		D3D11_TEXTURE2D_DESC copyDesc = liveDesc;
-		copyDesc.ArraySize = kPointShadowMaxLights;
-		copyDesc.MipLevels = 1;
-		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		copyDesc.MiscFlags = 0;
-		copyDesc.Usage = D3D11_USAGE_DEFAULT;
-		copyDesc.CPUAccessFlags = 0;
-		if (FAILED(globals::d3d::device->CreateTexture2D(&copyDesc, nullptr, pointShadowAtlasCopyTex.put())))
-			return;
-		Util::SetResourceName(pointShadowAtlasCopyTex.get(), "SnowDeformation::PointShadowAtlasCopy");
-		// Reuse the live view's depth-readable format for the typeless texture.
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
-		liveAtlasSRV->GetDesc(&srvDesc);
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-		srvDesc.Texture2DArray.MostDetailedMip = 0;
-		srvDesc.Texture2DArray.MipLevels = 1;
-		srvDesc.Texture2DArray.FirstArraySlice = 0;
-		srvDesc.Texture2DArray.ArraySize = kPointShadowMaxLights;
-		if (FAILED(globals::d3d::device->CreateShaderResourceView(pointShadowAtlasCopyTex.get(), &srvDesc, pointShadowAtlasCopySRV.put()))) {
+		if (pointShadowLiveTex != liveTex) {
+			pointShadowLiveSRV = nullptr;
+			pointShadowLiveTex = nullptr;
+			srvDesc.Texture2DArray.ArraySize = liveDesc.ArraySize;
+			if (FAILED(globals::d3d::device->CreateShaderResourceView(liveTex.get(), &srvDesc, pointShadowLiveSRV.put())))
+				return;
+			pointShadowLiveTex = liveTex;
+		}
+	} else {
+		pointShadowLiveSRV = nullptr;
+		pointShadowLiveTex = nullptr;
+		// One slice per mask channel, whole subresources: partial boxes are
+		// illegal on depth resources.
+		bool recreate = !pointShadowAtlasCopyTex || !pointShadowAtlasCopySRV;
+		if (pointShadowAtlasCopyTex) {
+			D3D11_TEXTURE2D_DESC haveDesc;
+			pointShadowAtlasCopyTex->GetDesc(&haveDesc);
+			recreate |= haveDesc.Width != liveDesc.Width || haveDesc.Height != liveDesc.Height || haveDesc.Format != liveDesc.Format;
+		}
+		if (recreate) {
+			pointShadowAtlasCopySRV = nullptr;
 			pointShadowAtlasCopyTex = nullptr;
-			return;
+			D3D11_TEXTURE2D_DESC copyDesc = liveDesc;
+			copyDesc.ArraySize = kPointShadowMaxLights;
+			copyDesc.MipLevels = 1;
+			copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			copyDesc.MiscFlags = 0;
+			copyDesc.Usage = D3D11_USAGE_DEFAULT;
+			copyDesc.CPUAccessFlags = 0;
+			if (FAILED(globals::d3d::device->CreateTexture2D(&copyDesc, nullptr, pointShadowAtlasCopyTex.put())))
+				return;
+			Util::SetResourceName(pointShadowAtlasCopyTex.get(), "SnowDeformation::PointShadowAtlasCopy");
+			srvDesc.Texture2DArray.ArraySize = kPointShadowMaxLights;
+			if (FAILED(globals::d3d::device->CreateShaderResourceView(pointShadowAtlasCopyTex.get(), &srvDesc, pointShadowAtlasCopySRV.put()))) {
+				pointShadowAtlasCopyTex = nullptr;
+				return;
+			}
 		}
 	}
 
-	// Snapshot every local light whose descriptor is live right now. Merge
-	// semantics: a light drawn earlier this frame already snapshotted at its
-	// own pass; entries persist until their channel is reassigned.
+	// Snapshot every local light whose descriptor is live now; entries
+	// persist until their channel is reassigned.
 	for (auto& lightPtr : shadowSceneNode->GetRuntimeData().activeShadowLights) {
 		auto* bsLight = lightPtr.get();
 		if (!bsLight || !bsLight->IsShadowLight())
 			continue;
 		auto* light = static_cast<RE::BSShadowLight*>(bsLight);
-		// Local lights only; the sun has its own path.
 		const bool isFrustum = light->GetIsFrustumLight();
 		const bool isParabolic = light->GetIsParabolicLight();
 		if (!isFrustum && !isParabolic)
@@ -160,10 +161,10 @@ void SnowDeformation::CapturePointShadowMask()
 		auto& desc = lightRuntime.shadowmapDescriptors[0];
 		if (!desc.isEnabled || desc.renderTarget == static_cast<RE::RENDER_TARGET_DEPTHSTENCIL>(-1))
 			continue;
+		if (desc.shadowmapIndex >= liveDesc.ArraySize)
+			continue;
 
-		// Copy this light's slice only when its own target is the one bound
-		// right now (each light's map is complete by its own mask pass);
-		// lights on a different target copy at their own pass's fire.
+		// Lights on another target snapshot at their own pass.
 		ID3D11Texture2D* lightTargetTex = nullptr;
 		if (auto* gameRenderer = globals::game::renderer) {
 			auto& dsData = gameRenderer->GetDepthStencilData().depthStencils[desc.renderTarget];
@@ -175,25 +176,24 @@ void SnowDeformation::CapturePointShadowMask()
 		PointShadowLightData& dd = pendingPointShadows[maskIndex];
 		auto proj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&desc.lightTransform));
 		DirectX::XMStoreFloat4x4(&dd.LightTransform, proj);
-		// The copy's slice IS the mask channel.
-		dd.SliceIndex = maskIndex;
+		dd.SliceIndex = pointShadowLiveReadOff ? maskIndex : desc.shadowmapIndex;
 		dd.LightType = isFrustum ? 1u : (light->GetIsOmniLight() ? 3u : 2u);
-		// The map's radial depth is normalised by the radius the light holds
-		// now. ISL rewrites it from the intensity later in the frame, so a
-		// flickering light's cluster radius is one frame ahead of its map.
+		// The radius the map's radial depth was normalised by; ISL rewrites
+		// the light's radius later in the frame.
 		dd.ShadowRadius = light->light ? light->light->GetLightRuntimeData().radius.x : 0.0f;
 
-		if (pointShadowSliceFrame[maskIndex] != pointShadowFrameIndex && desc.shadowmapIndex < liveDesc.ArraySize) {
+		if (pointShadowLiveReadOff && shadowCopyWantedFrames > 0 && pointShadowSliceFrame[maskIndex] != pointShadowFrameIndex) {
 			pointShadowSliceFrame[maskIndex] = pointShadowFrameIndex;
+			globals::profiler->BeginPass("SnowDeformation::Shadows - Local Atlas Copy");
 			context->CopySubresourceRegion(pointShadowAtlasCopyTex.get(), maskIndex, 0, 0, 0, liveTex.get(), desc.shadowmapIndex, nullptr);
+			globals::profiler->EndPass();
 		}
 
-		// One-shot layout log: which target/slice each mask channel uses.
 		static uint32_t layoutLogCount = 0;
 		if (layoutLogCount < 12) {
 			layoutLogCount++;
-			logger::info("[SNOW DEFORMATION] PointShadow: mask={} type={} srcSlice={} rt={} biasScale={:.3f}",
-				maskIndex, dd.LightType, desc.shadowmapIndex, uint32_t(desc.renderTarget), lightRuntime.shadowBiasScale);
+			logger::info("[SNOW DEFORMATION] PointShadow: mask={} type={} srcSlice={} rt={} arr={} inPlace={} biasScale={:.3f}",
+				maskIndex, dd.LightType, desc.shadowmapIndex, uint32_t(desc.renderTarget), liveDesc.ArraySize, !pointShadowLiveReadOff, lightRuntime.shadowBiasScale);
 		}
 	}
 }
@@ -221,10 +221,9 @@ void SnowDeformation::UpdatePointShadowLights()
 		pointShadowLights->CreateSRV(srvDesc);
 	}
 
-	// No local atlas copy = no usable maps; upload an empty table so
-	// shadow-casting lights render unshadowed instead of sampling garbage.
+	// No maps = an empty table: shadow-casting lights render unshadowed.
 	PointShadowLightData table[kPointShadowMaxLights]{};
-	if (pointShadowAtlasCopySRV)
+	if (PointShadowAtlasSRV())
 		memcpy(table, pendingPointShadows, sizeof(table));
 
 	D3D11_MAPPED_SUBRESOURCE mapped{};

@@ -2246,14 +2246,14 @@ public:
 	bool shadowAtlasLiveReadOff = false;
 	/** @brief The engine's sun atlas as bound at the shadow-mask pass. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasLiveSRV;
-	/** @brief Frames the atlas copy stays wanted after the last frame something could read it. */
-	uint32_t atlasCopyWantedFrames = 0;
+	/** @brief Copy A/B gate, both shadow copies: frames a copy stays wanted after the last frame the shells or skins could read it. Updated in Prepass from last frame's draw verdicts. */
+	uint32_t shadowCopyWantedFrames = 0;
 	/** @brief The atlas the crisp cascade shadows sample this frame, or null (the VSM path). */
 	ID3D11ShaderResourceView* ShadowAtlasSRV() const
 	{
 		if (!shadowAtlasLiveReadOff)
 			return shadowAtlasLiveSRV.get();
-		return atlasCopyWantedFrames > 0 ? shadowAtlasCopySRV.get() : nullptr;
+		return shadowCopyWantedFrames > 0 ? shadowAtlasCopySRV.get() : nullptr;
 	}
 	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
 	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
@@ -2306,9 +2306,16 @@ public:
 	/** @brief 4-entry structured buffer of PointShadowLightData (t38), uploaded each frame from the mask-time snapshots. */
 	Buffer* pointShadowLights = nullptr;
 
-	/** @brief Copy of the LOCAL lights' shadow atlas (t39), taken while a local light's mask renders; the local maps do NOT live in the sun cascade atlas, and by deferred time the engine has returned the live target. */
+	/** @brief Copy A/B only: one slice per mask channel, copied at each light's mask pass. */
 	winrt::com_ptr<ID3D11Texture2D> pointShadowAtlasCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> pointShadowAtlasCopySRV;
+	/** @brief A/B, runtime-only: copy each local light's map at its mask pass instead of sampling it in place. */
+	bool pointShadowLiveReadOff = false;
+	/** @brief Full-array view over the engine's local shadow map array (kSHADOWMAPS), cached by texture. */
+	winrt::com_ptr<ID3D11Texture2D> pointShadowLiveTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> pointShadowLiveSRV;
+	/** @brief The array the local-light shadows sample this frame (t39), or null. */
+	ID3D11ShaderResourceView* PointShadowAtlasSRV() const { return pointShadowLiveReadOff ? pointShadowAtlasCopySRV.get() : pointShadowLiveSRV.get(); }
 
 	/** @brief Per-channel descriptor snapshots, merged at each local mask pass; entries persist until their channel is reassigned (an extinguished light's entry is never sampled: its cluster light loses the Shadow flag). */
 	PointShadowLightData pendingPointShadows[kPointShadowMaxLights] = {};
@@ -2316,7 +2323,7 @@ public:
 	uint64_t pointShadowFrameIndex = 0;
 	uint64_t pointShadowSliceFrame[kPointShadowMaxLights] = {};
 
-	/** @brief Called from State::Draw while the game renders a LOCAL light's shadow mask (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live (renderTarget reads -1 once the engine returns the maps) and PS t4 genuinely holds the local atlas. Copies the atlas once per frame and snapshots every live local descriptor. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Called from State::Draw at a LOCAL light's shadow-mask pass (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live and PS t4 holds the local map array. Snapshots every live local descriptor; copies the slice in the copy A/B. Implemented in SnowDeformation/Shadows.cpp. */
 	void CapturePointShadowMask();
 
 	/** @brief Uploads the pending point-shadow table (t38). The table stays empty until mask-time snapshots exist. Implemented in SnowDeformation/Shadows.cpp. */

@@ -1927,6 +1927,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shadow_atlas_live_read_off"), "Turn Live Shadow Atlas Reading OFF"), &shadowAtlasLiveReadOff);
 			if (auto _ttAtlasLive = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shadow_atlas_live_read_off_tooltip"), "A/B: the snow normally reads the sun's shadow maps where the game drew them. Tick to copy them every frame instead, as older builds did (the Shadows - Atlas Copy row: 268 MB a frame at 8192, about 0.5 ms). If shadows on snow look wrong somewhere and ticking this fixes it, something redraws those maps before the snow reads them."));
+			ImGui::Checkbox(T(TKEY("point_shadow_live_read_off"), "Turn Live Local Shadow Reading OFF"), &pointShadowLiveReadOff);
+			if (auto _ttPointLive = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("point_shadow_live_read_off_tooltip"), "A/B: the snow normally reads the shadow maps of torches, hearths and other shadow-casting local lights where the game drew them. Tick to copy each light's map every frame instead, as older builds did (the Shadows - Local Atlas Copy row: 128 MB per light a frame at 8192, and a 512 MB copy held). If local-light shadows on snow look wrong somewhere and ticking this fixes it, something redraws those maps before the snow reads them."));
 			ImGui::Checkbox(T(TKEY("shell_shadow_cast_off"), "Skip Shell Sun Shadows (A/B)"), &shellShadowCastDebugOff);
 			if (auto _ttCastOff = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_shadow_cast_off_tooltip"), "A/B: the snow shell is not drawn into the sun shadow cascades this frame. Nothing else changes. If a shadow on an object vanishes with this on, the shell cast it."));

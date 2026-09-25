@@ -1784,7 +1784,7 @@ void SnowDeformation::DrawShell()
 	}
 	// Comparison sampler (s2), shared by the crisp cascade path and the
 	// point-light shadow path.
-	if (cbData.CrispShadows > 0.5f || pointShadowAtlasCopySRV) {
+	if (cbData.CrispShadows > 0.5f || PointShadowAtlasSRV()) {
 		if (!shadowCmpSampler) {
 			D3D11_SAMPLER_DESC cmpDesc{};
 			cmpDesc.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
@@ -1810,18 +1810,17 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* sssSRV = screenSpaceShadowsFeature.screenSpaceShadowsTexture->srv.get();
 		context->PSSetShaderResources(45, 1, &sssSRV);
 	}
-	// LLF cluster buffers (t35-t37) + the point-shadow light table (t38) for
-	// the shells' point lights. LLF binds t35-37 each Prepass, but slot
+	// LLF cluster buffers (t35-t37) + the point-shadow light table (t38) and
+	// the local shadow maps (t39). LLF binds t35-37 each Prepass, but slot
 	// state at deferred time is not guaranteed; rebind explicitly like t20.
 	// Do NOT null t35-37 in teardown: later forward passes (water, effects)
-	// read LLF's own binding, which this rebind matches exactly. The shadow
-	// maps themselves ride the t22/t23 atlas copies bound above.
+	// read LLF's own binding, which this rebind matches exactly.
 	if (cbData.PointLightsActive > 0.5f) {
 		ID3D11ShaderResourceView* lightSRVs[3] = { lightLimitFix.lights->srv.get(), lightLimitFix.lightIndexList->srv.get(), lightLimitFix.lightGrid->srv.get() };
 		context->PSSetShaderResources(35, 3, lightSRVs);
 		UpdatePointShadowLights();
 		if (pointShadowLights) {
-			ID3D11ShaderResourceView* pointShadowSRVs[2] = { pointShadowLights->srv.get(), pointShadowAtlasCopySRV.get() };
+			ID3D11ShaderResourceView* pointShadowSRVs[2] = { pointShadowLights->srv.get(), PointShadowAtlasSRV() };
 			context->PSSetShaderResources(38, 2, pointShadowSRVs);
 		}
 	}
