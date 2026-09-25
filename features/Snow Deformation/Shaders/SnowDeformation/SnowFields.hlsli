@@ -79,6 +79,16 @@ static const float2 kBermTaps[16] = {
 	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
 };
 
+// Berm Steepness scales the rings by BermReach. The shading step follows it,
+// floored at half a map texel (below that the bilinear bake shades in
+// facets); exactly 4 at the default reach.
+float BermGradStep()
+{
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	return min(4.0, max(4.0 * BermReach, 0.5 / (DeformInvWorldSize * dims.x)));
+}
+
 // One bilinear tap of the baked field, addressed exactly like the deformation
 // map it was baked from (BermFieldCS writes texel-for-texel, same toroidal
 // layout and MapOrigin - so partial rebuilds survive scrolls).

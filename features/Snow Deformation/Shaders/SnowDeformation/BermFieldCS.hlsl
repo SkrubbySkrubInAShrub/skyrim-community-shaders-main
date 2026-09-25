@@ -5,7 +5,7 @@
 // Berm field bake.
 //
 // The berm field is a 17-tap disc average of the deformation map over a ~40
-// unit radius (see BermField in SnowShell.hlsl). It is a pure function of the
+// unit radius times BermReach (see BermField in SnowShell.hlsl). It is a pure function of the
 // map, yet the shells recomputed it per PIXEL - four times over, for the
 // central difference the normal needs, plus once more per vertex. At 68 loads
 // a call that dominated the shell's pixel cost.
@@ -42,7 +42,8 @@ cbuffer PerFrame : register(b0)
 	uint ClearMap;
 
 	float StampFalloffStart;
-	float padTrail;
+	// 1 / Berm Steepness: scales the taps.
+	float BermReach;
 	float2 WindBias;
 
 	float DeltaTime;
@@ -125,7 +126,7 @@ void BermTexel(uint2 phys)
 
 	float b = Tap(centre, dims);
 	[unroll] for (int i = 0; i < 16; i++)
-		b += Tap(centre + kBermTaps[i] * invTexel, dims);
+		b += Tap(centre + kBermTaps[i] * (BermReach * invTexel), dims);
 
 	OutBermField[phys] = saturate(b / 17.0);
 }

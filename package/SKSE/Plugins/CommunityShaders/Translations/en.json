@@ -1359,6 +1359,8 @@
     "feature.snow_deformation.berm_clods_tooltip": "Breaks the berm crest into coarse thrown chunks - spoil is clumps, not a smooth mound. Coarser than the trench's churn rubble on purpose, so berm and trench read at different scales. 0 = off.",
     "feature.snow_deformation.berm_height": "Berm Height",
     "feature.snow_deformation.berm_height_tooltip": "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm. On objects the same value shades a ridge rather than raising one.",
+    "feature.snow_deformation.berm_steepness": "Berm Steepness",
+    "feature.snow_deformation.berm_steepness_tooltip": "How tightly the berm hugs the trench. 1.00 = a wide, soft apron reaching about 40 units out; higher packs the same height into a narrower, steeper ridge. Fine ridges need a fine trench map: with a long Trenches render distance, settings past about 2.5 change little.",
     "feature.snow_deformation.blast_radius_scale": "Fire Blast Radius",
     "feature.snow_deformation.blast_radius_scale_tooltip": "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar.",
     "feature.snow_deformation.blood_age_hours": "Drying Time",

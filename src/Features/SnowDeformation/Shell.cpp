@@ -1512,6 +1512,7 @@ void SnowDeformation::DrawShell()
 	// Fresh snow compacts instead of being thrown: little berm, no cut rim.
 	const float snowSoftness = GetSnowSoftness();
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f) * std::lerp(1.0f, 0.35f, snowSoftness);
+	cbData.BermReach = BermReachScale();
 	// .w claims RimStyle's documented spare rather than growing ShellCB: the
 	// buffer is hand-mirrored across two shaders and the statics pass binds
 	// this same b0, so one component serves both shells with nothing moving.

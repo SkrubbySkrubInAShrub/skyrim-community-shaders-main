@@ -120,6 +120,7 @@
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
+	X(BermSteepness) \
 	X(FreshSnowSoftness) \
 	X(FreshSnowChurn) \
 	X(FreshSnowSettleHours) \
@@ -1025,6 +1026,7 @@ void SnowDeformation::Prepass()
 	perFrameData.MapOrigin = mapOrigin;
 	perFrameData.WindowOrigin = windowOrigin;
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
+	perFrameData.BermReach = BermReachScale();
 	// Sharpness is a percent slider; 100% clamps just below the degenerate
 	// smoothstep(1, 1, x) edge.
 	// Fresh snow cannot hold a cut: walls stamped while it is loose slope
@@ -1301,8 +1303,10 @@ void SnowDeformation::Prepass()
 	// at rest needs one forced run or the stale bake stands until something moves.
 	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
 	prevBermBakeDisabled = shellBermBakeDisabled;
+	// A new Berm Steepness needs one executed run to mark the whole bake dirty.
+	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
 	// The field view keeps the pass awake: a frozen picture is worse than no sleep.
-	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !(debugForceDeformationUpdate || debugContactView);
+	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !bermReachStale && !(debugForceDeformationUpdate || debugContactView);
 
 	// The skip-rate window: "idle" that is really a flicker (a stamp crossing
 	// the hash quantum every few frames) reads identically in a single-frame
@@ -1401,6 +1405,13 @@ void SnowDeformation::Prepass()
 				context->ClearUnorderedAccessViewUint(occupancyUAV.get(), allDirty);
 				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), allDirty);
 				tileGridsNeedInit = false;
+			}
+			// Every texel's taps moved: rebuild the whole berm field. With the
+			// bake A/B off the marks wait, like any other.
+			if (perFrameData.BermReach != bermReachBaked) {
+				const UINT allDirty[4] = { 1, 1, 1, 1 };
+				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), allDirty);
+				bermReachBaked = perFrameData.BermReach;
 			}
 
 			ID3D11UnorderedAccessView* uavs[] = { map->uav.get(), deformActivityUAV.get(),

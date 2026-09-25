@@ -178,8 +178,9 @@ cbuffer PerFrame : register(b0)
 	// Lower smoothstep edge of the stamp falloff (fraction of radius):
 	// higher = steeper trench walls.
 	float StampFalloffStart;
-	// Retired TrailIrregularity slot; layout kept.
-	float padTrail;
+	// 1 / Berm Steepness: the berm tap reach (the retired TrailIrregularity
+	// slot). Mirror in BermFieldCS.hlsl.
+	float BermReach;
 	// Unit wind direction (world XY, blowing toward) times wind strength
 	// 0-1; zero = uniform refill.
 	float2 WindBias;
@@ -721,7 +722,7 @@ bool EvolveTexel(uint2 phys)
 }
 
 // Lists the tiles the berm bake must rebuild: the map changed within the
-// 40-unit tap reach. Same wrapped-space dilation as the evolve scan.
+// tap reach (40 units x BermReach). Same wrapped-space dilation as the evolve scan.
 [numthreads(8, 8, 1)] void ScanBermCS(uint3 DTid
 									  : SV_DispatchThreadID) {
 	uint2 dims;
@@ -731,7 +732,7 @@ bool EvolveTexel(uint2 phys)
 
 	bool need = ForceAllDirty != 0;
 	if (!need) {
-		const int halo = (int)ceil((40.0 / max(TexelSize, 1e-3) + 2.0) / 8.0);
+		const int halo = (int)ceil((40.0 * BermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
 		for (int dy = -halo; dy <= halo && !need; dy++)
 			for (int dx = -halo; dx <= halo && !need; dx++) {
 				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);

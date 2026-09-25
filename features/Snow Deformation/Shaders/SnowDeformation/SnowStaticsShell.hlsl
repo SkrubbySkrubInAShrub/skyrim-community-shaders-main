@@ -142,8 +142,8 @@ cbuffer ShellCB : register(b0)
 	// half on each side of the junction.
 	float ObjectMeetBand;
 
-	// Retired (Object Meeting Texture Fade); layout keeper.
-	float Spare1;
+	// 1 / Berm Steepness (see SnowShell.hlsl).
+	float BermReach;
 	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
 	uint ShellLODDebug;
 	float SeamRampInv;
@@ -589,7 +589,7 @@ float BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDeformation(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
-		b += SampleDeformation(gridLocal + kBermTaps[i]);
+		b += SampleDeformation(gridLocal + kBermTaps[i] * BermReach);
 	return saturate(b / 17.0);
 }
 
@@ -1500,7 +1500,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float2 bermGrad = float2(0.0, 0.0);
 		[branch] if (ObjBermHeightAmp > 0.005 && bermD > 0.003)
 		{
-			const float bStep = 4.0;
+			const float bStep = BermGradStep();
 			bermGrad = float2(
 				BermShape(BermField(gridLocal + float2(bStep, 0.0))) - BermShape(BermField(gridLocal - float2(bStep, 0.0))),
 				BermShape(BermField(gridLocal + float2(0.0, bStep))) - BermShape(BermField(gridLocal - float2(0.0, bStep)))) / (2.0 * bStep) *
@@ -2738,7 +2738,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003 && input.detail > 0.001)
 #endif
 	{
-		const float bStep = 4.0;
+		const float bStep = BermGradStep();
 		float2 bermGrad = float2(
 			BermShape(BermField(trenchGridLocal + float2(bStep, 0.0))) - BermShape(BermField(trenchGridLocal - float2(bStep, 0.0))),
 			BermShape(BermField(trenchGridLocal + float2(0.0, bStep))) - BermShape(BermField(trenchGridLocal - float2(0.0, bStep)))) / (2.0 * bStep);

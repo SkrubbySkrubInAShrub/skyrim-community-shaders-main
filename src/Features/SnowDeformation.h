@@ -550,6 +550,8 @@ public:
 		float ParallaxDepth = 1.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.20f;
+		/** @brief Berm Steepness: divides the berm's reach (its tap rings). 1 = the authored ~40-unit apron; higher packs the same height into a narrower, steeper ridge. Narrowing only (1-3) for now. */
+		float BermSteepness = 1.0f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
 		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
@@ -762,8 +764,8 @@ public:
 
 		/** @brief Lower smoothstep edge of the stamp falloff (fraction of radius): higher = steeper trench walls. */
 		float StampFalloffStart;
-		/** @brief Retired TrailIrregularity slot; layout kept. */
-		float padTrail;
+		/** @brief 1 / Settings::BermSteepness: the berm bake's tap reach and the dirty scan's halo. Took the retired TrailIrregularity slot. Mirror in DeformationUpdateCS.hlsl AND BermFieldCS.hlsl. */
+		float BermReach;
 		/** @brief Unit wind direction (world XY, blowing toward) times wind strength 0-1; zero = uniform refill. */
 		float2 WindBias;
 
@@ -1556,8 +1558,8 @@ public:
 		/** @brief settings.ObjectMeetBand, read by the landscape shell and the drape. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float ObjectMeetBand;
 
-		/** @brief Retired (water edge, then Object Meeting Texture Fade); layout keeper. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
-		float Spare1;
+		/** @brief 1 / Settings::BermSteepness, for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float BermReach;
 		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
 		uint ShellLODDebug;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
@@ -2712,6 +2714,8 @@ public:
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
+	/** @brief 1 / Berm Steepness, clamped to the narrowing range; the berm tap reach both the bake and the shells use. */
+	float BermReachScale() const { return 1.0f / std::clamp(settings.BermSteepness, 1.0f, 3.0f); }
 	/** @brief Interior cell: no landscape exists, so no ground shell and no trench can; object snow is unaffected. */
 	bool InInteriorCell() const
 	{
@@ -3878,6 +3882,8 @@ protected:
 	bool evolveIdleLastFrame = false;
 	/** @brief Last frame's berm A/B state: re-enabling the bake must run one update even at rest, or the shells read a bake from before the toggle went off. */
 	bool prevBermBakeDisabled = false;
+	/** @brief BermReach the bake was last marked all-dirty for: a new Berm Steepness moves every texel's taps, so the whole field rebuilds. */
+	float bermReachBaked = 1.0f;
 	/** @brief Stamp set of the last EXECUTED dispatch, for the tolerance match. Planted feet stamp every frame, so a count can never reach zero while anyone stands on snow; "unchanged since the verdict" is the idle test instead. A quantized hash was tried first and flickered: a swaying foot straddling a grid-cell boundary reads as change every few frames, and each flicker buys dispatch + verdict latency - permanent 0% skip. Matching within a tolerance has no boundaries to straddle. */
 	std::vector<float4> lastStampSet;
 	std::vector<float4> lastStampEnds;

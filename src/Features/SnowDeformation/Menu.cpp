@@ -851,6 +851,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm. On objects the same value shades a ridge rather than raising one."));
 
+		ImGui::SliderFloat(T(TKEY("berm_steepness"), "Berm Steepness"), &settings.BermSteepness, 1.0f, 3.0f, "%.2fx");
+		if (auto _ttBs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("berm_steepness_tooltip"), "How tightly the berm hugs the trench. 1.00 = a wide, soft apron reaching about 40 units out; higher packs the same height into a narrower, steeper ridge. Fine ridges need a fine trench map: with a long Trenches render distance, settings past about 2.5 change little."));
+
 		ImGui::SliderFloat(T(TKEY("berm_clods"), "Berm Clods"), &settings.BermClods, 0.0f, 6.0f, "%.1f units");
 		if (auto _ttClods = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("berm_clods_tooltip"), "Breaks the berm crest into coarse thrown chunks - spoil is clumps, not a smooth mound. Coarser than the trench's churn rubble on purpose, so berm and trench read at different scales. 0 = off."));

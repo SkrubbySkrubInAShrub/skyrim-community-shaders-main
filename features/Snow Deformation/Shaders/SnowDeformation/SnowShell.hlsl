@@ -139,8 +139,8 @@ cbuffer ShellCB : register(b0)
 	// side of the junction; 0 = off.
 	float ObjectMeetBand;
 
-	// Retired (Object Meeting Texture Fade); layout keeper.
-	float Spare1;
+	// 1 / Berm Steepness: the berm tap reach (BermFieldTapped, BermGradStep).
+	float BermReach;
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
 	uint ShellLODDebug;
@@ -929,7 +929,7 @@ float3 ShellObjectMeet(float2 worldXY, float sheetZ)
 
 // Edge berm: displaced snow piles along the trench rim, taller from a deeper
 // layer. Shape comes from the BLURRED deformation (BermField) - two rings
-// reaching ~40 units past the trail edge, the outer ring's small per-tap
+// reaching ~40 units (x BermReach) past the trail edge, the outer ring's small per-tap
 // weight giving a long tail instead of a knife along the stamp falloff.
 // BermShape and the tap ring are in SnowFields.hlsli.
 
@@ -937,7 +937,7 @@ float BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDisplacedFast(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
-		b += SampleDisplacedFast(gridLocal + kBermTaps[i]);
+		b += SampleDisplacedFast(gridLocal + kBermTaps[i] * BermReach);
 	return saturate(b / 17.0);
 }
 
@@ -2598,16 +2598,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Berm shading: numerical gradient of the SAME blurred hill the
 	// geometry displaces by, so the light/shadow break sits on the hill's
 	// true flanks (the analytic shortcut put the terminator on the crest).
-	float bermXP = BermField(gridLocal + float2(step, 0.0));
-	float bermXN = BermField(gridLocal - float2(step, 0.0));
-	float bermYP = BermField(gridLocal + float2(0.0, step));
-	float bermYN = BermField(gridLocal - float2(0.0, step));
+	// A steeper berm can shrink its step below the profile's; the mask then
+	// needs its own taps at the same points.
+	const float bStep = BermGradStep();
+	float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
+	[branch] if (bStep < step - 0.01)
+	{
+		mXP = SampleDeformation(gridLocal + float2(bStep, 0.0));
+		mXN = SampleDeformation(gridLocal - float2(bStep, 0.0));
+		mYP = SampleDeformation(gridLocal + float2(0.0, bStep));
+		mYN = SampleDeformation(gridLocal - float2(0.0, bStep));
+	}
+	float bermXP = BermField(gridLocal + float2(bStep, 0.0));
+	float bermXN = BermField(gridLocal - float2(bStep, 0.0));
+	float bermYP = BermField(gridLocal + float2(0.0, bStep));
+	float bermYN = BermField(gridLocal - float2(0.0, bStep));
 	// Differenced WITH the (1 - deformation) mask, so the shading gradient is
 	// of the exact surface the vertex path displaces - an unmasked gradient
 	// here shades a hill the geometry no longer has.
 	float2 bermGrad = float2(
-		BermShape(bermXP) * saturate(1.0 - dXP) - BermShape(bermXN) * saturate(1.0 - dXN),
-		BermShape(bermYP) * saturate(1.0 - dYP) - BermShape(bermYN) * saturate(1.0 - dYN)) / (2.0 * step);
+		BermShape(bermXP) * saturate(1.0 - mXP) - BermShape(bermXN) * saturate(1.0 - mXN),
+		BermShape(bermYP) * saturate(1.0 - mYP) - BermShape(bermYN) * saturate(1.0 - mYN)) / (2.0 * bStep);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	// Meeting a captured object: the sheet's MACRO slope goes halfway to the
 	// object's (ShellObjectMeet); the coat comes the other half
