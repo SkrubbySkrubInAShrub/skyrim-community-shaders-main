@@ -2323,6 +2323,9 @@ void SnowDeformation::ClearShaderCache()
 	if (heightScrollCS)
 		heightScrollCS->Release();
 	heightScrollCS = nullptr;
+	if (heightScrollTopCS)
+		heightScrollTopCS->Release();
+	heightScrollTopCS = nullptr;
 	if (heightCombineCS)
 		heightCombineCS->Release();
 	heightCombineCS = nullptr;

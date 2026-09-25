@@ -1542,6 +1542,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
+	if (!heightScrollTopCS)
+		heightScrollTopCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS"));
 	if (!heightCombineCS)
 		heightCombineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightWaterCoverCS)
@@ -1793,6 +1795,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ShelterMaxHeight = std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
 	processData.ShelterBandHeight = std::max(kShelterBandHeight, processData.ShelterMaxHeight);
 	processData.ShelterConeTan = settings.ShelterDriftCone ? std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f)) : 0.0f;
+	processData.WriteBaseField = groundLiftDebug ? 1u : 0u;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -2104,16 +2107,20 @@ void SnowDeformation::RenderObjectHeightMap()
 		heightGhostCB->Update(ghostData);
 	}
 	ID3D11Buffer* ghostCB = heightGhostCB->CB();
+	// Null bottoms = the top-only variant.
 	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom) {
-		if (!a_prevTop || !a_curTop || !a_prevBottom || !a_curBottom)
+		if (!a_prevTop || !a_curTop)
 			return;
-		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), a_prevBottom->srv.get() };
-		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), a_curBottom->uav.get() };
+		const bool bottoms = a_prevBottom && a_curBottom;
+		if (!bottoms && !heightScrollTopCS)
+			return;
+		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), bottoms ? a_prevBottom->srv.get() : nullptr };
+		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), bottoms ? a_curBottom->uav.get() : nullptr };
 		context->CSSetConstantBuffers(0, 1, &processCB);
 		context->CSSetConstantBuffers(2, 1, &ghostCB);
 		context->CSSetShaderResources(0, 2, mergeSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, mergeUAVs, nullptr);
-		context->CSSetShader(heightScrollCS, nullptr, 0);
+		context->CSSetShader(bottoms ? heightScrollCS : heightScrollTopCS, nullptr, 0);
 		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
@@ -2522,11 +2529,13 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11ShaderResourceView* nullPeelSRVs[2] = { nullptr, nullptr };
 		context->PSSetShaderResources(3, 2, nullPeelSRVs);
 
-		// Same merge for the peeled layer, before the next peel reads it.
-		// The bottom slot is the scratch: ScrollCS writes a bottoms result
-		// the cone chains below overwrite anyway.
+		// Same merge for the peeled layer, before the next peel reads it;
+		// tops only, nothing reads a peeled layer's bottoms.
 		globals::profiler->BeginPass("SnowDeformation::Objects - Peel Ghost");
-		mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch);
+		if (heightScrollTopCS)
+			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr);
+		else
+			mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch);
 		globals::profiler->EndPass();
 	}
 

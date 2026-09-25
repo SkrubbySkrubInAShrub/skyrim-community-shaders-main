@@ -2837,6 +2837,8 @@ public:
 	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
+	/** @brief ScrollCS with SCROLL_TOP_ONLY, for the peeled layers. */
+	ID3D11ComputeShader* heightScrollTopCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	/** @brief WaterCoverCS: the raw water window minus its lone wet texels into waterVisibleTexture, and the near field into waterNearTexture. */
 	ID3D11ComputeShader* heightWaterCoverCS = nullptr;
@@ -2882,6 +2884,12 @@ public:
 		float ShelterMaxHeight;
 		/** @brief tan(ShelterDriftAngle); 0 = no enclosure band. */
 		float ShelterConeTan;
+
+		/** @brief CombineCS writes the base field (ObjectHeights, t4) only for the ground-lift debug view, its sole reader. */
+		uint WriteBaseField;
+		uint pad0;
+		uint pad1;
+		uint pad2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 

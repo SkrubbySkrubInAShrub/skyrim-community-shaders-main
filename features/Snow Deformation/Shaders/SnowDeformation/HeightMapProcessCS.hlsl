@@ -56,6 +56,9 @@ cbuffer HeightProcessCB : register(b0)
 	float DiffuseLambda;
 	float ShelterMaxHeight;  // underside height above ground past which a structure stops sheltering
 	float ShelterConeTan;  // tan(drift angle from vertical); 0 = no enclosure band
+
+	uint WriteBaseField;  // CombineCS: write OutA (the shell reads it only in the ground-lift debug view)
+	uint3 HeightProcessPad;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -148,6 +151,13 @@ bool GhostInView(float2 worldXY, float worldZ)
 // surface the camera can see and nothing re-rasterized is gone. Out of view
 // it stands, decayed, which is what keeps the roof over a walkway sheltering
 // its floor while the camera looks straight down at the boards.
+// SCROLL_TOP_ONLY: the peeled layers' merge, whose bottoms nothing reads.
+#ifdef SCROLL_TOP_ONLY
+static const bool kScrollBottoms = false;
+#else
+static const bool kScrollBottoms = true;
+#endif
+
 [numthreads(8, 8, 1)] void ScrollCS(uint3 dtid
 									: SV_DispatchThreadID) {
 	uint2 dims;
@@ -156,9 +166,9 @@ bool GhostInView(float2 worldXY, float worldZ)
 		return;
 
 	float rasterTop = OutA[dtid.xy];
-	float rasterBottom = OutB[dtid.xy];
+	float rasterBottom = kScrollBottoms ? OutB[dtid.xy] : 100000.0;
 	bool haveTop = rasterTop > -50000.0;
-	bool haveBottom = rasterBottom < 50000.0;
+	bool haveBottom = kScrollBottoms && rasterBottom < 50000.0;
 
 	float top = -100000.0;
 	float bottom = 100000.0;
@@ -171,7 +181,8 @@ bool GhostInView(float2 worldXY, float worldZ)
 			// stale imprints (disabled/harvested/moved objects) melt away
 			// instead of persisting until the window scrolls past them.
 			top = InA[uint2(src)] - GhostDecay;
-			bottom = InB[uint2(src)] + GhostDecay;
+			if (kScrollBottoms)
+				bottom = InB[uint2(src)] + GhostDecay;
 		}
 	}
 
@@ -190,7 +201,8 @@ bool GhostInView(float2 worldXY, float worldZ)
 	}
 
 	OutA[dtid.xy] = top;
-	OutB[dtid.xy] = bottom;
+	if (kScrollBottoms)
+		OutB[dtid.xy] = bottom;
 }
 
 // How strongly the raster at p reads as a floating structure above the
@@ -341,7 +353,8 @@ groupshared uint combineTileList[MAX_EXCLUSIONS];
 		field = lerp(field, terrain, flatten);
 	}
 
-	OutA[dtid.xy] = field;
+	[branch] if (WriteBaseField != 0)
+		OutA[dtid.xy] = field;
 	OutMask[dtid.xy] = float2(suppress, melt);
 }
 
