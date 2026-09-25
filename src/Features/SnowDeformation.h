@@ -1882,6 +1882,8 @@ public:
 	ID3D11ComputeShader* seamShieldCS = nullptr;
 	Texture2D* seamMaskTexture = nullptr;
 	uint32_t seamMaskFrame = ~0u;
+	/** @brief shellTerrainVersion the mask was built from; the terrain window is its only input. */
+	uint32_t seamMaskTerrainVersion = ~0u;
 	bool EnsureSeamMask();
 
 	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */

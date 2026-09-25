@@ -1047,6 +1047,7 @@ bool SnowDeformation::EnsureSeamMask()
 	seamMaskTexture = new Texture2D(desc, "SnowDeformation::SeamShieldMask");
 	seamMaskTexture->CreateSRV(srvDesc);
 	seamMaskTexture->CreateUAV(uavDesc);
+	seamMaskTerrainVersion = ~0u;
 	return seamMaskTexture->srv && seamMaskTexture->uav;
 }
 
@@ -2227,22 +2228,28 @@ void SnowDeformation::DrawShell()
 	spanClock.Lap(CpuCensus::kSpanLODProbe);
 
 	// SSGI seam shield mask for the composite: the window's fringe band,
-	// gated to real snow nearby (see SeamShieldCS).
+	// gated to real snow nearby (see SeamShieldCS). Its only input is the
+	// terrain window, so it is rebuilt when the window is.
 	if (shellGround && shellTerrainTexture && shellTerrainTexture->srv && EnsureSeamMask()) {
 		if (auto cs = GetSeamShieldCS()) {
-			ID3D11ShaderResourceView* maskSRV = shellTerrainTexture->srv.get();
-			ID3D11UnorderedAccessView* maskUAV = seamMaskTexture->uav.get();
-			context->CSSetShaderResources(5, 1, &maskSRV);
-			context->CSSetUnorderedAccessViews(1, 1, &maskUAV, nullptr);
-			context->CSSetShader(cs, nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::Ground - Seam Shield");
-			context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
-			globals::profiler->EndPass();
-			ID3D11ShaderResourceView* nullMaskSRV = nullptr;
-			ID3D11UnorderedAccessView* nullMaskUAV = nullptr;
-			context->CSSetShaderResources(5, 1, &nullMaskSRV);
-			context->CSSetUnorderedAccessViews(1, 1, &nullMaskUAV, nullptr);
-			context->CSSetShader(nullptr, nullptr, 0);
+			if (seamMaskTerrainVersion != shellTerrainVersion) {
+				ID3D11ShaderResourceView* maskSRV = shellTerrainTexture->srv.get();
+				ID3D11UnorderedAccessView* maskUAV = seamMaskTexture->uav.get();
+				context->CSSetShaderResources(5, 1, &maskSRV);
+				context->CSSetUnorderedAccessViews(1, 1, &maskUAV, nullptr);
+				context->CSSetShader(cs, nullptr, 0);
+				globals::profiler->BeginPass("SnowDeformation::Ground - Seam Shield");
+				context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
+				globals::profiler->EndPass();
+				ID3D11ShaderResourceView* nullMaskSRV = nullptr;
+				ID3D11UnorderedAccessView* nullMaskUAV = nullptr;
+				context->CSSetShaderResources(5, 1, &nullMaskSRV);
+				context->CSSetUnorderedAccessViews(1, 1, &nullMaskUAV, nullptr);
+				context->CSSetShader(nullptr, nullptr, 0);
+				seamMaskTerrainVersion = shellTerrainVersion;
+			} else {
+				globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Seam Shield");
+			}
 			seamMaskFrame = globals::state->frameCount;
 		}
 	}
