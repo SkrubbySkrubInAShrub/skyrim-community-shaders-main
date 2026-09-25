@@ -222,6 +222,9 @@ cbuffer ShellCB : register(b0)
 	// Trampled ground: x = trench floor scale, y = floor churn scale (1 = off),
 	// zw = the extent bracket trail -> field. See TrampleScales.
 	float4 TrampleStyle;
+	// x = tessellation target, pixels per segment (0 = distance only);
+	// yz = viewport half size in pixels.
+	float4 TessScreen;
 }
 
 
@@ -1646,7 +1649,7 @@ static const float kTessCutoff = kTessNear * kTessReachBoost;
 // SNOW_HS_BAKE: the two corner taps come from BakeCS (ShellVertexBake.w,
 // same function, same vertex bits); only the midpoint stays live.
 #ifdef SNOW_HS_BAKE
-float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB, float deformA, float deformB)
+float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB, float deformA, float deformB, float zA, float zB)
 #else
 float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 #endif
@@ -1674,7 +1677,19 @@ float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 #endif
 		reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
 	}
-	return clamp(reach / max(dist, 32.0), 1.0, kTessMax);
+	float factor = clamp(reach / max(dist, 32.0), 1.0, kTessMax);
+#ifdef SNOW_HS_BAKE
+	// Screen-size cap: no more segments than the edge's projected length holds
+	// at TessScreen.x pixels each. Symmetric in the endpoints, so crack-free.
+	[branch] if (TessScreen.x > 0.0 && factor > 1.0)
+	{
+		float4 clipA = mul(CameraViewProj, float4(float3(GridOrigin + gridLocalA, zA) - ShellCameraPosAdjust.xyz, 1.0));
+		float4 clipB = mul(CameraViewProj, float4(float3(GridOrigin + gridLocalB, zB) - ShellCameraPosAdjust.xyz, 1.0));
+		[flatten] if (min(clipA.w, clipB.w) > 16.0)
+			factor = min(factor, max(length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz) / TessScreen.x, 1.0));
+	}
+#endif
+	return factor;
 }
 
 // Split gate. The PS's far-field depth clamp only fires past kClampFarStart, so
@@ -1895,10 +1910,10 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch, uint patchId :
 	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
 #ifdef SNOW_HS_BAKE
 	float4 edges = float4(
-		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal, v0.w, v3.w),
-		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal, v0.w, v1.w),
-		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal, v1.w, v2.w),
-		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal, v3.w, v2.w));
+		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal, v0.w, v3.w, v0.x, v3.x),
+		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal, v0.w, v1.w, v0.x, v1.x),
+		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal, v1.w, v2.w, v1.x, v2.x),
+		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal, v3.w, v2.w, v3.x, v2.x));
 #else
 	float4 edges = float4(
 		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal),

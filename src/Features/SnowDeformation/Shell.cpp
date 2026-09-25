@@ -1739,6 +1739,8 @@ void SnowDeformation::DrawShell()
 		1.0f / kExclusionFieldHalfExtent,
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
+	if (prevViewportCount)
+		cbData.TessScreen = { std::max(shellTessTargetPx, 0.0f), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, 0.0f };
 	shellCB->Update(cbData);
 
 	// Snapshot for next frame's shadow-caster injection (it runs at the

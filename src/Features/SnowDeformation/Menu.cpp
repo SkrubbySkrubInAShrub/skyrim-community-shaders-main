@@ -1868,6 +1868,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_tess_diagonal_unflip"), "Unflip Tessellated Diagonal"), &shellTessDiagonalUnflip);
 			if (auto _ttDiag = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_unflip_tooltip"), "A/B for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell's untessellated patches take the same split. Tick to restore the old, opposite split, which crossed the ground's; it shows as a checkerboard of sag on the 32-unit band around 1,600-1,900 units in the Depth Delta Heatmap."));
+			ImGui::SliderFloat(T(TKEY("shell_tess_target_px"), "Tessellation Target"), &shellTessTargetPx, 0.0f, 16.0f, shellTessTargetPx > 0.0f ? "%.0f px" : "off");
+			if (auto _ttTessTarget = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "A/B for trampled snow: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each. Off is today's distance-only rule. Higher is cheaper and softens the fine churn lumps on trampled floors first; trench and berm shapes hold. Measured on a trampled battlefield at 1720x720: 8 px took the snow shell from 2.87 to 2.24 ms."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);

@@ -1476,6 +1476,8 @@ public:
 	bool shellLandHeightDisabled = false;
 	/** @brief A/B, runtime-only: the tessellated patches' old corner rotation (bit 3), which put factor-1 patches on the opposite diagonal to the land (the tessellator splits along domain (1,0)-(0,1), measured 2026-09-25). */
 	bool shellTessDiagonalUnflip = false;
+	/** @brief Runtime-only: the shell's deformation tessellation keeps no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). */
+	float shellTessTargetPx = 0.0f;
 	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
 	bool shellOldUnionJack = false;
 
@@ -1629,6 +1631,8 @@ public:
 		float4 BloodLook3;
 		/** @brief Trampled ground: x = Settings::TrampledFloorLowering, y = Settings::TrampledFlattening (both 1 when the extent bake is not live), zw = the extent bracket trail -> field. Read through TrampleScales. Appended last; mirror in both shells. */
 		float4 TrampleStyle;
+		/** @brief Shell tessellation screen-size cap: x = target pixels per segment (0 = the distance factor alone), yz = viewport half size in pixels. Appended last; mirror in both shells. */
+		float4 TessScreen;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");
