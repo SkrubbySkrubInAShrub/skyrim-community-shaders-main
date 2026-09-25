@@ -6,8 +6,7 @@
  * @brief CPU occlusion culling for the main view, against the GPU's Hi-Z depth pyramid.
  *
  * Hooks the engine's scene-graph cull walk and skips objects that are provably hidden, so the
- * draw is never issued. Worth more under DXVK than on the native driver, which pays less per
- * draw on the render thread.
+ * draw is never issued.
  *
  * The buffer is built by \ref Deferred::BuildHiZ and copied back by \ref HiZReadback; this
  * feature only reads it. Three culls, each independently switchable: occlusion, small objects,

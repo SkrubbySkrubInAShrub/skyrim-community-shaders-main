@@ -181,17 +181,6 @@ namespace
 
 void OcclusionCulling::PostPostLoad()
 {
-	// CS_OCCLUSION=1 flips the master toggle on at boot for automated runs.
-	char buf[16] = {};
-	if (GetEnvironmentVariableA("CS_OCCLUSION", buf, sizeof(buf)) && buf[0] == '1')
-		settings.EnableOcclusionTesting = true;
-
-	// CS_OCCLUSION_NO_HOOKS=1: install nothing, for a baseline without even trampoline overhead.
-	if (GetEnvironmentVariableA("CS_OCCLUSION_NO_HOOKS", buf, sizeof(buf)) && buf[0] == '1') {
-		logger::warn("[OcclusionCulling] CS_OCCLUSION_NO_HOOKS=1: no hooks installed");
-		return;
-	}
-
 	// Detour the function BODIES of both culling-process classes. Body detours are essential:
 	// the main cull walk calls Process1 devirtualized, so a vtable patch never sees it.
 	//
@@ -253,8 +242,7 @@ void OcclusionCulling::DrawSettings()
 {
 	ImGui::TextWrapped("%s", T(TKEY("about"),
 		"Skips drawing objects the camera cannot see, by testing them against the depth buffer "
-		"the GPU already produced this frame. Removing a draw is worth more under DXVK than on "
-		"the native driver, because DXVK pays more CPU per draw."));
+		"the GPU already produced this frame."));
 	ImGui::Spacing();
 
 	bool changed = false;
@@ -322,14 +310,21 @@ void OcclusionCulling::DrawSettings()
 			"and screen-space shadows regenerate the near-field contact shadows those small "
 			"casters would have contributed."));
 		changed |= ImGui::Checkbox(T(TKEY("cull_small_shadows"), "Cull Small Shadow Casters"), &settings.CullSmallShadows);
+		// Slider labels match the Small Objects section, so scope their IDs.
+		ImGui::PushID("shadows");
 		changed |= ImGui::SliderFloat(T(TKEY("shadow_near_radius"), "Near Size"), &settings.ShadowCullNearRadius, 0.0f, 128.0f, "%.1f");
 		changed |= ImGui::SliderFloat(T(TKEY("shadow_slope"), "Size Growth"), &settings.ShadowCullDistSlope, 0.0f, 0.05f, "%.4f");
+		ImGui::PopID();
 	}
 
 	if (ImGui::CollapsingHeader(T(TKEY("statistics"), "Statistics"))) {
 		const auto stats = HiZCull::GetStats();
 		ImGui::Text("%s: %u", T(TKEY("stat_tested"), "Tested"), stats.tested);
 		ImGui::Text("%s: %u", T(TKEY("stat_culled"), "Culled"), stats.culled);
+		ImGui::Text("%s: %u", T(TKEY("stat_culled_sphere"), "Culled by bounding sphere"), stats.culledSphere);
+		ImGui::Text("%s: %u", T(TKEY("stat_culled_aabb"), "Culled by bounding box"), stats.culledAABB);
+		ImGui::Text("%s: %u", T(TKEY("stat_flips"), "Visibility changes"), stats.flips);
+		ImGui::Text("%s: %u", T(TKEY("stat_deferred"), "Hidden, awaiting cull"), stats.deferred);
 		ImGui::Text("%s: %u", T(TKEY("stat_small_objects"), "Small objects dropped"), stats.smallObjects);
 		ImGui::Text("%s: %u", T(TKEY("stat_small_shadows"), "Small shadow casters dropped"), stats.smallShadows);
 		ImGui::Text("%s: %u", T(TKEY("stat_age"), "Depth buffer age (frames)"), stats.snapshotAge);

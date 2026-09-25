@@ -361,18 +361,6 @@ namespace HiZCull
 
 	void BeginFrame()
 	{
-		// DIAG (CS_OCCLUSION_STATS=1): the previous frame's counters, before they are reset.
-		static const bool s_logStats = [] {
-			char buf[8] = {};
-			return GetEnvironmentVariableA("CS_OCCLUSION_STATS", buf, sizeof(buf)) && buf[0] == '1';
-		}();
-		if (s_logStats && (g_frameIndex.load(std::memory_order_relaxed) % 300u) == 0u) {
-			logger::info("[OcclusionCulling] tested={} culled={} (sphere={} aabb={}) flips={} deferred={} smallObj={} smallShadow={} age={}",
-				g_tested.load(), g_culled.load(), g_culledSphere.load(), g_culledAABB.load(),
-				g_flips.load(), g_deferred.load(),
-				g_smallObjects.load(), g_smallShadows.load(), HiZReadback::GetStats().age);
-		}
-
 		g_frameIndex.fetch_add(1, std::memory_order_relaxed);
 		g_tested.store(0, std::memory_order_relaxed);
 		g_culled.store(0, std::memory_order_relaxed);
@@ -556,6 +544,10 @@ namespace HiZCull
 		return Stats{
 			g_tested.load(std::memory_order_relaxed),
 			g_culled.load(std::memory_order_relaxed),
+			g_culledSphere.load(std::memory_order_relaxed),
+			g_culledAABB.load(std::memory_order_relaxed),
+			g_flips.load(std::memory_order_relaxed),
+			g_deferred.load(std::memory_order_relaxed),
 			g_smallObjects.load(std::memory_order_relaxed),
 			g_smallShadows.load(std::memory_order_relaxed),
 			HiZReadback::GetStats().age

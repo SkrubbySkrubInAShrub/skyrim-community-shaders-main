@@ -104,6 +104,10 @@ namespace HiZCull
 	{
 		std::uint32_t tested;
 		std::uint32_t culled;
+		std::uint32_t culledSphere;
+		std::uint32_t culledAABB;
+		std::uint32_t flips;     ///< verdict changed from the previous frame
+		std::uint32_t deferred;  ///< hidden, but not yet for long enough to cull
 		std::uint32_t smallObjects;
 		std::uint32_t smallShadows;
 		std::uint32_t snapshotAge;
