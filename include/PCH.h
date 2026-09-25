@@ -125,6 +125,42 @@ namespace stl
 		if (result != NO_ERROR)
 			T::func = Util::VTableHookFallback(target, idx, reinterpret_cast<PVOID>(T::thunk), result);
 	}
+
+	/**
+	 * @brief Detours the function body a class vtable slot points at.
+	 *
+	 * Patching the table itself is not enough when the engine calls the method devirtualized,
+	 * which the main culling walk does. Taking the body's address out of the table and
+	 * detouring that catches both call paths, and unlike an address-library id for the body it
+	 * resolves on every runtime the VTABLE variant covers.
+	 *
+	 * @return The body address that was hooked, or 0 if the attach failed.
+	 */
+	template <std::size_t idx, class T>
+	std::uintptr_t detour_vtable_body(REL::VariantID a_vtable)
+	{
+		const auto vtable = reinterpret_cast<std::uintptr_t*>(REL::Relocation<std::uintptr_t>(a_vtable).address());
+		const std::uintptr_t body = vtable[idx];
+
+		T::func = body;
+
+		LONG result = DetourTransactionBegin();
+		if (result == NO_ERROR) {
+			DetourUpdateThread(GetCurrentThread());
+			result = DetourAttach(reinterpret_cast<PVOID*>(&T::func), reinterpret_cast<PVOID>(T::thunk));
+			if (result == NO_ERROR)
+				result = DetourTransactionCommit();
+			else
+				DetourTransactionAbort();
+		}
+
+		if (result != NO_ERROR) {
+			SKSE::log::error("detour_vtable_body: attach failed for vtable slot {:#x} (error {})", idx, result);
+			return 0;
+		}
+
+		return body;
+	}
 }
 
 namespace logger = SKSE::log;

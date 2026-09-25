@@ -60,7 +60,7 @@ cbuffer CullBucket : register(b1)
 
 ByteAddressBuffer Instances : register(t0);
 StructuredBuffer<float4> Origins : register(t1);
-// Scene-depth max pyramid; see GrassHiZCS.hlsl.
+// Scene-depth max pyramid; see HiZ/HiZCS.hlsl.
 Texture2D<float> HiZ : register(t2);
 // .x is the first source instance; .y is the compacted start index.
 StructuredBuffer<uint2> SliceTable : register(t3);

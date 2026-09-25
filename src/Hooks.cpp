@@ -17,6 +17,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/OcclusionCulling/HiZCull.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -383,6 +384,7 @@ struct IDXGISwapChain_Present
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
 		globals::state->Reset();
+		HiZCull::BeginFrame();
 
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
 			This,

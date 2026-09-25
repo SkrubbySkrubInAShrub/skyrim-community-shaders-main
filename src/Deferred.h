@@ -3,6 +3,7 @@
 #include <DirectXMath.h>
 
 #include "Buffer.h"
+#include "HiZPyramid.h"
 #include "RE/B/BSShadowDirectionalLight.h"
 #include "Utils/VersionedRelocation.h"
 
@@ -58,6 +59,19 @@ public:
 
 	/** @brief Runs feature prepasses between StartDeferred and geometry rendering. */
 	void PrepassPasses();
+
+	/**
+	 * @brief Builds the shared Hi-Z pyramid from the live depth, at most once per frame.
+	 *
+	 * The first consumer to call it decides the build point: grass culls mid-opaque-pass, and
+	 * the depth-copy hook covers occlusion culling when grass did not build first.
+	 * @return True when \ref hiZ is valid for this frame.
+	 */
+	bool BuildHiZ();
+
+	/** @brief Max-depth mip pyramid shared by every Hi-Z consumer. Built by \ref BuildHiZ. */
+	HiZPyramid hiZ;
+	uint32_t hiZFrame = UINT32_MAX;
 
 	/** @brief Releases cached composite compute shaders, forcing recompilation on next use. */
 	void ClearShaderCache();

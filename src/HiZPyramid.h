@@ -2,7 +2,7 @@
 
 #include "Buffer.h"
 
-/** @brief Max-depth mip pyramid over the scene depth copy, used to occlusion-cull grass instances. A texel at level N is exactly the farthest depth of everything beneath it */
+/** @brief Max-depth mip pyramid over the scene depth, shared via Deferred::hiZ by grass and occlusion culling. A texel at level N is exactly the farthest depth of everything beneath it */
 class HiZPyramid
 {
 public:
@@ -30,7 +30,7 @@ public:
 	/** @brief Returns how many nominal screen pixels one base-level texel covers, scaled by dynamic resolution. */
 	float GetTexelPixels() const { return texelPixels; }
 
-	/** @brief Creates the parameter constant buffer. Called from the feature's SetupResources. */
+	/** @brief Creates the parameter constant buffer. Called from Deferred::SetupResources. */
 	void SetupResources();
 	/** @brief Releases the cached compute shaders so they recompile on next use. */
 	void ClearShaderCache();

@@ -1,4 +1,5 @@
 #include "GrassOptimizations.h"
+#include "Deferred.h"
 #include "GrassLighting.h"
 #include "TerrainBlending.h"  // loaded state selects the scene depth SRV's format
 
@@ -298,10 +299,8 @@ void GrassOptimizations::UpdateGrass()
 	FrustumSoA frustumSoA;
 	BuildFrustumSoA(frustumSoA, frustum);
 
-	if (settings.EnableOcclusionCulling)
-		hiZ.Build(device, ctx);
-	else
-		hiZ.Invalidate();
+	const bool hiZValid = settings.EnableOcclusionCulling && globals::deferred->BuildHiZ();
+	const auto& hiZ = globals::deferred->hiZ;
 
 	{
 		CullParamsCB cp{};
@@ -337,7 +336,7 @@ void GrassOptimizations::UpdateGrass()
 		cp.farLODPixelSize = settings.EnableMidLOD ? std::min(settings.FarLODPixelSize, settings.MidLODPixelSize) : settings.FarLODPixelSize;
 
 		cp.meshLODBandPx = std::max(0.0f, settings.MeshLODBandPixels);
-		cp.hiZEnabled = hiZ.IsValid() ? 1.0f : 0.0f;
+		cp.hiZEnabled = hiZValid ? 1.0f : 0.0f;
 		cp.hiZSizeX = (float)hiZ.GetWidth();
 		cp.hiZSizeY = (float)hiZ.GetHeight();
 
@@ -638,7 +637,6 @@ bool GrassOptimizations::AabbVisible(const FrustumSoA& f, __m128 lo, __m128 hi)
 void GrassOptimizations::SetupResources()
 {
 	cullParamsCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<CullParamsCB>(), "GrassOptimizations::CullParamsCB");
-	hiZ.SetupResources();
 	bucketStore.SetupResources();
 
 	if (FAILED(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&ctx1))) || !ctx1) {
@@ -655,7 +653,6 @@ void GrassOptimizations::ClearShaderCache()
 		shader = nullptr;
 	};
 	release(cullCS);
-	hiZ.ClearShaderCache();
 	bucketStore.ClearShaderCache();
 }
 
@@ -697,7 +694,7 @@ void GrassOptimizations::CullBucket(GrassBucket& b, ID3D11DeviceContext* ctx)
 
 	ID3D11ShaderResourceView* sliceTableSRV = sliceTable ? sliceTable->srv.get() : nullptr;
 	ID3D11ShaderResourceView* srvs[4] = { b.instanceSRV, b.originSRV,
-		hiZ.GetSRV(), sliceTableSRV };
+		globals::deferred->hiZ.GetSRV(), sliceTableSRV };
 	ctx->CSSetShaderResources(0, 4, srvs);
 
 	ID3D11Buffer* bucketCB = cullBucketCB->CB();

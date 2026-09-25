@@ -1,4 +1,5 @@
 #include "Feature.h"
+#include "Features/OcclusionCulling/OcclusionCulling.h"
 
 #include "FeatureIssues.h"
 #include "FeatureVersions.h"
@@ -263,7 +264,8 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::horizonFix,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
-		&globals::features::skin
+		&globals::features::skin,
+		OcclusionCulling::GetSingleton()
 	};
 
 	return features;

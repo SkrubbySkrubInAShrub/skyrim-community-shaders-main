@@ -15,6 +15,8 @@
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
 #include "Features/CSEditor.h"
+#include "Features/OcclusionCulling/HiZCull.h"
+#include "Features/OcclusionCulling/HiZReadback.h"
 
 #include "Hooks.h"
 
@@ -183,6 +185,8 @@ void Deferred::SetupResources()
 		directionalShadowLights = new Buffer(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
 		directionalShadowLights->CreateSRV(srvDesc);
 	}
+
+	hiZ.SetupResources();
 }
 
 void Deferred::ReflectionsPrepasses()
@@ -245,6 +249,26 @@ void Deferred::PrepassPasses()
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
+}
+
+bool Deferred::BuildHiZ()
+{
+	const auto frame = globals::game::graphicsState->frameCount;
+	if (hiZFrame == frame)
+		return hiZ.IsValid();
+	hiZFrame = frame;
+
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "Shared HiZ");
+
+	auto* device = globals::d3d::device;
+	auto* context = globals::d3d::context;
+	if (!hiZ.Build(device, context))
+		return false;
+
+	if (HiZCull::EnableOcclusionTesting)
+		HiZReadback::Update(device, context, hiZ);
+	return true;
 }
 
 void Deferred::StartDeferred()
@@ -581,6 +605,7 @@ void Deferred::ClearShaderCache()
 		mainCompositeInteriorCS->Release();
 		mainCompositeInteriorCS = nullptr;
 	}
+	hiZ.ClearShaderCache();
 }
 
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
@@ -692,6 +717,10 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 	auto depthCopy = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
 	context->CopyResource(depthCopy.texture, depth.texture);
+
+	// Opaque depth is complete and water has not touched it yet. A no-op if grass built it first.
+	if (HiZCull::EnableOcclusionTesting)
+		deferred->BuildHiZ();
 
 	// After this point, water starts rendering
 };
