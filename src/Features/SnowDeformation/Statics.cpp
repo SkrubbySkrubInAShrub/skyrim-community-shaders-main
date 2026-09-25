@@ -2190,6 +2190,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 	const uint32_t farRecordBase = captureCount * recordBlocks;
 	std::vector<StaticsCB> captureRecords(size_t(farRecordBase) + farCount);
+	// The largest depth the skin-depth raster can hold this frame: only road
+	// records write one (SnowHeightCapture), MAX-blended from a zero clear.
+	float maxSeedDepth = 0.0f;
 	// Owning references: the cache clears itself past 1,024 entries, and a
 	// raw pointer taken before that clear is a freed view by the time the
 	// loops bind it (Josef's driver-thread CTD, 2026-09-06).
@@ -2233,6 +2236,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// Objects carry no lift into the raster and cones; roads keep theirs.
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
+		maxSeedDepth = std::max(maxSeedDepth, std::max(scb.ObjectsDepth, scb.RoundedDepth));
 		scb.VertexCountF = vertexCountF;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = halfExtent;
@@ -2571,8 +2575,18 @@ void SnowDeformation::RenderObjectHeightMap()
 	// the leading 64 is the cone's world reach at the 4-unit texel; the
 	// trailing repeat keeps the pass count even.
 	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
-	// An even pass count is what lands each chain back in its own texture.
-	static_assert(std::size(kConeSteps) % 2 == 0);
+	// A pass can only lower a texel from a neighbour one step away plus the
+	// slope over that distance, and every value lies in [0, maxSeed]: a step
+	// reaching past maxSeed / slope is a no-op and is skipped. The margin
+	// keeps a boundary case on the safe side of the shader's own rounding.
+	auto activeConeSteps = [&](const HeightProcessCB& a_data, float a_maxSeed) {
+		std::vector<uint> steps;
+		const float texel = a_data.HeightHalfExtent * 2.0f / float(kHeightMapDim);
+		for (uint step : kConeSteps)
+			if (coneSkipDisabled || float(step) * texel * a_data.SlopePerUnit <= a_maxSeed * 1.001f)
+				steps.push_back(step);
+		return steps;
+	};
 
 	// Object snow cone: the same repose transform run over the OBJECT top
 	// raster, giving the skin's edge taper a ready-made snow surface to read.
@@ -2583,6 +2597,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
 		globals::profiler->BeginPass("SnowDeformation::Objects - Snow Slopes");
 		processData.ObjectSnowDepth = 0.1f;
+		const auto coarseSteps = activeConeSteps(processData, std::max(maxSeedDepth, processData.ObjectSnowDepth));
+		conePassesCoarse = uint32_t(coarseSteps.size());
+		// The chain lands back in its cone texture only over an even number of
+		// passes, the two settles included: an odd count seeds the scratch.
+		Texture2D* coarseSeed = (coarseSteps.size() % 2) ? heightScratch : objectSnowCone;
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
 		// InB (t1) = the skin-depth raster: the per-texel cone seed, so roads
@@ -2591,7 +2610,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11ShaderResourceView* seedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
 			heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
 		ID3D11ShaderResourceView* seedNextSRV = heightTop2Raw[heightCurrent] ? heightTop2Raw[heightCurrent]->srv.get() : nullptr;
-		ID3D11UnorderedAccessView* seedUAV = objectSnowCone->uav.get();
+		ID3D11UnorderedAccessView* seedUAV = coarseSeed->uav.get();
 		context->CSSetShaderResources(0, 2, seedSRVs);
 		context->CSSetShaderResources(3, 1, &seedNextSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &seedUAV, nullptr);
@@ -2622,11 +2641,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		};
 
 		// The repose chain over a seeded cone; it lands back in a_cone.
-		auto repose = [&](Texture2D* a_cone, HeightProcessCB& a_data) {
-			Texture2D* in = a_cone;
-			Texture2D* out = heightScratch;
+		auto repose = [&](Texture2D* a_cone, Texture2D* a_seeded, HeightProcessCB& a_data, const std::vector<uint>& a_steps) {
+			Texture2D* in = a_seeded;
+			Texture2D* out = a_seeded == a_cone ? heightScratch : a_cone;
 			context->CSSetShader(objectConeCS, nullptr, 0);
-			for (uint step : kConeSteps) {
+			for (uint step : a_steps) {
 				a_data.ConeStep = step;
 				heightProcessCB->Update(a_data);
 				ID3D11ShaderResourceView* passSRV = in->srv.get();
@@ -2640,7 +2659,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			}
 			settleCone(in, out);
 		};
-		repose(objectSnowCone, processData);
+		repose(objectSnowCone, coarseSeed, processData, coarseSteps);
 		globals::profiler->EndPass();
 
 		// The same seed + repose chain over the near clipmap's top, at one
@@ -2656,11 +2675,15 @@ void SnowDeformation::RenderObjectHeightMap()
 			HeightProcessCB fineData = processData;
 			fineData.HeightHalfExtent = FineRasterHalfExtent();
 			fineData.ConeStep = 1;
+			// InB is unbound here, so the seed is the constant alone.
+			const auto fineSteps = activeConeSteps(fineData, fineData.ObjectSnowDepth);
+			conePassesFine = uint32_t(fineSteps.size());
+			Texture2D* fineSeed = (fineSteps.size() % 2) ? heightScratch : objectSnowConeFine;
 			heightProcessCB->Update(fineData);
 			context->CSSetShader(objectConeSeedCS, nullptr, 0);
 			ID3D11ShaderResourceView* fineSeedSRVs[2] = { heightTopRawFine->srv.get(), nullptr };
 			ID3D11ShaderResourceView* fineNextSRV = heightTopRawFine->srv.get();
-			ID3D11UnorderedAccessView* fineSeedUAV = objectSnowConeFine->uav.get();
+			ID3D11UnorderedAccessView* fineSeedUAV = fineSeed->uav.get();
 			context->CSSetShaderResources(0, 2, fineSeedSRVs);
 			context->CSSetShaderResources(3, 1, &fineNextSRV);
 			context->CSSetUnorderedAccessViews(0, 1, &fineSeedUAV, nullptr);
@@ -2670,7 +2693,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetShaderResources(3, 1, nullCsSRVs);
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 
-			repose(objectSnowConeFine, fineData);
+			repose(objectSnowConeFine, fineSeed, fineData, fineSteps);
 			// The coarse chain's constants are what every later pass expects.
 			heightProcessCB->Update(processData);
 			globals::profiler->EndPass();

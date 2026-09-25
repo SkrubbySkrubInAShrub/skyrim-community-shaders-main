@@ -42,13 +42,36 @@ void SnowDeformation::CaptureShadowAtlas()
 		if (!shellShadowCastDebugOff && settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
-		globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
-		CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
-		globals::profiler->EndPass();
-		// Diagnostics: how many slices the copy carries (settings UI line).
-		if (shadowAtlasCopyTex) {
+		// Only the shells, the patch and the volume read the copy. Their
+		// verdicts are last frame's this early in the frame, so a bare-to-snow
+		// transition shades its first frame from the VSM path; the hold keeps
+		// a coat popping in and out from flapping between the two paths.
+		const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+		const bool staticsMayDraw = statCapturedStatics.load(std::memory_order_relaxed) > 0 || !capturedStatics.empty();
+		if (shellMayDraw || staticsMayDraw)
+			atlasCopyWantedFrames = kShellGateBareFrames;
+		else if (atlasCopyWantedFrames > 0)
+			atlasCopyWantedFrames--;
+		if (atlasCopyWantedFrames == 0) {
+			shadowAtlasCopySRV = nullptr;
+			shadowAtlasLiveSRV = nullptr;
+			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
+		} else if (shadowAtlasLiveBind) {
+			shadowAtlasLiveSRV = liveAtlasSRV;
+			shadowAtlasCopySRV = nullptr;
+			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
+		} else {
+			shadowAtlasLiveSRV = nullptr;
+			globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
+			CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
+			globals::profiler->EndPass();
+		}
+		// Diagnostics: how many slices the atlas carries (settings UI line).
+		winrt::com_ptr<ID3D11Resource> liveRes;
+		liveAtlasSRV->GetResource(liveRes.put());
+		if (auto liveTex = liveRes.try_as<ID3D11Texture2D>()) {
 			D3D11_TEXTURE2D_DESC atlasDesc;
-			shadowAtlasCopyTex->GetDesc(&atlasDesc);
+			liveTex->GetDesc(&atlasDesc);
 			dbgLodAtlasSlices = atlasDesc.ArraySize;
 		}
 	}
@@ -58,7 +81,7 @@ void SnowDeformation::CaptureShadowAtlas()
 	// missing/flickering shell shadows come with the answer attached.
 	static uint32_t shadowLogCount = 0;
 	static int lastValidState = -1;
-	int validState = shadowAtlasCopySRV ? 1 : 0;
+	int validState = ShadowAtlasSRV() ? 1 : 0;
 	if ((shadowLogCount < 6 || validState != lastValidState) && shadowLogCount < 40) {
 		shadowLogCount++;
 		lastValidState = validState;

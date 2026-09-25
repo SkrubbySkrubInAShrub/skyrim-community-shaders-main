@@ -1924,6 +1924,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttSssDbg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
 
+			ImGui::Checkbox(T(TKEY("shadow_atlas_live_bind"), "Read the Live Shadow Atlas (A/B)"), &shadowAtlasLiveBind);
+			if (auto _ttAtlasLive = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shadow_atlas_live_bind_tooltip"), "Measurement aid: the snow reads the sun's shadow maps directly instead of from the copy taken every frame (the Shadows - Atlas Copy row, 268 MB a frame at 8192). Exact only if nothing redraws those maps between the shadow mask pass and the snow. If shadows on snow go wrong with this on, the engine does."));
 			ImGui::Checkbox(T(TKEY("shell_shadow_cast_off"), "Skip Shell Sun Shadows (A/B)"), &shellShadowCastDebugOff);
 			if (auto _ttCastOff = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_shadow_cast_off_tooltip"), "A/B: the snow shell is not drawn into the sun shadow cascades this frame. Nothing else changes. If a shadow on an object vanishes with this on, the shell cast it."));
@@ -2111,6 +2114,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));
 
 
+			ImGui::Checkbox(T(TKEY("cone_skip_disabled"), "Run Every Cone Pass (A/B)"), &coneSkipDisabled);
+			if (auto _ttConeSkip = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("cone_skip_disabled_tooltip"), "Measurement aid: the object snow's slope passes spread snow down edges in steps of 64 down to 1 texel, and a step longer than the deepest snow divided by the slope cannot change anything. Normally those passes are skipped; tick to run all of them and A/B. Same result either way."));
+			WrapTextDisabledF("Cone passes run this frame: coarse %u, fine %u of 8", conePassesCoarse, conePassesFine);
 			ImGui::Checkbox(T(TKEY("statics_fine_level_disabled"), "Disable Near Detail Level"), &fineLevelDisabled);
 			if (auto _ttFineLevel = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("statics_fine_level_disabled_tooltip"), "The object height raster the skin's shape is read from covers 4096 units around the camera in 2048 texels, so one texel is 4 world units and no snow shape finer than that can exist. The near level rasterises the same objects a second time over 1024 units, where a texel is 1 unit, and the skin reads it wherever it reaches, fading back to the coarse map at the border. Tick to switch it off and A/B the shape. Cost is the ObjectHeightMapFine pass plus one cone chain."));

@@ -2242,6 +2242,13 @@ public:
 	/** @brief Full-resolution COPY of the game's raw sun-shadow cascade atlas, taken during the shadow-mask pass. The copy is mandatory: by deferred time the engine has reused the live target, and sampling it live produces garbage flicker. Taken after the shell is injected as a caster, so the snowfield receives its own banks' shadows; acne is held off by the caster's depth push. */
 	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
+	/** @brief Measurement, runtime-only: the shells read the live sun atlas instead of the per-frame copy. */
+	bool shadowAtlasLiveBind = false;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasLiveSRV;
+	/** @brief Frames the atlas copy stays wanted after the last frame something read it. */
+	uint32_t atlasCopyWantedFrames = 0;
+	/** @brief The atlas the crisp cascade shadows sample this frame, or null (the VSM path). */
+	ID3D11ShaderResourceView* ShadowAtlasSRV() const { return shadowAtlasLiveBind && shadowAtlasLiveSRV ? shadowAtlasLiveSRV.get() : shadowAtlasCopySRV.get(); }
 	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
 	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
 	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */
@@ -2722,6 +2729,11 @@ public:
 	bool FarLevelActive() const { return settings.RoadHeightfield && settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
 	bool fineLevelDisabled = false;
+	/** @brief Measurement, runtime-only: run every cone pass, including the ones the seed bound proves are no-ops. */
+	bool coneSkipDisabled = false;
+	/** @brief Cone passes the coarse / fine chains ran this frame (of kConeSteps). */
+	uint32_t conePassesCoarse = 0;
+	uint32_t conePassesFine = 0;
 	bool FineLevelOn() const { return !fineLevelDisabled && settings.ObjectSnowNearDetail; }
 	/** @brief Quality presets, Low (0) to Ultra (3); Ultra is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);

@@ -1399,7 +1399,7 @@ void SnowDeformation::DrawShell()
 	// Crisp shadows: full-resolution comparison PCF against the cascade-atlas
 	// copies taken at the shadow-mask pass. When the copies are missing this
 	// frame, the shader falls back to the blurred VSM path.
-	cbData.CrispShadows = shadowAtlasCopySRV ? 1.0f : 0.0f;
+	cbData.CrispShadows = ShadowAtlasSRV() ? 1.0f : 0.0f;
 	// Screen-Space Shadows availability: the feature clears its texture to
 	// WHITE every Prepass even when disabled, so multiplying is always safe
 	// once the texture exists.
@@ -1802,7 +1802,7 @@ void SnowDeformation::DrawShell()
 	// Raw shadow-atlas copy (t22) for crisp cascade shadows; the statics
 	// skin inherits it too.
 	if (cbData.CrispShadows > 0.5f) {
-		ID3D11ShaderResourceView* shadowAtlasSRV = shadowAtlasCopySRV.get();
+		ID3D11ShaderResourceView* shadowAtlasSRV = ShadowAtlasSRV();
 		context->PSSetShaderResources(22, 1, &shadowAtlasSRV);
 	}
 	// Screen-Space Shadows output (t45) for the shell + statics passes.
