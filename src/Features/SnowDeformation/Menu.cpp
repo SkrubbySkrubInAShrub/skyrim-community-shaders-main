@@ -1867,7 +1867,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
 			if (auto _ttDiag = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell now matches that split. The hardware's own choice of diagonal is assumed; if a checkerboard of sag shows on the 32-unit band around 1,600-1,900 units in the height-delta view, this toggle is the other guess."));
+				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals. Measured: the hardware splits an untessellated patch along the other diagonal than the shell assumed, so with this off those patches cross the ground's split; tick it to match. A checkerboard of sag on the 32-unit band around 1,600-1,900 units in the height-delta view is what it fixes."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);

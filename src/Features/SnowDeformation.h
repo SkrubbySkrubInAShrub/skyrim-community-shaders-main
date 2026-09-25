@@ -1474,7 +1474,7 @@ public:
 	void BuildTerrainFineWindow();
 	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
 	bool shellLandHeightDisabled = false;
-	/** @brief A/B: flips which corner rotation the tessellated patches use for a '/' land quad (bit 3). The tessellator's factor-1 diagonal is assumed to be domain (0,0)-(1,1); if the height-delta view shows a checkerboard of sag on the 32-unit band, this is the other guess. Runtime-only. */
+	/** @brief A/B: flips which corner rotation the tessellated patches use for a '/' land quad (bit 3). The rotation assumed the tessellator splits a factor-1 quad along domain (0,0)-(1,1); it splits along (1,0)-(0,1) (measured 2026-09-25, the flat-patch path's byte compare), so OFF puts factor-1 patches on the opposite diagonal to the land and ON matches it. Runtime-only. */
 	bool shellTessDiagonalFlip = false;
 	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
 	bool shellOldUnionJack = false;
