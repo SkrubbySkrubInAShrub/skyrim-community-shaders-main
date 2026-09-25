@@ -1871,6 +1871,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("shell_tess_target_px"), "Tessellation Target"), &shellTessTargetPx, 0.0f, 16.0f, shellTessTargetPx > 0.0f ? "%.0f px" : "off");
 			if (auto _ttTessTarget = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "A/B for trampled snow: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each. Off is today's distance-only rule. Higher is cheaper and softens the fine churn lumps on trampled floors first; trench and berm shapes hold. Measured on a trampled battlefield at 1720x720: 8 px took the snow shell from 2.87 to 2.24 ms."));
+			ImGui::Checkbox(T(TKEY("shell_churn_parallax"), "Churn Lumps by Parallax"), &shellChurnParallax);
+			if (auto _ttChurnParallax = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_churn_parallax_tooltip"), "A/B for trampled snow: the churn lumps and berm clods leave the geometry and are drawn by a short ray march in the pixel shader instead, so they need no small triangles. Seen from above they match the geometry. At low, grazing views they keep part of the lumpiness a high Tessellation Target smooths away, but not the lumps' outlines. Trench and berm shapes stay real geometry."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);

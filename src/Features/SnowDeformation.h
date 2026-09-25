@@ -1478,6 +1478,8 @@ public:
 	bool shellTessDiagonalUnflip = false;
 	/** @brief Runtime-only: the shell's deformation tessellation keeps no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). */
 	float shellTessTargetPx = 0.0f;
+	/** @brief Runtime-only A/B: churn and berm clods by parallax (ShellFlags bit 4). The shell geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
+	bool shellChurnParallax = false;
 	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
 	bool shellOldUnionJack = false;
 

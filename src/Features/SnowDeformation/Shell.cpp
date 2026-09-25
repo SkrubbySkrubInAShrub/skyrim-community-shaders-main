@@ -1329,9 +1329,10 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// shadow/probe passes.
 	a_cb.DeformMapOrigin = mapOrigin;
 	// Bit 0 horizon march, bit 1 hull frustum cull, bit 2 land-exact height
-	// off, bit 3 the tessellated patches' old, land-crossing diagonal.
+	// off, bit 3 the tessellated patches' old, land-crossing diagonal, bit 4
+	// churn by parallax, bit 5 far relief off.
 	a_cb.ShellFlags = { (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2) |
-							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalUnflip ? 8 : 0) | (shellFarTessDisabled ? 32 : 0),
+							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalUnflip ? 8 : 0) | (shellChurnParallax ? 16 : 0) | (shellFarTessDisabled ? 32 : 0),
 		0 };
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,

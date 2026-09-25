@@ -964,6 +964,40 @@ float ChurnNoise(float2 worldXY)
 	return ChurnNoiseScaled(worldXY, ChurnSizeScale);
 }
 
+float ChurnHeights(float2 worldXY, float churnAmp, float clodAmp)
+{
+	float h = churnAmp * ChurnNoise(worldXY);
+	[branch] if (clodAmp > 0.001)
+		h += clodAmp * ChurnNoiseScaled(worldXY, kClodSizeScale);
+	return h;
+}
+
+// Distance along the unit view ray (dir) from the sheet point to where it first
+// meets the churn and clod heights laid over the pixel's tangent plane (slope
+// g), searched from +h to -h around the plane and refined by secant.
+float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2 worldXY)
+{
+	float rise = dir.z - dot(dir.xy, g);
+	float hMax = churnAmp + clodAmp;
+	[branch] if (rise > -0.02)
+		return 0.0;
+	float span = -2.0 * hMax / rise;
+	float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
+	float dt = span / steps;
+	float prevT = hMax / rise;
+	float prevGap = hMax - ChurnHeights(worldXY + dir.xy * prevT, churnAmp, clodAmp);
+	[loop] for (float i = 1.0; i <= steps; i += 1.0)
+	{
+		float t = hMax / rise + dt * i;
+		float gap = rise * t - ChurnHeights(worldXY + dir.xy * t, churnAmp, clodAmp);
+		[branch] if (gap <= 0.0)
+			return lerp(prevT, t, prevGap / max(prevGap - gap, 1e-6));
+		prevT = t;
+		prevGap = gap;
+	}
+	return prevT;
+}
+
 // Class borders are hard edges in the baked depth/coverage data: a +30
 // snow class meeting a -5 mud class produces a ravine wall along the
 // texture seam. BorderNoise domain-warps where the border falls and
@@ -1341,12 +1375,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
-			depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD, GridOrigin + gridLocal) * saturate(depth / 10.0);
+			[branch] if ((ShellFlags.x & 16) == 0)
+				depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD, GridOrigin + gridLocal) * saturate(depth / 10.0);
 			// Berm clods: a coarser octave weighted by BermShape rather than
 			// the churn weight, since spoil lands on the crest and churn peaks
 			// in the trench. Masked like the berm and gated on material; the
 			// self-shadow march skips it, as it skips churn.
-			[branch] if (RimStyle.z > 0.01)
+			[branch] if (RimStyle.z > 0.01 && (ShellFlags.x & 16) == 0)
 				depth += ChurnNoiseScaled(GridOrigin + gridLocal, kClodSizeScale) * RimStyle.z *
 				         BermShape(bermD) * saturate(1.0 - deformation) * BermDepthGate(uncarved);
 		}
@@ -2583,6 +2618,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Churn gradient (same field the geometry displaces by).
 	float churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * saturate(pixelDepth / 10.0);
+	float clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
+	// Churn by parallax (ShellFlags bit 4): the geometry leaves the churn and
+	// clod heights out, so the ray is marched through them here and the point
+	// it meets is shaded. Depth-buffer work stays on the sheet.
+	float3 shadePos = input.WorldPos;
+	[branch] if ((ShellFlags.x & 16) != 0)
+	{
+		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
+		float churnAmp = (ChurnHeightAmp > 0.01 ? ChurnHeightAmp * churnW : 0.0) * fade;
+		float clodAmp = RimStyle.z * clodW * fade;
+		[branch] if (churnAmp + clodAmp > 0.05)
+		{
+			float3 dir = normalize(input.WorldPos);
+			float t = ChurnParallaxT(dir, gradZ, churnAmp, clodAmp, worldXYPS);
+			shadePos = input.WorldPos + dir * t;
+			worldXYPS += dir.xy * t;
+			gridLocal += dir.xy * t;
+		}
+	}
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
 	{
 		const float cStep = 3.0;
@@ -2596,7 +2650,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// P6 clod gradient (same field the VS displaces by; centre-weighted
 	// like the churn gradient - the clod frequency is far above the berm
 	// field's, so the noise gradient dominates).
-	float clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
 	[branch] if (clodW > 0.001)
 	{
 		const float kStep = 4.0;
@@ -2643,7 +2696,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// degrees, where any top-projection share boils as the camera moves. Side
 	// takes over fully by ~57 degrees.
 	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
-	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+	float snowWorldZAbs = shadePos.z + ShellCameraPosAdjust.z;
 	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
 	float2 snowSidePlane = snowSideDropsX ? float2(worldXYPS.y, snowWorldZAbs) : float2(worldXYPS.x, snowWorldZAbs);
 	// NO SnowUVOffset on the side plane, and a STATIC 4096-unit fold (exactly
@@ -2881,7 +2934,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float satNdotL = saturate(dot(normalWS, L));
 	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
 
-	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	float worldShadow = ShadowSampling::GetWorldShadow(shadePos, ShellCameraPosAdjust.xyz);
 	// Distant shadow softening: the far cascade's texels quantize into hard
 	// blocky patches on distant snow. The cascades must NOT be faded out;
 	// LOD trees cast into them and bare ground keeps their shadows at range;
@@ -2893,13 +2946,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(shadePos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
 		// Fallback: the Volumetric Shadows 512px VSM moments copy (blurry).
 		float detailedShadow;
-		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		float dynamicShadow = ShadowSampling::GetLightingShadow(shadePos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 
@@ -2919,7 +2972,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float sunLen2D = max(length(L.xy), 1e-4);
 		float sunTan = L.z / sunLen2D;
 		float2 stepDir = L.xy / sunLen2D;
-		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float surfZ = shadePos.z + ShellCameraPosAdjust.z;
 		// The receiver REBUILT the way the taps are, so what the reconstruction
 		// gets wrong - bilinear terrain against the triangulated mesh, the
 		// max-of-four object raster - cancels instead of standing as a false
@@ -3131,7 +3184,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	const float glintsHere = EnableGlints * (1.0 - saturate(bloodCover * 3.0));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
@@ -3155,7 +3208,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
+		SnowLights::AccumulatePointLights(snowMtl, shadePos, shadePos + ShellCameraPosAdjust.xyz,
 			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), directDiffuse, directSpecular);
 	}
 
@@ -3176,8 +3229,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// uses (ApplySkylighting passes the SCALED albedo).
 	[branch] if (SkylightingActive > 0.5)
 	{
-		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
+		sh2 skylightingSH = Skylighting::Sample(shadePos, normalWS);
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, shadePos, normalWS, landVertexAO);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
