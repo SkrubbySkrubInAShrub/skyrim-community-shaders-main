@@ -498,8 +498,50 @@ bool SnowDeformation::EnsureShellGridIndexBuffers()
 			return false;
 		}
 		Util::SetResourceName(shellGridIB[parity].get(), parity ? "SnowDeformation::ShellGridIB1" : "SnowDeformation::ShellGridIB0");
+
+		// Caster subset: castVis kills every vertex past 4900 u of the grid
+		// centre; the geomorph moves a vertex at most one band step first.
+		constexpr float kCasterRadius = 4900.0f + 256.0f;
+		std::vector<uint32_t> casterIndices;
+		casterIndices.reserve(indices.size() / 2);
+		for (uint y = 0; y < N; ++y) {
+			for (uint x = 0; x < N; ++x) {
+				bool inside = false;
+				for (uint cy = y; cy <= y + 1 && !inside; ++cy) {
+					for (uint cx = x; cx <= x + 1 && !inside; ++cx) {
+						const float ox = warpAxis(int(cx) - int(N / 2));
+						const float oy = warpAxis(int(cy) - int(N / 2));
+						inside = ox * ox + oy * oy <= kCasterRadius * kCasterRadius;
+					}
+				}
+				if (inside) {
+					const size_t q = (size_t(y) * N + x) * 6;
+					casterIndices.insert(casterIndices.end(), indices.begin() + q, indices.begin() + q + 6);
+				}
+			}
+		}
+		desc.ByteWidth = static_cast<UINT>(casterIndices.size() * sizeof(uint32_t));
+		init.pSysMem = casterIndices.data();
+		if (FAILED(globals::d3d::device->CreateBuffer(&desc, &init, shellGridCasterIB[parity].put()))) {
+			logger::error("SnowDeformation: shell caster index buffer {} creation failed", parity);
+			shellGridCasterIB[0] = nullptr;
+			shellGridCasterIB[1] = nullptr;
+		} else {
+			Util::SetResourceName(shellGridCasterIB[parity].get(), parity ? "SnowDeformation::ShellCasterIB1" : "SnowDeformation::ShellCasterIB0");
+			shellGridCasterIndexCount = static_cast<uint32_t>(casterIndices.size());
+		}
 	}
 	return true;
+}
+
+void SnowDeformation::DrawShellCasterGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb)
+{
+	if (shellCasterFullGrid || shellGridNonIndexed || !EnsureShellGridIndexBuffers() || !shellGridCasterIB[0] || !shellGridCasterIB[1]) {
+		DrawShellGrid(a_context, a_cb);
+		return;
+	}
+	a_context->IASetIndexBuffer(shellGridCasterIB[shellOldUnionJack ? 1 : 0].get(), DXGI_FORMAT_R32_UINT, 0);
+	a_context->DrawIndexed(shellGridCasterIndexCount, 0, 0);
 }
 
 void SnowDeformation::DrawShellGridIndexed(ID3D11DeviceContext* a_context, [[maybe_unused]] const ShellCB& a_cb)

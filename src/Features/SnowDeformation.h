@@ -1670,6 +1670,12 @@ public:
 	void DrawShellGridIndexed(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
 	void DrawShellGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
 	winrt::com_ptr<ID3D11Buffer> shellGridIB[2];
+	/** @brief The caster's subset per parity: quads with a corner inside the castVis kill radius (SnowShell.hlsl); the VS NaNs every vertex past it. */
+	winrt::com_ptr<ID3D11Buffer> shellGridCasterIB[2];
+	uint32_t shellGridCasterIndexCount = 0;
+	/** @brief A/B, runtime-only: cast from the whole grid. */
+	bool shellCasterFullGrid = false;
+	void DrawShellCasterGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
 	/** @brief A/B measurement: the non-indexed grid draws (SNOW_GRID_NONINDEXED VS variants) for reading what the index buffers are worth. Runtime-only. */
 	bool shellGridNonIndexed = false;
 	ID3D11VertexShader* shellVSNonIndexed = nullptr;

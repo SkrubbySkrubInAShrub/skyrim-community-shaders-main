@@ -584,7 +584,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (splitRow)
 			globals::profiler->BeginPass(kCasterGridRow[cascade]);
 		const ShellCB shadowCB = bindCascade(cascade);
-		DrawShellGrid(context, shadowCB);
+		DrawShellCasterGrid(context, shadowCB);
 		if (splitRow)
 			globals::profiler->EndPass();
 	}
