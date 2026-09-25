@@ -31,7 +31,7 @@ cbuffer StaticCB : register(b1)
 
 	float DebugSkinId;        // layout sync with SnowStaticsShell; unused here
 	float LegacySkin;         // layout sync with SnowStaticsShell; unused here
-	float MoundSteepness;     // layout sync with SnowStaticsShell; unused here
+	float padMoundSteepness;  // layout sync with SnowStaticsShell
 	float AlphaTested;  // layout sync with SnowStaticsShell; unused here
 
 	float FullCoat;

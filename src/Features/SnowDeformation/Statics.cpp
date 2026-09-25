@@ -1814,7 +1814,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ClearAll = heightMapValid ? 0u : 1u;
 	processData.HeightWindowCenter = newCenter;
 	processData.HeightHalfExtent = halfExtent;
-	processData.SlopePerUnit = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
+	processData.SlopePerUnit = kObjectConeSlope;
 	constexpr float shellCellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	processData.TerrainWindowOrigin = { shellWindowCellX * shellCellSize, shellWindowCellY * shellCellSize };
 	processData.TerrainTexelSize = kShellVertexSpacing;
@@ -2620,7 +2620,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
 	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
-	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road) ? 1.0f : 0.0f;
 	a_scb.ProjThreshold = a_cap.projThreshold;
 	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;

@@ -537,8 +537,6 @@ public:
 		float SnowBorderSmoothness = 16.0f;
 		/** @brief Border Fade, as a percent. Remapped to the internal 2..64 contact-term band on upload; it mainly sets how visible the outward dust is. */
 		float SnowBorderFade = 100.0f;
-		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
-		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
@@ -2378,8 +2376,8 @@ public:
 		float DebugSkinId;
 		/** @brief >0.5: this draw keeps the tuned pre-rework skin behaviour (road and bridge meshes); set from the capture's road flag. */
 		float LegacySkin;
-		/** @brief Angle of repose (1.0 = 45 degrees) from SnowMoundSteepness; sets how far inside the silhouette the lift tapers out. */
-		float MoundSteepness;
+		/** @brief was MoundSteepness (Mound Steepness, retired 2026-09-25); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float padMoundSteepness;
 		/** @brief was ObjectTrenches (Trenches on Objects, retired 2026-09-10; roads carve through LegacySkin); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		/** @brief >0.5: the mesh alpha-tests (a thatch fringe, a plank end); the skin keeps only pixels coincident with the scene surface, so it never spans the texels the game discarded. Took the retired ObjectTrenches row. */
 		float AlphaTested;
@@ -2705,6 +2703,8 @@ public:
 	// Dim and half-extent move together: the 4-unit texel is baked into
 	// kHeightTexel in SnowStaticsShell.hlsl.
 	static constexpr uint kHeightMapDim = 2048;
+	/** @brief Repose slope of the object snow cone (rise per world unit); sets the road verge bank down to a shallower landscape class. The retired Mound Steepness at its last default. */
+	static constexpr float kObjectConeSlope = 3.0f;
 	static constexpr float kHeightMapHalfExtent = 4096.0f;
 	/** @brief The live half-extent: Settings::ObjectRasterReachM in world units. Every window fill, texel derivation and shader mirror must take it from here - the texel size is derived from it, so a call site left on the constant addresses a different grid. */
 	float ObjectRasterHalfExtent() const { return std::clamp(settings.ObjectRasterReachM, 29.0f, 234.0f) * kUnitsPerMeter; }
@@ -2878,7 +2878,7 @@ public:
 
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
-		/** @brief Max field rise per world unit (1.0 = 45 degrees), from SnowMoundSteepness. */
+		/** @brief Max cone rise per world unit (1.0 = 45 degrees): kObjectConeSlope. */
 		float SlopePerUnit;
 
 		/** @brief Terrain window addressing so the compute passes can sample ground heights. */

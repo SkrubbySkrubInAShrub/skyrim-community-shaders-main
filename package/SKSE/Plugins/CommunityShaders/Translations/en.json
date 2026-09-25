@@ -1572,8 +1572,6 @@
     "feature.snow_deformation.menu_experimental": "Experimental",
     "feature.snow_deformation.model_depths": "Object Snow",
     "feature.snow_deformation.model_depths_tooltip": "Object snow: the recolor of the game's projected snow and the dials that shape the drape over it. Flat vs round is classified automatically per mesh.",
-    "feature.snow_deformation.mound_steepness": "Mound Steepness",
-    "feature.snow_deformation.mound_steepness_tooltip": "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds.",
     "feature.snow_deformation.multipass_snow_follows_paint": "Multipass Snow Follows Paint",
     "feature.snow_deformation.multipass_snow_follows_paint_tooltip": "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included.",
     "feature.snow_deformation.name": "Snow Deformation",

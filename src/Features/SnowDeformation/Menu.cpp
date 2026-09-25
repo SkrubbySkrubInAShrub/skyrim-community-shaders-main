@@ -935,10 +935,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttTf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trench_floor_tooltip"), "Snow left under a fully trampled trench, as a fraction of the snow depth there: 0.33 keeps a third, so walking through 30 units of snow leaves 10 around your foot instead of a canyon to the ground, and road snow never wears through to the road. 0 carves to the terrain."));
 
-			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
-			if (auto _ttSteep = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
-
 			ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
 			if (auto _ttFloat = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Far field only. Inside the contact window (22 m) an actor carves by its render mesh, and anything that hovers reaches no snow by construction; this gate covers the bone path beyond it. Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));

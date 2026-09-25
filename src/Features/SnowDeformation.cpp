@@ -114,7 +114,6 @@
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \
 	X(SnowBorderFade) \
-	X(SnowMoundSteepness) \
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
 	X(Tessellation) \

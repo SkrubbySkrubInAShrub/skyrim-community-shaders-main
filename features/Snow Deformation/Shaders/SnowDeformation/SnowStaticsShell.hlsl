@@ -224,8 +224,8 @@ cbuffer StaticCB : register(b1)
 	// >0.5: keep the tuned pre-rework skin behaviour (road and bridge meshes).
 	float LegacySkin;
 
-	// Angle of repose (1.0 = 45 degrees); sets the edge taper width.
-	float MoundSteepness;
+	// was MoundSteepness (Mound Steepness, retired). Slot kept for layout.
+	float padMoundSteepness;
 
 	// was ObjectTrenches (Trenches on Objects, retired); roads carve through
 	// LegacySkin. Slot kept for layout.
@@ -1864,7 +1864,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// The field is seeded with the deepest class in play, so normalizing
 		// by that recovers distance-to-rim: 0 at the rim, 1 in the interior.
 		float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-		float steep = clamp(MoundSteepness, 0.5, 3.0);
 		rimT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
 		// Cornice for EVERY class (P2, edge-research study): full depth
 		// carried to within kCorniceRoll units of the rim, quarter-circle
@@ -1875,7 +1874,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// exceeds thin features at deep settings. Where the ramp is narrower
 		// than the roll, rollFrac saturates and the fillet spans the whole
 		// ramp - it degrades to the dome profile, never to a spike.
-		float rollFrac = saturate(kCorniceRoll * steep / coneSeed);
+		float rollFrac = saturate(kCorniceRoll / coneSeed);
 		float u = saturate(rimT / max(rollFrac, 1e-3));
 		float toRim = 1.0 - u;
 		rimT = u;
