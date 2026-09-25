@@ -3312,6 +3312,20 @@ public:
 	uint32_t doorRefreshCounter = 0;
 	/** @brief Cadence-gathered exclusions (doors, campfires, heat sources, dropped burning torches). */
 	std::vector<std::pair<float4, float4>> staticExclusions;
+	/** @brief The walk in progress: its accumulators, the loaded-cell slot it resumes at (0 = idle), and the origin it was started from. Swapped into staticExclusions whole when the last slot is done. */
+	std::vector<std::pair<float4, float4>> exclusionPending;
+	std::vector<size_t> exclusionPendingFlames;
+	std::vector<float4> exclusionPendingGuards;
+	uint32_t exclusionPendingTrample = 0;
+	uint32_t exclusionPendingSealed = 0;
+	uint32_t exclusionGatherSlot = 0;
+	uint32_t exclusionGatherSlots = 0;
+	bool exclusionGatherInterior = false;
+	RE::NiPoint3 exclusionGatherOrigin;
+	void StartExclusionGather();
+	void StepExclusionGather();
+	RE::BSContainer::ForEachResult ExclusionVisit(RE::TESObjectREFR* a_ref);
+	void FinishExclusionGather();
 	/** @brief Survival Mode's Survival_WarmUpObjectsList when the plugin is present: base objects that count as heat sources. */
 	RE::BGSListForm* survivalHeatSources = nullptr;
 	bool survivalHeatSourcesResolved = false;

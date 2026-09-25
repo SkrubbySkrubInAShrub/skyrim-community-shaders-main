@@ -1800,254 +1800,23 @@ void SnowDeformation::RenderObjectHeightMap()
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
 
-	// Exclusion zones. Static sources (doors, campfires, heat sources,
-	// dropped torches) refresh once a second and at once on a window jump
-	// (load, teleport, reach change); walking scrolls the window nearly
-	// every frame and the gather walks every loaded reference. Heat
-	// sources come from Survival Mode's warm-up-objects formlist when the
-	// plugin is present, plus model-path matching that also covers
-	// non-Survival installs.
+	// Exclusion zones. Static sources (campfires, heat sources, dropped
+	// torches, workspaces, sealed containers) come from a walk over every
+	// loaded reference: started once a second and at once on a window jump
+	// (load, teleport, reach change), spread over the following frames a
+	// few cells at a time, swapped in whole when it ends. Heat sources come
+	// from Survival Mode's warm-up-objects formlist when the plugin is
+	// present, plus model-path matching that also covers non-Survival
+	// installs.
 	constexpr int kGatherJumpTexels = 32;
 	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
 	const bool windowJumped = processData.ClearAll != 0 ||
 	                          std::abs(processData.ScrollDelta.x) > kGatherJumpTexels || std::abs(processData.ScrollDelta.y) > kGatherJumpTexels;
-	if (windowJumped || (exclusionGatherEveryScroll && windowScrolled) || (doorRefreshCounter++ % 60) == 0) {
+	if (windowJumped || (exclusionGatherEveryScroll && windowScrolled) || (doorRefreshCounter++ % 60) == 0)
+		StartExclusionGather();
+	{
 		ScopedTicks _gatherTicks(cpuCensus.spanTicks[CpuCensus::kSpanExclusionGather], cpuCensus.spanCalls[CpuCensus::kSpanExclusionGather]);
-		if (!survivalHeatSourcesResolved) {
-			survivalHeatSourcesResolved = true;
-			if (auto* dataHandler = RE::TESDataHandler::GetSingleton())
-				survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
-		}
-		staticExclusions.clear();
-		uint32_t gatherTrampleCount = 0;
-		uint32_t gatherSealedCount = 0;
-		// Generic-flame entries by exclusion index, and the footprints of
-		// stations that own their flames (smelters, forges): a flame inside
-		// such a station must not add a melt spot on top of the
-		// slider-controlled workspace clearing.
-		std::vector<size_t> flameIndices;
-		std::vector<float4> stationFlameGuards;
-		if (auto player = RE::PlayerCharacter::GetSingleton()) {
-			if (auto tes = RE::TES::GetSingleton()) {
-				// Reaches the WIDE field's window, not just the near mask's: a
-				// campfire only shows at 200 m if it was gathered at 200 m.
-				// References exist only inside loaded cells, so this is bounded by
-				// uGridsToLoad rather than by the radius.
-				tes->ForEachReferenceInRange(player, kExclusionFieldHalfExtent + 512.0f,
-					[&](RE::TESObjectREFR* a_ref) {
-						// Collect past the CB cap: the nearest-first sort below
-						// picks the winners, so a far sconce can never evict a
-						// near door. 4x cap bounds the pathological case.
-						if (staticExclusions.size() >= kMaxExclusions * 4)
-							return RE::BSContainer::ForEachResult::kStop;
-						if (!a_ref || a_ref->IsDisabled() || !a_ref->Is3DLoaded())
-							return RE::BSContainer::ForEachResult::kContinue;
-						auto* base = a_ref->GetBaseObject();
-						if (!base)
-							return RE::BSContainer::ForEachResult::kContinue;
-
-						// Doors: REMOVED per round-248 verdict. They were the
-						// only coverage-kill (bare ground) system left, their
-						// ellipse is large, and elevated doors (porch decks)
-						// project it straight down onto the ground below
-						// through the 300-unit z-gate. The suppress channel and
-						// the shader ellipse stay for a better-scoped revisit.
-						if (base->Is(RE::FormType::Door))
-							return RE::BSContainer::ForEachResult::kContinue;
-
-						// Dropped torches: carryable light references melt where
-						// they lie - but only while actually BURNING. Torch-
-						// snuffing mods keep the light base on the dropped ref
-						// while removing its attached flame light; those still
-						// trench as props, they just stop melting.
-						if (auto* light = base->As<RE::TESObjectLIGH>(); light && light->CanBeCarried()) {
-							if (HasActiveLight(a_ref->Get3D())) {
-								auto pos = a_ref->GetPosition();
-								staticExclusions.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
-							}
-							return RE::BSContainer::ForEachResult::kContinue;
-						}
-
-						// Explicit form-type chain: skyrim_cast to TESModel
-						// silently returns null for activator bases, which
-						// makes campfires invisible to the gather.
-						const char* modelPath = nullptr;
-						if (auto* acti = base->As<RE::TESObjectACTI>())
-							modelPath = acti->GetModel();
-						else if (auto* stat = base->As<RE::TESObjectSTAT>())
-							modelPath = stat->GetModel();
-						else if (auto* movable = base->As<RE::BGSMovableStatic>())
-							modelPath = movable->GetModel();
-						// Classification order: named heat (model table / flames),
-						// then the workspace table, then the Survival warm-up
-						// formlist LAST - patched warm-up lists add workstations
-						// (grindstones, anvils...), and those must stay
-						// slider-controlled workspaces, not fixed heat spots.
-						float heatRadius = 0.0f;
-						bool genericFlame = false;
-						std::string lowered;
-						if (modelPath && modelPath[0]) {
-							lowered.assign(modelPath);
-							std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-								[](unsigned char c) { return (char)std::tolower(c); });
-							if (lowered.find("torchbug") == std::string::npos) {
-								if (lowered.find("fxfire") != std::string::npos) {
-									genericFlame = true;
-								} else {
-									for (const auto& spec : kHeatSpecs) {
-										if (lowered.find(spec.substring) != std::string::npos) {
-											heatRadius = spec.radius;
-											break;
-										}
-									}
-								}
-							}
-						}
-						if (heatRadius > 0.0f || genericFlame) {
-							auto pos = a_ref->GetPosition();
-							if (genericFlame) {
-								// Grounded flame = open fire; raised flame
-								// (brazier bowl, wall fire) melts a small spot
-								// on the ground below.
-								float landZ = pos.z;
-								tes->GetLandHeight(pos, landZ);
-								heatRadius = pos.z - landZ < kGroundFireBand ? kFireClearRadius : kRaisedFlameClearRadius;
-							}
-							heatRadius *= a_ref->GetScale();
-							if (genericFlame)
-								flameIndices.push_back(staticExclusions.size());
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
-							return RE::BSContainer::ForEachResult::kContinue;
-						}
-
-						// Workspace clearings: the shell only ever forms to
-						// partial depth around worked spots (workstations,
-						// stalls, wells, shrines) - a melt bowl centered toward
-						// the working side; real trampling carves the rest. A
-						// full pre-trampled look via the deformation map read
-						// as mini mountains and was replaced by this.
-						// TESFurniture derives from TESObjectACTI, so the model
-						// chain above already reached every workstation.
-						if (!lowered.empty()) {
-							for (const auto& spec : kTrampleSpecs) {
-								if (lowered.find(spec.substring) != std::string::npos) {
-									auto pos = a_ref->GetPosition();
-									float angleZ = a_ref->GetAngleZ();
-									float scale = a_ref->GetScale();
-									float zoneScale = std::max(settings.TrampleZoneScale, 0.0f);
-									const float meltStrength = spec.meltStrength > 0.0f ?
-								                                   spec.meltStrength :
-								                                   1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f;
-									// Elongation axis rides the facing (length =
-									// aspect - 1; zero = circle); type 2 = smooth
-									// bowl edge for bedding.
-									const float elongation = std::max(spec.aspect, 1.0f) - 1.0f;
-									staticExclusions.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
-																	 pos.y + std::cos(angleZ) * spec.forwardBias * scale,
-																	 pos.z, spec.radius * scale * zoneScale },
-										{ std::sin(angleZ) * elongation, std::cos(angleZ) * elongation, meltStrength,
-											spec.smoothEdge ? 2.0f : 1.0f } });
-									gatherTrampleCount++;
-									// Physical footprint, NOT slider-scaled: the
-									// flame sits inside the structure no matter
-									// how small the clearing is tuned.
-									if (spec.ownsFlames)
-										stationFlameGuards.push_back({ pos.x, pos.y, pos.z, spec.radius * scale * 0.5f });
-									return RE::BSContainer::ForEachResult::kContinue;
-								}
-							}
-						}
-
-						// Sealed containers (draugr sarcophagi): an oriented
-						// rectangle that kills coverage inside the footprint,
-						// so an opened coffin is bare rather than holding a
-						// sheet of snow it could not have collected. Placed
-						// after the tables above because a sarcophagus matches
-						// neither: they melt depth, this one suppresses.
-						if (!lowered.empty()) {
-							bool sealed = false;
-							for (const char* substring : kSealedContainerSubstrings)
-								sealed |= lowered.find(substring) != std::string::npos;
-							auto* sealedBound = sealed ? base->As<RE::TESBoundObject>() : nullptr;
-							if (sealedBound) {
-								const auto& bounds = sealedBound->boundData;
-								const float scale = a_ref->GetScale();
-								const float halfX = (bounds.boundMax.x - bounds.boundMin.x) * 0.5f * scale;
-								const float halfY = (bounds.boundMax.y - bounds.boundMin.y) * 0.5f * scale;
-								// A degenerate bound would collapse the rectangle
-								// to a line and clear nothing; skip rather than
-								// substitute a guessed size.
-								if (halfX >= 1.0f && halfY >= 1.0f) {
-									const float angleZ = a_ref->GetAngleZ();
-									const float sinZ = std::sin(angleZ), cosZ = std::cos(angleZ);
-									// Bounds are model-space and need not straddle
-									// the origin, so the box CENTRE rides the ref's
-									// own rotation (+Y is the facing, matching the
-									// workspace forward bias above).
-									const float localX = (bounds.boundMax.x + bounds.boundMin.x) * 0.5f * scale;
-									const float localY = (bounds.boundMax.y + bounds.boundMin.y) * 0.5f * scale;
-									auto pos = a_ref->GetPosition();
-									staticExclusions.push_back({ { pos.x + localX * cosZ + localY * sinZ,
-																	 pos.y - localX * sinZ + localY * cosZ,
-																	 pos.z, halfX },
-										{ sinZ, cosZ, halfY, 3.0f } });
-									gatherSealedCount++;
-								}
-								return RE::BSContainer::ForEachResult::kContinue;
-							}
-						}
-
-						// Survival warm-up formlist: heat neither table named.
-						// Modest circle when grounded (the list also holds
-						// candelabras), footprint-sized spot when raised.
-						if (survivalHeatSources && survivalHeatSources->HasForm(base)) {
-							float halfExtent = 20.0f;
-							if (auto* bound = base->As<RE::TESBoundObject>()) {
-								float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
-								float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
-								halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
-							}
-							auto pos = a_ref->GetPosition();
-							float landZ = pos.z;
-							tes->GetLandHeight(pos, landZ);
-							float radius = pos.z - landZ < kGroundFireBand ? kUnknownHeatClearRadius :
-						                                                     std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
-							staticExclusions.push_back({ { pos.x, pos.y, pos.z, radius * a_ref->GetScale() }, { 0.0f, 0.0f, 1.0f, 1.0f } });
-						}
-						return RE::BSContainer::ForEachResult::kContinue;
-					});
-
-				// Drop flame melt spots that sit inside a flame-owning station
-				// (descending index order keeps the remaining indices valid).
-				if (!stationFlameGuards.empty() && !flameIndices.empty()) {
-					for (auto it = flameIndices.rbegin(); it != flameIndices.rend(); ++it) {
-						const auto& flame = staticExclusions[*it].first;
-						for (const auto& guard : stationFlameGuards) {
-							const float dx = flame.x - guard.x, dy = flame.y - guard.y;
-							if (dx * dx + dy * dy < guard.w * guard.w && std::abs(flame.z - guard.z) < 300.0f) {
-								staticExclusions.erase(staticExclusions.begin() + *it);
-								break;
-							}
-						}
-					}
-				}
-
-				statTrampleCount = gatherTrampleCount;
-				statSealedCount = gatherSealedCount;
-
-				// Overflow: keep the sources nearest the player.
-				if (staticExclusions.size() > kMaxExclusions) {
-					const auto playerPos = player->GetPosition();
-					std::partial_sort(staticExclusions.begin(), staticExclusions.begin() + kMaxExclusions, staticExclusions.end(),
-						[&](const auto& a_lhs, const auto& a_rhs) {
-							const float lhsDx = a_lhs.first.x - playerPos.x, lhsDy = a_lhs.first.y - playerPos.y;
-							const float rhsDx = a_rhs.first.x - playerPos.x, rhsDy = a_rhs.first.y - playerPos.y;
-							return lhsDx * lhsDx + lhsDy * lhsDy < rhsDx * rhsDx + rhsDy * rhsDy;
-						});
-					staticExclusions.resize(kMaxExclusions);
-				}
-			}
-		}
+		StepExclusionGather();
 	}
 
 	// Upload after each gather. Carried torches deliberately do NOT melt:
@@ -5984,4 +5753,296 @@ void SnowDeformation::ServiceLandTriProbe()
 	landTriProbe.pending = false;
 	landTriProbe.vbStaging = nullptr;
 	landTriProbe.ibStaging = nullptr;
+}
+
+// Mirrors RE::TES::ForEachReferenceInRange: the interior cell alone, or the
+// loaded grid (x outer, y inner, attached cells whose square meets the
+// radius) and then the sky cell. Slot i is one of those cells.
+void SnowDeformation::StartExclusionGather()
+{
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* tes = RE::TES::GetSingleton();
+	if (!player || !tes) {
+		exclusionGatherSlot = 0;
+		return;
+	}
+	if (!survivalHeatSourcesResolved) {
+		survivalHeatSourcesResolved = true;
+		if (auto* dataHandler = RE::TESDataHandler::GetSingleton())
+			survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
+	}
+	exclusionPending.clear();
+	exclusionPendingFlames.clear();
+	exclusionPendingGuards.clear();
+	exclusionPendingTrample = 0;
+	exclusionPendingSealed = 0;
+	exclusionGatherOrigin = player->GetPosition();
+	exclusionGatherInterior = tes->interiorCell != nullptr;
+	const uint32_t gridLength = tes->gridCells ? tes->gridCells->length : 0;
+	exclusionGatherSlots = exclusionGatherInterior ? 1 : gridLength * gridLength + 1;
+	exclusionGatherSlot = 1;
+}
+
+void SnowDeformation::StepExclusionGather()
+{
+	if (exclusionGatherSlot == 0)
+		return;
+	auto* tes = RE::TES::GetSingleton();
+	if (!tes || (tes->interiorCell != nullptr) != exclusionGatherInterior) {
+		exclusionGatherSlot = 0;
+		return;
+	}
+	// Reaches the WIDE field's window, not just the near mask's: a campfire
+	// only shows at 200 m if it was gathered at 200 m.
+	const float radius = kExclusionFieldHalfExtent + 512.0f;
+	const auto& origin = exclusionGatherOrigin;
+	auto visit = [this](RE::TESObjectREFR* a_ref) { return ExclusionVisit(a_ref); };
+	// Whole walk in one frame under the A/B; otherwise done within ~50 frames.
+	const uint32_t perStep = exclusionGatherEveryScroll ? exclusionGatherSlots : std::max(1u, (exclusionGatherSlots + 49) / 50);
+	const uint32_t gridLength = tes->gridCells ? tes->gridCells->length : 0;
+	for (uint32_t n = 0; n < perStep && exclusionGatherSlot <= exclusionGatherSlots; n++, exclusionGatherSlot++) {
+		const uint32_t i = exclusionGatherSlot - 1;
+		if (exclusionGatherInterior) {
+			if (tes->interiorCell)
+				tes->interiorCell->ForEachReferenceInRange(origin, radius, visit);
+		} else if (i < gridLength * gridLength) {
+			auto* cell = tes->gridCells->GetCell(i / gridLength, i % gridLength);
+			if (cell && cell->IsAttached()) {
+				if (const auto* coords = cell->GetCoordinates()) {
+					if (coords->worldX < origin.x + radius && coords->worldX + 4096.0f > origin.x - radius &&
+						coords->worldY < origin.y + radius && coords->worldY + 4096.0f > origin.y - radius)
+						cell->ForEachReferenceInRange(origin, radius, visit);
+				}
+			}
+		} else if (auto* worldSpace = tes->GetRuntimeData2().worldSpace) {
+			if (auto* skyCell = worldSpace->GetSkyCell())
+				skyCell->ForEachReferenceInRange(origin, radius, visit);
+		}
+	}
+	if (exclusionGatherSlot > exclusionGatherSlots) {
+		FinishExclusionGather();
+		exclusionGatherSlot = 0;
+	}
+}
+
+RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR* a_ref)
+{
+	auto* tes = RE::TES::GetSingleton();
+	// Collect past the CB cap: the nearest-first sort below
+	// picks the winners, so a far sconce can never evict a
+	// near door. 4x cap bounds the pathological case.
+	if (exclusionPending.size() >= kMaxExclusions * 4)
+		return RE::BSContainer::ForEachResult::kStop;
+	if (!a_ref || a_ref->IsDisabled() || !a_ref->Is3DLoaded())
+		return RE::BSContainer::ForEachResult::kContinue;
+	auto* base = a_ref->GetBaseObject();
+	if (!base)
+		return RE::BSContainer::ForEachResult::kContinue;
+
+	// Doors: REMOVED per round-248 verdict. They were the
+	// only coverage-kill (bare ground) system left, their
+	// ellipse is large, and elevated doors (porch decks)
+	// project it straight down onto the ground below
+	// through the 300-unit z-gate. The suppress channel and
+	// the shader ellipse stay for a better-scoped revisit.
+	if (base->Is(RE::FormType::Door))
+		return RE::BSContainer::ForEachResult::kContinue;
+
+	// Dropped torches: carryable light references melt where
+	// they lie - but only while actually BURNING. Torch-
+	// snuffing mods keep the light base on the dropped ref
+	// while removing its attached flame light; those still
+	// trench as props, they just stop melting.
+	if (auto* light = base->As<RE::TESObjectLIGH>(); light && light->CanBeCarried()) {
+		if (HasActiveLight(a_ref->Get3D())) {
+			auto pos = a_ref->GetPosition();
+			exclusionPending.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
+		}
+		return RE::BSContainer::ForEachResult::kContinue;
+	}
+
+	// Explicit form-type chain: skyrim_cast to TESModel
+	// silently returns null for activator bases, which
+	// makes campfires invisible to the gather.
+	const char* modelPath = nullptr;
+	if (auto* acti = base->As<RE::TESObjectACTI>())
+		modelPath = acti->GetModel();
+	else if (auto* stat = base->As<RE::TESObjectSTAT>())
+		modelPath = stat->GetModel();
+	else if (auto* movable = base->As<RE::BGSMovableStatic>())
+		modelPath = movable->GetModel();
+	// Classification order: named heat (model table / flames),
+	// then the workspace table, then the Survival warm-up
+	// formlist LAST - patched warm-up lists add workstations
+	// (grindstones, anvils...), and those must stay
+	// slider-controlled workspaces, not fixed heat spots.
+	float heatRadius = 0.0f;
+	bool genericFlame = false;
+	std::string lowered;
+	if (modelPath && modelPath[0]) {
+		lowered.assign(modelPath);
+		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		if (lowered.find("torchbug") == std::string::npos) {
+			if (lowered.find("fxfire") != std::string::npos) {
+				genericFlame = true;
+			} else {
+				for (const auto& spec : kHeatSpecs) {
+					if (lowered.find(spec.substring) != std::string::npos) {
+						heatRadius = spec.radius;
+						break;
+					}
+				}
+			}
+		}
+	}
+	if (heatRadius > 0.0f || genericFlame) {
+		auto pos = a_ref->GetPosition();
+		if (genericFlame) {
+			// Grounded flame = open fire; raised flame
+			// (brazier bowl, wall fire) melts a small spot
+			// on the ground below.
+			float landZ = pos.z;
+			tes->GetLandHeight(pos, landZ);
+			heatRadius = pos.z - landZ < kGroundFireBand ? kFireClearRadius : kRaisedFlameClearRadius;
+		}
+		heatRadius *= a_ref->GetScale();
+		if (genericFlame)
+			exclusionPendingFlames.push_back(exclusionPending.size());
+		exclusionPending.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
+		return RE::BSContainer::ForEachResult::kContinue;
+	}
+
+	// Workspace clearings: the shell only ever forms to
+	// partial depth around worked spots (workstations,
+	// stalls, wells, shrines) - a melt bowl centered toward
+	// the working side; real trampling carves the rest. A
+	// full pre-trampled look via the deformation map read
+	// as mini mountains and was replaced by this.
+	// TESFurniture derives from TESObjectACTI, so the model
+	// chain above already reached every workstation.
+	if (!lowered.empty()) {
+		for (const auto& spec : kTrampleSpecs) {
+			if (lowered.find(spec.substring) != std::string::npos) {
+				auto pos = a_ref->GetPosition();
+				float angleZ = a_ref->GetAngleZ();
+				float scale = a_ref->GetScale();
+				float zoneScale = std::max(settings.TrampleZoneScale, 0.0f);
+				const float meltStrength = spec.meltStrength > 0.0f ?
+			                                   spec.meltStrength :
+			                                   1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f;
+				// Elongation axis rides the facing (length =
+				// aspect - 1; zero = circle); type 2 = smooth
+				// bowl edge for bedding.
+				const float elongation = std::max(spec.aspect, 1.0f) - 1.0f;
+				exclusionPending.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
+												 pos.y + std::cos(angleZ) * spec.forwardBias * scale,
+												 pos.z, spec.radius * scale * zoneScale },
+					{ std::sin(angleZ) * elongation, std::cos(angleZ) * elongation, meltStrength,
+						spec.smoothEdge ? 2.0f : 1.0f } });
+				exclusionPendingTrample++;
+				// Physical footprint, NOT slider-scaled: the
+				// flame sits inside the structure no matter
+				// how small the clearing is tuned.
+				if (spec.ownsFlames)
+					exclusionPendingGuards.push_back({ pos.x, pos.y, pos.z, spec.radius * scale * 0.5f });
+				return RE::BSContainer::ForEachResult::kContinue;
+			}
+		}
+	}
+
+	// Sealed containers (draugr sarcophagi): an oriented
+	// rectangle that kills coverage inside the footprint,
+	// so an opened coffin is bare rather than holding a
+	// sheet of snow it could not have collected. Placed
+	// after the tables above because a sarcophagus matches
+	// neither: they melt depth, this one suppresses.
+	if (!lowered.empty()) {
+		bool sealed = false;
+		for (const char* substring : kSealedContainerSubstrings)
+			sealed |= lowered.find(substring) != std::string::npos;
+		auto* sealedBound = sealed ? base->As<RE::TESBoundObject>() : nullptr;
+		if (sealedBound) {
+			const auto& bounds = sealedBound->boundData;
+			const float scale = a_ref->GetScale();
+			const float halfX = (bounds.boundMax.x - bounds.boundMin.x) * 0.5f * scale;
+			const float halfY = (bounds.boundMax.y - bounds.boundMin.y) * 0.5f * scale;
+			// A degenerate bound would collapse the rectangle
+			// to a line and clear nothing; skip rather than
+			// substitute a guessed size.
+			if (halfX >= 1.0f && halfY >= 1.0f) {
+				const float angleZ = a_ref->GetAngleZ();
+				const float sinZ = std::sin(angleZ), cosZ = std::cos(angleZ);
+				// Bounds are model-space and need not straddle
+				// the origin, so the box CENTRE rides the ref's
+				// own rotation (+Y is the facing, matching the
+				// workspace forward bias above).
+				const float localX = (bounds.boundMax.x + bounds.boundMin.x) * 0.5f * scale;
+				const float localY = (bounds.boundMax.y + bounds.boundMin.y) * 0.5f * scale;
+				auto pos = a_ref->GetPosition();
+				exclusionPending.push_back({ { pos.x + localX * cosZ + localY * sinZ,
+												 pos.y - localX * sinZ + localY * cosZ,
+												 pos.z, halfX },
+					{ sinZ, cosZ, halfY, 3.0f } });
+				exclusionPendingSealed++;
+			}
+			return RE::BSContainer::ForEachResult::kContinue;
+		}
+	}
+
+	// Survival warm-up formlist: heat neither table named.
+	// Modest circle when grounded (the list also holds
+	// candelabras), footprint-sized spot when raised.
+	if (survivalHeatSources && survivalHeatSources->HasForm(base)) {
+		float halfExtent = 20.0f;
+		if (auto* bound = base->As<RE::TESBoundObject>()) {
+			float extentX = (bound->boundData.boundMax.x - bound->boundData.boundMin.x) * 0.5f;
+			float extentY = (bound->boundData.boundMax.y - bound->boundData.boundMin.y) * 0.5f;
+			halfExtent = std::max(extentX, extentY) * a_ref->GetScale();
+		}
+		auto pos = a_ref->GetPosition();
+		float landZ = pos.z;
+		tes->GetLandHeight(pos, landZ);
+		float radius = pos.z - landZ < kGroundFireBand ? kUnknownHeatClearRadius :
+	                                                     std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
+		exclusionPending.push_back({ { pos.x, pos.y, pos.z, radius * a_ref->GetScale() }, { 0.0f, 0.0f, 1.0f, 1.0f } });
+	}
+	return RE::BSContainer::ForEachResult::kContinue;
+}
+
+void SnowDeformation::FinishExclusionGather()
+{
+	// Drop flame melt spots that sit inside a flame-owning station
+	// (descending index order keeps the remaining indices valid).
+	if (!exclusionPendingGuards.empty() && !exclusionPendingFlames.empty()) {
+		for (auto it = exclusionPendingFlames.rbegin(); it != exclusionPendingFlames.rend(); ++it) {
+			const auto& flame = exclusionPending[*it].first;
+			for (const auto& guard : exclusionPendingGuards) {
+				const float dx = flame.x - guard.x, dy = flame.y - guard.y;
+				if (dx * dx + dy * dy < guard.w * guard.w && std::abs(flame.z - guard.z) < 300.0f) {
+					exclusionPending.erase(exclusionPending.begin() + *it);
+					break;
+				}
+			}
+		}
+	}
+
+	statTrampleCount = exclusionPendingTrample;
+	statSealedCount = exclusionPendingSealed;
+
+	// Overflow: keep the sources nearest the walk's origin.
+	if (exclusionPending.size() > kMaxExclusions) {
+		const auto playerPos = exclusionGatherOrigin;
+		std::partial_sort(exclusionPending.begin(), exclusionPending.begin() + kMaxExclusions, exclusionPending.end(),
+			[&](const auto& a_lhs, const auto& a_rhs) {
+				const float lhsDx = a_lhs.first.x - playerPos.x, lhsDy = a_lhs.first.y - playerPos.y;
+				const float rhsDx = a_rhs.first.x - playerPos.x, rhsDy = a_rhs.first.y - playerPos.y;
+				return lhsDx * lhsDx + lhsDy * lhsDy < rhsDx * rhsDx + rhsDy * rhsDy;
+			});
+		exclusionPending.resize(kMaxExclusions);
+	}
+	staticExclusions.swap(exclusionPending);
+	exclusionPending.clear();
+	exclusionPendingFlames.clear();
+	exclusionPendingGuards.clear();
 }
