@@ -2239,16 +2239,22 @@ public:
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 
-	/** @brief Full-resolution COPY of the game's raw sun-shadow cascade atlas, taken during the shadow-mask pass. The copy is mandatory: by deferred time the engine has reused the live target, and sampling it live produces garbage flicker. Taken after the shell is injected as a caster, so the snowfield receives its own banks' shadows; acne is held off by the caster's depth push. */
+	/** @brief Per-frame copy of the sun cascade atlas, taken after the caster injection. Only allocated while shadowAtlasLiveReadOff is set. */
 	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
-	/** @brief Measurement, runtime-only: the shells read the live sun atlas instead of the per-frame copy. */
-	bool shadowAtlasLiveBind = false;
+	/** @brief A/B, runtime-only: copy the sun atlas every frame instead of sampling it in place. */
+	bool shadowAtlasLiveReadOff = false;
+	/** @brief The engine's sun atlas as bound at the shadow-mask pass. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasLiveSRV;
-	/** @brief Frames the atlas copy stays wanted after the last frame something read it. */
+	/** @brief Frames the atlas copy stays wanted after the last frame something could read it. */
 	uint32_t atlasCopyWantedFrames = 0;
 	/** @brief The atlas the crisp cascade shadows sample this frame, or null (the VSM path). */
-	ID3D11ShaderResourceView* ShadowAtlasSRV() const { return shadowAtlasLiveBind && shadowAtlasLiveSRV ? shadowAtlasLiveSRV.get() : shadowAtlasCopySRV.get(); }
+	ID3D11ShaderResourceView* ShadowAtlasSRV() const
+	{
+		if (!shadowAtlasLiveReadOff)
+			return shadowAtlasLiveSRV.get();
+		return atlasCopyWantedFrames > 0 ? shadowAtlasCopySRV.get() : nullptr;
+	}
 	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
 	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
 	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */

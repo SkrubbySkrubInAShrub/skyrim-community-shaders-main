@@ -1924,9 +1924,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttSssDbg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
 
-			ImGui::Checkbox(T(TKEY("shadow_atlas_live_bind"), "Read the Live Shadow Atlas (A/B)"), &shadowAtlasLiveBind);
+			ImGui::Checkbox(T(TKEY("shadow_atlas_live_read_off"), "Turn Live Shadow Atlas Reading OFF"), &shadowAtlasLiveReadOff);
 			if (auto _ttAtlasLive = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shadow_atlas_live_bind_tooltip"), "Measurement aid: the snow reads the sun's shadow maps directly instead of from the copy taken every frame (the Shadows - Atlas Copy row, 268 MB a frame at 8192). Exact only if nothing redraws those maps between the shadow mask pass and the snow. If shadows on snow go wrong with this on, the engine does."));
+				ImGui::Text("%s", T(TKEY("shadow_atlas_live_read_off_tooltip"), "A/B: the snow normally reads the sun's shadow maps where the game drew them. Tick to copy them every frame instead, as older builds did (the Shadows - Atlas Copy row: 268 MB a frame at 8192, about 0.5 ms). If shadows on snow look wrong somewhere and ticking this fixes it, something redraws those maps before the snow reads them."));
 			ImGui::Checkbox(T(TKEY("shell_shadow_cast_off"), "Skip Shell Sun Shadows (A/B)"), &shellShadowCastDebugOff);
 			if (auto _ttCastOff = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_shadow_cast_off_tooltip"), "A/B: the snow shell is not drawn into the sun shadow cascades this frame. Nothing else changes. If a shadow on an object vanishes with this on, the shell cast it."));

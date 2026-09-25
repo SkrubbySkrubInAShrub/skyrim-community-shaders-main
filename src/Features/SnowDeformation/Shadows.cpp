@@ -10,89 +10,65 @@
 
 void SnowDeformation::CaptureShadowAtlas()
 {
-	// Called mid-frame while the game renders the shadow mask: PS t4 holds
-	// the sun cascade atlas right now (at any other time it holds whatever
-	// material texture the last draw bound; an earlier EarlyPrepass grab
-	// captured a 128px BC7 diffuse). Copy it immediately: by deferred time
-	// the engine has reused the live target. (The old second copy of the
-	// volumetric-lighting ESRAM shadowmap, min'd in VolumetricShadows-style,
-	// was removed: it captured near-empty, and the shader sampled it through
-	// the sun atlas's transforms besides.)
-	//
-	// When a frame skips this pass, the previous copy is kept; one-frame-
-	// stale cascades are invisible, but flapping between the crisp and VSM
-	// paths reads as full-surface flicker. The copy is a real per-frame
-	// bandwidth cost, so a disabled feature must not pay it.
+	// PS t4 holds the sun cascade atlas only during the shadow-mask pass.
+	// A skipped pass keeps the previous atlas: stale cascades are invisible,
+	// crisp/VSM flapping is not.
 	if (!settings.EnableSnowDeformation || !globals::state->HasDirectionalShadows()) {
-		shadowAtlasCopySRV = nullptr;
+		shadowAtlasLiveSRV = nullptr;
+		atlasCopyWantedFrames = 0;
 		return;
 	}
 
 	winrt::com_ptr<ID3D11ShaderResourceView> liveAtlasSRV;
 	globals::d3d::context->PSGetShaderResources(4, 1, liveAtlasSRV.put());
 
+	D3D11_TEXTURE2D_DESC atlasDesc{};
 	if (liveAtlasSRV) {
-		// Inject before taking the copies: copies taken pre-shell
-		// meant the shell shaded itself from a shell-less atlas, so a bank's
-		// shadow fell on characters and dirt but stopped dead at the snow
-		// line. Copying after the injection lets the snowfield receive its
-		// own banks' shadows; acne stays off because the caster and the
-		// visible shell run the SAME surface math and the caster carries a
-		// depth push away from the light (kCasterDepthPush).
+		// Before the snow reads the atlas, so the snowfield receives its own casters.
 		if (!shellShadowCastDebugOff && settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
-		// Only the shells, the patch and the volume read the copy. Their
-		// verdicts are last frame's this early in the frame, so a bare-to-snow
-		// transition shades its first frame from the VSM path; the hold keeps
-		// a coat popping in and out from flapping between the two paths.
+		// Copy A/B only: last frame's draw verdicts gate it, the hold stops crisp/VSM flapping.
 		const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 		const bool staticsMayDraw = statCapturedStatics.load(std::memory_order_relaxed) > 0 || !capturedStatics.empty();
 		if (shellMayDraw || staticsMayDraw)
 			atlasCopyWantedFrames = kShellGateBareFrames;
 		else if (atlasCopyWantedFrames > 0)
 			atlasCopyWantedFrames--;
-		if (atlasCopyWantedFrames == 0) {
-			shadowAtlasCopySRV = nullptr;
-			shadowAtlasLiveSRV = nullptr;
-			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
-		} else if (shadowAtlasLiveBind) {
+		if (!shadowAtlasLiveReadOff) {
 			shadowAtlasLiveSRV = liveAtlasSRV;
 			shadowAtlasCopySRV = nullptr;
-			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
+			shadowAtlasCopyTex = nullptr;
 		} else {
 			shadowAtlasLiveSRV = nullptr;
-			globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
-			CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
-			globals::profiler->EndPass();
+			if (atlasCopyWantedFrames > 0) {
+				globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
+				CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
+				globals::profiler->EndPass();
+			} else
+				globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
 		}
-		// Diagnostics: how many slices the atlas carries (settings UI line).
+
 		winrt::com_ptr<ID3D11Resource> liveRes;
 		liveAtlasSRV->GetResource(liveRes.put());
 		if (auto liveTex = liveRes.try_as<ID3D11Texture2D>()) {
-			D3D11_TEXTURE2D_DESC atlasDesc;
 			liveTex->GetDesc(&atlasDesc);
 			dbgLodAtlasSlices = atlasDesc.ArraySize;
 		}
 	}
 
-	// One-shot + transition diagnostics: what is the shadow source? Logged on
-	// the first few frames and whenever validity flips, so user reports of
-	// missing/flickering shell shadows come with the answer attached.
+	// First frames, then every validity flip.
 	static uint32_t shadowLogCount = 0;
 	static int lastValidState = -1;
-	int validState = ShadowAtlasSRV() ? 1 : 0;
+	const int validState = ShadowAtlasSRV() ? 1 : 0;
 	if ((shadowLogCount < 6 || validState != lastValidState) && shadowLogCount < 40) {
 		shadowLogCount++;
 		lastValidState = validState;
-		D3D11_TEXTURE2D_DESC atlasDesc{};
-		if (shadowAtlasCopyTex)
-			shadowAtlasCopyTex->GetDesc(&atlasDesc);
 		D3D11_SHADER_RESOURCE_VIEW_DESC liveViewDesc{};
 		if (liveAtlasSRV)
 			liveAtlasSRV->GetDesc(&liveViewDesc);
-		logger::info("[SNOW DEFORMATION] ShadowCopy: atlasLive={} valid={} atlas={}x{} slices={} fmt={} samples={} liveViewDim={} liveViewFmt={}",
-			liveAtlasSRV != nullptr, validState,
+		logger::info("[SNOW DEFORMATION] ShadowCopy: atlasLive={} inPlace={} valid={} atlas={}x{} slices={} fmt={} samples={} liveViewDim={} liveViewFmt={}",
+			liveAtlasSRV != nullptr, !shadowAtlasLiveReadOff, validState,
 			atlasDesc.Width, atlasDesc.Height, atlasDesc.ArraySize, uint32_t(atlasDesc.Format), atlasDesc.SampleDesc.Count,
 			uint32_t(liveViewDesc.ViewDimension), uint32_t(liveViewDesc.Format));
 	}
