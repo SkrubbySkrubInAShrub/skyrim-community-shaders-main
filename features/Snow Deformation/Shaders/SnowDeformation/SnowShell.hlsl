@@ -1827,6 +1827,9 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch, uint patchId :
 	// factor can take three bicubic deformation taps. Off in the debug views
 	// that move a vertex's z away from the baked surface.
 	bool culled = false;
+	// SNOW_HS_TRUST (the shading pass): a prepass winner passed these three
+	// tests on the same inputs this frame.
+#ifndef SNOW_HS_TRUST
 	[branch] if ((ShellFlags.x & 2) != 0 && ShellDebugData == 0 && ShellLODDebug == 0)
 		culled = ShellOutsideFrustum(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal, zLo, zHi);
 
@@ -1836,6 +1839,7 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch, uint patchId :
 		culled = ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
 	[branch] if (!culled && ShellCullBare > 0.5)
 		culled = ShellFullyBare(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
+#endif
 #if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
 	culled = culled || ShellPatchSplitCulled(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
 #endif

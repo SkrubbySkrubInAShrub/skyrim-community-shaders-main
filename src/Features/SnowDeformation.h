@@ -1785,9 +1785,14 @@ public:
 	/** @brief Prepass-draw DS variants that also carry the patch id (SNOW_SHELL_PATCH_ID): [0] live, [1] bake, [2] bake check. */
 	ID3D11DomainShader* GetShellDSPatch(bool a_bake, bool a_check);
 	ID3D11DomainShader* shellDSPatch[3] = {};
-	ID3D11HullShader* GetShellHSVisible(bool a_bake);
+	ID3D11HullShader* GetShellHSVisible(bool a_bake, bool a_trust = false);
 	ID3D11HullShader* shellHSVisible = nullptr;
 	ID3D11HullShader* shellHSVisibleBake = nullptr;
+	/** @brief SNOW_HS_TRUST: the shading pass's hull skips the culls its prepass winners passed. */
+	ID3D11HullShader* shellHSVisibleTrust = nullptr;
+	ID3D11HullShader* shellHSVisibleTrustBake = nullptr;
+	/** @brief A/B, runtime-only: the shading pass re-runs the prepass culls. */
+	bool shellHullTrustOff = false;
 	ID3D11PixelShader* GetShellFillPSVisible();
 	ID3D11PixelShader* shellFillPSVisible = nullptr;
 	/** @brief The prepass ran this frame, so shellRasterDepth marks the shell's pixels; DepthSync is skipped otherwise. */

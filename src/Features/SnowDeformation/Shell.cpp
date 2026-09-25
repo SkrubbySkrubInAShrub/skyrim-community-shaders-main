@@ -738,14 +738,16 @@ ID3D11DomainShader* SnowDeformation::GetShellDSPatch(bool a_bake, bool a_check)
 	return slot;
 }
 
-ID3D11HullShader* SnowDeformation::GetShellHSVisible(bool a_bake)
+ID3D11HullShader* SnowDeformation::GetShellHSVisible(bool a_bake, bool a_trust)
 {
-	auto*& slot = a_bake ? shellHSVisibleBake : shellHSVisible;
+	auto*& slot = a_trust ? (a_bake ? shellHSVisibleTrustBake : shellHSVisibleTrust) : (a_bake ? shellHSVisibleBake : shellHSVisible);
 	if (!slot) {
-		logger::debug("Compiling SnowShell HS (visible patches{})", a_bake ? ", bake" : "");
+		logger::debug("Compiling SnowShell HS (visible patches{}{})", a_bake ? ", bake" : "", a_trust ? ", trust" : "");
 		std::vector<std::pair<const char*, const char*>> defines = { { "SNOW_HS_VISIBLE", "" } };
 		if (a_bake)
 			defines.push_back({ "SNOW_HS_BAKE", "" });
+		if (a_trust)
+			defines.push_back({ "SNOW_HS_TRUST", "" });
 		slot = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "hs_5_0"));
 	}
 	return slot;
@@ -2054,6 +2056,8 @@ void SnowDeformation::DrawShell()
 				// patch, the fill folds that into one flag per patch, and the
 				// shading pass's hull skips every patch that won nothing.
 				auto* hsVisible = shellVisibleCull && EnsureVisiblePatchResources() ? GetShellHSVisible(bake) : nullptr;
+				auto* hsTrust = hsVisible && !shellHullTrustOff ? GetShellHSVisible(bake, true) : nullptr;
+				auto* hsMain = hsTrust ? hsTrust : hsVisible;
 				auto* fillPSVisible = hsVisible ? GetShellFillPSVisible() : nullptr;
 				auto* psPrepassPatch = fillPSVisible ? GetShellPSPrepass(true) : nullptr;
 				auto* dsPrepassPatch = psPrepassPatch ? GetShellDSPatch(bake, shellVertexBakeCheck) : nullptr;
@@ -2121,7 +2125,7 @@ void SnowDeformation::DrawShell()
 				context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 				context->VSSetShader(tessVS, nullptr, 0);
-				context->HSSetShader(visibleCull ? hsVisible : tessHS, nullptr, 0);
+				context->HSSetShader(visibleCull ? hsMain : tessHS, nullptr, 0);
 				if (visibleCull) {
 					ID3D11ShaderResourceView* visibleSRV = shellVisiblePatchesSRV.get();
 					context->HSSetShaderResources(60, 1, &visibleSRV);
