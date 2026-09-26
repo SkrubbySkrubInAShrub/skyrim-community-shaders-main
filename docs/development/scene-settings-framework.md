@@ -278,7 +278,7 @@ skipped until the pending values actually change.
 a feature's *base* settings must hold one, otherwise it captures an overridden value as if it were the user's
 choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
 exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, one internal manager
-path (`GetFeatureSettingValue`), the two settings reads in the `FeatureOverwrites` export dialog, and six
+path (`GetFeatureSettingValue`), the two settings reads in the `FeatureOverwritesPanel` export dialog, and six
 DevBench bridge endpoints. Add one to any new code path that serializes feature settings.
 `SceneFeatureReplica` deliberately holds none: a scene page must show the live, scene-applied values.
 

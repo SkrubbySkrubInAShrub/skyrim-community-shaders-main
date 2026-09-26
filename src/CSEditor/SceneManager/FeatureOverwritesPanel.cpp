@@ -1,7 +1,8 @@
-#include "FeatureOverwrites.h"
+#include "FeatureOverwritesPanel.h"
 
 #include "CSEditor/EditorWindow.h"
-#include "CSEditor/SceneManager/SceneSettingsManager.h"
+#include "Feature.h"
+#include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
@@ -11,7 +12,7 @@
 #include <filesystem>
 #include <format>
 
-#define I18N_KEY_PREFIX "feature.feature_overwrites."
+#define I18N_KEY_PREFIX "feature.scene_manager.overwrites."
 
 namespace
 {
@@ -254,12 +255,7 @@ namespace
 	}
 }
 
-std::pair<std::string, std::vector<std::string>> FeatureOverwrites::GetFeatureSummary()
-{
-	return { T(TKEY("description"), "Manage and export mod-provided feature overwrites."), {} };
-}
-
-void FeatureOverwrites::DrawSettings()
+void FeatureOverwritesPanel::Draw()
 {
 	auto* manager = SettingsOverrideManager::GetSingleton();
 

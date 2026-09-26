@@ -7,7 +7,6 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
-#include "Features/FeatureOverwrites.h"
 #include "Features/GrassCollision.h"
 #include "Features/GrassLighting.h"
 #include "Features/GrassOptimizations.h"
@@ -101,7 +100,6 @@ namespace globals
 		TruePBR truePBR{};
 		Skin skin{};
 		SceneManager sceneManager{};
-		FeatureOverwrites featureOverwrites{};
 
 		namespace llf
 		{

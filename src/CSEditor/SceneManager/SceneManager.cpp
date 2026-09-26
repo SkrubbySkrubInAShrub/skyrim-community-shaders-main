@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include "FeatureOverwritesPanel.h"
 #include "SceneSettingsManager.h"
 #include "Utils/UI.h"
 
@@ -366,6 +367,10 @@ std::pair<std::string, std::vector<std::string>> SceneManager::GetFeatureSummary
 
 void SceneManager::DrawSettings()
 {
+	if (ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen))
+		FeatureOverwritesPanel::Draw();
+	ImGui::Separator();
+
 	const auto snapshot = GetDebugSnapshot();
 
 	ImGui::TextWrapped("Live debug view of the scene resolver. Sampled every frame while this panel is open.");

@@ -41,7 +41,6 @@ struct HDRDisplay;
 struct ScreenshotFeature;
 struct Skin;
 struct SceneManager;
-struct FeatureOverwrites;
 
 class State;
 class Deferred;
@@ -134,7 +133,6 @@ namespace globals
 		extern TruePBR truePBR;
 		extern Skin skin;
 		extern SceneManager sceneManager;
-		extern FeatureOverwrites featureOverwrites;
 
 	}
 
