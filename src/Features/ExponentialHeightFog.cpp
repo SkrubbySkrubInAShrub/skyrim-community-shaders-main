@@ -88,21 +88,15 @@ void ExponentialHeightFog::SaveSettings(json& o_json)
 ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 {
 	Settings data = settings;
-
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			data.enabled = 0;
-		}
-	}
-
-	// The world/local map keeps its vanilla fog; height fog tuned for eye level washes it out
-	if (globals::state->isMapMenuOpen) {
+	if (IsSuppressed())
 		data.enabled = 0;
-		data.disableVanillaFog = 0;
-	}
-
 	return data;
+}
+
+bool ExponentialHeightFog::IsSuppressed() const
+{
+	// The world/local map keeps its vanilla fog; height fog tuned for eye level washes it out
+	return (globals::features::effects11.loaded && globals::features::effects11.enableEffect) || globals::state->isMapMenuOpen;
 }
 
 void ExponentialHeightFog::DrawSettings()
@@ -402,6 +396,10 @@ void ExponentialHeightFog::Prepass()
 		return;
 	}
 
+	// Shaders ignore the fog volume while suppressed, so skip building it but keep the resources
+	if (IsSuppressed())
+		return;
+
 	EnsureVolumetricResources();
 
 	if (settings.fogDensity <= 0.0f) {
@@ -411,10 +409,6 @@ void ExponentialHeightFog::Prepass()
 		BindIntegratedLightScattering();
 		return;
 	}
-
-	// Shaders ignore the fog volume on the map (see GetCommonBufferData), so skip building it
-	if (globals::state->isMapMenuOpen)
-		return;
 
 	ID3D11ShaderResourceView* directionalShadowLightData = globals::deferred && globals::deferred->directionalShadowLights ? globals::deferred->directionalShadowLights->srv.get() : nullptr;
 	auto& lightLimitFix = globals::features::lightLimitFix;
