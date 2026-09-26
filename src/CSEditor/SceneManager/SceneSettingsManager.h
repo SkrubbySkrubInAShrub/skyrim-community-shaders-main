@@ -238,14 +238,9 @@ public:
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
 	void CaptureExternalFeatureChanges(Feature* feature);
 
-	/// Whether the scene layer is currently driving this feature, so its base settings must not be
-	/// offered for editing: the next resolve would revert the edit. Every settings UI has to gate on
-	/// this, not just the ImGui one.
+	/// Whether the scene layer is currently driving this feature, so a settings UI without sketch
+	/// support must not offer its base settings: the next resolve would revert the edit.
 	bool IsFeatureSceneControlled(const std::string& featureShortName) const;
-
-	/// Per-feature pause: temporarily disable all scene-specific settings for a feature
-	bool IsFeaturePaused(const std::string& featureShortName) const;
-	void SetFeaturePaused(const std::string& featureShortName, bool paused);
 
 	/// RAII suspend of the scene layer. Anything reading or writing a feature's *base* settings must
 	/// hold one, otherwise it captures an overridden value as if it were the user's choice.
@@ -661,6 +656,27 @@ public:
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey) const;
 
+	// --- Baseline sketches (main menu) ---
+
+	/** @brief Records a main-menu edit of a feature's base value. Where a scene applies, the edit
+	 *  becomes a sketch the resolver holds in place until the sketches are dropped. */
+	void RecordBaselineEdit(const SettingIdentity& setting, const json& value);
+	bool IsSketched(const SettingIdentity& setting) const;
+	bool HasSketches(const std::string& featureShortName) const;
+	/// Keeps one feature's sketches alive through the next Update; any other feature's are dropped.
+	void RetainSketches(const std::string& featureShortName);
+
+	/** @brief The context supplying an address's winning scene value: the narrowest location link,
+	 *  else the incoming weather, else the running period or interior. Null when no scene supplies it. */
+	std::optional<SceneContextId> FindWinningContext(const SettingIdentity& setting) const;
+
+	/** @brief Writes sketched values into the context winning each address and restores the base
+	 *  each held before it was sketched. */
+	void CommitSketches(std::span<const SettingIdentity> settings);
+
+	/// Readback comparison, tolerant of a feature storing a double-valued setting in a float.
+	static bool AppliedValuesEqual(const json& lhs, const json& rhs);
+
 	/// Mod name an overwrite entry came from: the filename stem up to the last underscore.
 	static std::string GetOverwriteModName(const SettingEntry& entry);
 
@@ -809,7 +825,6 @@ public:
 		std::vector<DebugResolvedSetting> resolvedSettings;
 		std::vector<std::string> applyFailures;
 		std::vector<std::string> restoreFailures;
-		std::vector<std::string> pausedFeatures;
 	};
 
 	/// Sample the full resolver state. Built on demand, only for the debug UI.
@@ -862,8 +877,6 @@ private:
 	/// at 30 Hz, so the tick is decoupled from the frame rate.
 	static constexpr float kLocationTransitionTickInterval = 1.0f / 30.0f;
 
-	// --- Pause states ---
-	std::map<std::string, bool> featurePauseStates;
 	int sceneLayerSuspendDepth = 0;
 
 	// --- Per-Weather Scene storage ---
@@ -899,6 +912,13 @@ private:
 	using ResolvedSettingMap = std::map<SettingAddress, json>;
 	ResolvedSettingMap baselineSettings;
 	ResolvedSettingMap appliedSettings;
+	/// Sketched addresses, each with the base it held before its first sketch. One feature at a time.
+	ResolvedSettingMap sketchOriginals;
+	bool sketchesRetained = false;
+	/// Drops every sketch so the next resolve re-applies the scene over the sketched base.
+	void DropSketches();
+	/// Resolves each sketched address to its base, so the scene leaves the sketch in place.
+	void HoldSketchedValues(ResolvedSettingMap& resolved);
 	/// Reused across resolves so the per-frame path does not reallocate the map.
 	ResolvedSettingMap resolvedSettingsScratch;
 	std::set<std::string> restoreFailureWarnings;
@@ -1123,8 +1143,6 @@ private:
 	/// Exact: an eased value moves by far less than any tolerance would forgive, and a skipped apply
 	/// would accumulate that difference into a visible staircase.
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
-	/// Readback comparison, tolerant of a feature storing a double-valued setting in a float.
-	static bool AppliedValuesEqual(const json& lhs, const json& rhs);
 	/**
 	 * Reads a feature back to confirm it kept every value it was handed: a clean LoadSettings only
 	 * means nothing threw, not that the value survived a clamp, a quantise or a mode gate.

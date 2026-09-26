@@ -391,5 +391,5 @@ const SceneWidgetInterceptor::Proxy* SceneWidgetInterceptor::GetArmedProxy()
 
 bool SceneWidgetInterceptor::IsArmed()
 {
-	return armed;
+	return armed && !armedContext.baseline;
 }

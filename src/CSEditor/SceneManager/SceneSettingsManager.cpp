@@ -8,6 +8,7 @@
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
+#include "Utils/Game.h"
 #include "Utils/SettingsCatalog.h"
 
 #include <algorithm>
@@ -511,7 +512,7 @@ void SceneSettingsManager::MarkEntryListUserSettingsModified(SceneType type)
 
 bool SceneSettingsManager::IsEntryActive(const SettingEntry& entry) const
 {
-	return !entry.paused && !IsFeaturePaused(entry.featureShortName);
+	return !entry.paused;
 }
 
 bool SceneSettingsManager::HasEntryFromSource(SceneType type, const std::string& featureShortName,
@@ -628,6 +629,9 @@ void SceneSettingsManager::Update()
 			return;
 		lastUpdateFrame = frame;
 	}
+	// Nothing retained them since the last Update: the menu closed or left the feature.
+	if (!std::exchange(sketchesRetained, false))
+		DropSketches();
 	VerifyPendingApplies();
 	FlushDeferredSceneChanges();
 
@@ -734,6 +738,139 @@ void SceneSettingsManager::CaptureExternalFeatureChanges(Feature* feature)
 		ResolveAndApply(true);
 }
 
+void SceneSettingsManager::RecordBaselineEdit(const SettingIdentity& setting, const json& value)
+{
+	// The feature's base snapshot and apply document predate the edit, so replaying either would revert it.
+	InvalidateFeatureSnapshot(setting.featureShortName);
+	const SettingAddress address{ setting.featureShortName, setting.settingPath, setting.settingKey };
+	auto baselineIt = baselineSettings.find(address);
+	if (!appliedSettings.contains(address) || baselineIt == baselineSettings.end())
+		return;
+
+	assert((sketchOriginals.empty() || sketchOriginals.begin()->first.featureShortName == setting.featureShortName) &&
+		   "sketches belong to the one feature the menu shows");
+	sketchOriginals.try_emplace(address, baselineIt->second);
+	baselineIt->second = value;
+	appliedSettings[address] = value;
+	locationTransitionBatchesDirty = true;
+}
+
+bool SceneSettingsManager::IsSketched(const SettingIdentity& setting) const
+{
+	return sketchOriginals.contains({ setting.featureShortName, setting.settingPath, setting.settingKey });
+}
+
+bool SceneSettingsManager::HasSketches(const std::string& featureShortName) const
+{
+	return !sketchOriginals.empty() && sketchOriginals.begin()->first.featureShortName == featureShortName;
+}
+
+void SceneSettingsManager::RetainSketches(const std::string& featureShortName)
+{
+	if (!sketchOriginals.empty() && !HasSketches(featureShortName))
+		DropSketches();
+	sketchesRetained = true;
+}
+
+void SceneSettingsManager::DropSketches()
+{
+	if (sketchOriginals.empty())
+		return;
+	// The sketched value stays as the feature's base; the scene simply resolves over it again.
+	sketchOriginals.clear();
+	resolverDirty = true;
+	locationTransitionBatchesDirty = true;
+}
+
+void SceneSettingsManager::HoldSketchedValues(ResolvedSettingMap& resolved)
+{
+	// A scene that stops supplying an address leaves its sketch as the plain base.
+	std::erase_if(sketchOriginals, [&](const auto& item) { return !resolved.contains(item.first); });
+	for (const auto& [address, _] : sketchOriginals)
+		if (auto baselineIt = baselineSettings.find(address); baselineIt != baselineSettings.end())
+			resolved[address] = baselineIt->second;
+}
+
+std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindWinningContext(
+	const SettingIdentity& setting) const
+{
+	// Mid-blend the incoming period is the one the scene is heading into, and so the one to author.
+	auto period = GetCurrentPeriod();
+	if (const auto next = static_cast<TimeOfDayPeriod>((static_cast<int>(period) + 1) % kPeriodCount);
+		GetTimeOfDayFactors()[static_cast<size_t>(next)] > 0.0f)
+		period = next;
+	const auto withActiveSet = [&](SceneContextId context) {
+		context.period = IsSceneTimeOfDayEnabled(context) ? period : TimeOfDayPeriod::Count;
+		return context;
+	};
+
+	// Narrowest first, mirroring the resolve order in reverse.
+	std::vector<SceneContextId> candidates;
+	const auto& locationTargets = GetCurrentLocationTargets();
+	for (auto target = locationTargets.rbegin(); target != locationTargets.rend(); ++target)
+		candidates.push_back(withActiveSet(
+			{ .type = SceneContextType::Location, .locationType = target->type, .locationFormKey = target->formKey }));
+	if (Util::IsInterior()) {
+		candidates.push_back({ .type = SceneContextType::Interior });
+	} else {
+		// The current weather is the incoming one; the previous is only fading out.
+		if (const auto* sky = globals::game::sky; sky && sky->currentWeather)
+			candidates.push_back(withActiveSet(
+				{ .type = SceneContextType::Weather, .weatherId = sky->currentWeather->GetFormID() }));
+		candidates.push_back({ .type = SceneContextType::TimeOfDay, .period = period });
+	}
+
+	for (const auto& context : candidates) {
+		switch (GetSettingProvenance(context, setting.featureShortName, setting.settingPath, setting.settingKey).layer) {
+		case SettingLayer::User:
+		case SettingLayer::Overwrite:
+			return context;
+		case SettingLayer::Deleted:
+			return std::nullopt;
+		default:
+			break;
+		}
+	}
+	return std::nullopt;
+}
+
+void SceneSettingsManager::CommitSketches(std::span<const SettingIdentity> settings)
+{
+	std::vector<std::pair<SceneContextId, const SettingIdentity*>> targets;
+	for (const auto& setting : settings) {
+		if (!IsSketched(setting))
+			continue;
+		const auto context = FindWinningContext(setting);
+		if (!context)
+			continue;
+		// Created before any index is read: an insertion renumbers the entries behind it.
+		if (!FindContextUserEntry(*context, setting.featureShortName, setting.settingPath, setting.settingKey) &&
+			!AddContextSetting(*context, setting.featureShortName, setting.settingPath, setting.settingKey, true))
+			continue;
+		targets.emplace_back(*context, &setting);
+	}
+	if (targets.empty())
+		return;
+
+	std::map<SceneContextId, std::vector<EntryValueUpdate>> updatesByContext;
+	for (const auto& [context, setting] : targets) {
+		const SettingAddress address{ setting->featureShortName, setting->settingPath, setting->settingKey };
+		const auto index = FindContextUserEntry(context, setting->featureShortName, setting->settingPath, setting->settingKey);
+		auto originalIt = sketchOriginals.find(address);
+		auto baselineIt = baselineSettings.find(address);
+		if (!index || originalIt == sketchOriginals.end() || baselineIt == baselineSettings.end())
+			continue;
+		updatesByContext[context].push_back({ *index, baselineIt->second });
+		baselineIt->second = std::move(originalIt->second);
+		sketchOriginals.erase(originalIt);
+	}
+	InvalidateFeatureSnapshot(targets.front().second->featureShortName);
+	for (const auto& [context, updates] : updatesByContext)
+		UpdateContextEntryValues(context, updates, true);
+	SaveAllUserSettings();
+	ReapplyIfActive();
+}
+
 SceneSettingsManager::SceneLayerGuard::SceneLayerGuard() :
 	manager(GetSingleton())
 {
@@ -756,19 +893,7 @@ SceneSettingsManager::SceneLayerGuard::~SceneLayerGuard()
 
 bool SceneSettingsManager::IsFeatureSceneControlled(const std::string& featureShortName) const
 {
-	return HasActiveSettingsForFeature(featureShortName) && !IsFeaturePaused(featureShortName);
-}
-
-bool SceneSettingsManager::IsFeaturePaused(const std::string& featureShortName) const
-{
-	auto it = featurePauseStates.find(featureShortName);
-	return it != featurePauseStates.end() && it->second;
-}
-
-void SceneSettingsManager::SetFeaturePaused(const std::string& featureShortName, bool paused)
-{
-	featurePauseStates[featureShortName] = paused;
-	ReapplyIfActive();
+	return HasActiveSettingsForFeature(featureShortName);
 }
 
 void SceneSettingsManager::SuspendSceneLayer()

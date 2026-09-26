@@ -262,10 +262,6 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::TextUnformatted("Features paused by the user");
-		DrawNameList(snapshot.pausedFeatures);
-
-		ImGui::Spacing();
 		ImGui::TextUnformatted("Features failing to apply");
 		DrawNameList(snapshot.applyFailures);
 
