@@ -78,9 +78,7 @@ void HistogramAutoExposure::DrawSettings()
 {
 	const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
 	ImGui::BeginDisabled(cam != nullptr);
-	float exposureCompensation = settings.ExposureCompensation;
-	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.exposure_compensation", "Exposure Compensation"), &exposureCompensation, -5.f, 5.f, "%+.2f EV");
-	settings.ExposureCompensation = exposureCompensation;
+	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.exposure_compensation", "Exposure Compensation"), &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.applying_additional_exposure_adjustment_to_the_image", "Applying additional exposure adjustment to the image."));
 	ImGui::EndDisabled();
