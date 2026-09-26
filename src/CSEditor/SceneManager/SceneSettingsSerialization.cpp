@@ -292,7 +292,6 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 
 	const auto flatSceneType = allowedSceneType.value_or(
 		periodField == PeriodField::Ignored ? SSM::SceneType::InteriorOnly : SSM::SceneType::TimeOfDay);
-	const auto sceneType = GetEntrySceneType(entry, flatSceneType);
 	// An unusable transition costs the entry its blend, never its value: the setting still has to be
 	// honored, and the raw field still has to survive the round trip.
 	if (auto transitionIt = item.find("transitionSeconds"); transitionIt != item.end()) {
@@ -308,17 +307,15 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 			entry.transitionSeconds = seconds;
 		}
 	}
-	if (!SSM::IsFeatureAllowedForType(sceneType, entry.featureShortName)) {
+	if (!SSM::IsFeatureAllowedForType(flatSceneType, entry.featureShortName)) {
 		logger::warn("[SceneSettings] {} entry feature '{}' is not allowed for this scene type", typeName, entry.featureShortName);
 		return false;
 	}
 
 	// Per-period entries always blend as floats, so they carry the same requirement as float-only scenes.
 	const bool requireNumeric = periodic || requireNumericValue;
-	if (requireNumeric) {
-		WidenParsedIntegerToFloat(entry.value);
-		WidenParsedIntegerToFloat(entry.originalValue);
-	}
+	WidenParsedIntegerToFloat(entry.featureShortName, entry.settingPath, entry.settingKey, entry.value);
+	WidenParsedIntegerToFloat(entry.featureShortName, entry.settingPath, entry.settingKey, entry.originalValue);
 	if (requireNumeric && (!IsNumericValue(entry.value) || !IsNumericValue(entry.originalValue) ||
 		!std::isfinite(entry.value.get<float>()))) {
 		logger::warn("[SceneSettings] {} entry {} is not a finite float setting - skipping",
@@ -326,10 +323,10 @@ static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::
 		return false;
 	}
 
-	if (!ValidateSceneSettingEntry(typeName, entry.featureShortName, entry.settingPath, entry.settingKey,
-			entry.value, requireNumeric, featureSettingsCache) ||
-		!ValidateSceneSettingEntry(typeName, entry.featureShortName, entry.settingPath, entry.settingKey,
-			entry.originalValue, requireNumeric, featureSettingsCache))
+	if (!ValidateSceneSettingEntry(typeName, flatSceneType, entry.featureShortName, entry.settingPath,
+			entry.settingKey, entry.value, requireNumeric, featureSettingsCache) ||
+		!ValidateSceneSettingEntry(typeName, flatSceneType, entry.featureShortName, entry.settingPath,
+			entry.settingKey, entry.originalValue, requireNumeric, featureSettingsCache))
 		return false;
 	if (entry.transitionSeconds &&
 		(!IsNumericValue(entry.value) || !FindAllowedCatalogSetting(

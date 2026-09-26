@@ -321,7 +321,7 @@ namespace
 	}
 
 	/// Feature column beside the panel body, split by a divider the user can drag.
-	/// Transitionable features are the per-period set; the rest also covers interior and location.
+	/// Transitionable features are the weather set; the rest also covers interior and location.
 	void DrawFeatureLayout(std::string& selectedFeature, bool transitionableOnly, const char* intro,
 		bool withPeriodBar, const SceneSettingsManager::SceneContextId& baseContext)
 	{
@@ -707,8 +707,8 @@ void SceneSettingsUI::DrawLocationWindows()
 				.locationType = window.target.type,
 				.locationFormKey = window.target.formKey,
 			};
-			// A per-period set blends like time of day, so it only offers the transitionable features.
-			DrawFeatureLayout(window.selectedFeature, SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(context),
+			// Both sets take location features; a per-period set greys whatever cannot blend.
+			DrawFeatureLayout(window.selectedFeature, false,
 				T(TKEY("scene_manager_location_intro"), "Settings overridden while the player is in this location."),
 				true, context);
 		}

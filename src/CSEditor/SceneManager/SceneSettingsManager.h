@@ -291,7 +291,8 @@ public:
 
 	/// Check whether a single catalog setting is scene-controllable for the scene type.
 	static bool IsSettingAllowedForType(SceneType type, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey);
+		const std::vector<std::string>& settingPath, const std::string& settingKey,
+		bool requireTransitionable = false);
 
 	/// Check the shared catalog and settings blacklist policy.
 	static bool IsSceneSettingAllowed(
@@ -988,9 +989,10 @@ private:
 	/// Per-period location values, rebuilt with cachedLocationOverrides but re-blended every resolve.
 	PeriodSettingMap cachedLocationPeriodValues;
 	/** @brief Groups one saved set's floats by address, dropping anything unresolvable.
-	 *  @param timeOfDayEnabled Selects the per-period set; otherwise each flat entry fills every period. */
+	 *  @param timeOfDayEnabled Selects the per-period set; otherwise each flat entry fills every period.
+	 *  @param type The scene type whose whitelist the entries are judged by. */
 	void CollectPeriodValueGroups(const std::vector<SettingEntry>& sourceEntries, bool timeOfDayEnabled,
-		PeriodSettingMap& values) const;
+		SceneType type, PeriodSettingMap& values) const;
 	const PeriodSettingMap& BuildTimeOfDayValueGroups() const;
 	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
 
@@ -1149,7 +1151,7 @@ private:
 	/// Entry values changed: drop the per-period caches and re-resolve the location layer.
 	void MarkSceneValuesDirty();
 	bool IsEntryActive(const SettingEntry& entry) const;
-	/// Active, catalog-permitted and, for TimeOfDay, transitionable float entry.
+	/// Active, catalog-permitted and, for TimeOfDay or a per-period entry, transitionable float entry.
 	bool IsResolvableEntry(const SettingEntry& entry, SceneType type) const;
 	static SettingAddress GetEntryAddress(const SettingEntry& entry);
 	bool HasDuplicateEntry(SceneType type, const std::string& featureShortName,

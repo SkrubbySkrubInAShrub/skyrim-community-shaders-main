@@ -388,13 +388,13 @@ std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContext
 		return std::nullopt;
 
 	const auto rules = GetSceneContextRules(context);
-	if (!IsSettingAllowedForType(rules.sceneType, featureShortName, settingPath, settingKey) ||
+	if (!IsSettingAllowedForType(rules.sceneType, featureShortName, settingPath, settingKey, rules.requireNumeric) ||
 		FindContextUserEntry(context, featureShortName, settingPath, settingKey))
 		return std::nullopt;
 
 	auto value = CaptureContextValue(context, { featureShortName, settingPath, settingKey });
-	if (!value || !ValidateSceneSettingEntry(rules.label, featureShortName, settingPath, settingKey,
-					  *value, rules.requireNumeric))
+	if (!value || !ValidateSceneSettingEntry(rules.label, rules.sceneType, featureShortName, settingPath,
+					  settingKey, *value, rules.requireNumeric))
 		return std::nullopt;
 
 	auto* contextEntries = EnsureContextEntriesMut(context);
@@ -425,7 +425,7 @@ void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& contex
 
 	const auto rules = GetSceneContextRules(context);
 	bool userEntriesChanged = false;
-	if (!ApplyEntryValueUpdates(rules.label, *contextEntries, updates, rules.requireNumeric,
+	if (!ApplyEntryValueUpdates(rules.label, rules.sceneType, *contextEntries, updates, rules.requireNumeric,
 			userEntriesChanged))
 		return;
 	if (userEntriesChanged)
@@ -487,7 +487,8 @@ bool SceneSettingsManager::TombstoneContextSetting(const SceneContextId& context
 		return false;
 
 	// A tombstone must not land at an address where an ordinary user entry would be rejected.
-	if (!IsSettingAllowedForType(GetSceneContextRules(context).sceneType, featureShortName, settingPath, settingKey))
+	const auto rules = GetSceneContextRules(context);
+	if (!IsSettingAllowedForType(rules.sceneType, featureShortName, settingPath, settingKey, rules.requireNumeric))
 		return false;
 
 	// An existing user entry becomes the tombstone: two entries at one address would race.
@@ -566,7 +567,7 @@ void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& con
 
 	const auto rules = GetSceneContextRules(context);
 	const auto defaultValue = ResolveContextEntryDefault(context, entry);
-	if (!defaultValue || !ValidateSceneSettingEntry(rules.label, entry.featureShortName,
+	if (!defaultValue || !ValidateSceneSettingEntry(rules.label, rules.sceneType, entry.featureShortName,
 							  entry.settingPath, entry.settingKey, *defaultValue, rules.requireNumeric))
 		return;
 

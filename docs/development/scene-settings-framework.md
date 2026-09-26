@@ -176,7 +176,8 @@ address always wins. `SettingsUser.json` remains the baseline beneath all of thi
     (`IsPeriodActive`); the other is kept untouched, so switching back restores it. The mode comes from the
     user's choice, else a shipped overwrite's `timeOfDayEnabled` metadata, else per-period only when every
     entry is. Any user edit pins the current mode so a later preset cannot move the user's entries between
-    sets. A per-period location set follows time-of-day rules (floats only, blended across periods).
+    sets. A per-period location set keeps the location whitelist but takes only transitionable floats,
+    blended across periods.
 -   Writes smaller than `kBlendEpsilon` (1e-3) are skipped so blending does not spam `LoadSettings`.
 
 **Divergence from upstream, deliberate:** upstream overlays `User` first and `Overwrite` second, so a
@@ -365,7 +366,7 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
         allocation those settings size, so blending them mid-frame is not something the feature can honor.
     -   `ImageBasedLighting`'s `DisableInWorldMap` and `DisableInLoadingScreen`.
     -   all of `GrassOptimizations`, `TerrainVariation` and `VolumetricLighting`.
--   `kLocationFeatureWhitelist` (4) and `kTimeOfDayFeatureWhitelist` (7) — which features those scene types
+-   `kLocationFeatureWhitelist` (5) and `kTimeOfDayFeatureWhitelist` (7): which features those scene types
     may target.
 
 When adding a feature to a whitelist, run `tests/test_scene_settings_policy.py`; it fails if a name is not

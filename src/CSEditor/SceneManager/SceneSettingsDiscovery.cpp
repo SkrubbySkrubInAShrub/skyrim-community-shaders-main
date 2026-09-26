@@ -142,9 +142,11 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 	if (safeModName.empty())
 		return false;
 
-	/// One output file: the type description its metadata carries, and the entries baked into it.
+	/// One output file: the root it must stay inside, the type description its metadata carries, and the
+	/// entries baked into it.
 	struct PresetFile
 	{
+		std::filesystem::path allowedRoot;
 		std::string typeDescription;
 		json extraMetadata = json::object();
 		std::vector<const SettingEntry*> entries;
@@ -152,46 +154,51 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 	std::map<std::pair<std::filesystem::path, std::string>, PresetFile> files;
 
 	const auto bakeContext = [&](const SceneContextId& context, const std::vector<SettingEntry>& sourceEntries,
-								 const std::filesystem::path& baseDir, std::string_view sceneLabel,
-								 const json& extraMetadata = json::object()) {
+								 const std::filesystem::path& allowedRoot, const std::filesystem::path& baseDir,
+								 std::string_view sceneLabel, const json& extraMetadata = json::object()) {
 		const auto directory = GetOverwriteDir(baseDir, context.period);
 		for (const auto& [identity, entry] : BuildEffectiveContextEntries(sourceEntries, context)) {
 			auto& file = files[{ directory, identity.featureShortName }];
+			file.allowedRoot = allowedRoot;
 			file.typeDescription = GetOverwriteTypeDescription(sceneLabel, context.period);
 			file.extraMetadata = extraMetadata;
 			file.entries.push_back(entry);
 		}
 	};
 
+	const auto interiorRoot = GetOverwritesPath(SceneType::InteriorOnly);
 	bakeContext({ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count },
-		GetEntries(SceneType::InteriorOnly), GetOverwritesPath(SceneType::InteriorOnly), "Interior Only");
+		GetEntries(SceneType::InteriorOnly), interiorRoot, interiorRoot, "Interior Only");
 
+	const auto timeOfDayRoot = GetOverwritesPath(SceneType::TimeOfDay);
 	for (auto period : kPeriods)
 		bakeContext({ .type = SceneContextType::TimeOfDay, .period = period },
-			GetEntries(SceneType::TimeOfDay), GetOverwritesPath(SceneType::TimeOfDay), "Time of Day");
+			GetEntries(SceneType::TimeOfDay), timeOfDayRoot, timeOfDayRoot, "Time of Day");
 
 	// Both saved sets ship; the metadata carries the mode that picks between them.
 	const auto bakeSceneSets = [&](SceneContextId context, const PeriodicSceneConfig& config,
-								   const std::filesystem::path& sceneDir, std::string_view sceneLabel,
-								   json metadata = json::object()) {
+								   const std::filesystem::path& allowedRoot, const std::filesystem::path& sceneDir,
+								   std::string_view sceneLabel, json metadata = json::object()) {
 		metadata[kTimeOfDayEnabledKey] = config.timeOfDayEnabled;
-		bakeContext(context, config.entries, sceneDir, sceneLabel, metadata);
+		bakeContext(context, config.entries, allowedRoot, sceneDir, sceneLabel, metadata);
 		for (auto period : kPeriods) {
 			context.period = period;
-			bakeContext(context, config.entries, sceneDir, sceneLabel, metadata);
+			bakeContext(context, config.entries, allowedRoot, sceneDir, sceneLabel, metadata);
 		}
 	};
 
+	const auto weatherRoot = GetWeatherOverwritesDir();
 	for (const auto& [weatherId, config] : weatherSceneConfigs)
 		bakeSceneSets({ .type = SceneContextType::Weather, .weatherId = weatherId }, config,
-			GetWeatherOverwritesDir() / Util::FormIdToSpid(weatherId), "Weather");
+			weatherRoot, weatherRoot / Util::FormIdToSpid(weatherId), "Weather");
 
+	const auto locationRoot = GetLocationOverwritesDir();
 	for (const auto& [configKey, config] : locationSceneConfigs) {
 		const auto* targetDescription = GetLocationTargetTypeName(config.type);
 		bakeSceneSets({ .type = SceneContextType::Location,
 						  .locationType = config.type,
 						  .locationFormKey = config.formKey },
-			config, GetLocationOverwritesDir() / config.formKey, targetDescription,
+			config, locationRoot, locationRoot / config.formKey, targetDescription,
 			json{ { "targetType", targetDescription },
 				{ "targetName", config.name },
 				{ "coc", config.cocCode } });
@@ -212,7 +219,7 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 	for (const auto& [key, file] : files) {
 		const auto& [directory, featureShortName] = key;
 		const auto path = directory / std::format("{}_{}.json", safeModName, featureShortName);
-		if (!WriteGroupedOverwriteFile(path, featureShortName, file.typeDescription, file.entries,
+		if (!WriteGroupedOverwriteFile(file.allowedRoot, path, featureShortName, file.typeDescription, file.entries,
 				file.extraMetadata)) {
 			logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
 			wroteAll = false;
@@ -314,19 +321,19 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 					continue;
 				}
 
+				std::vector<SettingEntry> parsedEntries;
+				std::optional<bool> timeOfDayEnabled;
+				if (!ParseOverwriteFileEntries(data, filePath, SceneType::Location, period != TimeOfDayPeriod::Count,
+						parsedEntries, &featureSettingsCache, &timeOfDayEnabled))
+					continue;
+
+				// Created only once a file yields entries, so a rejected file leaves no empty target behind.
 				auto& config = GetLocationConfigMut(*targetType, canonicalFormKey,
 					!metadataName.empty() ? metadataName : resolvedName);
 				if (!metadataCocCode.empty())
 					config.cocCode = metadataCocCode;
 				else if (!resolvedCocCode.empty())
 					config.cocCode = resolvedCocCode;
-
-				std::vector<SettingEntry> parsedEntries;
-				std::optional<bool> timeOfDayEnabled;
-				const bool periodic = period != TimeOfDayPeriod::Count;
-				if (!ParseOverwriteFileEntries(filePath, periodic ? SceneType::TimeOfDay : SceneType::Location, periodic,
-						parsedEntries, &featureSettingsCache, &timeOfDayEnabled))
-					continue;
 				if (!config.overwriteTimeOfDayEnabled)
 					config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
 				for (auto& entry : parsedEntries) {
@@ -373,7 +380,6 @@ void SceneSettingsManager::DiscoverWeatherOverwrites()
 
 void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId, const std::filesystem::path& weatherDir)
 {
-	auto& config = GetWeatherConfigMut(weatherId);
 	FeatureSettingsCache featureSettingsCache;
 
 	ForEachOverwriteSetDir(weatherDir, [&](const std::filesystem::path& directory, TimeOfDayPeriod period) {
@@ -384,6 +390,8 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 				if (!ParseOverwriteFileEntries(filePath, SceneType::TimeOfDay, true, parsedEntries, &featureSettingsCache,
 						&timeOfDayEnabled))
 					continue;
+				// Created only once a file yields entries, so a rejected file leaves no empty weather behind.
+				auto& config = GetWeatherConfigMut(weatherId);
 				if (!config.overwriteTimeOfDayEnabled)
 					config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
 				for (auto& entry : parsedEntries) {

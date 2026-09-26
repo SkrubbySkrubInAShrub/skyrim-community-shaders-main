@@ -545,13 +545,13 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 	const auto start = std::max<int>(metadata->aggregateStart, 0);
 	// The rules AddContextSetting judges by, so a control never shows as allowed and then fails to
 	// gain an entry on the gutter tick.
-	const auto sceneType = SceneSettingsContextRules::GetSceneContextRules(contextId).sceneType;
+	const auto rules = SceneSettingsContextRules::GetSceneContextRules(contextId);
 
 	for (const auto* setting : GetControlComponents(*metadata)) {
 		// Siblings share featureShortName/settingPath (see MakeAggregateKey), so the guard's own
 		// resolved values apply to every component here; only settingKey varies.
-		if (!SceneSettingsManager::IsSettingAllowedForType(
-				sceneType, identity.featureShortName, identity.settingPath, std::string{ setting->settingKey }))
+		if (!SceneSettingsManager::IsSettingAllowedForType(rules.sceneType, identity.featureShortName,
+				identity.settingPath, std::string{ setting->settingKey }, rules.requireNumeric))
 			continue;
 
 		const auto slot = setting->aggregateCount <= 1 ?

@@ -19,6 +19,8 @@ namespace SceneSettingsInternal
 	constexpr const char* kFeatureKey = "_feature";
 	constexpr const char* kMetadataKey = "_metadata";
 	constexpr const char* kMetadataDescriptionKey = "description";
+	/// Per-setting location transition seconds, mirroring the setting tree under `_metadata`.
+	constexpr const char* kMetadataEntryTransitionsKey = "entryTransitions";
 	constexpr const char* kStatusKey = "status";
 	constexpr const char* kStatusDeleted = "deleted";
 	/// Picks a weather or location's saved set; also a mod's overwrite metadata key.
@@ -42,14 +44,6 @@ namespace SceneSettingsInternal
 	bool IsSceneSettingPrimitive(const json& value);
 
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type);
-
-	/** @brief The rules an entry is judged by: a per-period entry blends, so it follows TimeOfDay. */
-	inline SceneSettingsManager::SceneType GetEntrySceneType(const SceneSettingsManager::SettingEntry& entry,
-		SceneSettingsManager::SceneType flatType)
-	{
-		return entry.period == SceneSettingsManager::TimeOfDayPeriod::Count ? flatType :
-		                                                                     SceneSettingsManager::SceneType::TimeOfDay;
-	}
 
 	bool WriteJsonAtomically(const std::filesystem::path& path, const json& data, int indent,
 		std::string_view context);
@@ -78,8 +72,9 @@ namespace SceneSettingsInternal
 	bool IsNumericValue(const json& value);
 
 	/// A hand-written file may spell a float as `1`. The catalog accepts that for a float setting, so widen
-	/// it at the parse boundary rather than let IsNumericValue drop the entry.
-	void WidenParsedIntegerToFloat(json& value);
+	/// it at the parse boundary rather than let IsNumericValue drop the entry or skip its transition.
+	void WidenParsedIntegerToFloat(const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey, json& value);
 
 	bool IsSceneSettingPathWrapper(std::string_view token);
 
@@ -270,11 +265,13 @@ namespace SceneSettingsInternal
 	bool IsSceneSettingValueAllowed(const json& featureValue,
 		const SceneSettingsCatalog::SettingMetadata& setting, const json& value, bool requireNumeric);
 
-	bool ValidateSceneSettingEntry(std::string_view context, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
-		bool requireNumeric, FeatureSettingsCache* featureSettingsCache = nullptr);
+	/** @brief Checks an entry against the scene type's whitelist, the blacklist, the catalog and the feature's live value. */
+	bool ValidateSceneSettingEntry(std::string_view context, SceneSettingsManager::SceneType type,
+		const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey, const json& value, bool requireNumeric,
+		FeatureSettingsCache* featureSettingsCache = nullptr);
 
-	bool ApplyEntryValueUpdates(std::string_view context,
+	bool ApplyEntryValueUpdates(std::string_view context, SceneSettingsManager::SceneType type,
 		std::vector<SceneSettingsManager::SettingEntry>& entries,
 		std::span<const SceneSettingsManager::EntryValueUpdate> updates,
 		bool requireNumeric, bool& userEntriesChanged);

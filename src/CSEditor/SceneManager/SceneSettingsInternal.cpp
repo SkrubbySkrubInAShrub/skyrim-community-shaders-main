@@ -173,9 +173,13 @@ namespace SceneSettingsInternal
 		return value.is_number_float();
 	}
 
-	void WidenParsedIntegerToFloat(json& value)
+	void WidenParsedIntegerToFloat(const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey, json& value)
 	{
-		if (value.is_number_integer())
+		if (!value.is_number_integer())
+			return;
+		if (const auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey);
+			setting && setting->valueType == SceneSettingsCatalog::ValueType::Float)
 			value = value.get<double>();
 	}
 
@@ -948,10 +952,16 @@ namespace SceneSettingsInternal
 		return IsCompatibleSceneSettingValue(featureValue, value);
 	}
 
-	bool ValidateSceneSettingEntry(std::string_view context, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, const json& value,
-		bool requireNumeric, FeatureSettingsCache* featureSettingsCache)
+	bool ValidateSceneSettingEntry(std::string_view context, SceneSettingsManager::SceneType type,
+		const std::string& featureShortName, const std::vector<std::string>& settingPath,
+		const std::string& settingKey, const json& value, bool requireNumeric,
+		FeatureSettingsCache* featureSettingsCache)
 	{
+		if (!IsSettingAllowedBySceneTypePolicy(type, featureShortName, settingPath, settingKey)) {
+			logger::warn("[SceneSettings] {} entry {} is not whitelisted for this scene type",
+				context, GetSettingLogName(featureShortName, settingPath, settingKey));
+			return false;
+		}
 		if (IsBlacklistedSceneSetting(featureShortName, settingPath, settingKey)) {
 			logger::warn("[SceneSettings] {} entry {} is blacklisted",
 				context, GetSettingLogName(featureShortName, settingPath, settingKey));
@@ -983,7 +993,7 @@ namespace SceneSettingsInternal
 		return true;
 	}
 
-	bool ApplyEntryValueUpdates(std::string_view context,
+	bool ApplyEntryValueUpdates(std::string_view context, SceneSettingsManager::SceneType type,
 		std::vector<SceneSettingsManager::SettingEntry>& entries,
 		std::span<const SceneSettingsManager::EntryValueUpdate> updates,
 		bool requireNumeric, bool& userEntriesChanged)
@@ -997,7 +1007,7 @@ namespace SceneSettingsInternal
 			if (update.index >= entries.size() || !updatedIndices.insert(update.index).second)
 				return false;
 			const auto& entry = entries[update.index];
-			if (!ValidateSceneSettingEntry(context, entry.featureShortName, entry.settingPath,
+			if (!ValidateSceneSettingEntry(context, type, entry.featureShortName, entry.settingPath,
 					entry.settingKey, update.value, requireNumeric, &featureSettingsCache))
 				return false;
 		}

@@ -359,9 +359,9 @@ bool SceneSettingsManager::IsFeatureAllowedForType(SceneType type, const std::st
 
 bool SceneSettingsManager::IsSettingAllowedForType(SceneType type,
 	const std::string& featureShortName, const std::vector<std::string>& settingPath,
-	const std::string& settingKey)
+	const std::string& settingKey, bool requireTransitionable)
 {
-	auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey);
+	auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey, requireTransitionable);
 	return Feature::FindFeatureByShortName(featureShortName) && setting &&
 	       IsCatalogSettingAllowedForSceneType(type, *setting);
 }
