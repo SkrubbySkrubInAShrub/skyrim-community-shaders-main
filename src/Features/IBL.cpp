@@ -32,12 +32,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void IBL::DrawSettings()
 {
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
-			return;
-		}
+	if (IsManagedByENB()) {
+		ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+		return;
 	}
 
 	ImGui::Checkbox(T(TKEY("enable_ibl"), "Enable IBL"), (bool*)&settings.EnableIBL);
@@ -141,24 +138,27 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.DALCMode = settings.DALCMode
 	};
 
-	if (!sceneDisabled && globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			auto& settingManager = SettingManager::GetSingleton();
-			if (settingManager.GetValue<bool>("EnableImageBasedLighting", "EFFECT")) {
-				data.EnableIBL = Util::IsInterior() ? 0u : 1u;
-				data.EnvIBLScale = 0.0f;
-				data.SkyIBLScale = settingManager.GetInterpolatedTimeOfDayValue("MultiplicativeAmount", "IMAGEBASEDLIGHTING");
-				data.DALCAmount = 1.0f;
-				data.EnvIBLSaturation = 1.0f;
-				data.SkyIBLSaturation = 1.0f;
-				data.DALCMode = 3;
-				data.FogAmount = 0.0f;
-			}
-		}
+	if (!sceneDisabled && IsManagedByENB()) {
+		auto& settingManager = SettingManager::GetSingleton();
+		data.EnableIBL = Util::IsInterior() ? 0u : 1u;
+		data.EnvIBLScale = 0.0f;
+		data.SkyIBLScale = settingManager.GetInterpolatedTimeOfDayValue("MultiplicativeAmount", "IMAGEBASEDLIGHTING");
+		data.DALCAmount = 1.0f;
+		data.EnvIBLSaturation = 1.0f;
+		data.SkyIBLSaturation = 1.0f;
+		data.DALCMode = 3;
+		data.FogAmount = 0.0f;
 	}
 
 	return data;
+}
+
+bool IBL::IsManagedByENB() const
+{
+	auto& enb = globals::features::effects11;
+	if (!enb.loaded || !enb.enableEffect)
+		return false;
+	return SettingManager::GetSingleton().GetValue<bool>("EnableImageBasedLighting", "EFFECT");
 }
 
 bool IBL::IsDisabledForCurrentScene() const
