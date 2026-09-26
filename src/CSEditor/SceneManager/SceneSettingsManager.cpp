@@ -16,6 +16,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <regex>
 
 using namespace SceneSettingsInternal;
 using namespace SceneSettingsOverwrites;
@@ -225,6 +226,23 @@ std::filesystem::path SceneSettingsManager::GetWeatherOverwritesDir()
 std::filesystem::path SceneSettingsManager::GetLocationOverwritesDir()
 {
 	return Util::PathHelpers::GetSceneSettingsPath() / "Locations";
+}
+
+std::filesystem::path SceneSettingsManager::GetPresetMetadataPath(const std::string& presetName)
+{
+	return Util::PathHelpers::GetSceneSettingsPath() / (presetName + ".json");
+}
+
+bool SceneSettingsManager::IsReservedPresetName(std::string_view presetName)
+{
+	// Windows paths are case-insensitive, so "scenemanager" would still replace the user document.
+	return _stricmp(std::string(presetName).c_str(), GetUserSettingsFilePath().stem().string().c_str()) == 0;
+}
+
+bool SceneSettingsManager::IsValidPresetVersion(std::string_view version)
+{
+	static const std::regex pattern(R"(^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$)");
+	return std::regex_match(version.begin(), version.end(), pattern);
 }
 
 // --- Time of Day Period Helpers ---
@@ -753,6 +771,7 @@ void SceneSettingsManager::LoadAll()
 		dataLoaded = true;
 		DiscoverOverwrites(SceneType::InteriorOnly);
 		DiscoverOverwrites(SceneType::TimeOfDay);
+		DiscoverPresetMetadata();
 		LoadAllUserSettings();
 		BumpEntryPresentationRevision();
 		activeEntryCacheDirty = true;
@@ -784,6 +803,7 @@ void SceneSettingsManager::ReloadOverwrites()
 
 	DiscoverOverwrites(SceneType::InteriorOnly);
 	DiscoverOverwrites(SceneType::TimeOfDay);
+	DiscoverPresetMetadata();
 	// Discovery for a layer that never loaded would run without its user settings, so it waits.
 	if (weatherDataLoaded)
 		DiscoverWeatherOverwrites();

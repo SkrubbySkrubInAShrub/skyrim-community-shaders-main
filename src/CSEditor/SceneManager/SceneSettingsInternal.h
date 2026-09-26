@@ -31,6 +31,10 @@ namespace SceneSettingsInternal
 	/// Earlier open-shaders name for the locationTypes section and its "Category" type; read and migrated.
 	constexpr const char* kLegacyLocationTypeSectionName = "categories";
 	constexpr const char* kLegacyLocationTypeName = "Category";
+	/// Marks a SceneSettings root json as a preset's identity file rather than any other document.
+	constexpr const char* kPresetMetadataKey = "presetMetadata";
+	constexpr const char* kPresetMetadataNameKey = "name";
+	constexpr const char* kPresetMetadataVersionKey = "version";
 
 	using namespace Util::Settings;
 

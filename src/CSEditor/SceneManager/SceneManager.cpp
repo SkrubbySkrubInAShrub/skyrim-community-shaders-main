@@ -322,6 +322,29 @@ namespace
 		DrawNameList(snapshot.transitionApplyFailures);
 	}
 
+	void DrawPresets(const std::vector<SceneSettingsManager::PresetMetadata>& presets)
+	{
+		if (presets.empty()) {
+			Util::Text::Disabled("No preset metadata files found.");
+			return;
+		}
+		if (!ImGui::BeginTable("Presets", 3, kDebugTableFlags))
+			return;
+		for (const auto* header : { "Name", "Version", "File" })
+			ImGui::TableSetupColumn(header);
+		ImGui::TableHeadersRow();
+		for (const auto& preset : presets) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(preset.name.c_str());
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(preset.version.c_str());
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(preset.path.filename().string().c_str());
+		}
+		ImGui::EndTable();
+	}
+
 	void DrawResolvedSettings(const DebugSnapshot& snapshot)
 	{
 		if (snapshot.resolvedSettings.empty()) {
@@ -388,6 +411,8 @@ void SceneManager::DrawSettings()
 		DrawLocationTransitions(snapshot);
 	if (ImGui::CollapsingHeader("Applied Settings", ImGuiTreeNodeFlags_DefaultOpen))
 		DrawResolvedSettings(snapshot);
+	if (ImGui::CollapsingHeader("Presets"))
+		DrawPresets(GetPresetMetadata());
 	if (ImGui::CollapsingHeader("Scene Type Entries"))
 		DrawLayers(snapshot.sceneLayers);
 	if (ImGui::CollapsingHeader("Weather Entries"))

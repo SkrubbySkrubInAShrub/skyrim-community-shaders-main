@@ -191,8 +191,30 @@ public:
 
 	/** @brief Bakes the winning values of every context into a preset, replacing its file set.
 	 *  Tombstoned addresses are omitted; a paused user entry lets the mod's value through.
+	 *  @param version The preset's own MAJOR.MINOR.PATCH release, recorded in its metadata file.
 	 *  @return Whether every file was written. */
-	bool ExportPreset(const std::string& modName);
+	bool ExportPreset(const std::string& modName, const std::string& version);
+
+	/// A preset's identity file at the SceneSettings root, written alongside its overwrites on export.
+	struct PresetMetadata
+	{
+		std::string name;
+		std::string version;
+		std::filesystem::path path;
+	};
+
+	static constexpr const char* kDefaultPresetVersion = "1.0.0";
+
+	/// Whether a preset version is a semantic MAJOR.MINOR.PATCH triple.
+	static bool IsValidPresetVersion(std::string_view version);
+
+	/// Preset identity files found at the SceneSettings root, in filename order.
+	const std::vector<PresetMetadata>& GetPresetMetadata() const { return presetMetadata; }
+
+	static std::filesystem::path GetPresetMetadataPath(const std::string& presetName);
+
+	/// Whether a preset of this name would collide with a file the Scene Manager owns at the root.
+	static bool IsReservedPresetName(std::string_view presetName);
 
 	// --- Scene Application ---
 
@@ -802,6 +824,7 @@ private:
 	bool weatherUserSettingsModified = false;
 	bool locationUserSettingsModified = false;
 	bool locationTransitionModified = false;
+	std::vector<PresetMetadata> presetMetadata;
 	bool dataLoaded = false;
 	bool deferredSceneChangesPending = false;
 	std::chrono::steady_clock::time_point deferredSceneChangesDeadline{};
@@ -1181,6 +1204,9 @@ private:
 	// --- Overwrite discovery helper ---
 	void DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir,
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count);
+
+	/// Re-reads every preset identity file at the SceneSettings root.
+	void DiscoverPresetMetadata();
 
 	/// Discover overwrite files for a single weather SPID folder.
 	void DiscoverWeatherOverwritesForSpid(RE::FormID weatherId, const std::filesystem::path& weatherDir);
