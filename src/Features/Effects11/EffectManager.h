@@ -87,8 +87,6 @@ public:
 	void CreateCopyShaders();
 	void CreateColorCorrectionShader();
 
-	void RenderEffectsList();
-
 	// Common variable data (updated once, applied to all effects)
 	struct CommonVariableData
 	{

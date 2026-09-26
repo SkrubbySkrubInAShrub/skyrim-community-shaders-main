@@ -4,8 +4,8 @@
 
 #include "Effects11/D3D11StateBackup.h"
 #include "Effects11/ENBHelper.h"
+#include "Effects11/Editor/Effects11Editor.h"
 #include "Effects11/EffectManager.h"
-#include "Effects11/MenuManager.h"
 #include "Effects11/PresetManager.h"
 #include "Effects11/SettingManager.h"
 #include "Effects11/WeatherManager.h"
@@ -92,7 +92,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 void Effects11::DrawSettings()
 {
-	MenuManager::GetSingleton().RenderImGui();
+	Effects11Editor::GetSingleton().DrawLauncher();
 }
 
 void Effects11::ToggleEnabled()

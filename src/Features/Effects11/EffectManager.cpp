@@ -1,6 +1,7 @@
 #include "EffectManager.h"
 
 #include "D3D11StateBackup.h"
+#include "Editor/Effects11Editor.h"
 #include "Features/Effects11.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -808,8 +809,10 @@ void EffectManager::UpdateCursorData()
 	commonData.tempInfo1[0] = cursorPosition[0];
 	commonData.tempInfo1[1] = cursorPosition[1];
 
+	// Shaders get the cursor while a UI that shows it is open, e.g. for click-to-focus depth of field
 	auto* menu = globals::menu;
-	if (menu && menu->IsEnabled && ImGui::GetCurrentContext()) {
+	const bool cursorVisible = (menu && menu->IsEnabled) || Effects11Editor::GetSingleton().IsOpen();
+	if (cursorVisible && ImGui::GetCurrentContext()) {
 		const auto& io = ImGui::GetIO();
 		if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
 			cursorPosition[0] = std::clamp(io.MousePos.x / io.DisplaySize.x, 0.0f, 1.0f);
@@ -1085,41 +1088,4 @@ void EffectManager::ReloadShaders()
 	colorCorrectionComputeShader = nullptr;
 	CreateCopyShaders();
 	CreateColorCorrectionShader();
-}
-
-void EffectManager::RenderEffectsList()
-{
-	Effect* allEffects[] = { &enbBloom, &enbLens, &enbAdaptation, &enbEffect, &enbEffectPostPass };
-
-	std::vector<Effect*> compiledEffects;
-	for (auto* effect : allEffects)
-		if (effect->IsCompiled())
-			compiledEffects.push_back(effect);
-
-#ifdef ENABLE_ENB_EXTENDER
-	if (!compiledEffects.empty())
-		ExtendedEffect::RenderMergedUI(compiledEffects, UITree::FilterMode::TopLevelOnly);
-#endif
-
-	for (auto* effect : compiledEffects) {
-		if (ImGui::TreeNodeEx(effect->GetName().c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-#ifdef ENABLE_ENB_EXTENDER
-			Effect* self = effect;
-			ExtendedEffect::RenderMergedUI({ &self, 1 }, UITree::FilterMode::NonTopLevelOnly);
-#else
-			effect->RenderImGui();
-#endif
-			ImGui::TreePop();
-		}
-	}
-
-	for (auto* effect : allEffects) {
-		if (!effect->IsFilePresent())
-			continue;
-		if (!effect->GetErrors().empty()) {
-			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Error, "%s:", effect->GetName().c_str());
-			for (const auto& err : effect->GetErrors())
-				ImGui::TextWrapped("%s", err.c_str());
-		}
-	}
 }
