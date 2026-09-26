@@ -631,6 +631,8 @@ namespace
 				Effects11UI::Clipboard::SetColor(uiVar.vectorValue);
 			if (ImGui::MenuItem(T(TKEY("paste"), "Paste"), nullptr, false, Effects11UI::Clipboard::HasColor())) {
 				Effects11UI::Clipboard::GetColor(uiVar.vectorValue);
+				for (int i = 0; i < Effects11UI::Clipboard::kColorComponents; ++i)
+					uiVar.vectorValue[i] = std::clamp(uiVar.vectorValue[i], uiVar.floatMin, uiVar.floatMax);
 				changed = true;
 			}
 		}
@@ -761,9 +763,9 @@ namespace
 		return true;
 	}
 
-	void RenderTechniqueDropdown(Effect* effect, RenderContext& ctx)
+	void RenderTechniqueDropdown(Effect* effect, RenderContext& ctx, bool ancestorMatched)
 	{
-		if (ctx.Filtering() && !Effects11UI::ContainsNoCase(effect->techniqueDropdown.name, ctx.view.filter))
+		if (ctx.Filtering() && !ancestorMatched && !Effects11UI::ContainsNoCase(effect->techniqueDropdown.name, ctx.view.filter))
 			return;
 
 		ImGui::PushID(effect);
@@ -812,7 +814,7 @@ namespace
 	{
 		for (auto& [effect, group] : techDropdowns)
 			if (!group.empty() && group == node.fullPath && !effect->techniqueDropdown.topLevel)
-				RenderTechniqueDropdown(effect, ctx);
+				RenderTechniqueDropdown(effect, ctx, ancestorMatched);
 
 		bool inTable = false;
 		bool lastWasSeparator = false;
@@ -913,14 +915,13 @@ void ExtendedEffect::RenderMergedUI(std::span<Effect*> effects, UITree::FilterMo
 	if (filter != UITree::FilterMode::TopLevelOnly) {
 		for (auto& [effect, group] : techDropdowns)
 			if (effect->techniqueDropdown.topLevel || group.empty())
-				RenderTechniqueDropdown(effect, ctx);
+				RenderTechniqueDropdown(effect, ctx, false);
 	}
 
 	RenderGroupNode(tree.root, ctx, techDropdowns, false);
 
 	if (!changedEffects.empty()) {
-		auto& cd = EffectManager::GetSingleton().commonData;
-		uint32_t activeWeatherID = static_cast<uint32_t>(cd.weather[2] > 0.5f ? cd.weather[0] : cd.weather[1]);
+		const uint32_t activeWeatherID = EffectManager::GetSingleton().GetDominantWeatherID();
 		for (auto& [effect, index] : changedVars) {
 			if (auto* ext = dynamic_cast<ExtendedEffect*>(effect))
 				ext->SyncWeatherVarFromUI(index, activeWeatherID);

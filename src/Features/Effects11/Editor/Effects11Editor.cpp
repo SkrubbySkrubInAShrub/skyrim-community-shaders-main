@@ -44,7 +44,7 @@ namespace
 		Sky,
 		Atmosphere,
 		Camera,
-		WaterAndRain,
+		Rain,
 		Other,
 		Count
 	};
@@ -68,7 +68,7 @@ namespace
 		{ "LIGHTSPRITE", Group::Lighting },
 		{ "FIRE", Group::Lighting },
 		{ "SKY", Group::Sky },
-		{ "SKYSCATTERING", Group::Sky },
+		{ "PROCEDURALSUN", Group::Sky },
 		{ "SUNGLARE", Group::Sky },
 		{ "CLOUDSHADOWS", Group::Sky },
 		{ "VOLUMETRICFOG", Group::Atmosphere },
@@ -77,8 +77,7 @@ namespace
 		{ "ADAPTATION", Group::Camera },
 		{ "BLOOM", Group::Camera },
 		{ "LENS", Group::Camera },
-		{ "WATER", Group::WaterAndRain },
-		{ "RAIN", Group::WaterAndRain },
+		{ "RAIN", Group::Rain },
 	};
 
 	bool IsKnownCategory(std::string_view a_category)
@@ -101,8 +100,8 @@ namespace
 			return T("feature.effects11.group.atmosphere", "Atmosphere");
 		case Group::Camera:
 			return T("feature.effects11.group.camera", "Camera");
-		case Group::WaterAndRain:
-			return T("feature.effects11.group.water_rain", "Water & Rain");
+		case Group::Rain:
+			return T("feature.effects11.group.rain", "Rain");
 		default:
 			return T("feature.effects11.group.other", "Other");
 		}
@@ -138,8 +137,8 @@ namespace
 			return { T("feature.effects11.category.fire", "Fire"), T("feature.effects11.category.fire_desc", "Brightness and contrast of fire.") };
 		if (a_category == "SKY")
 			return { T("feature.effects11.category.sky", "Sky"), T("feature.effects11.category.sky_desc", "Sky gradient, clouds, sun, moon and stars.") };
-		if (a_category == "SKYSCATTERING")
-			return { T("feature.effects11.category.skyscattering", "Sky Scattering"), T("feature.effects11.category.skyscattering_desc", "Atmospheric scattering for the sky and cloud lighting.") };
+		if (a_category == "PROCEDURALSUN")
+			return { T("feature.effects11.category.proceduralsun", "Procedural Sun"), T("feature.effects11.category.proceduralsun_desc", "Size, edge and glow of the procedural sun disk.") };
 		if (a_category == "SUNGLARE")
 			return { T("feature.effects11.category.sunglare", "Sun Glare"), T("feature.effects11.category.sunglare_desc", "Glow around the sun.") };
 		if (a_category == "CLOUDSHADOWS")
@@ -156,8 +155,6 @@ namespace
 			return { T("feature.effects11.category.bloom", "Bloom"), T("feature.effects11.category.bloom_desc", "Overall bloom amount handed to the shaders.") };
 		if (a_category == "LENS")
 			return { T("feature.effects11.category.lens", "Lens"), T("feature.effects11.category.lens_desc", "Overall lens effect amount handed to the shaders.") };
-		if (a_category == "WATER")
-			return { T("feature.effects11.category.water", "Water"), T("feature.effects11.category.water_desc", "Waves, color, reflections and lighting of water.") };
 		if (a_category == "RAIN")
 			return { T("feature.effects11.category.rain", "Rain"), T("feature.effects11.category.rain_desc", "Motion stretch and transparency of rain drops.") };
 		return {};
@@ -1081,7 +1078,7 @@ void Effects11Editor::DrawColorTimeOfDayRow(const Setting& a_setting, const char
 
 		float rgb[3] = { value.values[period].x, value.values[period].y, value.values[period].z };
 		constexpr ImGuiColorEditFlags flags = ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoTooltip |
-		                                      ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR;
+		                                      ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoOptions;
 		if (ImGui::ColorEdit3("##c", rgb, flags)) {
 			value.values[period] = { rgb[0], rgb[1], rgb[2] };
 			changed = true;
@@ -1516,6 +1513,9 @@ void Effects11Editor::DrawLauncher()
 		SameLineIfFits(ImGui::CalcTextSize(T(TKEY("unsaved_changes"), "Unsaved changes")).x);
 		ImGui::AlignTextToFramePadding();
 		Util::Text::Warning("%s", T(TKEY("unsaved_changes"), "Unsaved changes"));
+		ImGui::SameLine();
+		if (Util::SuccessButton(T(TKEY("save"), "Save")))
+			Save();
 	}
 
 	if (!effectManager.enbEffect.IsFilePresent())
@@ -1642,8 +1642,7 @@ bool Effects11Editor::IsInterior() const
 
 uint32_t Effects11Editor::EditWeatherID() const
 {
-	const auto& commonData = EffectManager::GetSingleton().commonData;
-	return static_cast<uint32_t>(commonData.weather[2] > 0.5f ? commonData.weather[0] : commonData.weather[1]);
+	return EffectManager::GetSingleton().GetDominantWeatherID();
 }
 
 std::string Effects11Editor::EditTargetFile(const std::string& a_category) const

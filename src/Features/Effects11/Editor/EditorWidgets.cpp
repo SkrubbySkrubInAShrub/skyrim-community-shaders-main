@@ -37,7 +37,7 @@ namespace Effects11UI
 				Float,
 				Color
 			} kind = Kind::None;
-			float values[3] = {};
+			float values[Clipboard::kColorComponents] = {};
 		} clipboard;
 	}
 
@@ -189,7 +189,8 @@ namespace Effects11UI
 
 	bool ColorValue(const char* a_id, float* a_color, int a_components, bool a_hdr)
 	{
-		ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayRGB;
+		// NoOptions leaves right-click to the parameter's own context menu
+		ImGuiColorEditFlags flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_NoOptions;
 		if (a_hdr)
 			flags |= ImGuiColorEditFlags_HDR;
 		if (a_components >= 4)
@@ -236,13 +237,13 @@ namespace Effects11UI
 		void SetColor(const float* a_rgb)
 		{
 			clipboard.kind = ClipboardState::Kind::Color;
-			std::copy_n(a_rgb, 3, clipboard.values);
+			std::copy_n(a_rgb, kColorComponents, clipboard.values);
 			ImGui::SetClipboardText(std::format("{:.4f}, {:.4f}, {:.4f}", a_rgb[0], a_rgb[1], a_rgb[2]).c_str());
 		}
 
 		bool HasFloat() { return clipboard.kind == ClipboardState::Kind::Float; }
 		bool HasColor() { return clipboard.kind == ClipboardState::Kind::Color; }
 		float GetFloat() { return clipboard.values[0]; }
-		void GetColor(float* a_rgb) { std::copy_n(clipboard.values, 3, a_rgb); }
+		void GetColor(float* a_rgb) { std::copy_n(clipboard.values, kColorComponents, a_rgb); }
 	}
 }

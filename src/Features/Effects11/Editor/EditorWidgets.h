@@ -88,6 +88,9 @@ namespace Effects11UI
 	/** @brief One-slot clipboard so a value can be copied from one setting and pasted into another. */
 	namespace Clipboard
 	{
+		/** @brief Colors are copied as RGB; alpha is left untouched on paste. */
+		inline constexpr int kColorComponents = 3;
+
 		void SetFloat(float a_value);
 		void SetColor(const float* a_rgb);
 		bool HasFloat();

@@ -127,6 +127,8 @@ public:
 	} ids;
 
 	const CommonVariableData& GetCommonData() const { return commonData; }
+	/** @brief The weather that dominates the current blend; weather-separated edits are written to it. */
+	uint32_t GetDominantWeatherID() const { return static_cast<uint32_t>(commonData.weather[2] > 0.5f ? commonData.weather[0] : commonData.weather[1]); }
 
 	bool IsInitialized() const { return initialized; }
 
