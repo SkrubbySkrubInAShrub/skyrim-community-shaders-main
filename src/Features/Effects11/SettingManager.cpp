@@ -65,24 +65,6 @@ static bool TryParseWeatherID(const std::string& a_key, uint32_t& a_out)
 	}
 }
 
-// True if the ini defines the setting; any time-of-day key counts for time-of-day settings
-static bool IniDefinesSetting(const std::string& a_filePath, const Setting& a_setting)
-{
-	auto hasKey = [&](const std::string& key) {
-		char buffer[4];
-		return GetPrivateProfileStringA(a_setting.category.c_str(), key.c_str(), "", buffer, sizeof(buffer), a_filePath.c_str()) > 0;
-	};
-
-	if (a_setting.type == SettingType::TimeOfDay || a_setting.type == SettingType::ColorTimeOfDay) {
-		for (const char* timeOfDayName : timeOfDayNames) {
-			if (hasKey(a_setting.key + timeOfDayName))
-				return true;
-		}
-		return false;
-	}
-	return hasKey(a_setting.key);
-}
-
 SettingManager& SettingManager::GetSingleton()
 {
 	static SettingManager instance;
@@ -568,9 +550,8 @@ void SettingManager::LoadWeatherSettings(const std::vector<uint32_t>& weatherIDs
 	}
 	for (auto& setting : settingsCopy) {
 		if (setting.hasWeatherSupport) {
-			definedValues[setting.id] = IniDefinesSetting(filePath, setting);
 			setting.defaultValue = setting.currentValue;
-			LoadSettingFromFile(filePath, setting.category, setting.key, setting);
+			definedValues[setting.id] = LoadSettingFromFile(filePath, setting.category, setting.key, setting);
 			loadedValues[setting.id] = setting.currentValue;
 		}
 	}
@@ -910,11 +891,12 @@ static bool TryParseColor(const std::string& a_value, float a_min, float a_max, 
 	return true;
 }
 
-void SettingManager::LoadSettingFromFile(const std::string& filePath, const std::string& section, const std::string& key, Setting& setting)
+bool SettingManager::LoadSettingFromFile(const std::string& filePath, const std::string& section, const std::string& key, Setting& setting)
 {
 	// Later keys override earlier ones, so the canonical key goes last to win over legacy names
 	std::vector<std::string> keys{ setting.legacyKeys };
 	keys.push_back(key);
+	bool found = false;
 
 	switch (setting.type) {
 	case SettingType::Bool:
@@ -923,8 +905,10 @@ void SettingManager::LoadSettingFromFile(const std::string& filePath, const std:
 			for (const auto& k : keys) {
 				std::string str;
 				bool parsed;
-				if (ReadIniValue(filePath, section, k, str) && TryParseBool(str, parsed))
+				if (ReadIniValue(filePath, section, k, str) && TryParseBool(str, parsed)) {
 					value = parsed;
+					found = true;
+				}
 			}
 			setting.currentValue = value;
 			break;
@@ -935,8 +919,10 @@ void SettingManager::LoadSettingFromFile(const std::string& filePath, const std:
 			for (const auto& k : keys) {
 				std::string str;
 				float parsed;
-				if (ReadIniValue(filePath, section, k, str) && TryParseFloat(str, parsed))
+				if (ReadIniValue(filePath, section, k, str) && TryParseFloat(str, parsed)) {
 					value = std::clamp(parsed, setting.minValue, setting.maxValue);
+					found = true;
+				}
 			}
 			setting.currentValue = value;
 			break;
@@ -948,12 +934,16 @@ void SettingManager::LoadSettingFromFile(const std::string& filePath, const std:
 			for (const auto& k : keys) {
 				std::string str;
 				float parsed;
-				if (ReadIniValue(filePath, section, k, str) && TryParseFloat(str, parsed))
+				if (ReadIniValue(filePath, section, k, str) && TryParseFloat(str, parsed)) {
 					std::fill(std::begin(timeOfDayValue.values), std::end(timeOfDayValue.values), std::clamp(parsed, setting.minValue, setting.maxValue));
+					found = true;
+				}
 
 				for (int i = 0; i < 8; ++i) {
-					if (ReadIniValue(filePath, section, k + timeOfDayNames[i], str) && TryParseFloat(str, parsed))
+					if (ReadIniValue(filePath, section, k + timeOfDayNames[i], str) && TryParseFloat(str, parsed)) {
 						timeOfDayValue.values[i] = std::clamp(parsed, setting.minValue, setting.maxValue);
+						found = true;
+					}
 				}
 			}
 
@@ -967,12 +957,16 @@ void SettingManager::LoadSettingFromFile(const std::string& filePath, const std:
 			for (const auto& k : keys) {
 				std::string str;
 				float3 parsed;
-				if (ReadIniValue(filePath, section, k, str) && TryParseColor(str, setting.minValue, setting.maxValue, parsed))
+				if (ReadIniValue(filePath, section, k, str) && TryParseColor(str, setting.minValue, setting.maxValue, parsed)) {
 					std::fill(std::begin(colorTimeOfDayValue.values), std::end(colorTimeOfDayValue.values), parsed);
+					found = true;
+				}
 
 				for (int i = 0; i < 8; ++i) {
-					if (ReadIniValue(filePath, section, k + timeOfDayNames[i], str) && TryParseColor(str, setting.minValue, setting.maxValue, parsed))
+					if (ReadIniValue(filePath, section, k + timeOfDayNames[i], str) && TryParseColor(str, setting.minValue, setting.maxValue, parsed)) {
 						colorTimeOfDayValue.values[i] = parsed;
+						found = true;
+					}
 				}
 			}
 
@@ -980,6 +974,7 @@ void SettingManager::LoadSettingFromFile(const std::string& filePath, const std:
 			break;
 		}
 	}
+	return found;
 }
 
 void SettingManager::SaveSettingToFile(const std::string& filePath, const std::string& section, const std::string& key, const Setting& setting)

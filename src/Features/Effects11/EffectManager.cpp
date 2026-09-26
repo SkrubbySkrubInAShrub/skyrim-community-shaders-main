@@ -552,6 +552,7 @@ void EffectManager::CreateCopyShaders()
 		return;
 
 	winrt::com_ptr<ID3DBlob> psBlob;
+	errorBlob = nullptr;  // Holds any vertex shader warnings, and put() requires an empty pointer
 	hr = D3DCompile(pixelShaderSource.data(), pixelShaderSource.size(), "CopyPS.hlsl", nullptr, nullptr,
 		"main", "ps_5_0", 0, 0, psBlob.put(), errorBlob.put());
 

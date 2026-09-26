@@ -227,6 +227,7 @@ private:
 	SettingValue InterpolateValues(const SettingValue& a, const SettingValue& b, float t) const;
 	float ComputeTimeOfDayInterpolation(const TimeOfDayValue& value) const;
 	float3 ComputeColorTimeOfDayInterpolation(const ColorTimeOfDayValue& value) const;
-	void LoadSettingFromFile(const std::string& filePath, const std::string& section, const std::string& key, Setting& setting);
+	/** @return true if the file set the setting under any of its keys. */
+	bool LoadSettingFromFile(const std::string& filePath, const std::string& section, const std::string& key, Setting& setting);
 	void SaveSettingToFile(const std::string& filePath, const std::string& section, const std::string& key, const Setting& setting);
 };
