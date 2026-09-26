@@ -216,7 +216,7 @@ namespace SceneWidgetBinding
 		/// Drops the resolved entries once they are deleted, so the rest of the frame reads Absent.
 		void ForgetEntries();
 
-		/// Points the control at this page's own value whenever the live member carries another layer's.
+		/// Points the control at this page's own value, never the live member the scene resolves into.
 		void BindDisplayValue();
 
 		/// Storage the control was bound to, and so the one an edit landed in.
@@ -224,6 +224,10 @@ namespace SceneWidgetBinding
 
 		/// Loads what this page would apply into the holding storage the bound control reads.
 		void StoreHoldingValue();
+		/** @brief What a component would fall back on were this page active and holding nothing: the
+		 *  highest lower layer supplying it, else the feature's base.
+		 *  @return Null when the live member already holds that base. */
+		const json* ResolveFallbackValue(const Component& a_component) const;
 		void WriteHoldingComponent(const Component& a_component, const json& a_stored);
 
 		/// The caller's post-call storage, as the primitive one component persists.
@@ -266,9 +270,9 @@ namespace SceneWidgetBinding
 		bool mixedAcrossPeriods = false;
 
 		/// What the control showed before the call, so entry creation can restore it before the manager
-		/// snapshots the member. Re-seeded from `holding` once a layer above shadows this page.
+		/// snapshots the member. Re-seeded from `holding` once the control is bound to it.
 		ValueStorage preCall;
-		/// Storage a displaced control is bound to, so no write reaches the feature member.
+		/// Storage a bound scene control reads and writes, so no write reaches the feature member.
 		ValueStorage holding;
 		/// Whether the control was bound to `holding` rather than the caller's storage.
 		bool boundToHolding = false;

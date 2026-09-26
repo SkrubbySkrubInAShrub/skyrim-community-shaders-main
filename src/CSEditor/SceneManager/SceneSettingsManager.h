@@ -603,6 +603,10 @@ public:
 	/// Entries stored for one context, unfiltered by period. Empty when the context holds none.
 	std::span<const SettingEntry> GetContextEntries(const SceneContextId& context) const;
 
+	/** @brief The feature's own value at an address the scene layer is applied over, or null when the
+	 *  layer leaves it alone and the live member already holds it. */
+	const json* FindAppliedBaseline(const SettingIdentity& setting) const;
+
 	/// Which layer supplies the winning value at an address in a context.
 	enum class SettingLayer : std::uint8_t
 	{

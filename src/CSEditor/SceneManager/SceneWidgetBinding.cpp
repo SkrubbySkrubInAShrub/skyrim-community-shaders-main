@@ -406,6 +406,27 @@ namespace
 		return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
 	}
 
+	/** @brief The entry one context applies at an address for the periods asked for, or null when it
+	 *  supplies nothing. A user entry outranks an overwrite, and the last of a source wins, as the
+	 *  resolver overlays them. */
+	const SceneSettingsManager::SettingEntry* FindSupplyingEntry(const SceneContextId& a_context,
+		const SceneSettingsManager::SettingIdentity& a_setting, PeriodMask a_periods)
+	{
+		using EntrySource = SceneSettingsManager::EntrySource;
+		const SceneSettingsManager::SettingEntry* supplier = nullptr;
+		for (const auto& entry : SceneSettingsManager::GetSingleton()->GetContextEntries(a_context)) {
+			const auto period = static_cast<size_t>(entry.period);
+			if (entry.paused || !IsInContextSet(entry, a_context) ||
+				(period < static_cast<size_t>(kPeriodCount) && !(a_periods & static_cast<PeriodMask>(1u << period))) ||
+				entry.featureShortName != a_setting.featureShortName || entry.settingPath != a_setting.settingPath ||
+				entry.settingKey != a_setting.settingKey)
+				continue;
+			if (!supplier || entry.source == EntrySource::User || supplier->source != EntrySource::User)
+				supplier = &entry;
+		}
+		return supplier;
+	}
+
 }
 
 void SceneWidgetBinding::WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value)
@@ -778,8 +799,7 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 	auto* manager = SceneSettingsManager::GetSingleton();
 
 	// AddContextSetting snapshots the feature member, so what the control showed before the call has
-	// to be back in it: an edit under way would otherwise be recorded as the entry's original, and a
-	// shadowed control would capture the value that beat it rather than its own.
+	// to be in it, or the entry's original would be the value the scene resolved rather than its own.
 	ValueStorage live;
 	std::memcpy(live.bytes, value.data, valueSize);
 	std::memcpy(value.data, preCall.bytes, valueSize);
@@ -803,24 +823,19 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 
 void SceneWidgetBinding::Guard::BindDisplayValue()
 {
-	// A paused entry is not running, and one a layer above shadows never reaches the scene, so in
-	// both cases the member carries someone else's value. The control has to show what this page
-	// would apply instead of the value that beat it.
-	const bool shadowed = upperLayer != SceneSettingsManager::SettingLayer::None && SuppliesValue(winningLayer);
-	boundToHolding = state == State::Paused || shadowed;
-	if (!boundToHolding)
-		return;
-
+	// The live member carries what the scene resolved for right now, not this page's value, and a
+	// write into it would be snapshotted as the feature's base. Edits reach the scene via the resolver.
+	boundToHolding = true;
 	StoreHoldingValue();
-	// Entry creation snapshots the member, so a shadowed control's baseline has to be what it showed.
-	// A paused one never creates an entry, and its preCall is still the value the scene is running.
-	if (shadowed)
+	// Entry creation snapshots the member, so its baseline has to be what the control showed. A paused
+	// entry never creates one, and its preCall is still the value the scene is running.
+	if (state != State::Paused)
 		std::memcpy(preCall.bytes, holding.bytes, valueSize);
 }
 
 void SceneWidgetBinding::Guard::StoreHoldingValue()
 {
-	// Components without an entry still read live, so start from the caller's value.
+	// An address the scene leaves alone reads its base straight from the member.
 	std::memcpy(holding.bytes, value.data, valueSize);
 
 	const auto entries = SceneSettingsManager::GetSingleton()->GetContextEntries(contextId);
@@ -828,7 +843,30 @@ void SceneWidgetBinding::Guard::StoreHoldingValue()
 		const auto index = DisplayEntry(component);
 		if (index && *index < entries.size())
 			WriteHoldingComponent(component, entries[*index].value);
+		else if (const auto* fallback = ResolveFallbackValue(component))
+			WriteHoldingComponent(component, *fallback);
 	}
+}
+
+const json* SceneWidgetBinding::Guard::ResolveFallbackValue(const Component& a_component) const
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+	const SceneSettingsManager::SettingIdentity setting{ identity.featureShortName, identity.settingPath,
+		a_component.settingKey };
+
+	if (!manager->IsFeaturePaused(identity.featureShortName)) {
+		const auto periods = CoveredPeriodMask();
+		for (const auto& lower : GetLowerContexts(contextId)) {
+			const auto* supplier = FindSupplyingEntry(lower, setting, periods);
+			if (!supplier)
+				continue;
+			// A tombstone below suppresses everything under it, leaving the feature's base.
+			if (!supplier->deleted)
+				return &supplier->value;
+			break;
+		}
+	}
+	return manager->FindAppliedBaseline(setting);
 }
 
 void SceneWidgetBinding::Guard::WriteHoldingComponent(const Component& a_component, const json& a_stored)

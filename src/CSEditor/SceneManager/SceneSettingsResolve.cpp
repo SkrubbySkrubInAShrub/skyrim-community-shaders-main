@@ -1026,6 +1026,15 @@ json SceneSettingsManager::GetBaselineValue(const SettingAddress& address)
 	return {};
 }
 
+const json* SceneSettingsManager::FindAppliedBaseline(const SettingIdentity& setting) const
+{
+	const SettingAddress address{ setting.featureShortName, setting.settingPath, setting.settingKey };
+	if (!appliedSettings.contains(address))
+		return nullptr;
+	const auto found = baselineSettings.find(address);
+	return found != baselineSettings.end() ? &found->second : nullptr;
+}
+
 bool SceneSettingsManager::ResolvedValuesEqual(const json& lhs, const json& rhs)
 {
 	return lhs == rhs;

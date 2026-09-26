@@ -431,10 +431,10 @@ void SceneSettingsManager::UpdateContextEntryValues(const SceneContextId& contex
 	if (userEntriesChanged)
 		MarkContextUserSettingsModified(context, false);
 
-	// Only values moved, so the presentation caches still hold. The value caches must still go: a
-	// resolve landing mid-drag (a weather lerp or hour tick) would otherwise re-apply the pre-edit
-	// number over the value the control is dragging.
+	// Only values moved, so the presentation caches still hold. The value caches must still go, and
+	// the next Update resolves them so a drag previews live without resolving mid-DrawSettings.
 	if (deferSave) {
+		resolverDirty = true;
 		MarkSceneValuesDirty();
 		MarkDeferredSceneChanges();
 		return;
