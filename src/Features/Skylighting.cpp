@@ -415,6 +415,9 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 	if (!validOccluder || !(geometry->worldBound.radius > minOccluderRadius))
 		return precipitationOcclusionMapRenderPassList;
 
+	if (skylighting.inOcclusion && geometry->worldBound.center.z + geometry->worldBound.radius < skylighting.occlusionCullBelowZ)
+		return precipitationOcclusionMapRenderPassList;
+
 	if (skylighting.inOcclusion) {
 		if (auto userData = geometry->GetUserData()) {
 			RE::BSFadeNode* fadeNode = nullptr;
@@ -426,7 +429,8 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 			}
 
 			if (fadeNode) {
-				if (auto extraData = fadeNode->GetExtraData("BSX")) {
+				static const RE::BSFixedString bsxKey{ "BSX" };
+				if (auto extraData = fadeNode->GetExtraData(bsxKey)) {
 					auto bsxFlags = (RE::BSXFlags*)extraData;
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
@@ -594,6 +598,11 @@ void Skylighting::RenderOcclusion()
 
 				float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(1 - vPoint.LengthSquared()) };
 				PrecipitationShaderDirectionF.Normalize();
+
+				// The probe grid spans occlusionDistance * .5 vertically, centered on the eye
+				occlusionCullBelowZ = PrecipitationShaderDirectionF.z < OcclusionBelowGridMaxDirectionZ ?
+				                          Util::GetEyePosition().z - occlusionDistance * .25f - OcclusionBelowGridMargin :
+				                          -FLT_MAX;
 
 				PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
 

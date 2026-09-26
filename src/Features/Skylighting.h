@@ -99,6 +99,11 @@ public:
 	// cached variables
 	bool queuedResetSkylighting = true;
 	bool inOcclusion = false;
+	// Occluders wholly below this height can't shadow any probe, so the occlusion render skips them.
+	float occlusionCullBelowZ = -FLT_MAX;
+	static constexpr float OcclusionBelowGridMargin = 512.f;
+	// Shallower sun directions keep every occluder, as a texel's footprint reaches further below the probes.
+	static constexpr float OcclusionBelowGridMaxDirectionZ = -.25f;
 	REX::W32::XMFLOAT4X4 OcclusionTransform;
 	float4 OcclusionDir;
 	uint frameCount = 0;
