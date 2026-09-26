@@ -198,6 +198,9 @@ private:
 	std::vector<std::string> categoryOrder;
 	std::unordered_map<uint32_t, std::vector<SettingValue>> weatherData;
 	std::unordered_map<uint32_t, std::vector<SettingValue>> lastSavedWeatherData;
+	// Which settings each weather actually defines (in its file or by a UI edit). The others read the live
+	// enbseries.ini value rather than the copy snapshotted when the weather file was loaded.
+	std::unordered_map<uint32_t, std::vector<bool>> weatherDefined;
 
 	uint32_t currentWeatherID = 0;
 	uint32_t lastWeatherID = 0;
@@ -212,6 +215,8 @@ private:
 	void RegisterSettingInternal(Setting& setting);
 	void LoadWeatherIgnoreSettings(const std::string& filePath);
 	bool IsWeatherSystemEnabledInternal() const;
+	/** @brief True if the weather defines the setting, in its file or through a UI edit. */
+	bool IsWeatherDefined(uint32_t weatherID, uint32_t settingID) const;
 
 	template <typename T>
 	T GetValueInternal(uint32_t id, bool rawValue = false) const;

@@ -124,4 +124,12 @@ public:
 
 private:
 	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
+
+	/** @brief Point light settings, resolved once per frame in CheckCommonData since OverridePointLightColor runs per light. */
+	struct PointLightingParams
+	{
+		float curve = 1.0f;
+		float desaturation = 0.0f;
+		float intensity = 1.0f;
+	} pointLighting;
 };

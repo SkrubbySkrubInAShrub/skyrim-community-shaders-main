@@ -4,6 +4,7 @@
 #include "SettingManager.h"
 #include "TextureManager.h"
 #include "Features/Effects11.h"
+#include "Features/Effects11/SettingsPatches.h"
 #include "Features/Effects11/ShaderPatches.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -57,6 +58,7 @@ void MenuManager::RenderSettingsPanel()
 		settingManager.Save();
 		effectManager.Save();
 		Util::ShaderPatches::Load();
+		Util::SettingsPatches::Load();
 		settingManager.Load();
 		effectManager.Apply();
 	}
@@ -69,6 +71,7 @@ void MenuManager::RenderSettingsPanel()
 
 	if (ImGui::Button("Load & Apply")) {
 		Util::ShaderPatches::Load();
+		Util::SettingsPatches::Load();
 		settingManager.Load();
 		effectManager.Apply();
 	}

@@ -65,6 +65,24 @@ static bool TryParseWeatherID(const std::string& a_key, uint32_t& a_out)
 	}
 }
 
+// True if the ini defines the setting; any time-of-day key counts for time-of-day settings
+static bool IniDefinesSetting(const std::string& a_filePath, const Setting& a_setting)
+{
+	auto hasKey = [&](const std::string& key) {
+		char buffer[4];
+		return GetPrivateProfileStringA(a_setting.category.c_str(), key.c_str(), "", buffer, sizeof(buffer), a_filePath.c_str()) > 0;
+	};
+
+	if (a_setting.type == SettingType::TimeOfDay || a_setting.type == SettingType::ColorTimeOfDay) {
+		for (const char* timeOfDayName : timeOfDayNames) {
+			if (hasKey(a_setting.key + timeOfDayName))
+				return true;
+		}
+		return false;
+	}
+	return hasKey(a_setting.key);
+}
+
 SettingManager& SettingManager::GetSingleton()
 {
 	static SettingManager instance;
@@ -114,6 +132,12 @@ bool SettingManager::IsWeatherSystemEnabledInternal() const
 		return false;
 	auto* enabled = std::get_if<bool>(&allSettings[multipleWeathersSettingID].currentValue);
 	return enabled && *enabled;
+}
+
+bool SettingManager::IsWeatherDefined(uint32_t weatherID, uint32_t settingID) const
+{
+	auto definedIt = weatherDefined.find(weatherID);
+	return definedIt != weatherDefined.end() && settingID < definedIt->second.size() && definedIt->second[settingID];
 }
 
 void SettingManager::RegisterBoolSetting(const std::string& key, const std::string& category,
@@ -243,11 +267,11 @@ T SettingManager::GetValueInternal(uint32_t id, bool rawValue) const
 			SettingValue currentValue = setting.currentValue;
 			SettingValue lastValue = setting.currentValue;
 
-			if (currentIt != weatherData.end() && id < currentIt->second.size()) {
+			if (currentIt != weatherData.end() && id < currentIt->second.size() && IsWeatherDefined(currentWeatherID, id)) {
 				currentValue = currentIt->second[id];
 			}
 
-			if (lastIt != weatherData.end() && id < lastIt->second.size()) {
+			if (lastIt != weatherData.end() && id < lastIt->second.size() && IsWeatherDefined(lastWeatherID, id)) {
 				lastValue = lastIt->second[id];
 			}
 
@@ -308,6 +332,11 @@ void SettingManager::SetValueInternal(uint32_t id, const T& value)
 					}
 				}
 				data[id] = value;
+
+				auto& defined = weatherDefined[linkedID];
+				if (defined.size() < allSettings.size())
+					defined.resize(allSettings.size(), false);
+				defined[id] = true;
 			}
 			return;
 		}
@@ -533,11 +562,13 @@ void SettingManager::LoadWeatherSettings(const std::vector<uint32_t>& weatherIDs
 
 	// Do all file I/O without holding any lock
 	std::vector<SettingValue> loadedValues(settingsCopy.size());
+	std::vector<bool> definedValues(settingsCopy.size(), false);
 	for (size_t i = 0; i < settingsCopy.size(); ++i) {
 		loadedValues[i] = settingsCopy[i].currentValue;
 	}
 	for (auto& setting : settingsCopy) {
 		if (setting.hasWeatherSupport) {
+			definedValues[setting.id] = IniDefinesSetting(filePath, setting);
 			setting.defaultValue = setting.currentValue;
 			LoadSettingFromFile(filePath, setting.category, setting.key, setting);
 			loadedValues[setting.id] = setting.currentValue;
@@ -550,6 +581,7 @@ void SettingManager::LoadWeatherSettings(const std::vector<uint32_t>& weatherIDs
 		for (uint32_t weatherID : weatherIDs) {
 			weatherData[weatherID] = loadedValues;
 			lastSavedWeatherData[weatherID] = loadedValues;
+			weatherDefined[weatherID] = definedValues;
 		}
 	}
 }
@@ -578,7 +610,8 @@ void SettingManager::SaveWeatherSettings(const std::string& weatherKey, const st
 		const auto& weatherValues = weatherIt->second;
 
 		for (const auto& setting : allSettings) {
-			if (setting.hasWeatherSupport && setting.id < weatherValues.size()) {
+			// Only write what the weather defines; the rest belongs to enbseries.ini
+			if (setting.hasWeatherSupport && IsWeatherDefined(weatherID, setting.id) && setting.id < weatherValues.size()) {
 				bool changed = true;
 				if (lastIt != lastSavedWeatherData.end() && setting.id < lastIt->second.size()) {
 					if (weatherValues[setting.id] == lastIt->second[setting.id]) {
@@ -634,6 +667,7 @@ void SettingManager::ReloadAllWeatherSettings()
 	{
 		std::unique_lock lock(mutex);
 		weatherData.clear();
+		weatherDefined.clear();
 	}
 	auto& weatherManager = WeatherManager::GetSingleton();
 	weatherManager.Initialize();
@@ -951,8 +985,9 @@ void SettingManager::LoadSettingFromFile(const std::string& filePath, const std:
 void SettingManager::SaveSettingToFile(const std::string& filePath, const std::string& section, const std::string& key, const Setting& setting)
 {
 	auto formatFloat = [](float value) -> std::string {
-		char temp[32];
-		sprintf_s(temp, "%.3f", value);
+		// Six decimals: presets use values finer than 0.001, and saving any time-of-day period rewrites all eight
+		char temp[64];
+		sprintf_s(temp, "%.6f", value);
 		std::string result = temp;
 
 		// Remove trailing zeros

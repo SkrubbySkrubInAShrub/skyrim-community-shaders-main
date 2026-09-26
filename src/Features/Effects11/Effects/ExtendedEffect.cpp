@@ -10,6 +10,12 @@
 #include "../WeatherManager.h"
 #include "Globals.h"
 
+/** @brief ExteriorWeather vars take their preset value indoors, so they neither read nor save time-of-day or weather values there. */
+static bool IsExteriorWeatherIndoors(const std::string& separation)
+{
+	return separation == "ExteriorWeather" && EffectManager::GetSingleton().GetCommonData().eInteriorFactor > 0.0f;
+}
+
 void ExtendedEffect::Unload()
 {
 	weatherData.clear();
@@ -99,8 +105,6 @@ void ExtendedEffect::ApplyTimeOfDayInterpolation()
 		baseGroups[name.substr(0, name.size() - period.size())].push_back({ i, GetPeriodWeight(period) });
 	}
 
-	auto& cd = EffectManager::GetSingleton().commonData;
-
 	for (auto& [baseName, entries] : baseGroups) {
 		auto baseVarIt = variables.find(baseName);
 		if (baseVarIt == variables.end())
@@ -109,8 +113,7 @@ void ExtendedEffect::ApplyTimeOfDayInterpolation()
 		if (!baseVar || !baseVar->IsValid())
 			continue;
 
-		auto& sep = uiVariables[entries[0].index].separation;
-		if (sep == "ExteriorWeather" && cd.eInteriorFactor > 0.0f)
+		if (IsExteriorWeatherIndoors(uiVariables[entries[0].index].separation))
 			continue;
 
 		float totalWeight = 0.0f;
@@ -233,6 +236,11 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 		if (iniKey.empty())
 			continue;
 
+		// Still written indoors, to undo any weather value
+		const bool useWeather = !IsExteriorWeatherIndoors(uiVar.separation);
+		const WeatherValues* varCurrentValues = useWeather ? currentValues : nullptr;
+		const WeatherValues* varLastValues = useWeather ? lastValues : nullptr;
+
 		switch (uiVar.type) {
 		case UIVariableType::Float:
 			{
@@ -243,8 +251,8 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 					return safeStof(it->second, uiVar.baseFloatValue);
 				};
 
-				float currentVal = getVal(currentValues);
-				float lastVal = getVal(lastValues);
+				float currentVal = getVal(varCurrentValues);
+				float lastVal = getVal(varLastValues);
 				uiVar.floatValue = lastVal + blendFactor * (currentVal - lastVal);
 				if (uiVar.effectVariable)
 					uiVar.effectVariable->AsScalar()->SetFloat(uiVar.floatValue);
@@ -280,8 +288,8 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 				};
 
 				float currentVals[4] = {}, lastVals[4] = {};
-				parseVec(currentValues, currentVals);
-				parseVec(lastValues, lastVals);
+				parseVec(varCurrentValues, currentVals);
+				parseVec(varLastValues, lastVals);
 
 				for (int c = 0; c < comps; ++c)
 					uiVar.vectorValue[c] = lastVals[c] + blendFactor * (currentVals[c] - lastVals[c]);
@@ -307,7 +315,8 @@ void ExtendedEffect::SyncWeatherVarFromUI(size_t index, uint32_t weatherID)
 		return;
 
 	// Must match ApplyWeatherBlending: with weather overrides off, edits belong to the base value
-	auto* entry = IsWeatherSeparated(uiVar) && IsMultipleWeathersEnabled() ? WeatherManager::GetSingleton().FindWeatherEntry(weatherID) : nullptr;
+	const bool usesWeather = IsWeatherSeparated(uiVar) && IsMultipleWeathersEnabled() && !IsExteriorWeatherIndoors(uiVar.separation);
+	auto* entry = usesWeather ? WeatherManager::GetSingleton().FindWeatherEntry(weatherID) : nullptr;
 	std::string iniKey = GetVariableIniKey(uiVar);
 	if (!entry || iniKey.empty()) {
 		CaptureBaseValue(uiVar);

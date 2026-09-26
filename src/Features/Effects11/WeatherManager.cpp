@@ -4,6 +4,7 @@
 #include "PresetManager.h"
 #include "SettingManager.h"
 #include <Windows.h>
+#include <charconv>
 #include <filesystem>
 #include <sstream>
 
@@ -135,7 +136,9 @@ uint32_t WeatherManager::ParseHexID(const std::string& hexStr)
 		return 0;
 	}
 
-	return static_cast<uint32_t>(std::stoul(hexStr, nullptr, 16));
+	// Runtime form IDs are compared without their load-order index (see EffectManager::UpdateCommonData),
+	// so drop it here too; otherwise any ID written with a non-zero mod index never matches
+	return static_cast<uint32_t>(std::stoul(hexStr, nullptr, 16)) & 0x00FFFFFF;
 }
 
 void WeatherManager::LoadLocationWeather()
@@ -267,6 +270,26 @@ uint32_t WeatherManager::GetEffectiveWeatherID(uint32_t actualWeatherID)
 	}
 
 	return actualWeatherID;
+}
+
+uint32_t WeatherManager::GetWeatherIndex(uint32_t weatherID) const
+{
+	auto& effectManager = EffectManager::GetSingleton();
+	if (!SettingManager::GetSingleton().GetValue<bool>(effectManager.ids.enableMultipleWeathers)) {
+		return 0;
+	}
+
+	auto it = weatherIDMap.find(weatherID);
+	if (it == weatherIDMap.end()) {
+		return 0;
+	}
+
+	// LoadWeatherList only keeps sections starting with "WEATHER", e.g. WEATHER002 -> 2
+	const std::string& sectionName = it->second;
+	constexpr size_t prefixLength = sizeof("WEATHER") - 1;
+	uint32_t index = 0;
+	const auto result = std::from_chars(sectionName.data() + prefixLength, sectionName.data() + sectionName.size(), index);
+	return result.ec == std::errc() ? index : 0;
 }
 
 std::unordered_map<std::string, std::string> WeatherManager::GetWeatherFiles() const
