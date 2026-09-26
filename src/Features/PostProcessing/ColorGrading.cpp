@@ -614,6 +614,7 @@ void ColorGrading::LoadSettings(json& o_json)
 	} catch (const json::exception& e) {
 		logger::error("Failed to load Color Grading settings: {}", e.what());
 		RestoreDefaultSettings();
+		return;
 	}
 
 	try {

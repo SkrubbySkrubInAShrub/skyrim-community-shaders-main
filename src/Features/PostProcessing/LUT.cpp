@@ -63,20 +63,25 @@ void LUT::DrawSettings()
 void LUT::RestoreDefaultSettings()
 {
 	settings = {};
+	tempPath = {};
+	Clear();
 }
 
 void LUT::LoadSettings(json& o_json)
 {
+	const auto oldPath = settings.LutPath;
 	settings = o_json;
 
 	tempPath = settings.LutPath;
-	logger::info("Loading LUT settings, LUT Path: {}", settings.LutPath);
 
+	// Scene blends reload every frame, so only hit the disk when the path changes.
 	try {
-		if (!tempPath.empty() && !firstLoad)
+		if (tempPath.empty()) {
+			Clear();
+		} else if (tempPath != oldPath || LutType == -1) {
+			logger::debug("Loading LUT texture: {}", tempPath);
 			ReadTexture(tempPath);
-		else if (firstLoad)
-			firstLoad = false;
+		}
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load LUT settings: {}", e.what());
 	}
