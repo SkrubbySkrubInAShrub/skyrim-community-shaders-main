@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "ScreenSpaceShadows/DistantShadowMap.h"
 
 struct ScreenSpaceShadows : Feature
 {
@@ -36,6 +37,69 @@ public:
 
 	BendSettings bendSettings;
 
+	enum class DistantMethod : uint
+	{
+		ShadowMap = 0,
+		ScreenSpace = 1
+	};
+
+	struct DistantSettings
+	{
+		bool Enable = true;
+		uint SampleCount = 12;
+		float MaxRayLength = 16384.0f;
+		float Intensity = 1.0f;
+		float Thickness = 1.0f;
+		uint Method = static_cast<uint>(DistantMethod::ShadowMap);
+		uint MapResolution = 2048;
+		float MapRange = 40960.0f;
+		float MinCasterSize = 128.0f;
+		float UpdateInterval = 2000.0f;
+		float FilterRadius = 1.5f;
+		float Bias = 1.5f;
+		bool TreeLOD = true;
+	};
+
+	DistantSettings distantSettings;
+
+	static constexpr uint DistantMinSampleCount = 4;
+	static constexpr uint DistantMaxSampleCount = 32;
+	static constexpr float DistantMinRayLength = 2048.0f;
+	static constexpr float DistantMaxRayLength = 65536.0f;
+	static constexpr float DistantMinThickness = 0.1f;
+	static constexpr float DistantMaxThickness = 2.0f;
+	static constexpr float DistantFadeLength = 1024.0f;
+	static constexpr uint DistantMapResolutions[3] = { 1024, 2048, 4096 };
+	static constexpr float DistantMinMapRange = 16384.0f;
+	static constexpr float DistantMaxMapRange = 131072.0f;
+	static constexpr float DistantMaxCasterSize = 2048.0f;
+	static constexpr float DistantMaxUpdateInterval = 5000.0f;
+	static constexpr float DistantMaxFilterRadius = 4.0f;
+	static constexpr float DistantMaxBias = 8.0f;
+	static constexpr float DistantMapBlendBand = 0.05f;
+
+	struct alignas(16) DistantShadowsCB
+	{
+		float2 RenderSize;
+		float2 InvRenderSize;
+		float StartDistance;
+		float FadeLength;
+		float MaxRayLength;
+		float Intensity;
+		float ThicknessScale;
+		uint SampleCount;
+		uint UseContactShadows;
+		float pad0;
+		uint HalfSize[2];
+		float pad1[2];
+		DistantShadowMap::CascadeData MapCascades[DistantShadowMap::CascadeCount];
+		float MapFilterRadius;
+		float MapBiasTexels;
+		float MapInvResolution;
+		float MapBlendBand;
+	};
+	STATIC_ASSERT_ALIGNAS_16(DistantShadowsCB);
+
 	struct alignas(16) RaymarchCB
 	{
 		// Runtime data returned from BuildDispatchList():
@@ -63,6 +127,14 @@ public:
 	ID3D11ComputeShader* raymarchCS = nullptr;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
+
+	ConstantBuffer* distantShadowsCB = nullptr;
+	ID3D11ComputeShader* distantTraceCS = nullptr;
+	ID3D11ComputeShader* distantResolveCS = nullptr;
+	ID3D11ComputeShader* distantShadowMapCS = nullptr;
+	DistantShadowMap distantShadowMap;
+	Texture2D* contactShadowsCopyTexture = nullptr;
+	Texture2D* distantHalfTexture = nullptr;
 
 	/** @brief Creates the raymarch constant buffer, point border sampler, and shadow output texture. */
 	virtual void SetupResources() override;
@@ -92,6 +164,9 @@ public:
 	/** @brief Dispatches the Bend SSS compute shader to generate screen-space contact shadows. */
 	void DrawShadows();
 
-	virtual void RestoreDefaultSettings() override;
+	bool CompileDistantShadows();
+	float GetShadowCascadeEndDistance();
+	void DrawDistantShadows(bool a_hasContactShadows);
 
+	virtual void RestoreDefaultSettings() override;
 };
