@@ -3791,7 +3791,7 @@ void SnowDeformation::DrawCapturedStatics()
 			bindSkinStages(skinStagesTess);
 		};
 
-		statsRow("SnowDeformation::Objects - Depth Prepass");
+		statsRow("SnowDeformation::Objects - Prepass Fill");
 		// The decal overlay leaves the landscape shell's pixels to the blood
 		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
@@ -3802,6 +3802,7 @@ void SnowDeformation::DrawCapturedStatics()
 			bloodPreSkinDepthThisFrame = true;
 		}
 		fill(shellTestDepthDSV.get(), mainDepthSRV);
+		statsRow("SnowDeformation::Objects - Depth Prepass");
 		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		// The hidden-quad exit reads the depth the private buffer was filled from.
