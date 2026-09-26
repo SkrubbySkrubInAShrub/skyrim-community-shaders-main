@@ -96,6 +96,12 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 		}
 	}
 
+	// The world/local map keeps its vanilla fog; height fog tuned for eye level washes it out
+	if (globals::state->isMapMenuOpen) {
+		data.enabled = 0;
+		data.disableVanillaFog = 0;
+	}
+
 	return data;
 }
 
@@ -405,6 +411,10 @@ void ExponentialHeightFog::Prepass()
 		BindIntegratedLightScattering();
 		return;
 	}
+
+	// Shaders ignore the fog volume on the map (see GetCommonBufferData), so skip building it
+	if (globals::state->isMapMenuOpen)
+		return;
 
 	ID3D11ShaderResourceView* directionalShadowLightData = globals::deferred && globals::deferred->directionalShadowLights ? globals::deferred->directionalShadowLights->srv.get() : nullptr;
 	auto& lightLimitFix = globals::features::lightLimitFix;
