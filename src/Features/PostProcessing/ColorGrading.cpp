@@ -9,7 +9,6 @@
 #include "Features/HDRDisplay.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
-#include "Menu.h"
 #include "OpenDRTIo.h"
 
 #include <DDSTextureLoader.h>
@@ -1045,7 +1044,6 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	globals::profiler->EndPass();
 
 	const bool curveReadbackActive =
-		Menu::GetSingleton()->IsEnabled &&
 		curveReadbackRequested &&
 		ImGui::GetCurrentContext() &&
 		curveReadbackRequestFrame >= ImGui::GetFrameCount() - 1;

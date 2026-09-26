@@ -2,7 +2,6 @@
 
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
-#include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -336,14 +335,12 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	state->BeginPerfEvent("Histogram Auto Exposure");
 
 	const bool histogramReadbackActive =
-		Menu::GetSingleton()->IsEnabled &&
 		histogramReadbackRequested &&
 		ImGui::GetCurrentContext() &&
 		histogramReadbackRequestFrame >= ImGui::GetFrameCount() - 1;
 	if (!histogramReadbackActive)
 		histogramReadbackRequested = false;
 	const bool exposureReadbackActive =
-		Menu::GetSingleton()->IsEnabled &&
 		ImGui::GetCurrentContext() &&
 		exposureReadbackRequestFrame >= 0 &&
 		exposureReadbackRequestFrame >= ImGui::GetFrameCount() - 1;
