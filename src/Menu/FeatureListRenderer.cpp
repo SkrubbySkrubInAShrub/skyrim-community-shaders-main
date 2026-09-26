@@ -706,7 +706,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	const char* exportButtonText = T("menu.features.export_overwrite", "Export Overwrite");
 	float exportButtonWidth = ImGui::CalcTextSize(exportButtonText).x + buttonPadding;
-	const bool canExport = !isDisabled && isLoaded && feat->UsesMainSettings();
+	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
 
 	float totalButtonWidth = bootToggleWidth;
 	if (canExport) {
