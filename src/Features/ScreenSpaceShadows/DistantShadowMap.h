@@ -2,11 +2,13 @@
 
 #include "Buffer.h"
 
+/** @brief Sun-space depth cascades of distant LOD and large static objects, drawn beyond the vanilla shadow map distance. */
 class DistantShadowMap
 {
 public:
 	static constexpr uint CascadeCount = 2;
 
+	/** @brief User-facing settings; any change invalidates all cascades. */
 	struct Config
 	{
 		uint Resolution = 2048;
@@ -20,6 +22,7 @@ public:
 		bool operator==(const Config&) const = default;
 	};
 
+	/** @brief Per-cascade GPU data mapping camera-relative positions into shadow map UV and depth. */
 	struct alignas(16) CascadeData
 	{
 		float4 CameraToMap[3];
@@ -27,15 +30,22 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(CascadeData);
 
+	/**
+	 * @brief Redraws at most one stale cascade this frame.
+	 * @return True if at least one cascade holds valid depth.
+	 */
 	bool Update(const Config& a_config);
 
+	/** @brief Fills cascade transforms for the current camera; invalid cascades are zeroed. */
 	void GetCascadeData(CascadeData (&a_out)[CascadeCount]) const;
 
+	/** @brief Marks every cascade for redraw. */
 	void Invalidate();
 
 	ID3D11ShaderResourceView* GetSRV() const { return texture ? texture->srv.get() : nullptr; }
 	ID3D11SamplerState* GetComparisonSampler() const { return comparisonSampler.get(); }
 
+	/** @brief Releases the depth shaders and input layouts so they recompile on next use. */
 	void ClearShaderCache();
 
 private:
@@ -115,23 +125,33 @@ private:
 	static constexpr float RedrawSunAngleCos = 0.99999f;
 	static constexpr float RecenterFraction = 0.1f;
 	static constexpr float DepthMargin = 32768.0f;
+	static constexpr float NearCascadeStartScale = 1.75f;
+	static constexpr float NearCascadeMinHalfExtent = 4096.0f;
+	static constexpr float NearCascadeMaxRangeFraction = 0.5f;
+	static constexpr float InvalidateDriftFraction = 0.5f;
+	static constexpr float DepthExtentScale = 1.5f;
+	static constexpr float MaxShadowStretch = 8.0f;
+	// Tree instance data starts with a half4 (position and scale)
+	static constexpr uint MinTreeInstanceStride = 4 * sizeof(uint16_t);
 
 	bool EnsureResources(uint a_resolution);
 	bool EnsureShaders();
-	ID3D11InputLayout* GetStaticLayout(uint a_key);
-	ID3D11InputLayout* GetTreeLayout(uint a_key);
+	/** @brief Returns the cached input layout for a vertex layout key, creating it on first use. */
+	ID3D11InputLayout* GetLayout(bool a_tree, uint a_key);
 
 	void RenderCascade(uint a_index, const float3& a_lightDirection, const float3& a_cameraPosition, float a_halfExtent);
 	void Collect(RE::NiAVObject* a_root, const CullContext& a_cull);
 	void CollectGeometry(RE::BSGeometry* a_geometry, const CullContext& a_cull);
 	void CollectTreeLOD(RE::BSGeometry* a_geometry, const CullContext& a_cull);
-	void DrawCollected(uint a_index);
+	/** @brief Draws the collected casters into one cascade slice. @return False if nothing was written. */
+	bool DrawCollected(uint a_index);
 
 	static bool IsVertexFormatSupported(uint64_t a_desc);
 	static uint GetLayoutKey(uint64_t a_desc);
 	static void BuildObjectToClip(const RE::NiTransform& a_world, const CullContext& a_cull, float a_depthNear, float a_depthRange, float4 (&a_rows)[3]);
 
 	Config lastConfig{};
+	RE::TESWorldSpace* lastWorldSpace = nullptr;
 	Cascade cascades[CascadeCount];
 	uint lastRenderedCascade = CascadeCount - 1;
 	uint resolution = 0;

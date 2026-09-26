@@ -43,6 +43,7 @@ public:
 		ScreenSpace = 1
 	};
 
+	/** @brief Settings for distant LOD shadows, saved under the "DistantShadows" JSON key. */
 	struct DistantSettings
 	{
 		bool Enable = true;
@@ -132,6 +133,7 @@ public:
 	ID3D11ComputeShader* distantTraceCS = nullptr;
 	ID3D11ComputeShader* distantResolveCS = nullptr;
 	ID3D11ComputeShader* distantShadowMapCS = nullptr;
+	bool distantCompileFailed = false;
 	DistantShadowMap distantShadowMap;
 	Texture2D* contactShadowsCopyTexture = nullptr;
 	Texture2D* distantHalfTexture = nullptr;
@@ -164,9 +166,15 @@ public:
 	/** @brief Dispatches the Bend SSS compute shader to generate screen-space contact shadows. */
 	void DrawShadows();
 
-	bool CompileDistantShadows();
+	/** @brief Compiles the distant shadow shaders for the given method, latching failures until ClearShaderCache. */
+	bool CompileDistantShadows(bool a_useShadowMap);
+	/** @brief Creates the distant shadow textures on first use, the half-res trace target only for the screen space method. */
+	void EnsureDistantTextures(bool a_useShadowMap);
+	/** @brief Returns the far end of the vanilla sun shadow cascades, or 0 if unavailable. */
 	float GetShadowCascadeEndDistance();
+	/** @brief Darkens the shadow mask beyond the vanilla shadow distance using the selected distant method. */
 	void DrawDistantShadows(bool a_hasContactShadows);
 
 	virtual void RestoreDefaultSettings() override;
+
 };

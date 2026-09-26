@@ -59,6 +59,26 @@ float GetViewDepth(uint2 pixel)
 	return SharedData::GetScreenDepth(SceneDepthTexture[pixel]);
 }
 
+float3 GetPositionWS(uint2 pixel, float depth)
+{
+	float2 uv = (pixel + 0.5) * InvRenderSize;
+	float4 unprojected = mul(FrameBuffer::CameraViewProjInverse, float4(2.0 * float2(uv.x, 1.0 - uv.y) - 1.0, depth, 1.0));
+	return unprojected.xyz / unprojected.w;
+}
+
+// 0 for sky and for pixels the vanilla shadow map still covers
+float GetDistantFade(float depth, out float viewDepth)
+{
+	viewDepth = SharedData::GetScreenDepth(depth);
+	return depth == 1.0 ? 0.0 : saturate((viewDepth - StartDistance) / FadeLength);
+}
+
+void WriteShadow(uint2 pixel, float occlusion, float fade)
+{
+	float contactShadows = UseContactShadows ? ContactShadowsTexture[pixel] : 1.0;
+	OutputTexture[pixel] = contactShadows * (1.0 - occlusion * fade * Intensity);
+}
+
 float TraceOcclusion(uint2 pixel, uint2 noisePixel, out float viewDepth)
 {
 	float occlusion = 0.0;
@@ -71,9 +91,7 @@ float TraceOcclusion(uint2 pixel, uint2 noisePixel, out float viewDepth)
 	float3 positionWS = 0.0;
 	[branch] if (trace)
 	{
-		float2 uv = (pixel + 0.5) * InvRenderSize;
-		float4 unprojected = mul(FrameBuffer::CameraViewProjInverse, float4(2.0 * float2(uv.x, 1.0 - uv.y) - 1.0, depth, 1.0));
-		positionWS = unprojected.xyz / unprojected.w;
+		positionWS = GetPositionWS(pixel, depth);
 
 #if defined(TERRAIN_SHADOWS)
 		if (TerrainShadows::GetTerrainShadow(positionWS + FrameBuffer::CameraPosAdjust.xyz + float3(0.0, 0.0, TerrainShadowSkipMargin), LinearSampler) <= 0.0) {
@@ -169,18 +187,12 @@ float UpsampleOcclusion(uint2 pixel, float viewDepth)
 	if (any(dispatchID.xy >= uint2(RenderSize)))
 		return;
 
-	float depth = SceneDepthTexture[dispatchID.xy];
-	if (depth == 1.0)
-		return;
-
-	float viewDepth = SharedData::GetScreenDepth(depth);
-	float fade = saturate((viewDepth - StartDistance) / FadeLength);
+	float viewDepth;
+	float fade = GetDistantFade(SceneDepthTexture[dispatchID.xy], viewDepth);
 	if (fade <= 0.0)
 		return;
 
-	float shadow = 1.0 - UpsampleOcclusion(dispatchID.xy, viewDepth) * fade * Intensity;
-	float contactShadows = UseContactShadows ? ContactShadowsTexture[dispatchID.xy] : 1.0;
-	OutputTexture[dispatchID.xy] = contactShadows * shadow;
+	WriteShadow(dispatchID.xy, UpsampleOcclusion(dispatchID.xy, viewDepth), fade);
 }
 
 float3 GetMapCoords(uint cascade, float3 positionWS)
@@ -217,17 +229,12 @@ float SampleMapOcclusion(uint cascade, float3 positionWS)
 		return;
 
 	float depth = SceneDepthTexture[dispatchID.xy];
-	if (depth == 1.0)
-		return;
-
-	float viewDepth = SharedData::GetScreenDepth(depth);
-	float fade = saturate((viewDepth - StartDistance) / FadeLength);
+	float viewDepth;
+	float fade = GetDistantFade(depth, viewDepth);
 	if (fade <= 0.0)
 		return;
 
-	float2 uv = (dispatchID.xy + 0.5) * InvRenderSize;
-	float4 unprojected = mul(FrameBuffer::CameraViewProjInverse, float4(2.0 * float2(uv.x, 1.0 - uv.y) - 1.0, depth, 1.0));
-	float3 positionWS = unprojected.xyz / unprojected.w;
+	float3 positionWS = GetPositionWS(dispatchID.xy, depth);
 
 	float nearWeight = GetMapEdgeWeight(0, GetMapCoords(0, positionWS).xy);
 	float farWeight = GetMapEdgeWeight(1, GetMapCoords(1, positionWS).xy);
@@ -238,7 +245,5 @@ float SampleMapOcclusion(uint cascade, float3 positionWS)
 	[branch] if (nearWeight < 1.0 && farWeight > 0.0)
 		occlusion += (1.0 - nearWeight) * farWeight * SampleMapOcclusion(1, positionWS);
 
-	float shadow = 1.0 - occlusion * fade * Intensity;
-	float contactShadows = UseContactShadows ? ContactShadowsTexture[dispatchID.xy] : 1.0;
-	OutputTexture[dispatchID.xy] = contactShadows * shadow;
+	WriteShadow(dispatchID.xy, occlusion, fade);
 }

@@ -76,7 +76,7 @@ void ScreenSpaceShadows::DrawSettings()
 			ImGui::Text("%s", T(TKEY("distant_enable_tooltip"), "Casts sun/moon shadows from object LOD, tree LOD and large objects beyond the shadow map distance, where distant LOD otherwise receives no shadows."));
 
 		const char* methods[] = { T(TKEY("distant_method_shadow_map"), "Shadow Map"), T(TKEY("distant_method_screen_space"), "Screen Space") };
-		int method = static_cast<int>(std::min(distantSettings.Method, 1u));
+		int method = static_cast<int>(std::min(distantSettings.Method, static_cast<uint>(DistantMethod::ScreenSpace)));
 		if (ImGui::Combo(T(TKEY("distant_method"), "Distant Shadow Method"), &method, methods, IM_ARRAYSIZE(methods)))
 			distantSettings.Method = static_cast<uint>(method);
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -84,10 +84,8 @@ void ScreenSpaceShadows::DrawSettings()
 
 		if (distantSettings.Method == static_cast<uint>(DistantMethod::ShadowMap)) {
 			const char* resolutions[] = { "1024", "2048", "4096" };
-			int resolutionIndex = 1;
-			for (int i = 0; i < IM_ARRAYSIZE(resolutions); i++)
-				if (DistantMapResolutions[i] == distantSettings.MapResolution)
-					resolutionIndex = i;
+			int resolutionIndex = static_cast<int>(std::ranges::find(DistantMapResolutions, distantSettings.MapResolution) - std::begin(DistantMapResolutions));
+			assert(resolutionIndex < IM_ARRAYSIZE(resolutions) && "LoadSettings keeps MapResolution in DistantMapResolutions");
 			if (ImGui::Combo(T(TKEY("distant_map_resolution"), "Shadow Map Resolution"), &resolutionIndex, resolutions, IM_ARRAYSIZE(resolutions)))
 				distantSettings.MapResolution = DistantMapResolutions[resolutionIndex];
 			if (auto _tt = Util::HoverTooltipWrapper())
@@ -151,18 +149,13 @@ void ScreenSpaceShadows::InvalidateRaymarchShaders()
 void ScreenSpaceShadows::ClearShaderCache()
 {
 	InvalidateRaymarchShaders();
-	if (distantTraceCS) {
-		distantTraceCS->Release();
-		distantTraceCS = nullptr;
+	for (auto* shader : { &distantTraceCS, &distantResolveCS, &distantShadowMapCS }) {
+		if (*shader) {
+			(*shader)->Release();
+			*shader = nullptr;
+		}
 	}
-	if (distantResolveCS) {
-		distantResolveCS->Release();
-		distantResolveCS = nullptr;
-	}
-	if (distantShadowMapCS) {
-		distantShadowMapCS->Release();
-		distantShadowMapCS = nullptr;
-	}
+	distantCompileFailed = false;
 	distantShadowMap.ClearShaderCache();
 }
 
@@ -330,10 +323,12 @@ void ScreenSpaceShadows::DrawShadows()
 	context->CSSetConstantBuffers(1, 1, &buffer);
 }
 
-bool ScreenSpaceShadows::CompileDistantShadows()
+bool ScreenSpaceShadows::CompileDistantShadows(bool a_useShadowMap)
 {
-	if (distantTraceCS && distantResolveCS && distantShadowMapCS)
+	if (a_useShadowMap ? distantShadowMapCS != nullptr : distantTraceCS && distantResolveCS)
 		return true;
+	if (distantCompileFailed)
+		return false;
 
 	std::vector<std::pair<const char*, const char*>> defines;
 	if (globals::features::terrainBlending.loaded)
@@ -341,13 +336,42 @@ bool ScreenSpaceShadows::CompileDistantShadows()
 	if (globals::features::terrainShadows.loaded)
 		defines.push_back({ "TERRAIN_SHADOWS", "" });
 
-	if (!distantTraceCS)
-		distantTraceCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\DistantShadowsCS.hlsl", defines, "cs_5_0", "TraceCS");
-	if (!distantResolveCS)
-		distantResolveCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\DistantShadowsCS.hlsl", defines, "cs_5_0", "ResolveCS");
-	if (!distantShadowMapCS)
-		distantShadowMapCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\DistantShadowsCS.hlsl", defines, "cs_5_0", "ShadowMapCS");
-	return distantTraceCS && distantResolveCS && distantShadowMapCS;
+	auto compile = [&](ID3D11ComputeShader*& a_shader, const char* a_entry) {
+		if (!a_shader)
+			a_shader = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\DistantShadowsCS.hlsl", defines, "cs_5_0", a_entry);
+		return a_shader != nullptr;
+	};
+	const bool compiled = a_useShadowMap ? compile(distantShadowMapCS, "ShadowMapCS") : compile(distantTraceCS, "TraceCS") && compile(distantResolveCS, "ResolveCS");
+	distantCompileFailed = !compiled;
+	return compiled;
+}
+
+void ScreenSpaceShadows::EnsureDistantTextures(bool a_useShadowMap)
+{
+	if (contactShadowsCopyTexture && (a_useShadowMap || distantHalfTexture))
+		return;
+
+	D3D11_TEXTURE2D_DESC texDesc = screenSpaceShadowsTexture->desc;
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	screenSpaceShadowsTexture->srv->GetDesc(&srvDesc);
+	screenSpaceShadowsTexture->uav->GetDesc(&uavDesc);
+
+	if (!contactShadowsCopyTexture) {
+		D3D11_TEXTURE2D_DESC copyDesc = texDesc;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		contactShadowsCopyTexture = new Texture2D(copyDesc, "SSS::ContactShadowsCopy");
+		contactShadowsCopyTexture->CreateSRV(srvDesc);
+	}
+
+	if (!a_useShadowMap && !distantHalfTexture) {
+		texDesc.Width = (texDesc.Width + 1) / 2;
+		texDesc.Height = (texDesc.Height + 1) / 2;
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		distantHalfTexture = new Texture2D(texDesc, "SSS::DistantHalfOcclusion");
+		distantHalfTexture->CreateSRV(srvDesc);
+		distantHalfTexture->CreateUAV(uavDesc);
+	}
 }
 
 float ScreenSpaceShadows::GetShadowCascadeEndDistance()
@@ -378,8 +402,9 @@ void ScreenSpaceShadows::DrawDistantShadows(bool a_hasContactShadows)
 		return;
 
 	const bool useShadowMap = distantSettings.Method == static_cast<uint>(DistantMethod::ShadowMap);
-	if ((!useShadowMap && !distantHalfTexture) || !CompileDistantShadows())
+	if (!CompileDistantShadows(useShadowMap))
 		return;
+	EnsureDistantTextures(useShadowMap);
 
 	float2 renderSize = Util::ConvertToDynamic(float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight });
 
@@ -587,23 +612,6 @@ void ScreenSpaceShadows::SetupResources()
 		screenSpaceShadowsTexture = new Texture2D(texDesc, "SSS::ShadowTexture");
 		screenSpaceShadowsTexture->CreateSRV(srvDesc);
 		screenSpaceShadowsTexture->CreateUAV(uavDesc);
-
-		D3D11_TEXTURE2D_DESC copyDesc = texDesc;
-		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		contactShadowsCopyTexture = new Texture2D(copyDesc, "SSS::ContactShadowsCopy");
-		contactShadowsCopyTexture->CreateSRV(srvDesc);
-
-		D3D11_TEXTURE2D_DESC halfDesc = texDesc;
-		halfDesc.Width = (texDesc.Width + 1) / 2;
-		halfDesc.Height = (texDesc.Height + 1) / 2;
-		halfDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
-		D3D11_SHADER_RESOURCE_VIEW_DESC halfSrvDesc = srvDesc;
-		halfSrvDesc.Format = halfDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC halfUavDesc = uavDesc;
-		halfUavDesc.Format = halfDesc.Format;
-		distantHalfTexture = new Texture2D(halfDesc, "SSS::DistantHalfOcclusion");
-		distantHalfTexture->CreateSRV(halfSrvDesc);
-		distantHalfTexture->CreateUAV(halfUavDesc);
 	}
 }
 #undef I18N_KEY_PREFIX

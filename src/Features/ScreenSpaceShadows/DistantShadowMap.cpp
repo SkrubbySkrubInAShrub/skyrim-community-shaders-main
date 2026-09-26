@@ -257,15 +257,16 @@ void DistantShadowMap::ClearShaderCache()
 	Invalidate();
 }
 
-ID3D11InputLayout* DistantShadowMap::GetStaticLayout(uint a_key)
+ID3D11InputLayout* DistantShadowMap::GetLayout(bool a_tree, uint a_key)
 {
-	if (auto it = staticLayouts.find(a_key); it != staticLayouts.end())
+	auto& layouts = a_tree ? treeLayouts : staticLayouts;
+	if (auto it = layouts.find(a_key); it != layouts.end())
 		return it->second.get();
 
-	const bool fullPrecision = a_key & 1;
+	const DXGI_FORMAT positionFormat = (a_key & 1) ? DXGI_FORMAT_R32G32B32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT;
 	const uint texCoordOffset = a_key >> 8;
-	const D3D11_INPUT_ELEMENT_DESC elements[] = {
-		{ "POSITION", 0, fullPrecision ? DXGI_FORMAT_R32G32B32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	const D3D11_INPUT_ELEMENT_DESC staticElements[] = {
+		{ "POSITION", 0, positionFormat, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		{ "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, texCoordOffset, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		{ "TEXCOORD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
 		{ "TEXCOORD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
@@ -273,34 +274,21 @@ ID3D11InputLayout* DistantShadowMap::GetStaticLayout(uint a_key)
 		{ "TEXCOORD", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
 		{ "TEXCOORD", 5, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 64, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
 	};
-
-	winrt::com_ptr<ID3D11InputLayout> layout;
-	if (FAILED(globals::d3d::device->CreateInputLayout(elements, ARRAYSIZE(elements), staticVSBlob->GetBufferPointer(), staticVSBlob->GetBufferSize(), layout.put())))
-		logger::warn("[SSS] Distant shadow map input layout {:#x} failed", a_key);
-	else
-		Util::SetResourceName(layout.get(), "SSS::DistantShadowMap StaticLayout %x", a_key);
-	return staticLayouts.emplace(a_key, layout).first->second.get();
-}
-
-ID3D11InputLayout* DistantShadowMap::GetTreeLayout(uint a_key)
-{
-	if (auto it = treeLayouts.find(a_key); it != treeLayouts.end())
-		return it->second.get();
-
-	const bool fullPrecision = a_key & 1;
-	const uint texCoordOffset = a_key >> 8;
-	const D3D11_INPUT_ELEMENT_DESC elements[] = {
-		{ "POSITION", 0, fullPrecision ? DXGI_FORMAT_R32G32B32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-		{ "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, texCoordOffset, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	const D3D11_INPUT_ELEMENT_DESC treeElements[] = {
+		staticElements[0],
+		staticElements[1],
 		{ "TEXCOORD", 4, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1 },
 	};
+	const std::span<const D3D11_INPUT_ELEMENT_DESC> elements = a_tree ? std::span<const D3D11_INPUT_ELEMENT_DESC>(treeElements) : staticElements;
+	auto* blob = a_tree ? treeVSBlob.get() : staticVSBlob.get();
+	const char* name = a_tree ? "TreeLayout" : "StaticLayout";
 
 	winrt::com_ptr<ID3D11InputLayout> layout;
-	if (FAILED(globals::d3d::device->CreateInputLayout(elements, ARRAYSIZE(elements), treeVSBlob->GetBufferPointer(), treeVSBlob->GetBufferSize(), layout.put())))
-		logger::warn("[SSS] Distant shadow map tree input layout {:#x} failed", a_key);
+	if (FAILED(globals::d3d::device->CreateInputLayout(elements.data(), static_cast<UINT>(elements.size()), blob->GetBufferPointer(), blob->GetBufferSize(), layout.put())))
+		logger::warn("[SSS] Distant shadow map {} {:#x} failed", name, a_key);
 	else
-		Util::SetResourceName(layout.get(), "SSS::DistantShadowMap TreeLayout %x", a_key);
-	return treeLayouts.emplace(a_key, layout).first->second.get();
+		Util::SetResourceName(layout.get(), "SSS::DistantShadowMap %s %x", name, a_key);
+	return layouts.emplace(a_key, layout).first->second.get();
 }
 
 void DistantShadowMap::Invalidate()
@@ -462,9 +450,10 @@ void DistantShadowMap::CollectTreeLOD(RE::BSGeometry* a_geometry, const CullCont
 		return;
 
 	auto& multiStream = shape->GetMultiStreamTrishapeRuntimeData();
-	const uint instanceStride = 2u * multiStream.instanceSize;
+	// instanceSize counts 16-bit components
+	const uint instanceStride = static_cast<uint>(sizeof(uint16_t)) * multiStream.instanceSize;
 	const uint triangleCount = shape->GetTrishapeRuntimeData().triangleCount;
-	if (instanceStride < 8u || !triangleCount)
+	if (instanceStride < MinTreeInstanceStride || !triangleCount)
 		return;
 
 	auto* diffuse = GetTextureSRV(runtimeData.shaderProperty->GetBaseTexture());
@@ -491,14 +480,14 @@ void DistantShadowMap::CollectTreeLOD(RE::BSGeometry* a_geometry, const CullCont
 	}
 }
 
-void DistantShadowMap::DrawCollected(uint a_index)
+bool DistantShadowMap::DrawCollected(uint a_index)
 {
 	auto context = globals::d3d::context;
 
 	if (!staticInstances.empty()) {
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (FAILED(context->Map(instanceBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
-			return;
+			return false;
 		std::memcpy(mapped.pData, staticInstances.data(), staticInstances.size() * sizeof(StaticInstance));
 		context->Unmap(instanceBuffer.get(), 0);
 	}
@@ -547,7 +536,7 @@ void DistantShadowMap::DrawCollected(uint a_index)
 	for (const auto& draw : staticDraws) {
 		if (draw.layoutKey != currentLayout) {
 			currentLayout = draw.layoutKey;
-			layout = GetStaticLayout(draw.layoutKey);
+			layout = GetLayout(false, draw.layoutKey);
 			context->IASetInputLayout(layout);
 		}
 		if (!layout)
@@ -579,7 +568,7 @@ void DistantShadowMap::DrawCollected(uint a_index)
 		for (auto& draw : treeDraws) {
 			if (draw.layoutKey != currentLayout) {
 				currentLayout = draw.layoutKey;
-				layout = GetTreeLayout(draw.layoutKey);
+				layout = GetLayout(true, draw.layoutKey);
 				context->IASetInputLayout(layout);
 			}
 			if (!layout)
@@ -614,6 +603,7 @@ void DistantShadowMap::DrawCollected(uint a_index)
 		hullShader->Release();
 	if (domainShader)
 		domainShader->Release();
+	return true;
 }
 
 void DistantShadowMap::RenderCascade(uint a_index, const float3& a_lightDirection, const float3& a_cameraPosition, float a_halfExtent)
@@ -653,10 +643,10 @@ void DistantShadowMap::RenderCascade(uint a_index, const float3& a_lightDirectio
 	cull.up = up;
 	cull.forward = forward;
 	cull.halfExtent = a_halfExtent;
-	cull.depthFar = 1.5f * a_halfExtent + DepthMargin;
+	cull.depthFar = DepthExtentScale * a_halfExtent + DepthMargin;
 	cull.cameraPosition = a_cameraPosition;
 	cull.nearSkipDistance = lastConfig.StartDistance;
-	cull.shadowStretch = std::min(cosElevation / sinElevation, 8.0f);
+	cull.shadowStretch = std::min(cosElevation / sinElevation, MaxShadowStretch);
 	cull.minCasterRadius = lastConfig.MinCasterRadius;
 	cull.billboardRotation = facing;
 	cull.includeTrees = lastConfig.IncludeTreeLOD;
@@ -675,11 +665,14 @@ void DistantShadowMap::RenderCascade(uint a_index, const float3& a_lightDirectio
 	if (globals::state->frameAnnotations)
 		globals::state->BeginPerfEvent("SSS - Distant Shadow Map");
 
-	DrawCollected(a_index);
+	const bool drawn = DrawCollected(a_index);
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
 	globals::profiler->EndPass();
+
+	if (!drawn)
+		return;
 
 	cascade.valid = true;
 	cascade.lightDirection = a_lightDirection;
@@ -695,8 +688,11 @@ void DistantShadowMap::RenderCascade(uint a_index, const float3& a_lightDirectio
 
 bool DistantShadowMap::Update(const Config& a_config)
 {
-	if (!(a_config == lastConfig)) {
+	auto* tes = RE::TES::GetSingleton();
+	auto* worldSpace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+	if (!(a_config == lastConfig) || worldSpace != lastWorldSpace) {
 		lastConfig = a_config;
+		lastWorldSpace = worldSpace;
 		Invalidate();
 	}
 
@@ -727,7 +723,7 @@ bool DistantShadowMap::Update(const Config& a_config)
 	const float3 cameraPosition{ cameraPosAdjust.x, cameraPosAdjust.y, cameraPosAdjust.z };
 
 	const float halfExtents[CascadeCount] = {
-		std::clamp(a_config.StartDistance * 1.75f, 4096.0f, a_config.Range * 0.5f),
+		std::clamp(a_config.StartDistance * NearCascadeStartScale, NearCascadeMinHalfExtent, a_config.Range * NearCascadeMaxRangeFraction),
 		a_config.Range
 	};
 
@@ -738,7 +734,7 @@ bool DistantShadowMap::Update(const Config& a_config)
 		if (cascade.valid) {
 			const float3 offset = cameraPosition - cascade.center;
 			const float drift = std::max(std::abs(offset.Dot(cascade.right)), std::abs(offset.Dot(cascade.up)));
-			if (drift > cascade.halfExtent * 0.5f)
+			if (drift > cascade.halfExtent * InvalidateDriftFraction)
 				cascade.valid = false;
 			else if (cascade.halfExtent != halfExtents[i])
 				priorities[i] = 3;
