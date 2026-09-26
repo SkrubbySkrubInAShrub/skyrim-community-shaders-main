@@ -272,8 +272,8 @@ public:
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
 	bool isStatsMenuOpen = false;
-	bool flatWorldMapLoaded = false;  ///< FlatMapMarkersSSE replaces the 3D world map with flat art
-	/** @brief The world map is open and drawn as flat art by FlatMapMarkersSSE. */
+	bool flatWorldMapLoaded = false;  ///< FlatMapMarkersSSE is loaded, which flat world map mods (e.g. FWMF) rely on
+	/** @brief The map menu is open while a flat world map mod is installed. */
 	bool IsFlatWorldMapOpen() const { return isMapMenuOpen && flatWorldMapLoaded; }
 	/**
 	 * @brief Checks whether the main menu or loading menu is cached as open.

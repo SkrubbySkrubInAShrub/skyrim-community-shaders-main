@@ -88,7 +88,7 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 				globals::state->flatWorldMapLoaded = GetModuleHandleW(L"FlatMapMarkersSSE.dll") != nullptr;
 				if (globals::state->flatWorldMapLoaded)
-					logger::info("FlatMapMarkersSSE detected, Linear Lighting is disabled on the world map");
+					logger::info("FlatMapMarkersSSE detected, treating the world map as flat art");
 
 				auto shaderCache = globals::shaderCache;
 
