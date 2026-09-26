@@ -366,7 +366,7 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
         allocation those settings size, so blending them mid-frame is not something the feature can honor.
     -   `ImageBasedLighting`'s `DisableInWorldMap` and `DisableInLoadingScreen`.
     -   all of `GrassOptimizations`, `TerrainVariation` and `VolumetricLighting`.
--   `kLocationFeatureWhitelist` (5) and `kTimeOfDayFeatureWhitelist` (7): which features those scene types
+-   `kLocationFeatureWhitelist` (5) and `kTimeOfDayFeatureWhitelist` (9): which features those scene types
     may target.
 
 When adding a feature to a whitelist, run `tests/test_scene_settings_policy.py`; it fails if a name is not

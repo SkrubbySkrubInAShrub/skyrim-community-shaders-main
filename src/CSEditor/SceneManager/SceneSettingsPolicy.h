@@ -39,6 +39,8 @@ namespace SceneSettingsPolicy
 		{ "ExponentialHeightFog" },
 		{ "GrassLighting" },
 		{ "ImageBasedLighting" },
+		{ "ScreenSpaceGI" },
+		{ "ScreenSpaceShadows" },
 		{ "Skylighting" },
 		{ "SubsurfaceScattering" },
 		{ "WetnessEffects" },

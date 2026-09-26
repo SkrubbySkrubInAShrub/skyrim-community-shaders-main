@@ -19,6 +19,8 @@
 #include "Utils/Format.h"
 #include "Utils/UI.h"
 
+#include <imgui_internal.h>
+
 #define I18N_KEY_PREFIX "cs_editor."
 
 namespace
@@ -33,6 +35,9 @@ namespace
 
 	/// Keeps the toolbar off the window's scrollbar, like the widget gutter does.
 	constexpr float kRightMargin = 8.0f;
+
+	/// Divider that keeps the transition label from reading as part of the control before the toolbar.
+	constexpr float kDividerThickness = 1.0f;
 
 	/// The preview lists every candidate, so it scrolls rather than growing past the screen.
 	constexpr float kPreviewWidth = 520.0f;
@@ -611,7 +616,8 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 	// The global duration only governs the location layer, so it is absent everywhere else.
 	const bool hasTransitionField = context.type == SceneContextType::Location;
 	const float transitionWidth = hasTransitionField ?
-	                                  ImGui::CalcTextSize(transitionLabel).x + style.ItemInnerSpacing.x +
+	                                  kDividerThickness + style.ItemSpacing.x +
+	                                      ImGui::CalcTextSize(transitionLabel).x + style.ItemInnerSpacing.x +
 	                                      SceneTransitionField::GetWidth() + style.ItemSpacing.x :
 	                                  0.0f;
 	const float width = ButtonWidth(toggleLabel) + ButtonWidth(copyLabel) + ButtonWidth(loadPresetLabel) +
@@ -623,6 +629,9 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 	ImGui::PushID("ScenePageToolbar");
 
 	if (hasTransitionField) {
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical, kDividerThickness);
+		ImGui::SameLine();
+
 		// Bare text is top-aligned, which would float it above the framed row it labels.
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(transitionLabel);
