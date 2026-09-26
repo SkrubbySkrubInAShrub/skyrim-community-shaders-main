@@ -1217,7 +1217,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					float4 stamp{};
 					stamp.x = tip.x;
 					stamp.y = tip.y;
-					stamp.z = 1.0f;
+					stamp.z = BodyPrintScale();
 					stamp.w = radius;
 					perFrameData.Stamps[stampCount] = stamp;
 					// StampEnds.w on a carve is the weight it puts through a
@@ -1262,7 +1262,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float4 stamp{};
 				stamp.x = bWorld.translate.x;
 				stamp.y = bWorld.translate.y;
-				stamp.z = carve;
+				stamp.z = carve * BodyPrintScale();
 				stamp.w = radius;
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f,
@@ -1361,7 +1361,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float4 stamp{};
 				stamp.x = bWorld.translate.x;
 				stamp.y = bWorld.translate.y;
-				stamp.z = carve;
+				stamp.z = carve * BodyPrintScale();
 				stamp.w = radius;
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f,
@@ -1438,7 +1438,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					float4 stamp{};
 					stamp.x = shapeStamp.a.x;
 					stamp.y = shapeStamp.a.y;
-					stamp.z = carve;
+					stamp.z = carve * BodyPrintScale();
 					// StampRadius scales the shape's own radius; the crust reads the
 					// bound sphere, the mass proxy, unchanged.
 					stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale,

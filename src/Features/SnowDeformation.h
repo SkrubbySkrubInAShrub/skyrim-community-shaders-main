@@ -550,12 +550,14 @@ public:
 		float ParallaxDepth = 1.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.20f;
-		/** @brief Berm Steepness: divides the berm's reach (its tap rings). 1 = the authored ~40-unit apron; higher packs the same height into a narrower, steeper ridge. Narrowing only (1-3) for now. */
+		/** @brief Berm Steepness, 0-2: the berm's reach (its tap rings) is 2^(1 - s). 1 = the authored ~40-unit apron; 0 spreads the same crest height twice as wide, 2 packs it into half the width. */
 		float BermSteepness = 1.0f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
 		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
+		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
+		float SnowResistance = 50.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
@@ -764,7 +766,7 @@ public:
 
 		/** @brief Lower smoothstep edge of the stamp falloff (fraction of radius): higher = steeper trench walls. */
 		float StampFalloffStart;
-		/** @brief 1 / Settings::BermSteepness: the berm bake's tap reach and the dirty scan's halo. Took the retired TrailIrregularity slot. Mirror in DeformationUpdateCS.hlsl AND BermFieldCS.hlsl. */
+		/** @brief BermReachScale() (Berm Steepness): the berm bake's tap reach and the dirty scan's halo. Took the retired TrailIrregularity slot. Mirror in DeformationUpdateCS.hlsl AND BermFieldCS.hlsl. */
 		float BermReach;
 		/** @brief Unit wind direction (world XY, blowing toward) times wind strength 0-1; zero = uniform refill. */
 		float2 WindBias;
@@ -817,7 +819,8 @@ public:
 		float2 ViewCenter;
 		/** @brief Debug view crop half-extent, world units. */
 		float ViewHalf;
-		float ViewPad;
+		/** @brief BodyPrintScale() (Snow Resistance): the share of its reach a body's contact carves; loose props carve all of theirs. Claimed ViewPad, layout unchanged. */
+		float BodyPrint;
 		/** @brief Object height window (RenderObjectHeightMap) the road raster at t9 was captured in; HasRoadRaster = 0 when it is not bound. */
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
@@ -1558,7 +1561,7 @@ public:
 		/** @brief settings.ObjectMeetBand, read by the landscape shell and the drape. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float ObjectMeetBand;
 
-		/** @brief 1 / Settings::BermSteepness, for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		/** @brief BermReachScale() (Berm Steepness), for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float BermReach;
 		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
 		uint ShellLODDebug;
@@ -2714,8 +2717,10 @@ public:
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
-	/** @brief 1 / Berm Steepness, clamped to the narrowing range; the berm tap reach both the bake and the shells use. */
-	float BermReachScale() const { return 1.0f / std::clamp(settings.BermSteepness, 1.0f, 3.0f); }
+	/** @brief 2^(1 - Berm Steepness): the berm tap reach both the bake and the shells use. Exactly 1 at the default. */
+	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
+	/** @brief 1 - Snow Resistance: the share of a body's reach into the layer that carves. */
+	float BodyPrintScale() const { return 1.0f - std::clamp(settings.SnowResistance, 0.0f, 100.0f) * 0.01f; }
 	/** @brief Interior cell: no landscape exists, so no ground shell and no trench can; object snow is unaffected. */
 	bool InInteriorCell() const
 	{
@@ -3469,9 +3474,11 @@ public:
 	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
 	ID3D11InputLayout* StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 
-	/** @brief Prop contact field (MESH-CONTACT-PLAN Route B, rigid half): moving props' render meshes rasterized from above, MIN-blended world Z per column, over a fine window around the deformation centre. Per frame, never accumulated; the stamp pass carves from it per texel. */
+	/** @brief Prop contact field (MESH-CONTACT-PLAN Route B, rigid half): moving props' render meshes rasterized from above, MIN-blended world Z per column, over a fine window around the deformation centre. R32G32F: R = bodies (Snow Resistance applies), G = loose props. Per frame, never accumulated; the stamp pass carves from it per texel. */
 	Texture2D* contactHeight = nullptr;
-	winrt::com_ptr<ID3D11BlendState> contactMinBlendState;
+	/** @brief MIN blends masked to one channel of the contact field: bodies write R, loose props G. */
+	winrt::com_ptr<ID3D11BlendState> contactMinBlendBodies;
+	winrt::com_ptr<ID3D11BlendState> contactMinBlendProps;
 	winrt::com_ptr<ID3D11RasterizerState> contactRasterState;
 	ID3D11VertexShader* contactVS = nullptr;
 	ID3D11PixelShader* contactPS = nullptr;

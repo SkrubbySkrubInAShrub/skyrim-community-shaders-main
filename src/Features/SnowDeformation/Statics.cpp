@@ -4506,7 +4506,7 @@ bool SnowDeformation::EnsureContactResources()
 			.Height = kContactDim,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32_FLOAT,
+			.Format = DXGI_FORMAT_R32G32_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET
@@ -4525,7 +4525,10 @@ bool SnowDeformation::EnsureContactResources()
 		contactHeight->CreateSRV(srvDesc);
 		contactHeight->CreateRTV(rtvDesc);
 	}
-	if (!contactMinBlendState) {
+	// One MIN blend per channel: bodies write R, loose props G.
+	auto makeMinBlend = [&](winrt::com_ptr<ID3D11BlendState>& a_state, UINT8 a_mask) {
+		if (a_state)
+			return true;
 		D3D11_BLEND_DESC blendDesc{};
 		auto& rt = blendDesc.RenderTarget[0];
 		rt.BlendEnable = TRUE;
@@ -4535,11 +4538,12 @@ bool SnowDeformation::EnsureContactResources()
 		rt.SrcBlendAlpha = D3D11_BLEND_ONE;
 		rt.DestBlendAlpha = D3D11_BLEND_ONE;
 		rt.BlendOpAlpha = D3D11_BLEND_OP_MIN;
-		rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-		if (FAILED(device->CreateBlendState(&blendDesc, contactMinBlendState.put()))) {
-			contactShadersFailed = true;
-			return false;
-		}
+		rt.RenderTargetWriteMask = a_mask;
+		return SUCCEEDED(device->CreateBlendState(&blendDesc, a_state.put()));
+	};
+	if (!makeMinBlend(contactMinBlendBodies, D3D11_COLOR_WRITE_ENABLE_RED) || !makeMinBlend(contactMinBlendProps, D3D11_COLOR_WRITE_ENABLE_GREEN)) {
+		contactShadersFailed = true;
+		return false;
 	}
 	if (!contactRasterState) {
 		// Undersides are the surfaces that touch the snow: no culling.
@@ -4567,11 +4571,11 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		return;
 	auto* context = a_context;
 
-	const float clearValue[4] = { kContactNone, 0.0f, 0.0f, 0.0f };
+	const float clearValue[4] = { kContactNone, kContactNone, 0.0f, 0.0f };
 	context->ClearRenderTargetView(contactHeight->rtv.get(), clearValue);
 	ID3D11RenderTargetView* rtv = contactHeight->rtv.get();
 	context->OMSetRenderTargets(1, &rtv, nullptr);
-	context->OMSetBlendState(contactMinBlendState.get(), nullptr, 0xFFFFFFFF);
+	context->OMSetBlendState(contactMinBlendProps.get(), nullptr, 0xFFFFFFFF);
 	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 	context->RSGetState(savedRaster.put());
 	context->RSSetState(contactRasterState.get());
@@ -4723,6 +4727,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		contactSweepStates.clear();
 	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
 		globals::profiler->BeginPass("SnowDeformation::Trails - Contact Bodies");
+		context->OMSetBlendState(contactMinBlendBodies.get(), nullptr, 0xFFFFFFFF);
 		context->VSSetShader(contactSkinVS, nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);

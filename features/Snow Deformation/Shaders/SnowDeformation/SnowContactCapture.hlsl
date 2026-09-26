@@ -1,6 +1,7 @@
 // Contact height capture for moving props: each drawn render mesh writes its
-// world Z from directly above into an R32F target with MIN blending, so a
-// column holds the lowest surface standing over it this frame. The stamp
+// world Z from directly above into an R32G32F target with MIN blending, so a
+// column holds the lowest surface standing over it this frame: bodies in R,
+// loose props in G (the pass's write mask picks the channel). The stamp
 // pass carves where that surface reaches into the snow layer. Drawn with
 // culling off: the underside is the surface that touches the snow.
 //
@@ -120,8 +121,8 @@ VS_OUTPUT main(VS_INPUT input)
 #endif
 
 #ifdef PSHADER
-float main(VS_OUTPUT input) : SV_Target
+float2 main(VS_OUTPUT input) : SV_Target
 {
-	return input.WorldZ;
+	return input.WorldZ.xx;
 }
 #endif

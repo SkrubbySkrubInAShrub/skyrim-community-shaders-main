@@ -252,7 +252,8 @@ cbuffer PerFrame : register(b0)
 	float2 ViewCenter;
 	// Debug view crop half-extent, world units.
 	float ViewHalf;
-	float ViewPad;
+	// Snow Resistance: the share of its reach a body's contact carves.
+	float BodyPrint;
 	// Object height window the road raster (t9) was captured in.
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
@@ -296,7 +297,8 @@ StructuredBuffer<uint> TileListIn : register(t5);
 // render meshes, MIN-blended; CONTACT_NONE where nothing was drawn. The
 // terrain window gives the ground and the layer depth the contact is
 // measured into. Stamp pass only.
-Texture2D<float> ContactHeight : register(t7);
+// x = bodies, y = loose props.
+Texture2D<float2> ContactHeight : register(t7);
 Texture2D<float4> TerrainWindow : register(t8);
 // Object skin-depth raster (SnowHeightCapture RT2): x = class layer depth,
 // y = highest road top in the column, kNoRoadTop where no road drew.
@@ -1033,13 +1035,19 @@ bool StampTexel(uint2 phys)
 		{
 			int dim = (int)ContactDim;
 			int2 ct = int2((rel.x * 0.5 + 0.5) * ContactDim, (0.5 - rel.y * 0.5) * ContactDim);
-			float contact = CONTACT_NONE;
+			float2 contact = float2(CONTACT_NONE, CONTACT_NONE);
 			[unroll] for (int oy = -1; oy <= 1; oy++)
 				[unroll] for (int ox = -1; ox <= 1; ox++)
 					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
-			[branch] if (contact < CONTACT_NONE * 0.5)
+			// Bodies carve the Snow Resistance share of their reach; loose
+			// props all of it, the floor ItemSink rests them on.
+			float printed = 0.0;
+			[branch] if (contact.x < CONTACT_NONE * 0.5)
+				printed = saturate(1.0 - ContactAbove(worldPos, contact.x)) * BodyPrint;
+			[branch] if (contact.y < CONTACT_NONE * 0.5)
+				printed = max(printed, saturate(1.0 - ContactAbove(worldPos, contact.y)));
+			[branch] if (printed > 0.0)
 			{
-				float printed = saturate(1.0 - ContactAbove(worldPos, contact));
 				// Crust bears it like any carve of unknown weight: no force.
 				printed *= lerp(1.0, CrustPrintDepth, standingCrust);
 				carve = max(carve, printed);
@@ -1149,7 +1157,9 @@ bool StampTexel(uint2 phys)
 		[branch] if (all(abs(crel) < 1.0))
 		{
 			int2 ct = int2((crel.x * 0.5 + 0.5) * ContactDim, (0.5 - crel.y * 0.5) * ContactDim);
-			const float contact = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
+			// Both channels, before Snow Resistance.
+			const float2 contactXY = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
+			const float contact = min(contactXY.x, contactXY.y);
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
 				float above = ContactAbove(worldPos, contact);

@@ -121,6 +121,7 @@
 	X(ParallaxDepth) \
 	X(BermHeight) \
 	X(BermSteepness) \
+	X(SnowResistance) \
 	X(FreshSnowSoftness) \
 	X(FreshSnowChurn) \
 	X(FreshSnowSettleHours) \
@@ -1027,6 +1028,7 @@ void SnowDeformation::Prepass()
 	perFrameData.WindowOrigin = windowOrigin;
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
 	perFrameData.BermReach = BermReachScale();
+	perFrameData.BodyPrint = BodyPrintScale();
 	// Sharpness is a percent slider; 100% clamps just below the degenerate
 	// smoothstep(1, 1, x) edge.
 	// Fresh snow cannot hold a cut: walls stamped while it is loose slope

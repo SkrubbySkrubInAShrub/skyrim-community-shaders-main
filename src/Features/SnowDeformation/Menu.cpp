@@ -851,9 +851,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm. On objects the same value shades a ridge rather than raising one."));
 
-		ImGui::SliderFloat(T(TKEY("berm_steepness"), "Berm Steepness"), &settings.BermSteepness, 1.0f, 3.0f, "%.2fx");
+		ImGui::SliderFloat(T(TKEY("berm_steepness"), "Berm Steepness"), &settings.BermSteepness, 0.0f, 2.0f, "%.2f");
 		if (auto _ttBs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("berm_steepness_tooltip"), "How tightly the berm hugs the trench. 1.00 = a wide, soft apron reaching about 40 units out; higher packs the same height into a narrower, steeper ridge. Fine ridges need a fine trench map: with a long Trenches render distance, settings past about 2.5 change little."));
+			ImGui::Text("%s", T(TKEY("berm_steepness_tooltip"), "How tightly the berm hugs the trench, at the same crest height. 1.00 = the default apron, reaching about 40 units out; 0 spreads it twice as wide and gentle, 2 packs it into half the width - a steep ridge."));
 
 		ImGui::SliderFloat(T(TKEY("berm_clods"), "Berm Clods"), &settings.BermClods, 0.0f, 6.0f, "%.1f units");
 		if (auto _ttClods = Util::HoverTooltipWrapper())
@@ -876,6 +876,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
 		ImGui::SeparatorText(T(TKEY("snow_condition_group"), "Snow Condition"));
+
+		ImGui::SliderFloat(T(TKEY("snow_resistance"), "Snow Resistance"), &settings.SnowResistance, 0.0f, 100.0f, "%.0f %%");
+		if (auto _ttResist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
