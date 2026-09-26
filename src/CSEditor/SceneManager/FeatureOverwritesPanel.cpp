@@ -30,6 +30,7 @@ namespace
 		std::vector<uint8_t> selected;
 		ImGuiTextFilter filter;
 		bool failed = false;
+		bool featureLocked = false;
 	};
 
 	ExportState exportState;
@@ -60,17 +61,14 @@ namespace
 		exportState.selected.assign(exportState.settings.size(), uint8_t{ 1 });
 	}
 
-	void BeginExport()
+	void AddExportFeature(Feature* feature)
 	{
-		// Reset field by field: ImGuiTextFilter holds ranges pointing into its own buffer, so it must not be copied.
-		exportState.shortNames.clear();
-		exportState.labels.clear();
-		exportState.settings.clear();
-		exportState.selected.clear();
-		exportState.featureIndex = -1;
-		exportState.failed = false;
-		exportState.filter.Clear();
+		exportState.shortNames.push_back(feature->GetShortName());
+		exportState.labels.push_back(feature->GetDisplayName());
+	}
 
+	void AddExportableFeatures()
+	{
 		auto features = Feature::GetFeatureList();
 		std::ranges::sort(features, [](Feature* a, Feature* b) { return a->GetDisplayName() < b->GetDisplayName(); });
 		for (auto* feature : features) {
@@ -78,13 +76,9 @@ namespace
 				continue;
 			json settings;
 			feature->SaveSettings(settings);
-			if (!settings.is_object() || settings.empty())
-				continue;
-			exportState.shortNames.push_back(feature->GetShortName());
-			exportState.labels.push_back(feature->GetDisplayName());
+			if (settings.is_object() && !settings.empty())
+				AddExportFeature(feature);
 		}
-
-		ImGui::OpenPopup(GetExportPopupTitle().c_str());
 	}
 
 	/** @brief Draws the feature picker; returns true once a feature is selected. */
@@ -163,64 +157,6 @@ namespace
 		ImGui::EndChild();
 	}
 
-	void DrawExport()
-	{
-		const auto title = GetExportPopupTitle();
-		if (!ImGui::IsPopupOpen(title.c_str()))
-			return;
-
-		const float width = ImGui::GetFontSize() * kExportPopupWidthEm;
-		ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, ImGui::GetMainViewport()->WorkSize.y));
-		bool open = true;
-		auto popup = Util::CenteredPopupModal(title.c_str(), &open);
-		if (!popup)
-			return;
-
-		if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-			// The editor ignores Escape only while a popup is open, which this close is about to end.
-			if (auto* editor = EditorWindow::GetSingleton(); editor->open)
-				editor->suppressNextEditorEscape = true;
-			ImGui::CloseCurrentPopup();
-			return;
-		}
-
-		ImGui::InputText(T(TKEY("export.mod_name"), "Mod Name"), exportState.modName, IM_ARRAYSIZE(exportState.modName));
-		const auto modName = Util::FileHelpers::SanitizeFileName(exportState.modName);
-		ImGui::TextWrapped("%s", T(TKEY("export.description"), "Choose one feature and the settings to export, without scene-specific values."));
-		ImGui::TextWrapped("%s", T(TKEY("export.existing"), "Existing files with the same name are updated. Other settings and metadata are preserved."));
-
-		if (!DrawFeaturePicker())
-			return;
-
-		DrawSelectionButtons();
-		DrawSettingList();
-
-		if (exportState.failed)
-			Util::Text::WrappedError("%s", T(TKEY("export.failed"), "Could not export the selected settings. Check the log and try again."));
-
-		const auto count = std::ranges::count(exportState.selected, uint8_t{ 1 });
-		auto disabled = Util::DisableGuard(modName.empty() || count == 0);
-		const auto label = std::vformat(T(TKEY("export.count"), "Export ({0})"), std::make_format_args(count));
-		if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
-			std::vector<std::string> paths;
-			for (size_t index = 0; index < exportState.settings.size(); ++index)
-				if (exportState.selected[index])
-					paths.push_back(exportState.settings[index].path);
-
-			json settings;
-			auto* feature = Feature::FindFeatureByShortName(exportState.shortNames[exportState.featureIndex]);
-			if (feature) {
-				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-				feature->SaveSettings(settings);
-			}
-
-			exportState.failed = !feature || !SettingsOverrideManager::GetSingleton()->ExportSettings(modName,
-												 exportState.shortNames[exportState.featureIndex], paths, settings);
-			if (!exportState.failed)
-				ImGui::CloseCurrentPopup();
-		}
-	}
-
 	/** @brief Draws one overwrite row and requests deletion when its button is pressed. */
 	void DrawOverwriteRow(const SettingsOverrideManager::OverrideInfo& info)
 	{
@@ -252,6 +188,88 @@ namespace
 		}
 
 		ImGui::PopID();
+	}
+}
+
+void FeatureOverwritesPanel::BeginExport(Feature* feature)
+{
+	// Reset field by field: ImGuiTextFilter holds ranges pointing into its own buffer, so it must not be copied.
+	exportState.shortNames.clear();
+	exportState.labels.clear();
+	exportState.settings.clear();
+	exportState.selected.clear();
+	exportState.featureIndex = -1;
+	exportState.failed = false;
+	exportState.filter.Clear();
+	exportState.featureLocked = feature != nullptr;
+
+	if (feature) {
+		AddExportFeature(feature);
+		SelectFeature(0);
+	} else {
+		AddExportableFeatures();
+	}
+
+	ImGui::OpenPopup(GetExportPopupTitle().c_str());
+}
+
+void FeatureOverwritesPanel::DrawExport()
+{
+	const auto title = GetExportPopupTitle();
+	if (!ImGui::IsPopupOpen(title.c_str()))
+		return;
+
+	const float width = ImGui::GetFontSize() * kExportPopupWidthEm;
+	ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, ImGui::GetMainViewport()->WorkSize.y));
+	bool open = true;
+	auto popup = Util::CenteredPopupModal(title.c_str(), &open);
+	if (!popup)
+		return;
+
+	if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+		// The editor ignores Escape only while a popup is open, which this close is about to end.
+		if (auto* editor = EditorWindow::GetSingleton(); editor->open)
+			editor->suppressNextEditorEscape = true;
+		ImGui::CloseCurrentPopup();
+		return;
+	}
+
+	ImGui::InputText(T(TKEY("export.mod_name"), "Mod Name"), exportState.modName, IM_ARRAYSIZE(exportState.modName));
+	const auto modName = Util::FileHelpers::SanitizeFileName(exportState.modName);
+	ImGui::TextWrapped("%s", exportState.featureLocked ?
+								 T(TKEY("export.description_feature"), "Choose the settings to export, without scene-specific values.") :
+								 T(TKEY("export.description"), "Choose one feature and the settings to export, without scene-specific values."));
+	ImGui::TextWrapped("%s", T(TKEY("export.existing"), "Existing files with the same name are updated. Other settings and metadata are preserved."));
+
+	if (!exportState.featureLocked && !DrawFeaturePicker())
+		return;
+
+	DrawSelectionButtons();
+	DrawSettingList();
+
+	if (exportState.failed)
+		Util::Text::WrappedError("%s", T(TKEY("export.failed"), "Could not export the selected settings. Check the log and try again."));
+
+	const auto count = std::ranges::count(exportState.selected, uint8_t{ 1 });
+	auto disabled = Util::DisableGuard(modName.empty() || count == 0);
+	const auto label = std::vformat(T(TKEY("export.count"), "Export ({0})"), std::make_format_args(count));
+	if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
+		std::vector<std::string> paths;
+		for (size_t index = 0; index < exportState.settings.size(); ++index)
+			if (exportState.selected[index])
+				paths.push_back(exportState.settings[index].path);
+
+		json settings;
+		auto* feature = Feature::FindFeatureByShortName(exportState.shortNames[exportState.featureIndex]);
+		if (feature) {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			feature->SaveSettings(settings);
+		}
+
+		exportState.failed = !feature || !SettingsOverrideManager::GetSingleton()->ExportSettings(modName,
+											 exportState.shortNames[exportState.featureIndex], paths, settings);
+		if (!exportState.failed)
+			ImGui::CloseCurrentPopup();
 	}
 }
 

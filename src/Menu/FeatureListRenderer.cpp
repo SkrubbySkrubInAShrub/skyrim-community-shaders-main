@@ -18,6 +18,7 @@
 #include "Menu/HomePageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
+#include "CSEditor/SceneManager/FeatureOverwritesPanel.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
@@ -688,7 +689,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
+	const char* exportButtonText = T("menu.features.export_overwrite", "Export Overwrite");
+	float exportButtonWidth = ImGui::CalcTextSize(exportButtonText).x + buttonPadding;
+	const bool canExport = !isDisabled && isLoaded && feat->UsesMainSettings();
+
 	float totalButtonWidth = bootToggleWidth;
+	if (canExport) {
+		totalButtonWidth += exportButtonWidth + buttonSpacing;
+	}
 	if (!isDisabled && isLoaded && hasOverrides) {
 		totalButtonWidth += overrideButtonWidth + buttonSpacing;
 	}
@@ -747,6 +755,19 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 			bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
 	}
 
+	if (canExport) {
+		ImGui::SameLine();
+		if (ImGui::Button(exportButtonText, { exportButtonWidth, 0 }))
+			FeatureOverwritesPanel::BeginExport(feat);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"%s",
+				T("menu.features.export_overwrite_tooltip",
+					"Export selected settings as a feature overwrite file.\n"
+					"Overwrites are loaded at startup."));
+		}
+	}
+
 	// Apply Override button (when feature has available overrides)
 	if (!isDisabled && isLoaded && hasOverrides) {
 		ImGui::SameLine();
@@ -779,6 +800,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 			}
 		}
 	}
+
+	// Drawn after all header items so the modal cannot clobber their hover state.
+	if (canExport)
+		FeatureOverwritesPanel::DrawExport();
 
 	// Restore cursor position after the title and separator
 	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
