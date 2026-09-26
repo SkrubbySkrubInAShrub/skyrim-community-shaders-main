@@ -28,6 +28,11 @@ namespace
 	// --- Originals ---
 	auto* RealSliderFloat = &ImGui::SliderFloat;
 	auto* RealSliderFloat2 = &ImGui::SliderFloat2;
+	auto* RealSliderFloat3 = &ImGui::SliderFloat3;
+	auto* RealSliderFloat4 = &ImGui::SliderFloat4;
+	auto* RealDragFloat4 = &ImGui::DragFloat4;
+	auto* RealInputFloat2 = &ImGui::InputFloat2;
+	auto* RealInputFloat3 = &ImGui::InputFloat3;
 	auto* RealSliderInt = &ImGui::SliderInt;
 	auto* RealSliderScalar = &ImGui::SliderScalar;
 	auto* RealSliderAngle = &ImGui::SliderAngle;
@@ -117,14 +122,60 @@ namespace
 		return guard.Finish(dropped || changed);
 	}
 
+	/** @brief Binds an N-component float control; the vector widgets differ only in N and trailing args. */
+	template <std::uint8_t ComponentCount, typename Real, typename... Args>
+	bool InterceptFloatVector(Real a_real, const char* a_label, float* a_v, Args... a_args)
+	{
+		static_assert(ComponentCount <= SceneWidgetBinding::Value::kMaxComponents);
+		InterceptedCall interceptedCall;
+		SceneWidgetBinding::Guard guard(a_label, SceneWidgetBinding::Value::FloatVector(a_v, ComponentCount));
+		return guard.Finish(a_real(a_label, guard.Float(), a_args...));
+	}
+
 	bool DetouredSliderFloat2(const char* label, float v[2], float vMin, float vMax,
 		const char* format, ImGuiSliderFlags flags)
 	{
 		if (!ShouldIntercept())
 			return RealSliderFloat2(label, v, vMin, vMax, format, flags);
-		InterceptedCall interceptedCall;
-		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::FloatVector(v, 2));
-		return guard.Finish(RealSliderFloat2(label, guard.Float(), vMin, vMax, format, flags));
+		return InterceptFloatVector<2>(RealSliderFloat2, label, v, vMin, vMax, format, flags);
+	}
+
+	bool DetouredSliderFloat3(const char* label, float v[3], float vMin, float vMax,
+		const char* format, ImGuiSliderFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealSliderFloat3(label, v, vMin, vMax, format, flags);
+		return InterceptFloatVector<3>(RealSliderFloat3, label, v, vMin, vMax, format, flags);
+	}
+
+	bool DetouredSliderFloat4(const char* label, float v[4], float vMin, float vMax,
+		const char* format, ImGuiSliderFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealSliderFloat4(label, v, vMin, vMax, format, flags);
+		return InterceptFloatVector<4>(RealSliderFloat4, label, v, vMin, vMax, format, flags);
+	}
+
+	bool DetouredDragFloat4(const char* label, float v[4], float speed, float vMin, float vMax,
+		const char* format, ImGuiSliderFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealDragFloat4(label, v, speed, vMin, vMax, format, flags);
+		return InterceptFloatVector<4>(RealDragFloat4, label, v, speed, vMin, vMax, format, flags);
+	}
+
+	bool DetouredInputFloat2(const char* label, float v[2], const char* format, ImGuiInputTextFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealInputFloat2(label, v, format, flags);
+		return InterceptFloatVector<2>(RealInputFloat2, label, v, format, flags);
+	}
+
+	bool DetouredInputFloat3(const char* label, float v[3], const char* format, ImGuiInputTextFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealInputFloat3(label, v, format, flags);
+		return InterceptFloatVector<3>(RealInputFloat3, label, v, format, flags);
 	}
 
 	bool DetouredSliderInt(const char* label, int* v, int vMin, int vMax,
@@ -274,6 +325,11 @@ namespace
 		static const DetourEntry table[] = {
 			{ "SliderFloat", reinterpret_cast<PVOID*>(&RealSliderFloat), reinterpret_cast<PVOID>(&DetouredSliderFloat) },
 			{ "SliderFloat2", reinterpret_cast<PVOID*>(&RealSliderFloat2), reinterpret_cast<PVOID>(&DetouredSliderFloat2) },
+			{ "SliderFloat3", reinterpret_cast<PVOID*>(&RealSliderFloat3), reinterpret_cast<PVOID>(&DetouredSliderFloat3) },
+			{ "SliderFloat4", reinterpret_cast<PVOID*>(&RealSliderFloat4), reinterpret_cast<PVOID>(&DetouredSliderFloat4) },
+			{ "DragFloat4", reinterpret_cast<PVOID*>(&RealDragFloat4), reinterpret_cast<PVOID>(&DetouredDragFloat4) },
+			{ "InputFloat2", reinterpret_cast<PVOID*>(&RealInputFloat2), reinterpret_cast<PVOID>(&DetouredInputFloat2) },
+			{ "InputFloat3", reinterpret_cast<PVOID*>(&RealInputFloat3), reinterpret_cast<PVOID>(&DetouredInputFloat3) },
 			{ "SliderInt", reinterpret_cast<PVOID*>(&RealSliderInt), reinterpret_cast<PVOID>(&DetouredSliderInt) },
 			{ "SliderScalar", reinterpret_cast<PVOID*>(&RealSliderScalar), reinterpret_cast<PVOID>(&DetouredSliderScalar) },
 			{ "SliderAngle", reinterpret_cast<PVOID*>(&RealSliderAngle), reinterpret_cast<PVOID>(&DetouredSliderAngle) },

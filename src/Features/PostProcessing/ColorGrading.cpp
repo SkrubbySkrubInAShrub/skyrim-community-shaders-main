@@ -596,6 +596,9 @@ void ColorGrading::RestoreDefaultSettings()
 
 void ColorGrading::LoadSettings(json& o_json)
 {
+	const bool oldUseOpenDrt = settings.useOpenDrt;
+	const int oldTonemapperType = tonemapperType;
+
 	try {
 		settings = o_json;
 		auto& spaces = getAvailableColorSpaces();
@@ -625,7 +628,8 @@ void ColorGrading::LoadSettings(json& o_json)
 		settings.odrtConfig = {};
 	}
 
-	recompileFlag = true;
+	// Recompiling drops the shaders until the async compile lands, so scene blends must not trigger it.
+	recompileFlag = recompileFlag || settings.useOpenDrt != oldUseOpenDrt || tonemapperType != oldTonemapperType;
 }
 
 void ColorGrading::SaveSettings(json& o_json)

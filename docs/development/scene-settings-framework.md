@@ -66,7 +66,7 @@ when, and only when, a second TU needs it.
 ## How the catalog is built
 
 `CMakeLists.txt` runs the generator as a custom command before compiling, with
-`--min-entries 330 --min-controllable 305 --min-controllable-features 29` as a regression gate. The two
+`--min-entries 645 --min-controllable 538 --min-controllable-features 30` as a regression gate. The two
 controllable floors are the ones that matter: a parser change that stops binding a control does not
 remove the entry, it silently drops its `SceneControllable` flag. Keep them just under the real numbers.
 It statically parses feature sources and derives, for every persisted setting:
@@ -88,7 +88,11 @@ This makes the framework **feature-agnostic**: a feature exposes scene-controlla
 persisting them and drawing them with a recognized ImGui call. There is no registration API and no
 per-feature code to write. This is what replaced the deleted `WeatherVariableRegistry`.
 
-Current catalog on this fork: **345 entries**, 318 of them scene-controllable across 29 features.
+Current catalog on this fork: **660 entries**, 551 of them scene-controllable across 30 features.
+
+A non-primitive member persisted under its own JSON key fails the build unless its type is listed in
+`UNCATALOGED_PERSISTED_AGGREGATE_TYPES`. Generic type names are qualified there (`PostProcessing::Settings`,
+the tonemap ownership switch persisted as `ppsettings`), so another feature's `Settings` still trips the guard.
 
 ## Runtime flow
 
@@ -135,8 +139,8 @@ valid at its source), so the exposure is the on-disk contract: `IsSceneSettingVa
 *type* of a value, not its range, and a hand-edited or foreign `SceneManager.json` can carry anything.
 
 `ClampCatalogNumericValue()` closes that in `ApplyCatalogSceneSettings()`, the one place any scene value
-reaches a feature. It covers `EditorSemantic::Numeric` entries carrying `hasNumericBounds` (223 of the
-current catalog's 345). Bounds are authored in **display** space, so the range is converted once through
+reaches a feature. It covers `EditorSemantic::Numeric` entries carrying `hasNumericBounds` (416 of the
+current catalog's 660). Bounds are authored in **display** space, so the range is converted once through
 `ConvertCatalogNumericDisplayToStored()` rather than round-tripping every value; both transforms are
 monotonic, so the min stays the min. An integer-typed value clamps to the whole numbers inside the range,
 since an integer control cannot land on a fractional bound.
@@ -366,8 +370,16 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
         allocation those settings size, so blending them mid-frame is not something the feature can honor.
     -   `ImageBasedLighting`'s `DisableInWorldMap` and `DisableInLoadingScreen`.
     -   all of `GrassOptimizations`, `TerrainVariation` and `VolumetricLighting`.
--   `kLocationFeatureWhitelist` (5) and `kTimeOfDayFeatureWhitelist` (9): which features those scene types
+    -   upstream's `PostProcessing` entries, kept identical for on-disk compatibility: all of `Border` and
+        `LUT` (`LUT::LoadSettings` rereads its texture from disk), DoF `HighlightShape`, Motion Blur
+        `VelocityScale`, and the Color Grading tonemapper selection (`enableTonemap`, `useOpenDrt`,
+        `currentTonemapper`, `tonemapParams`), which recompiles shaders.
+-   `kLocationFeatureWhitelist` (6) and `kTimeOfDayFeatureWhitelist` (10): which features those scene types
     may target.
+
+`PostProcessing` defers its load: `LoadSettings` stores the JSON and `ProcessSettings` applies it in
+`Prepass`. Its per-load path must stay cheap because a blend reloads every frame, so sub-features reconcile
+settings-sized resources in `Draw` and Color Grading recompiles only when the tonemapper changes.
 
 When adding a feature to a whitelist, run `tests/test_scene_settings_policy.py`; it fails if a name is not
 discovered in the generated catalog.
@@ -484,8 +496,8 @@ the generator, or `tests/**`. Run them locally after touching the generator or t
 The generator can be run standalone to inspect its output:
 
 ```bash
-python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 330 \
-    --min-controllable 305 --min-controllable-features 29
+python cmake/generate_scene_settings_catalog.py --source-dir . --out-dir /tmp/catalog --min-entries 645 \
+    --min-controllable 538 --min-controllable-features 30
 ```
 
 The generator test file is upstream's with the open-shaders-coupled assertions removed (`CSUtility`,

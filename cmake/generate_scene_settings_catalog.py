@@ -31,9 +31,11 @@ from pathlib import Path
 # SaveSettings body fails the build, so an aggregate can never drop out of the catalog silently.
 # Keyed by declared type rather than serialized key: a feature persisting some other struct under
 # the name "DebugSettings" must still trip the guard, and naming features here would put policy in
-# the generator instead of SceneSettingsPolicy.h.
+# the generator instead of SceneSettingsPolicy.h. Generic names like "Settings" must be qualified.
 UNCATALOGED_PERSISTED_AGGREGATE_TYPES = {
     "DebugSettings",
+    # Tonemap ownership switch arbitrated by State::GetTonemapOwner, not a per-scene look.
+    "PostProcessing::Settings",
 }
 
 PRIMITIVE_TYPES = {
@@ -752,7 +754,9 @@ def collect_direct_persisted_fields(
                 if value_type:
                     persisted_fields.setdefault(feature_class, []).append(
                         (key, value_type, member))
-                elif declared_type and declared_type not in UNCATALOGED_PERSISTED_AGGREGATE_TYPES:
+                elif declared_type and not (
+                        {declared_type, f"{feature_class}::{declared_type}"}
+                        & UNCATALOGED_PERSISTED_AGGREGATE_TYPES):
                     uncataloged.append(
                         f"{feature_class}::SaveSettings persists '{key}' as non-primitive "
                         f"'{declared_type}'; catalog it or list it in "
@@ -4960,10 +4964,15 @@ SOURCE_WIDGET_ENTRY_POINTS = {
     "ColorEdit3": ("ColorEdit3",),
     "ColorEdit4": ("ColorEdit4",),
     "Combo": ("Combo", "RadioButton"),
+    "DragFloat4": ("DragFloat4",),
+    "InputFloat2": ("InputFloat2",),
+    "InputFloat3": ("InputFloat3",),
     "PercentageSlider": ("SliderFloat",),
     "SliderAngle": ("SliderAngle",),
     "SliderFloat": ("SliderFloat",),
     "SliderFloat2": ("SliderFloat2",),
+    "SliderFloat3": ("SliderFloat3",),
+    "SliderFloat4": ("SliderFloat4",),
     "SliderInt": ("SliderInt",),
     "SliderScalar": ("SliderScalar",),
 }
