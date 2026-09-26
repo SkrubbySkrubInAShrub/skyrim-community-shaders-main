@@ -337,6 +337,12 @@ namespace Util
 	/** @brief Draws the rounded hover/active fill for the last submitted item. */
 	bool DrawCurrentItemRoundedButtonHighlight(ImDrawList* drawList = nullptr);
 
+	/** @brief Draws a circle icon, filled or outlined, on the window draw list. */
+	void DrawIconCircle(ImVec2 center, float radius, ImU32 color, bool filled);
+
+	/** @brief Reserves one text-line-high square and draws a dot centred in it, so callers can test ImGui::IsItemHovered(). */
+	void DrawInlineIndicatorDot(ImU32 color, bool filled);
+
 	/** @brief ImGui::Begin() wrappers that replace native title-bar button highlights with rounded ones. */
 	bool BeginWithRoundedClose(const char* name, bool* p_open, ImGuiWindowFlags flags = 0);
 	bool BeginPopupModalWithRoundedClose(const char* name, bool* p_open = nullptr, ImGuiWindowFlags flags = 0);

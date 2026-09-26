@@ -614,6 +614,21 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		ImGui::TextColored(StageTagColor(stage), "%s", Feature::GetReleaseStageTag(stage).c_str());
 	}
 
+	// A feature only authored for other scenes still gets a hollow dot, so its settings stay discoverable.
+	if (auto* sceneManager = globals::sceneSettingsManager; sceneManager->HasAnySceneEntriesForFeature(featureName)) {
+		const bool applying = sceneManager->IsFeatureSceneControlled(featureName);
+		ImGui::SameLine();
+		Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetInfo()), applying);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(applying ?
+									   T("menu.features.scene_indicator_applying",
+										   "Scene Manager is applying settings here. Base settings are locked; edit them in Scene Manager.") :
+								   sceneManager->IsFeaturePaused(featureName) ?
+									   T("menu.features.scene_indicator_paused", "Scene Manager settings are paused for this feature.") :
+									   T("menu.features.scene_indicator_configured",
+										   "Has Scene Manager settings for other times, weathers or locations."));
+	}
+
 	// Display version if loaded
 	if (isLoaded) {
 		ImGui::SameLine();

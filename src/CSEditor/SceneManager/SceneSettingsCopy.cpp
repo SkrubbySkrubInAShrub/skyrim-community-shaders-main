@@ -1,5 +1,6 @@
 #include "SceneSettingsManager.h"
 
+#include "Globals.h"
 #include "SceneSettingsContextRules.h"
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
@@ -78,7 +79,10 @@ std::vector<SceneSettingsManager::CopyCandidate> SceneSettingsManager::BuildCopy
 			identity.featureShortName, identity.settingPath, identity.settingKey, destinationRules.requireNumeric);
 		auto rejection = CopyRejection::None;
 		if (!setting)
-			rejection = CopyRejection::NotInCatalog;
+			rejection = destinationRules.requireNumeric && FindAllowedCatalogSetting(identity.featureShortName,
+			                                                   identity.settingPath, identity.settingKey) ?
+			                CopyRejection::NotBlendable :
+			                CopyRejection::NotInCatalog;
 		else if (!IsSettingAllowedForType(destinationRules.sceneType, identity.featureShortName,
 					 identity.settingPath, identity.settingKey))
 			rejection = CopyRejection::NotAllowedInLayer;
@@ -176,7 +180,8 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopySourc
 		if (IsSameSceneContext(context, destination))
 			return;
 		if (const auto settingCount = countCompatible(effectiveEntries); settingCount != 0)
-			sources.push_back({ context, GetSceneContextDisplayName(context), settingCount });
+			sources.push_back({ context, GetSceneContextDisplayName(context), settingCount, true,
+				IsCurrentSceneContext(context) });
 	};
 	// The last slot holds the flat set, whose entries carry the Count period.
 	const auto addActiveSetSources = [&](const SceneContextId& context, const std::vector<SettingEntry>& sourceEntries,
@@ -228,7 +233,8 @@ std::vector<SceneSettingsManager::CopySource> SceneSettingsManager::GetCopyDesti
 		const auto compatibleCount = static_cast<size_t>(
 			std::count_if(candidates.begin(), candidates.end(), [](const auto& candidate) { return candidate.compatible; }));
 		if (compatibleCount != 0)
-			destinations.push_back({ context, std::move(displayName), compatibleCount });
+			destinations.push_back({ context, std::move(displayName), compatibleCount,
+				IsSceneContextAuthored(context), IsCurrentSceneContext(context) });
 	};
 
 	const SceneContextId interiorContext{ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count };
@@ -554,4 +560,61 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettings(const SceneC
 	const SceneContextId& destination, CopyConflictPolicy conflictPolicy)
 {
 	return CopySettingsToContext(source, destination, conflictPolicy, false);
+}
+
+SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsBatch(const SceneContextId& source,
+	std::span<const SceneContextId> destinations, CopyConflictPolicy conflictPolicy)
+{
+	CopyResult total;
+	for (const auto& destination : destinations) {
+		const auto result = CopySettingsToContext(source, destination, conflictPolicy, true);
+		total.copied += result.copied;
+		total.skipped += result.skipped;
+		total.overwritten += result.overwritten;
+		total.incompatible += result.incompatible;
+		total.hadConflicts |= result.hadConflicts;
+		total.cancelled |= result.cancelled;
+		if (!result.Changed())
+			continue;
+		MarkContextUserSettingsModified(destination, true);
+		// Later destinations derive originalValue from caches keyed on the scene value revision.
+		MarkSceneValuesDirty();
+	}
+	if (!total.Changed())
+		return total;
+
+	BumpEntryPresentationRevision();
+	CommitSceneSettingChanges();
+	return total;
+}
+
+bool SceneSettingsManager::IsSceneContextAuthored(const SceneContextId& context) const
+{
+	switch (context.type) {
+	case SceneContextType::Weather:
+		return weatherSceneConfigs.contains(context.weatherId);
+	case SceneContextType::Location:
+		return locationSceneConfigs.contains(GetLocationConfigKey(context.locationType, context.locationFormKey));
+	default:
+		return true;
+	}
+}
+
+bool SceneSettingsManager::IsCurrentSceneContext(const SceneContextId& context) const
+{
+	switch (context.type) {
+	case SceneContextType::Weather: {
+		const auto* sky = globals::game::sky;
+		return sky && sky->currentWeather && sky->currentWeather->GetFormID() == context.weatherId;
+	}
+	case SceneContextType::Location:
+		return std::ranges::any_of(GetCurrentLocationTargets(), [&](const auto& target) {
+			return IsSameSceneContext(context, { .type = SceneContextType::Location,
+												   .period = context.period,
+												   .locationType = target.type,
+												   .locationFormKey = target.formKey });
+		});
+	default:
+		return false;
+	}
 }

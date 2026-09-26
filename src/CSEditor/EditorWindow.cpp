@@ -66,15 +66,6 @@ void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled)
 	}
 }
 
-void DrawIconCircle(ImVec2 center, float radius, ImU32 color, bool filled)
-{
-	auto* drawList = ImGui::GetWindowDrawList();
-	if (filled)
-		drawList->AddCircleFilled(center, radius, color, 16);
-	else
-		drawList->AddCircle(center, radius, color, 16, 1.5f * Util::GetUIScale());
-}
-
 void DrawIconWave(ImVec2 center, float width, ImU32 color, bool filled)
 {
 	auto* drawList = ImGui::GetWindowDrawList();
@@ -114,7 +105,7 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 	if (strcmp(iconType, "star") == 0) {
 		DrawIconStar(center, iconSize, iconColor, filled);
 	} else if (strcmp(iconType, "circle") == 0) {
-		DrawIconCircle(center, iconSize, iconColor, filled);
+		Util::DrawIconCircle(center, iconSize, iconColor, filled);
 	} else if (strcmp(iconType, "wave") == 0) {
 		DrawIconWave(center, buttonSize.x * 0.7f, iconColor, filled);
 	}

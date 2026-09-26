@@ -664,6 +664,26 @@ namespace Util
 		return DrawRoundedButtonHighlight(ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()), ImGui::IsItemHovered(), ImGui::IsItemActive(), drawList);
 	}
 
+	void DrawIconCircle(ImVec2 center, float radius, ImU32 color, bool filled)
+	{
+		auto* drawList = ImGui::GetWindowDrawList();
+		if (filled)
+			drawList->AddCircleFilled(center, radius, color, ThemeManager::Constants::ICON_CIRCLE_SEGMENTS);
+		else
+			drawList->AddCircle(center, radius, color, ThemeManager::Constants::ICON_CIRCLE_SEGMENTS,
+				ThemeManager::Constants::ICON_OUTLINE_THICKNESS * GetUIScale());
+	}
+
+	void DrawInlineIndicatorDot(ImU32 color, bool filled)
+	{
+		const float lineHeight = ImGui::GetTextLineHeight();
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(lineHeight, lineHeight));
+		const float halfLine = lineHeight * 0.5f;
+		DrawIconCircle(ImVec2(origin.x + halfLine, origin.y + halfLine),
+			lineHeight * ThemeManager::Constants::SCENE_INDICATOR_RADIUS_RATIO, color, filled);
+	}
+
 	// Shared constants for title-bar button overlays
 	static constexpr float kTitleBarButtonPadding = 2.0f;
 	static constexpr float kCloseCrossDiagonalScale = 0.5f / std::numbers::sqrt2_v<float>;

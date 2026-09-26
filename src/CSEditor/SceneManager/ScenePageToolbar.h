@@ -4,7 +4,7 @@
 
 /// Page-wide actions for one scene context: pause or resume it, copy settings between it and
 /// another context (in either direction), export it as a preset, and clear it. The page being
-/// drawn is always one side of the copy; the other side is picked from the From/To submenus.
+/// drawn is always one side of the copy; the other side is picked in the Copy modal.
 namespace ScenePageToolbar
 {
 	/// Draws the actions right-aligned on the current row, along with the dialogs they open.

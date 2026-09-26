@@ -204,9 +204,7 @@ public:
 
 	/// Check if any scene settings are active for a given feature
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
-	/// Whether a feature has any entry authored anywhere, in effect or not, unlike
-	/// HasActiveSettingsForFeature. No caller yet: the seam for a "configured" badge that stays lit
-	/// when the player is somewhere the overrides do not apply.
+	/// Whether a feature has any entry authored anywhere, in effect here or not.
 	bool HasAnySceneEntriesForFeature(const std::string& featureShortName) const;
 	bool IsActiveSceneSetting(std::string_view featureShortName,
 		std::string_view settingPath, std::string_view settingKey) const;
@@ -503,6 +501,7 @@ public:
 	{
 		None,
 		NotInCatalog,            ///< No catalog entry the destination layer permits.
+		NotBlendable,            ///< Exists, but cannot blend, so a time-of-day or weather layer cannot hold it.
 		NotAllowedInLayer,       ///< Feature not loaded, or the destination layer forbids the setting.
 		ValueRejected,           ///< The source value is not a legal value at the destination.
 		BlockedByOverwrite,      ///< An unpaused mod-authored overwrite holds the destination address.
@@ -515,6 +514,8 @@ public:
 		SceneContextId context;
 		std::string displayName;
 		size_t settingCount = 0;
+		bool authored = false;  ///< Holds entries, or is on the user's location list.
+		bool current = false;   ///< The live weather, or a link of the player's location chain.
 	};
 
 	/// One physical setting available to copy.
@@ -554,6 +555,9 @@ public:
 		const SceneContextId& destination) const;
 	/// Copy settings as one validated mutation and one save/reapply operation.
 	CopyResult CopySettings(const SceneContextId& source, const SceneContextId& destination,
+		CopyConflictPolicy conflictPolicy);
+	/// Copy one source into several destinations as one mutation: one revision bump, one save, one reapply.
+	CopyResult CopySettingsBatch(const SceneContextId& source, std::span<const SceneContextId> destinations,
 		CopyConflictPolicy conflictPolicy);
 	/// Name one context the way the copy source list spells it.
 	std::string GetSceneContextDisplayName(const SceneContextId& context) const;
@@ -1071,6 +1075,10 @@ private:
 	/// Deferring the commit lets a fan-out over the periods land as one save.
 	CopyResult CopySettingsToContext(const SceneContextId& source, const SceneContextId& destination,
 		CopyConflictPolicy conflictPolicy, bool deferCommit);
+	/// Whether a context holds entries or is on the user's location list.
+	bool IsSceneContextAuthored(const SceneContextId& context) const;
+	/// Whether a context is the live weather or a link of the player's location chain.
+	bool IsCurrentSceneContext(const SceneContextId& context) const;
 	/// Exact: an eased value moves by far less than any tolerance would forgive, and a skipped apply
 	/// would accumulate that difference into a visible staircase.
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);

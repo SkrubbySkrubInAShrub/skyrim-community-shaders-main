@@ -793,6 +793,9 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 					continue;
 			}
 
+			const bool hasSceneSettings = globals::sceneSettingsManager->HasWeatherConfig(weather->GetFormID());
+			const bool isCurrentWeather = weather == sky->currentWeather;
+
 			ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherTypeColor(weather));
 			bool didSelect = ImGui::Selectable(weatherLabels[i].c_str(), isSelected);
 			ImGui::PopStyleColor();
@@ -820,11 +823,20 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 				ImGui::Text(T(TKEY("tooltip_weather_name"), "Weather: %s"), weather->GetName() ? weather->GetName() : "Unnamed");
 				ImGui::Text(T(TKEY("tooltip_editor_id"), "Editor ID: %s"), weather->GetFormEditorID() ? weather->GetFormEditorID() : "None");
 				ImGui::Text(T(TKEY("tooltip_form_id"), "Form ID: 0x%08X"), weather->GetFormID());
+				if (hasSceneSettings)
+					ImGui::TextUnformatted(isCurrentWeather ?
+											   T(TKEY("tooltip_scene_settings_applying"), "Scene Manager settings applying now") :
+											   T(TKEY("tooltip_scene_settings"), "Has Scene Manager settings"));
 				ImGui::EndTooltip();
 			}
 
 			if (isSelected)
 				ImGui::SetItemDefaultFocus();
+
+			if (hasSceneSettings) {
+				ImGui::SameLine();
+				Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetInfo()), isCurrentWeather);
+			}
 		}
 		ImGui::EndCombo();
 	} else {
