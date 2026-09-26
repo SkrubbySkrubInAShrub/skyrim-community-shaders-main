@@ -65,6 +65,9 @@
 // floor setting, because that is already the shape of a hollow scooped out
 // rather than cut. Mirrored by kStampModeBowl in SnowDeformation.h.
 #define STAMP_MODE_BOWL 20.0
+// Added to a carve made by a body: Snow Resistance and its trampled fade
+// apply. Decoded before BOWL and CONE. Mirrored by kStampModeBody.
+#define STAMP_MODE_BODY 40.0
 // Where a bowl carve stops holding full depth, as a fraction of its radius.
 // Zero: a scoured hollow has no floor at all, it curves from the middle. Its
 // own number rather than the melt bowl's, because that one is a FIRE knob and
@@ -258,6 +261,9 @@ cbuffer PerFrame : register(b0)
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
 	float HasRoadRaster;
+	// Snow Resistance's trampled fade: xy the extent bracket, z the amount
+	// (0 = off), w spare.
+	float4 TrampleResist;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -303,6 +309,8 @@ Texture2D<float4> TerrainWindow : register(t8);
 // Object skin-depth raster (SnowHeightCapture RT2): x = class layer depth,
 // y = highest road top in the column, kNoRoadTop where no road drew.
 Texture2D<float2> ObjectSkinDepth : register(t9);
+// Trample extent (BermFieldCS ExtentCS): one texel per PHYSICAL 8x8 tile.
+Texture2D<float> TrampleExtentIn : register(t10);
 #define CONTACT_NONE 1.0e30
 static const float kNoRoadTop = -1000000.0;
 RWByteAddressBuffer TileArgs : register(u5);
@@ -811,6 +819,29 @@ float ContactAbove(float2 worldPos, float contact)
 	return above;
 }
 
+// A body's share of its reach at a texel: Snow Resistance, faded where the
+// ground is trampled. Bilinear between tile centres like the shells'
+// TrampleExtent, in physical space - the extent never moves on a scroll.
+float BodyPrintAt(uint2 phys)
+{
+	float print = BodyPrint;
+	[branch] if (TrampleResist.z > 0.0 && print < 1.0)
+	{
+		uint2 tiles;
+		TrampleExtentIn.GetDimensions(tiles.x, tiles.y);
+		float2 q = (float2(phys) - 4.0) / 8.0;
+		float2 qf = floor(q);
+		float2 f = q - qf;
+		int2 mask = int2(tiles) - 1;
+		int2 q0 = int2(qf) & mask;
+		int2 q1 = (int2(qf) + 1) & mask;
+		float extent = lerp(lerp(TrampleExtentIn.Load(int3(q0.x, q0.y, 0)), TrampleExtentIn.Load(int3(q1.x, q0.y, 0)), f.x),
+			lerp(TrampleExtentIn.Load(int3(q0.x, q1.y, 0)), TrampleExtentIn.Load(int3(q1.x, q1.y, 0)), f.x), f.y);
+		print = lerp(print, 1.0, smoothstep(TrampleResist.x, TrampleResist.y, extent) * TrampleResist.z);
+	}
+	return print;
+}
+
 bool StampTexel(uint2 phys)
 {
 	uint2 dims;
@@ -825,6 +856,7 @@ bool StampTexel(uint2 phys)
 	float crust = carried.z;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
+	const float bodyPrint = BodyPrintAt(phys);
 
 	// Carve, melt and scorch accumulate separately so the result cannot depend
 	// on the order stamps happen to sit in the buffer.
@@ -869,6 +901,8 @@ bool StampTexel(uint2 phys)
 		// axis, so the gate below needs no change at all - only the falloff
 		// coordinate inside it does.
 		float modeRaw = StampEnds[i].z;
+		bool isBody = modeRaw > STAMP_MODE_BODY - 0.5;
+		modeRaw = isBody ? modeRaw - STAMP_MODE_BODY : modeRaw;
 		bool isBowl = modeRaw > STAMP_MODE_BOWL - 0.5;
 		float modeNoBowl = isBowl ? modeRaw - STAMP_MODE_BOWL : modeRaw;
 		bool isCone = modeNoBowl > STAMP_MODE_CONE - 0.5;
@@ -919,7 +953,7 @@ bool StampTexel(uint2 phys)
 				// weight this shape puts through, unused by carves otherwise.
 				float force = saturate(StampEnds[i].w);
 				float resist = standingCrust * (1.0 - force);
-				float printed = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist);
+				float printed = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist) * (isBody ? bodyPrint : 1.0);
 				carve = max(carve, printed);
 
 				// Anything that CUTS a crust has broken the skin over it, not
@@ -1043,7 +1077,7 @@ bool StampTexel(uint2 phys)
 			// props all of it, the floor ItemSink rests them on.
 			float printed = 0.0;
 			[branch] if (contact.x < CONTACT_NONE * 0.5)
-				printed = saturate(1.0 - ContactAbove(worldPos, contact.x)) * BodyPrint;
+				printed = saturate(1.0 - ContactAbove(worldPos, contact.x)) * bodyPrint;
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
 				printed = max(printed, saturate(1.0 - ContactAbove(worldPos, contact.y)));
 			[branch] if (printed > 0.0)

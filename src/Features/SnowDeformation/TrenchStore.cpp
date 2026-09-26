@@ -257,7 +257,8 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
 		// Carves only. A melt stamp's depth is subtracted out of what the
 		// store keeps anyway, so mirroring its rows early buys nothing.
-		if (a_data.StampEnds[i].z > 0.5f)
+		const float stampMode = a_data.StampEnds[i].z;
+		if ((stampMode > kStampModeBody - 0.5f ? stampMode - kStampModeBody : stampMode) > 0.5f)
 			continue;
 		cpuCensus.carveStampsTotal++;
 

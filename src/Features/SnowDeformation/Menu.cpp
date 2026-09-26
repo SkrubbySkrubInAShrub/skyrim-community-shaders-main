@@ -879,7 +879,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("snow_resistance"), "Snow Resistance"), &settings.SnowResistance, 0.0f, 100.0f, "%.0f %%");
 		if (auto _ttResist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
+			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Dropped items, spells and melt keep their own depths; trampled ground fades it (Trampled Ground > Resistance Fade). Affects new trenches only."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
@@ -898,6 +898,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttTrampleFlat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Where many trails overlap into a trampled area, the broken lumps on the trench floor are walked flatter: this multiplies Churn Height on the floor there, easing in the bigger the trampled area is. At 0.50x a Churn Height of 4 becomes 2. Lumps on the berms and in a single trail are never touched. 1.00x = off."));
+
+		ImGui::SliderFloat(T(TKEY("trampled_resist_fade"), "Resistance Fade"), &settings.TrampledResistFade, 0.0f, 1.0f, "%.2f");
+		if (auto _ttTrampleResist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trampled_resist_fade_tooltip"), "Where many trails overlap into a trampled area, the snow is packed down and gives way: this much of Snow Resistance fades there, easing in the bigger the trampled area is. Battlefields and busy yards carve as deep as bodies reach while a lone trail stays shallow. 1.00 = the full fade; 0 = off."));
 
 		ImGui::SliderFloat(T(TKEY("trample_start"), "Trampled Area: Starts At"), &settings.TrampleStart, 0.0f, 0.9f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("trample_full"), "Trampled Area: Full At"), &settings.TrampleFull, 0.05f, 1.0f, "%.2f");

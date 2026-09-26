@@ -1520,14 +1520,12 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.RimTeeth, 0.0f, 1.0f) * (1.0f - snowSoftness),
 		std::clamp(settings.BermClods, 0.0f, 6.0f),
 		GetAccumulationDepthScale() };
-	// The extent field is baked from the berm field; without that bake it is
-	// stale, so the class switch goes off with it.
-	const bool extentLive = !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture;
-	const float trampleStart = std::clamp(settings.TrampleStart, 0.0f, 0.98f);
+	// A stale extent field turns the class switch off with it.
+	const float2 trampleBracket = TrampleBracket();
 	cbData.TrampleStyle = { 0.0f,
-		extentLive ? std::clamp(settings.TrampledFlattening, 0.0f, 1.0f) : 1.0f,
-		trampleStart,
-		std::clamp(settings.TrampleFull, trampleStart + 0.01f, 1.0f) };
+		ExtentLive() ? std::clamp(settings.TrampledFlattening, 0.0f, 1.0f) : 1.0f,
+		trampleBracket.x,
+		trampleBracket.y };
 	// Loose snow holds no clods. ObjChurnHeightAmp copies this below.
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f) * std::lerp(1.0f, std::clamp(settings.FreshSnowChurn, 0.0f, 1.0f), snowSoftness);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);

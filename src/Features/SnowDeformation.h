@@ -71,6 +71,8 @@ public:
 	static constexpr float kStampModeCone = 10.0f;
 	/** @brief Added to a stamp's mode to give a carve a BOWL cross-section rather than a trench's flat floor and standing walls. Mirrored by STAMP_MODE_BOWL in DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeBowl = 20.0f;
+	/** @brief Added to a carve made by a body (feet, limbs, a body's own shapes): Snow Resistance and its trampled fade apply per texel. Decoded before BOWL and CONE; TrenchStore's carve test strips it. Mirrored by STAMP_MODE_BODY in DeformationUpdateCS.hlsl. */
+	static constexpr float kStampModeBody = 40.0f;
 	/** @brief Cap on spell emitters STAMPED per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 	/**
@@ -549,7 +551,7 @@ public:
 		/** @brief Parallax occlusion depth on the landscape shell, as a multiplier on the PBR config's displacementScale. 1 = exactly the slab depth PBR ground gets, since kSnowUVTile matches the landscape tiling. 0 skips the march. */
 		float ParallaxDepth = 1.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
-		float BermHeight = 0.20f;
+		float BermHeight = 0.50f;
 		/** @brief Berm Steepness, 0-2: the berm's reach (its tap rings) is 2^(1 - s). 1 = the authored ~40-unit apron; 0 spreads the same crest height twice as wide, 2 packs it into half the width. */
 		float BermSteepness = 1.0f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
@@ -557,7 +559,7 @@ public:
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
-		float SnowResistance = 50.0f;
+		float SnowResistance = 33.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
@@ -566,6 +568,8 @@ public:
 		float FreshSnowSettleHours = 24.0f;
 		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
 		float TrampledFlattening = 0.5f;
+		/** @brief Trampled ground: how much of Snow Resistance fades inside a trampled area - packed snow gives way, so heavy traffic carves as deep as bodies reach while a lone trail stays shallow. 0 = off. */
+		float TrampledResistFade = 1.0f;
 		/** @brief Trampled ground: disturbance-extent reading where the trampled shape begins. Promoted from a debug aid to a real setting 2026-09-21, so it ships and persists; the CPU mirror reads the same pair. */
 		float TrampleStart = 0.20f;
 		/** @brief Trampled ground: extent reading where the trampled shape is fully applied. Held at least 0.01 above TrampleStart. */
@@ -825,6 +829,8 @@ public:
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
 		float HasRoadRaster;
+		/** @brief Snow Resistance's trampled fade: xy = TrampleBracket(), z = TrampledResistFade (0 while the extent bake is not live), w spare. Mirror in DeformationUpdateCS.hlsl. */
+		float4 TrampleResist;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, ContactCenter) == 8336, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
@@ -2721,6 +2727,14 @@ public:
 	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
 	/** @brief 1 - Snow Resistance: the share of a body's reach into the layer that carves. */
 	float BodyPrintScale() const { return 1.0f - std::clamp(settings.SnowResistance, 0.0f, 100.0f) * 0.01f; }
+	/** @brief The trample extent bracket (TrampleStart, TrampleFull held 0.01 above it), shared by the shells and the stamp pass. */
+	float2 TrampleBracket() const
+	{
+		const float start = std::clamp(settings.TrampleStart, 0.0f, 0.98f);
+		return { start, std::clamp(settings.TrampleFull, start + 0.01f, 1.0f) };
+	}
+	/** @brief The extent field is baked from the berm field; without that bake it is stale. */
+	bool ExtentLive() const { return !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture; }
 	/** @brief Interior cell: no landscape exists, so no ground shell and no trench can; object snow is unaffected. */
 	bool InInteriorCell() const
 	{

@@ -126,6 +126,7 @@
 	X(FreshSnowChurn) \
 	X(FreshSnowSettleHours) \
 	X(TrampledFlattening) \
+	X(TrampledResistFade) \
 	X(TrampleStart) \
 	X(TrampleFull) \
 	X(RimLip) \
@@ -1029,6 +1030,9 @@ void SnowDeformation::Prepass()
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
 	perFrameData.BermReach = BermReachScale();
 	perFrameData.BodyPrint = BodyPrintScale();
+	const float2 trampleBracket = TrampleBracket();
+	perFrameData.TrampleResist = { trampleBracket.x, trampleBracket.y,
+		ExtentLive() ? std::clamp(settings.TrampledResistFade, 0.0f, 1.0f) : 0.0f, 0.0f };
 	// Sharpness is a percent slider; 100% clamps just below the degenerate
 	// smoothstep(1, 1, x) edge.
 	// Fresh snow cannot hold a cut: walls stamped while it is loose slope
@@ -1509,12 +1513,14 @@ void SnowDeformation::Prepass()
 			// force-all-dirty cross-check - never a truncated list, which
 			// would be a silently frozen stamp.
 			{
-				ID3D11ShaderResourceView* contactSRVs[3] = {
+				// t10: the trample extent, for Snow Resistance's trampled fade.
+				ID3D11ShaderResourceView* contactSRVs[4] = {
 					(contactHeight && perFrameData.ContactDim > 0.5f) ? contactHeight->srv.get() : nullptr,
 					shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
-					perFrameData.HasRoadRaster > 0.5f ? heightSkinDepth->srv.get() : nullptr
+					perFrameData.HasRoadRaster > 0.5f ? heightSkinDepth->srv.get() : nullptr,
+					perFrameData.TrampleResist.z > 0.0f ? extentFieldTexture->srv.get() : nullptr
 				};
-				context->CSSetShaderResources(7, 3, contactSRVs);
+				context->CSSetShaderResources(7, 4, contactSRVs);
 			}
 			if (stampRan) {
 				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
@@ -1564,8 +1570,8 @@ void SnowDeformation::Prepass()
 				}
 			}
 			{
-				ID3D11ShaderResourceView* nullContact[3] = { nullptr, nullptr, nullptr };
-				context->CSSetShaderResources(7, 3, nullContact);
+				ID3D11ShaderResourceView* nullContact[4] = {};
+				context->CSSetShaderResources(7, 4, nullContact);
 			}
 		}
 

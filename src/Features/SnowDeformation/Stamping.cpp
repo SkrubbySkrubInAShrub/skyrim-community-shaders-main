@@ -1217,14 +1217,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					float4 stamp{};
 					stamp.x = tip.x;
 					stamp.y = tip.y;
-					stamp.z = BodyPrintScale();
+					stamp.z = 1.0f;
 					stamp.w = radius;
 					perFrameData.Stamps[stampCount] = stamp;
 					// StampEnds.w on a carve is the weight it puts through a
 					// crust: a boot prints shallow on ice, a mammoth goes
 					// through it. Radius stands in for mass - the shapes a
 					// heavy skeleton carries are simply bigger.
-					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, 0.0f,
+					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, kStampModeBody,
 						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.feet++;
@@ -1262,10 +1262,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float4 stamp{};
 				stamp.x = bWorld.translate.x;
 				stamp.y = bWorld.translate.y;
-				stamp.z = carve * BodyPrintScale();
+				stamp.z = carve;
 				stamp.w = radius;
 				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f,
+				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, kStampModeBody,
 					CrustBreakForce(radius) };
 				stampCount++;
 				stampStats.limbs++;
@@ -1361,10 +1361,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float4 stamp{};
 				stamp.x = bWorld.translate.x;
 				stamp.y = bWorld.translate.y;
-				stamp.z = carve * BodyPrintScale();
+				stamp.z = carve;
 				stamp.w = radius;
 				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f,
+				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, kStampModeBody,
 					CrustBreakForce(radius) };
 				stampCount++;
 				stampStats.limbs++;
@@ -1438,13 +1438,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					float4 stamp{};
 					stamp.x = shapeStamp.a.x;
 					stamp.y = shapeStamp.a.y;
-					stamp.z = carve * BodyPrintScale();
+					stamp.z = carve;
 					// StampRadius scales the shape's own radius; the crust reads the
 					// bound sphere, the mass proxy, unchanged.
 					stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale,
 						texelFloor);
 					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, 0.0f,
+					perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, kStampModeBody,
 						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.shapes++;
