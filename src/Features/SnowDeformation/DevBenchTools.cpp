@@ -171,6 +171,8 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 		shellTessDiagonalUnflip = a_args["tessDiagonalUnflip"].get<bool>();
 	if (a_args.contains("lodDebugView") && a_args["lodDebugView"].is_number_integer())
 		lodDebugView = std::clamp(a_args["lodDebugView"].get<int>(), 0, 4);
+	if (a_args.contains("projSnowTint") && a_args["projSnowTint"].is_boolean())
+		debugProjSnowView = a_args["projSnowTint"].get<bool>();
 	static constexpr const char* kPresetNames[4] = { "low", "medium", "high", "ultra" };
 	static constexpr const char* kGateNames[3] = { "snowy", "unknown", "bare" };
 	if (a_args.contains("qualityPreset") && a_args["qualityPreset"].is_string()) {
@@ -194,7 +196,7 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 		{ "shadowAtlasLive", !shadowAtlasLiveReadOff }, { "shadowAtlasCopyActive", shadowAtlasLiveReadOff && shadowCopyWantedFrames > 0 }, { "shadowAtlasCopyHeld", shadowAtlasCopyTex != nullptr },
 		{ "pointShadowLive", !pointShadowLiveReadOff }, { "pointShadowCopyHeld", pointShadowAtlasCopyTex != nullptr },
 		{ "casterFullGrid", shellCasterFullGrid }, { "casterIndices", shellGridCasterIndexCount }, { "hullTrust", !shellHullTrustOff }, { "gatherEveryScroll", exclusionGatherEveryScroll }, { "exclusionCount", statExclusionCount }, { "exclusionWalk", { { "slot", exclusionGatherSlot }, { "slots", exclusionGatherSlots } } }, { "hiZCopyPath", hiZCopyPath }, { "patchSplit", shellPatchSplit }, { "patchSplitActive", shellPatchSplitThisFrame }, { "patchCounts", { { "flat", shellPatchFlatCount }, { "tessellated", shellPatchTessCount } } },
-		{ "tessDiagonalUnflip", shellTessDiagonalUnflip }, { "lodDebugView", lodDebugView }, { "lodHistogram", lodHist }, { "prepassExit", !shellPrepassExitOff }, { "skinPrepassExit", !staticsPrepassExitOff }, { "tessTargetPx", shellTessTargetPx }, { "churnParallax", !shellChurnParallaxOff }, { "tessViewportHalf", { lastShellCBData ? lastShellCBData->TessScreen.y : 0.0f, lastShellCBData ? lastShellCBData->TessScreen.z : 0.0f } },
+		{ "tessDiagonalUnflip", shellTessDiagonalUnflip }, { "lodDebugView", lodDebugView }, { "projSnowTint", debugProjSnowView }, { "lodHistogram", lodHist }, { "prepassExit", !shellPrepassExitOff }, { "skinPrepassExit", !staticsPrepassExitOff }, { "tessTargetPx", shellTessTargetPx }, { "churnParallax", !shellChurnParallaxOff }, { "tessViewportHalf", { lastShellCBData ? lastShellCBData->TessScreen.y : 0.0f, lastShellCBData ? lastShellCBData->TessScreen.z : 0.0f } },
 		{ "qualityPreset", preset < 0 ? "custom" : kPresetNames[preset] },
 		{ "gates", { { "shell", kGateNames[std::min(shellSnowVerdict, 2u)] }, { "shellBareFrames", shellGateBareFrames }, { "deform", kGateNames[std::min(deformSnowVerdict, 2u)] }, { "deformBareFrames", deformGateBareFrames }, { "groundSuspended", GroundShellsSuspended() }, { "captured", capturedStatics.size() }, { "heightMapValid", heightMapValid } } },
 		{ "effectCost", { { "running", effectCost.running }, { "done", effectCost.done }, { "step", effectCost.step }, { "costs", effectCosts } } },

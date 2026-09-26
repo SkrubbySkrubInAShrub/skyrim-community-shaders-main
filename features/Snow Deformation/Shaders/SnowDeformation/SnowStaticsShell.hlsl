@@ -518,13 +518,11 @@ float SkinRecolorWeight(float enc)
 	enc = enc >= 256.0 ? enc / 256.0 : enc;
 	return (enc >= 3.5 && enc < 40.0) ? (log2(enc * 0.25) / 3.0 - 1.0) * kRecolorWeightSpan : -1.0;
 }
-// The note, read through the decal blend. Decal mode blends EVERY bound target,
-// so a decal over painted snow can only drag the note DOWN from what the
-// surface wrote (48 -> 20 under Inn01:0, 2026-09-22) and the coat then cut
-// itself out in the decal's own alpha pattern. Take whichever of the two reads
-// as more painted: the snapshot rescues a blended pixel, and the live copy
-// still wins where a decal-mode draw is itself the snow (Seasons' rock skirts
-// keep their skin).
+// The note through the decal blend: decal mode blends every bound target, Masks
+// included. The more painted of the pre-decal snapshot and the live copy wins.
+// Lighting writes nothing in (32, 40), so a live note there over a bare
+// snapshot is a snow decal's 48 blended in at (live - pre) / (48 - pre):
+// painted from half cover.
 float SkinMasksY(int2 a_px)
 {
 	float live = PreSkinMasks.Load(int3(a_px, 0)).y;
@@ -533,8 +531,13 @@ float SkinMasksY(int2 a_px)
 		float pre = PreDecalMasks.Load(int3(a_px, 0)).y;
 		float liveEnc = SkinRecolorEnc(live);
 		float preEnc = SkinRecolorEnc(pre);
+		float liveN = live >= 256.0 ? live / 256.0 : live;
+		float preN = pre >= 256.0 ? pre / 256.0 : pre;
+		bool lifted = liveEnc == 2.0 && preEnc < 3.0 && liveN > 32.25 && liveN >= 24.0 + 0.5 * preN;
 		[flatten] if (preEnc > liveEnc || (preEnc == liveEnc && SkinRecolorWeight(pre) > SkinRecolorWeight(live)))
 			live = pre;
+		[flatten] if (lifted)
+			live = 48.0;
 	}
 	return live;
 }
@@ -4377,16 +4380,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 			[branch] if (HasSkinMasksCopy > 0.5)
 			{
 				int2 mp = int2(input.Position.xy);
-				float rawEnc = PreSkinMasks.Load(int3(mp, 0)).y;
+				float rawEnc = SkinMasksY(mp);
 				realEnc = SkinRecolorEnc(rawEnc);
 				realW = SkinRecolorWeight(rawEnc);
-				[flatten] if (realEnc < 1.5)
+				[branch] if (realEnc < 1.5)
 				{
 					int2 mmax = int2(masksDim) - 1;
-					float4 rawN = float4(PreSkinMasks.Load(int3(min(mp + int2(1, 0), mmax), 0)).y,
-						PreSkinMasks.Load(int3(max(mp - int2(1, 0), 0), 0)).y,
-						PreSkinMasks.Load(int3(min(mp + int2(0, 1), mmax), 0)).y,
-						PreSkinMasks.Load(int3(max(mp - int2(0, 1), 0), 0)).y);
+					float4 rawN = float4(SkinMasksY(min(mp + int2(1, 0), mmax)),
+						SkinMasksY(max(mp - int2(1, 0), 0)),
+						SkinMasksY(min(mp + int2(0, 1), mmax)),
+						SkinMasksY(max(mp - int2(0, 1), 0)));
 					realEnc = max(max(SkinRecolorEnc(rawN.x), SkinRecolorEnc(rawN.y)), max(SkinRecolorEnc(rawN.z), SkinRecolorEnc(rawN.w)));
 					realW = max(max(SkinRecolorWeight(rawN.x), SkinRecolorWeight(rawN.y)), max(SkinRecolorWeight(rawN.z), SkinRecolorWeight(rawN.w)));
 				}

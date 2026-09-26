@@ -2629,7 +2629,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
-	a_scb.HasPreDecalMasks = preDecalMasksSRV ? 1.0f : 0.0f;
+	// A frame with no decal-mode draw leaves an older frame's snapshot bound.
+	a_scb.HasPreDecalMasks = (preDecalMasksSRV && preDecalMasksFrame == globals::state->frameCount) ? 1.0f : 0.0f;
 	// The accumulation scalar is already 0..1 over Accumulation Time, melt
 	// and fade, independent of the peak - exactly the reach's timeline.
 	a_scb.EdgeFlankWidth = (settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates) ?
