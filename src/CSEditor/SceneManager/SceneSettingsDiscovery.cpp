@@ -236,7 +236,8 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName, const std::s
 	}
 
 	const json metadata{ { kPresetMetadataKey,
-		{ { kPresetMetadataNameKey, safeModName }, { kPresetMetadataVersionKey, version } } } };
+		{ { kPresetMetadataNameKey, safeModName }, { kPresetMetadataVersionKey, version },
+			{ kTimeOfDayTransitionHoursKey, timeOfDayTransitionHours } } } };
 	if (!WriteJsonAtomically(GetPresetMetadataPath(safeModName), metadata, kOverwriteJsonIndent, "preset metadata")) {
 		logger::error("[SceneSettings] Preset '{}' failed to write its metadata file", safeModName);
 		wroteAll = false;
@@ -252,8 +253,10 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 	presetMetadata.clear();
 	const auto root = Util::PathHelpers::GetSceneSettingsPath();
 	std::error_code ec;
-	if (!std::filesystem::exists(root, ec))
+	if (!std::filesystem::exists(root, ec)) {
+		RefreshTimeOfDayTransitionHours();
 		return;
+	}
 
 	for (const auto& path : GetSortedJsonFiles(root, "preset metadata files")) {
 		if (IsReservedPresetName(path.stem().string()))
@@ -275,11 +278,15 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 			logger::warn("[SceneSettings] Preset metadata '{}' needs a name and a MAJOR.MINOR.PATCH version", path.string());
 			continue;
 		}
-		presetMetadata.push_back({ .name = nameIt->get<std::string>(), .version = versionIt->get<std::string>(), .path = path });
+		presetMetadata.push_back({ .name = nameIt->get<std::string>(),
+			.version = versionIt->get<std::string>(),
+			.path = path,
+			.transitionHours = ReadTimeOfDayTransitionHours(*metadataIt, path.string()) });
 	}
 
 	if (!presetMetadata.empty())
 		logger::info("[SceneSettings] Found {} preset metadata file(s)", presetMetadata.size());
+	RefreshTimeOfDayTransitionHours();
 }
 
 void SceneSettingsManager::DiscoverLocationOverwrites()

@@ -35,6 +35,7 @@ namespace SceneSettingsInternal
 	constexpr const char* kPresetMetadataKey = "presetMetadata";
 	constexpr const char* kPresetMetadataNameKey = "name";
 	constexpr const char* kPresetMetadataVersionKey = "version";
+	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;
 
@@ -51,6 +52,9 @@ namespace SceneSettingsInternal
 
 	bool WriteJsonAtomically(const std::filesystem::path& path, const json& data, int indent,
 		std::string_view context);
+
+	/** @brief The period transition an object carries, or nullopt when absent or out of range. */
+	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context);
 
 	std::vector<std::filesystem::path> GetSortedDirectoryPaths(
 		const std::filesystem::path& directory, bool directories, std::string_view context);

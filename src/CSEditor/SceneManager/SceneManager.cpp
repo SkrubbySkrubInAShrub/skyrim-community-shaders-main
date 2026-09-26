@@ -390,6 +390,26 @@ std::pair<std::string, std::vector<std::string>> SceneManager::GetFeatureSummary
 
 void SceneManager::DrawSettings()
 {
+	auto transitionHours = GetTimeOfDayTransitionHours();
+	if (ImGui::SliderFloat(T("feature.scene_manager.time_of_day_transition", "Time of Day Transition"), &transitionHours,
+			0.0f, kMaxTimeOfDayTransitionHours, "%.2f h", ImGuiSliderFlags_AlwaysClamp))
+		SetTimeOfDayTransitionHours(transitionHours, true);
+	// A drag held still would otherwise outlive the debounce and write the file mid-gesture.
+	if (ImGui::IsItemActive())
+		HoldDeferredSceneChanges();
+	Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_tooltip",
+		"Hours at the end of each time of day period spent blending into the next.\n"
+		"0 switches between periods instantly.\n"
+		"Installed presets supply this until you set your own."));
+	if (HasUserTimeOfDayTransitionHours()) {
+		ImGui::SameLine();
+		if (Util::WarningButton(T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition")))
+			SetTimeOfDayTransitionHours(std::nullopt);
+		Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_reset_tooltip",
+			"Drop your value and use the last installed preset's, or the default when none sets one."));
+	}
+	ImGui::Separator();
+
 	if (ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen))
 		FeatureOverwritesPanel::Draw();
 	ImGui::Separator();

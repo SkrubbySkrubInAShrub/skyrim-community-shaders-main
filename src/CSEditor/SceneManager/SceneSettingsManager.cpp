@@ -324,7 +324,11 @@ SceneSettingsManager::PeriodLookup SceneSettingsManager::FindPeriodForHour(float
 	return {};
 }
 
-std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetTimeOfDayFactors()
+static_assert(std::ranges::all_of(SceneSettingsManager::kPeriodHours, [](const auto& hours) {
+	return hours[1] - hours[0] >= SceneSettingsManager::kMaxTimeOfDayTransitionHours;
+}));
+
+std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetTimeOfDayFactors() const
 {
 	std::array<float, kPeriodCount> factors{};
 	const auto lookup = FindPeriodForHour(GetCurrentGameHour());
@@ -333,17 +337,45 @@ std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetT
 		return factors;
 	}
 
+	// A zero-length blend always takes this branch, so the division below never sees it.
 	const float hoursToEnd = kPeriodHours[lookup.index][1] - lookup.hour;
-	if (hoursToEnd >= kTransitionHours) {
+	if (hoursToEnd >= timeOfDayTransitionHours) {
 		factors[lookup.index] = 1.0f;
 		return factors;
 	}
 
 	// Inside the blend-out zone: cross-fade into the next period.
-	const float weight = hoursToEnd / kTransitionHours;
+	const float weight = hoursToEnd / timeOfDayTransitionHours;
 	factors[lookup.index] = weight;
 	factors[(lookup.index + 1) % kPeriodCount] = 1.0f - weight;
 	return factors;
+}
+
+void SceneSettingsManager::SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave)
+{
+	if (hours) {
+		if (!std::isfinite(*hours))
+			return;
+		*hours = std::clamp(*hours, 0.0f, kMaxTimeOfDayTransitionHours);
+	}
+	if (hours.has_value() == userTimeOfDayTransitionHours.has_value() &&
+		(!hours || std::abs(*userTimeOfDayTransitionHours - *hours) < kBlendEpsilon))
+		return;
+	userTimeOfDayTransitionHours = hours;
+	RefreshTimeOfDayTransitionHours();
+	if (deferSave)
+		MarkDeferredSceneChanges();
+	else
+		SaveAllUserSettings();
+	ReapplyIfActive();
+}
+
+void SceneSettingsManager::RefreshTimeOfDayTransitionHours()
+{
+	timeOfDayTransitionHours = kDefaultTimeOfDayTransitionHours;
+	for (const auto& preset : presetMetadata)
+		timeOfDayTransitionHours = preset.transitionHours.value_or(timeOfDayTransitionHours);
+	timeOfDayTransitionHours = userTimeOfDayTransitionHours.value_or(timeOfDayTransitionHours);
 }
 
 SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetCurrentPeriod()

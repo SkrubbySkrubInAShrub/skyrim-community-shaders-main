@@ -76,8 +76,10 @@ public:
 		{ 21.0f, 28.0f }   // Night (wraps past midnight)
 	};
 
-	/// Transition blend zone in hours at each period boundary.
-	static constexpr float kTransitionHours = 0.5f;
+	/// Default blend zone in hours at the end of each period, cross-fading into the next.
+	static constexpr float kDefaultTimeOfDayTransitionHours = 1.0f;
+	/// Shortest period's length: a longer blend would already be under way when a period begins.
+	static constexpr float kMaxTimeOfDayTransitionHours = 2.0f;
 
 	// --- Event Handler ---
 
@@ -191,7 +193,8 @@ public:
 
 	/** @brief Bakes the winning values of every context into a preset, replacing its file set.
 	 *  Tombstoned addresses are omitted; a paused user entry lets the mod's value through.
-	 *  @param version The preset's own MAJOR.MINOR.PATCH release, recorded in its metadata file.
+	 *  @param version The preset's own MAJOR.MINOR.PATCH release, recorded in its metadata file
+	 *         alongside the time-of-day transition.
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const std::string& modName, const std::string& version);
 
@@ -201,6 +204,7 @@ public:
 		std::string name;
 		std::string version;
 		std::filesystem::path path;
+		std::optional<float> transitionHours;  // Period transition the preset ships, if any
 	};
 
 	static constexpr const char* kDefaultPresetVersion = "1.0.0";
@@ -294,7 +298,15 @@ public:
 	static float GetPeriodMidHour(TimeOfDayPeriod period);
 
 	/// Per-period blend weights for the current game hour. Weights sum to 1.
-	static std::array<float, kPeriodCount> GetTimeOfDayFactors();
+	std::array<float, kPeriodCount> GetTimeOfDayFactors() const;
+
+	/// Hours at the end of each period spent blending into the next, after presets and the user's value.
+	float GetTimeOfDayTransitionHours() const { return timeOfDayTransitionHours; }
+	/// Whether the user's own value overrides whatever the presets supply.
+	bool HasUserTimeOfDayTransitionHours() const { return userTimeOfDayTransitionHours.has_value(); }
+	/// Set and persist the user's period blend zone, clamped to 0..kMaxTimeOfDayTransitionHours.
+	/// nullopt drops it, handing the value back to the presets.
+	void SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave = false);
 
 	/// Returns the period whose hour range contains the current game hour.
 	static TimeOfDayPeriod GetCurrentPeriod();
@@ -825,6 +837,8 @@ private:
 	bool locationUserSettingsModified = false;
 	bool locationTransitionModified = false;
 	std::vector<PresetMetadata> presetMetadata;
+	float timeOfDayTransitionHours = kDefaultTimeOfDayTransitionHours;
+	std::optional<float> userTimeOfDayTransitionHours;
 	bool dataLoaded = false;
 	bool deferredSceneChangesPending = false;
 	std::chrono::steady_clock::time_point deferredSceneChangesDeadline{};
@@ -1207,6 +1221,10 @@ private:
 
 	/// Re-reads every preset identity file at the SceneSettings root.
 	void DiscoverPresetMetadata();
+
+	/** @brief Re-derives the period transition: the user's value, else the last preset in filename
+	 *  order that sets one, as feature overrides layer, else the default. */
+	void RefreshTimeOfDayTransitionHours();
 
 	/// Discover overwrite files for a single weather SPID folder.
 	void DiscoverWeatherOverwritesForSpid(RE::FormID weatherId, const std::filesystem::path& weatherDir);
