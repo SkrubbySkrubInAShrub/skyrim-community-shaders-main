@@ -617,6 +617,7 @@ void EffectManager::CreateColorCorrectionShader()
 void EffectManager::UpdateCommonData()
 {
 	commonData = {};
+	currentWeatherID = previousWeatherID = 0;
 
 	auto sky = globals::game::sky;
 
