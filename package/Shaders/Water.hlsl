@@ -875,7 +875,9 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
 
 	if (SharedData::enbSettings.EnableWater) {
-		float fresnelRI = pow(abs(FresnelRI.x), SharedData::enbSettings.WaterFresnelMultiplier);
+		float fresnelExponent = SharedData::enbSettings.WaterFresnelMultiplier;
+		// pow(0, 0) is NaN on GPU
+		float fresnelRI = fresnelExponent != 0.0 ? pow(abs(FresnelRI.x), fresnelExponent) : 1.0;
 		float fresnel = (1 - fresnelRI) * pow(viewAngle, 5) + fresnelRI;
 		fresnel = lerp(SharedData::enbSettings.WaterFresnelMin, SharedData::enbSettings.WaterFresnelMax, fresnel);
 		return fresnel * SharedData::enbSettings.WaterReflectionAmount;
@@ -1148,6 +1150,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;
 
+#				if !defined(UNDERWATER)
+	if (SharedData::enbSettings.EnableWater) {
+		float3 dirScatter = saturate(dot(normal.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * saturate(dot(viewDirection.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * SharedData::DirLightColor.xyz;
+		diffuseOutput.refractionDiffuseColor += DeepColor.xyz * dirScatter * surfaceShadow * SharedData::enbSettings.WaterSunLightingMultiplier;
+	}
+#				endif
+
 	float3 diffuseColor = lerp(diffuseOutput.refractionColor, diffuseOutput.refractionDiffuseColor, diffuseOutput.refractionMul);
 
 	depthControl = DepthControl * (distanceMul - 1) + 1;
@@ -1207,11 +1216,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
 
-	if (SharedData::enbSettings.EnableWater) {
-		float3 dirScatter = saturate(dot(normal.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * saturate(dot(viewDirection.xyz, SharedData::DirLightDirection.xyz) * 0.5 + 0.5) * SharedData::DirLightColor.xyz;
-		diffuseOutput.refractionDiffuseColor += DeepColor.xyz * dirScatter * surfaceShadow * SharedData::enbSettings.WaterSunLightingMultiplier;
+	if (SharedData::enbSettings.EnableWater)
 		sunColor *= SharedData::enbSettings.WaterSunSpecularMultiplier;
-	}
 
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);

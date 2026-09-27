@@ -4,6 +4,22 @@
 #include "../SettingManager.h"
 #include "../TextureManager.h"
 
+static constexpr std::array<std::string_view, 3> FocusTechniques = { "Aperture", "ReadFocus", "Focus" };
+
+bool ENBDepthOfField::Apply()
+{
+	historyValid = false;
+	const bool applied = EffectBase::Apply();
+
+	// Lowest name keeps the fallback deterministic across unordered_map iteration
+	fallbackTechnique.clear();
+	for (const auto& name : techniques | std::views::keys)
+		if (std::ranges::find(FocusTechniques, name) == FocusTechniques.end() && (fallbackTechnique.empty() || name < fallbackTechnique))
+			fallbackTechnique = name;
+
+	return applied;
+}
+
 void ENBDepthOfField::Execute()
 {
 	auto& textureManager = TextureManager::GetSingleton();
@@ -33,6 +49,13 @@ void ENBDepthOfField::Execute()
 		!textureFocusRead.srv || !textureFocusWrite.rtv)
 		return;
 
+	// Fresh textures hold undefined data; UpdateEffectVariables also skips history blending this frame
+	if (!historyValid) {
+		static constexpr float clearColor[4] = {};
+		globals::d3d::context->ClearRenderTargetView(textureApertureRead.rtv.get(), clearColor);
+		globals::d3d::context->ClearRenderTargetView(textureFocusRead.rtv.get(), clearColor);
+	}
+
 	SetShaderResourceVariable("TexturePrevious", textureApertureRead.srv.get());
 	ExecuteTechnique("Aperture", textureApertureWrite);
 
@@ -42,11 +65,13 @@ void ENBDepthOfField::Execute()
 	SetShaderResourceVariable("TexturePrevious", textureFocusRead.srv.get());
 	SetShaderResourceVariable("TextureCurrent", textureReadFocus.srv.get());
 	ExecuteTechnique("Focus", textureFocusWrite);
+	historyValid = true;
 
 	SetShaderResourceVariable("TextureFocus", textureFocusWrite.srv.get());
 	SetShaderResourceVariable("TextureOriginal", textureMain.SRV);
 
-	auto [executed, inOutput, inTemp] = ExecuteTechniqueSequence(GetSelectedTechnique(), textureMain.SRV, *textureHDRTemp, *textureHDRTemp2);
+	const auto technique = selectedTechniqueIndex < uiTechniques.size() ? GetSelectedTechnique() : fallbackTechnique;
+	auto [executed, inOutput, inTemp] = ExecuteTechniqueSequence(technique, textureMain.SRV, *textureHDRTemp, *textureHDRTemp2);
 
 	if (executed && (inOutput || inTemp)) {
 		auto* result = inOutput ? textureHDRTemp : textureHDRTemp2;
@@ -67,7 +92,7 @@ void ENBDepthOfField::UpdateEffectVariables()
 	const float deltaTime = globals::game::deltaTime ? (*globals::game::deltaTime) : 0.0f;
 	auto blendFactor = [&](uint32_t settingID) {
 		const float time = settingManager.GetValue<float>(settingID);
-		return std::clamp(time > 0.0f ? deltaTime / time : 1.0f, 0.0f, 1.0f);
+		return historyValid ? std::clamp(time > 0.0f ? deltaTime / time : 1.0f, 0.0f, 1.0f) : 1.0f;
 	};
 
 	float4 dofParameters{};

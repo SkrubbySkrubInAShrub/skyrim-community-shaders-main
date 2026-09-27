@@ -949,12 +949,16 @@ void EffectManager::CopyToTarget(ID3D11Texture2D* a_source, ID3D11ShaderResource
 {
 	auto context = globals::d3d::context;
 
+	const bool distinct = a_source && a_dest && a_source != a_dest;
 	D3D11_TEXTURE2D_DESC srcDesc{}, dstDesc{};
-	if (a_source && a_dest) {
+	if (distinct) {
 		a_source->GetDesc(&srcDesc);
 		a_dest->GetDesc(&dstDesc);
 	}
-	if (a_source && a_dest && srcDesc.Format == dstDesc.Format && srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height && srcDesc.SampleDesc.Count == dstDesc.SampleDesc.Count) {
+	const bool layoutsMatch = srcDesc.Format == dstDesc.Format && srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height &&
+	                          srcDesc.MipLevels == dstDesc.MipLevels && srcDesc.ArraySize == dstDesc.ArraySize &&
+	                          srcDesc.SampleDesc.Count == dstDesc.SampleDesc.Count && srcDesc.SampleDesc.Quality == dstDesc.SampleDesc.Quality;
+	if (distinct && layoutsMatch) {
 		context->CopyResource(a_dest, a_source);
 	} else {
 		CopyTexture(a_sourceSRV, a_destRTV, false);

@@ -152,7 +152,7 @@ public:
 	// Texture copy using pixel shader
 	void CopyTexture(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* destination, bool dither = true);
 
-	/** @brief Copies source into destination with CopyResource when layouts match, else via CopyTexture, leaving no RTV bound. */
+	/** @brief Copies source into distinct destination with CopyResource when full layouts match, else via CopyTexture, leaving no RTV bound. */
 	void CopyToTarget(ID3D11Texture2D* source, ID3D11ShaderResourceView* sourceSRV, ID3D11Texture2D* destination, ID3D11RenderTargetView* destinationRTV);
 
 	// Color correction using compute shader
