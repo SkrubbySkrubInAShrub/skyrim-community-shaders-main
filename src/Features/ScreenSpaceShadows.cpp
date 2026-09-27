@@ -155,7 +155,8 @@ void ScreenSpaceShadows::ClearShaderCache()
 			*shader = nullptr;
 		}
 	}
-	distantCompileFailed = false;
+	distantShadowMapCompileFailed = false;
+	distantScreenSpaceCompileFailed = false;
 	distantShadowMap.ClearShaderCache();
 }
 
@@ -327,7 +328,8 @@ bool ScreenSpaceShadows::CompileDistantShadows(bool a_useShadowMap)
 {
 	if (a_useShadowMap ? distantShadowMapCS != nullptr : distantTraceCS && distantResolveCS)
 		return true;
-	if (distantCompileFailed)
+	bool& compileFailed = a_useShadowMap ? distantShadowMapCompileFailed : distantScreenSpaceCompileFailed;
+	if (compileFailed)
 		return false;
 
 	std::vector<std::pair<const char*, const char*>> defines;
@@ -342,7 +344,7 @@ bool ScreenSpaceShadows::CompileDistantShadows(bool a_useShadowMap)
 		return a_shader != nullptr;
 	};
 	const bool compiled = a_useShadowMap ? compile(distantShadowMapCS, "ShadowMapCS") : compile(distantTraceCS, "TraceCS") && compile(distantResolveCS, "ResolveCS");
-	distantCompileFailed = !compiled;
+	compileFailed = !compiled;
 	return compiled;
 }
 

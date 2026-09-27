@@ -133,7 +133,8 @@ public:
 	ID3D11ComputeShader* distantTraceCS = nullptr;
 	ID3D11ComputeShader* distantResolveCS = nullptr;
 	ID3D11ComputeShader* distantShadowMapCS = nullptr;
-	bool distantCompileFailed = false;
+	bool distantShadowMapCompileFailed = false;
+	bool distantScreenSpaceCompileFailed = false;
 	DistantShadowMap distantShadowMap;
 	Texture2D* contactShadowsCopyTexture = nullptr;
 	Texture2D* distantHalfTexture = nullptr;
