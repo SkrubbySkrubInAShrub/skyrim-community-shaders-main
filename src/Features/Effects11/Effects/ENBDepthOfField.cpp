@@ -46,9 +46,9 @@ void ENBDepthOfField::Execute()
 	SetShaderResourceVariable("TextureFocus", textureFocusWrite.srv.get());
 	SetShaderResourceVariable("TextureOriginal", textureMain.SRV);
 
-	auto [executed, inOutput] = ExecuteTechniqueSequence(GetSelectedTechnique(), textureMain.SRV, *textureHDRTemp, *textureHDRTemp2);
+	auto [executed, inOutput, inTemp] = ExecuteTechniqueSequence(GetSelectedTechnique(), textureMain.SRV, *textureHDRTemp, *textureHDRTemp2);
 
-	if (executed) {
+	if (executed && (inOutput || inTemp)) {
 		auto* result = inOutput ? textureHDRTemp : textureHDRTemp2;
 		EffectManager::GetSingleton().CopyToTarget(result->texture.get(), result->srv.get(), textureMain.texture, textureMain.RTV);
 	}
