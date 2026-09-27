@@ -577,8 +577,8 @@ void Effects11Editor::DrawStatus()
 				return entry->fileName;
 			return I18n::GetSingleton()->Format(TKEY("weather_no_file"), { { "id", std::format("0x{:06X}", a_id) } }, "{id} (no weather file)");
 		};
-		const auto current = static_cast<uint32_t>(commonData.weather[0]);
-		const auto previous = static_cast<uint32_t>(commonData.weather[1]);
+		const auto current = effectManager.currentWeatherID;
+		const auto previous = effectManager.previousWeatherID;
 		const float blend = std::clamp(commonData.weather[2], 0.0f, 1.0f);
 
 		std::string text = weatherName(current);
@@ -853,9 +853,9 @@ void Effects11Editor::DrawWeatherFileList()
 		Util::TextUnformattedDisabled(T(TKEY("weather_files_none"), "No weather files are loaded. Weather files are listed in enbseries/_weatherlist.ini."));
 		ImGui::PopTextWrapPos();
 	} else {
-		const auto& commonData = EffectManager::GetSingleton().commonData;
-		const auto current = static_cast<uint32_t>(commonData.weather[0]);
-		const auto previous = static_cast<uint32_t>(commonData.weather[1]);
+		const auto& effectManager = EffectManager::GetSingleton();
+		const auto current = effectManager.currentWeatherID;
+		const auto previous = effectManager.previousWeatherID;
 
 		std::vector<const WeatherManager::WeatherEntry*> sorted;
 		sorted.reserve(entries.size());
@@ -1385,6 +1385,11 @@ void Effects11Editor::Revert()
 {
 	RefreshPresetPaths();
 	SettingManager::GetSingleton().Load();
+	// Load only overwrites keys present in the ini, so edits to omitted keys must be reset first
+	for (const auto& file : GetEffectFiles()) {
+		for (auto& uiVar : file.effect->uiVariables)
+			Effect::RestoreDefaultValue(uiVar);
+	}
 	EffectManager::GetSingleton().Load();
 	dirty = false;
 }

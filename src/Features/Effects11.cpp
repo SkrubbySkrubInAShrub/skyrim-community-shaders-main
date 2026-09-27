@@ -8,7 +8,6 @@
 #include "Effects11/EffectManager.h"
 #include "Effects11/PresetManager.h"
 #include "Effects11/SettingManager.h"
-#include "Effects11/WeatherManager.h"
 
 #include "CloudShadows.h"
 #include "Deferred.h"
@@ -480,16 +479,11 @@ void Effects11::CheckCommonData()
 
 		enableEffect = !globals::state->IsFullScreenMenuOpen() && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
 
-		auto& weatherManager = WeatherManager::GetSingleton();
-
 		effectManager.UpdateCommonData();
 
 		const auto& commonData = effectManager.GetCommonData();
 		settingManager.SetTimeOfDayData(commonData.timeOfDay1, commonData.timeOfDay2);
-
-		uint32_t currentWeatherID = weatherManager.GetEffectiveWeatherID(static_cast<uint32_t>(commonData.weather[0]));
-		uint32_t lastWeatherID = weatherManager.GetEffectiveWeatherID(static_cast<uint32_t>(commonData.weather[1]));
-		settingManager.SetWeatherBlendFactors(currentWeatherID, lastWeatherID, commonData.weather[2]);
+		settingManager.SetWeatherBlendFactors(effectManager.currentWeatherID, effectManager.previousWeatherID, commonData.weather[2]);
 	}
 }
 

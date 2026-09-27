@@ -329,9 +329,7 @@ void EffectManager::ExecuteEffect(EffectBase& a_effect, uint32_t enableSettingID
 
 	a_effect.profiler = globals::profiler;
 #ifdef ENABLE_ENB_EXTENDER
-	a_effect.ApplyWeatherBlending(commonData.weather[2],
-		static_cast<uint32_t>(commonData.weather[0]),
-		static_cast<uint32_t>(commonData.weather[1]));
+	a_effect.ApplyWeatherBlending(commonData.weather[2], currentWeatherID, previousWeatherID);
 	a_effect.ApplyTimeOfDayInterpolation();
 #endif
 	UpdateCommonVariablesForEffect(a_effect);
@@ -661,8 +659,10 @@ void EffectManager::UpdateCommonData()
 			uint32_t currentID = sky->currentWeather ? stripPluginIndex(sky->currentWeather->formID) : 0;
 			uint32_t lastID = lastWeather ? stripPluginIndex(lastWeather->formID) : 0;
 
-			commonData.weather[0] = static_cast<float>(weatherManager.GetEffectiveWeatherID(currentID));
-			commonData.weather[1] = static_cast<float>(weatherManager.GetEffectiveWeatherID(lastID));
+			currentWeatherID = weatherManager.GetEffectiveWeatherID(currentID);
+			previousWeatherID = weatherManager.GetEffectiveWeatherID(lastID);
+			commonData.weather[0] = static_cast<float>(currentWeatherID);
+			commonData.weather[1] = static_cast<float>(previousWeatherID);
 			commonData.weather[2] = sky->currentWeatherPct;
 			commonData.weather[3] = sky->currentGameHour;
 		}
