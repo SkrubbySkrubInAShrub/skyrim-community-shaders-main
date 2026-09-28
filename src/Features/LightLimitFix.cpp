@@ -580,17 +580,18 @@ void LightLimitFix::UpdateLights()
 						auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
 						light.lightFlags.set(LightFlags::ShadowCaster);
 						const bool localShadowsActive = IsLocalShadowCacheActive();
-						if (localShadowsActive) {
-							if (auto* caster = FindLocalShadowCaster(shadowLight); caster && caster->slice >= 0 && caster->lastRenderedFrame != 0) {
-								light.localShadowIndex = static_cast<uint32_t>(caster->slice);
-								light.lightFlags.set(LightFlags::LocalShadow);
-							}
+						const auto* caster = localShadowsActive ? FindLocalShadowCaster(shadowLight) : nullptr;
+						if (caster && caster->slice >= 0 && caster->lastRenderedFrame != 0) {
+							light.localShadowIndex = static_cast<uint32_t>(caster->slice);
+							light.lightFlags.set(LightFlags::LocalShadow);
 						}
 						// Lights without a cached slice (cache full or not yet copied) fall back to the engine shadow mask.
 						if (light.lightFlags.none(LightFlags::LocalShadow))
 							TryAssignShadowMask(light, shadowLight);
-						// Without the cache an unslotted light has no shadow at all, so drop it rather than leak light through walls.
-						if (!localShadowsActive && light.lightFlags.none(LightFlags::Shadow))
+						// Drop shadowless lights rather than leak light through walls; with the cache, only new casters and spot lights wait.
+						const bool withheld = !localShadowsActive || !caster || shadowLight->GetIsFrustumLight() ||
+						                      localShadowFrame - caster->firstSeenFrame < LOCAL_SHADOW_UNCACHED_GRACE_FRAMES;
+						if (light.lightFlags.none(LightFlags::LocalShadow, LightFlags::Shadow) && withheld)
 							return;
 					}
 
@@ -1161,12 +1162,36 @@ LightLimitFix::LocalShadowCaster* LightLimitFix::FindLocalShadowCaster(RE::BSSha
 	return nullptr;
 }
 
+void LightLimitFix::MatchShadowDistanceToLightFade(bool a_enable)
+{
+	static float& shadowDistance = *reinterpret_cast<float*>(REL::RelocationID(528314, 415263).address());
+	static float& shadowDistanceSquared = *reinterpret_cast<float*>(REL::RelocationID(528316, 415264).address());
+	static float& lightFadeEndSquared = *reinterpret_cast<float*>(REL::RelocationID(527669, 414583).address());
+
+	const float baseSquared = shadowDistance * shadowDistance;
+	if (!a_enable) {
+		if (shadowDistanceRaised && std::isfinite(baseSquared))
+			shadowDistanceSquared = baseSquared;
+		shadowDistanceRaised = false;
+		return;
+	}
+	if (!std::isfinite(baseSquared) || !std::isfinite(lightFadeEndSquared) || lightFadeEndSquared <= 0.0f)
+		return;
+	// Lights past the shadow distance would otherwise drop out of the rotation and render unshadowed.
+	shadowDistanceSquared = std::max(baseSquared, lightFadeEndSquared);
+	shadowDistanceRaised = true;
+}
+
 void LightLimitFix::ScheduleLocalShadowCasters()
 {
 	localShadowAllowed.clear();
 	localShadowSelecting = false;
 
-	if (!loaded || !settings.EnableLocalShadows || REL::Module::IsVR())
+	if (!loaded || REL::Module::IsVR())
+		return;
+
+	MatchShadowDistanceToLightFade(settings.EnableLocalShadows && Util::IsInterior());
+	if (!settings.EnableLocalShadows)
 		return;
 
 	auto smState = globals::game::smState;
@@ -1223,6 +1248,7 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 			localShadowCasterLookup[light] = static_cast<uint32_t>(localShadowCasters.size());
 			caster = &localShadowCasters.emplace_back();
 			caster->light = light;
+			caster->firstSeenFrame = frame;
 		}
 
 		const float teleportDistance = std::max(LOCAL_SHADOW_TELEPORT_DISTANCE, niLight->GetLightRuntimeData().radius.x * LOCAL_SHADOW_TELEPORT_RADIUS_FRACTION);
@@ -1233,6 +1259,7 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 			*caster = LocalShadowCaster{};
 			caster->light = light;
 			caster->slice = slice;
+			caster->firstSeenFrame = frame;
 		}
 		caster->niLight = niLight;
 
@@ -1353,7 +1380,7 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 	}
 	order.insert(order.end(), newcomers.begin(), newcomers.end());
 
-	size_t engineCapacity = GetEngineShadowCapacity();
+	size_t engineCapacity = ENGINE_LOCAL_SHADOW_CASTERS;
 	if (needsSweep && order.size() >= engineCapacity && engineCapacity > 1)
 		engineCapacity--;
 	const size_t allowedCount = std::min<size_t>(order.size(), engineCapacity);
@@ -1637,7 +1664,6 @@ void LightLimitFix::CopyLocalShadowMaps()
 	const uint32_t groups = (localShadowCacheResolution + LOCAL_SHADOW_COPY_GROUP_SIZE - 1) / LOCAL_SHADOW_COPY_GROUP_SIZE;
 
 	bool computeBound = false;
-	bool sunSeen = false;
 	static bool loggedMapping = false;
 
 	const uint32_t engineSliceCount = std::min(ENGINE_SHADOW_MAP_SLICES, localShadowEngineSlices);
@@ -1653,10 +1679,8 @@ void LightLimitFix::CopyLocalShadowMaps()
 	uint32_t sliceClaims[ENGINE_SHADOW_MAP_SLICES] = {};
 
 	ForEachAccumulatedShadowLight(runtimeData.shadowLightsAccum, [&](RE::BSShadowLight* light) {
-		if (light == sunLight) {
-			sunSeen = true;
+		if (light == sunLight)
 			return;
-		}
 
 		auto* caster = FindLocalShadowCaster(light);
 		if (!caster || caster->lastRenderedFrame == frame)
@@ -1747,9 +1771,7 @@ void LightLimitFix::CopyLocalShadowMaps()
 		localShadowStatRendered++;
 	}
 
-	localShadowSunActive = sunSeen || globals::state->HasDirectionalShadows();
-
-	if (localShadowStatRendered < GetEngineShadowCapacity()) {
+	if (localShadowStatRendered < ENGINE_LOCAL_SHADOW_CASTERS) {
 		for (auto* allowed : localShadowAllowed) {
 			auto* caster = FindLocalShadowCaster(allowed);
 			if (!caster || caster->lastRenderedFrame == frame)

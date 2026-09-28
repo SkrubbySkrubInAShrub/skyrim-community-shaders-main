@@ -102,7 +102,8 @@ public:
 
 	static constexpr uint32_t SHADOW_MASK_CHANNEL_COUNT = 4;
 	static constexpr uint32_t NO_SHADOW_MASK_INDEX = 255;
-	static constexpr uint32_t ENGINE_SHADOW_SLOTS = 4;
+	/** @brief Point/spot shadow maps the engine renders per frame, independent of the sun. */
+	static constexpr uint32_t ENGINE_LOCAL_SHADOW_CASTERS = 3;
 	static constexpr uint32_t ENGINE_SHADOW_MAP_SLICES = 8;
 	static constexpr uint32_t MIN_LOCAL_SHADOW_SLOTS = 4;
 	static constexpr uint32_t MAX_LOCAL_SHADOW_SLOTS = 64;
@@ -111,6 +112,8 @@ public:
 	static constexpr uint32_t LOCAL_SHADOW_EVICT_AGE = 120;
 	static constexpr uint32_t LOCAL_SHADOW_REJECT_MAX_FRAMES = 120;
 	static constexpr uint32_t LOCAL_SHADOW_CAMERA_HOLD_FRAMES = 60;
+	/** @brief Frames a new caster's light is withheld while it waits for its first cached shadow. */
+	static constexpr uint32_t LOCAL_SHADOW_UNCACHED_GRACE_FRAMES = 8;
 	static constexpr uint32_t LOCAL_SHADOW_STATIC_STARVE_FRAMES = 60;
 	static constexpr float LOCAL_SHADOW_AGE_URGENCY = 64.0f;
 	static constexpr float LOCAL_SHADOW_ACTOR_SCORE = 1000.0f;
@@ -180,6 +183,7 @@ public:
 		RE::NiLight* niLight = nullptr;
 		int32_t slice = -1;
 		uint32_t lastSeenFrame = 0;
+		uint32_t firstSeenFrame = 0;
 		uint32_t lastEvaluatedFrame = 0;
 		uint32_t lastEligibleFrame = 0;
 		uint32_t lastRenderedFrame = 0;
@@ -354,7 +358,7 @@ public:
 	ankerl::unordered_dense::map<RE::FormID, RE::NiPoint3> localShadowActorHistoryNext;
 	eastl::vector<LocalShadowData> localShadowUpload;
 	bool localShadowSelecting = false;
-	bool localShadowSunActive = false;
+	bool shadowDistanceRaised = false;
 	uint32_t localShadowFrame = 0;
 	RE::NiPoint3 localShadowCameraPosition{};
 
@@ -379,8 +383,6 @@ public:
 
 	/** @brief True when local shadows are enabled and the cache texture exists. */
 	bool IsLocalShadowCacheActive() const { return settings.EnableLocalShadows && localShadowCache; }
-	/** @brief Engine shadow slots left for local lights once the sun takes its slot. */
-	uint32_t GetEngineShadowCapacity() const { return localShadowSunActive ? ENGINE_SHADOW_SLOTS - 1 : ENGINE_SHADOW_SLOTS; }
 	/** @brief True when the engine found the caster in range within the camera hold window. */
 	static bool IsLocalShadowCasterInView(const LocalShadowCaster& a_caster, uint32_t a_frame);
 	/** @brief Texel size of the cache format, which is always R16_UNORM or R32_FLOAT. */
@@ -388,9 +390,11 @@ public:
 
 	/**
 	 * @brief Picks which shadow casters the engine may render this frame so the cache covers every caster over time.
-	 * Runs before the engine selects its (at most four) shadow-casting lights.
+	 * Runs before the engine selects its (at most three) point/spot shadow-casting lights.
 	 */
 	void ScheduleLocalShadowCasters();
+	/** @brief Raises the engine's point/spot shadow cull distance to the light fade distance, or restores it when disabled. */
+	void MatchShadowDistanceToLightFade(bool a_enable);
 	/**
 	 * @brief Records the engine's own range test for a caster and hides casters not scheduled this frame.
 	 * @param a_light The shadow light being evaluated by the engine.
