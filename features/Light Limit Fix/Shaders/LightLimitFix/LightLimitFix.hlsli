@@ -89,6 +89,7 @@ namespace LightLimitFix
 		return float2x2(cosAngle, sinAngle, -sinAngle, cosAngle);
 	}
 
+	/** @brief Bilinear PCF tap equivalent to SampleCmpLevelZero; the host shaders have no comparison sampler bound, so this uses Gather. */
 	float SampleLocalShadowTap(SamplerState samp, uint slice, float2 uv, float receiverDepth)
 	{
 		const float texel = SharedData::lightLimitFixSettings.LocalShadowTexelSize;

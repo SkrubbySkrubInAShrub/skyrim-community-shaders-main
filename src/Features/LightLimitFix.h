@@ -66,10 +66,10 @@ public:
 	enum class LightFlags : std::uint32_t
 	{
 		PortalStrict = (1 << 0),
-		Shadow = (1 << 1),
+		Shadow = (1 << 1),  // Has an engine shadow mask channel (shadowMaskIndex).
 		Simple = (1 << 2),
-		ShadowCaster = (1 << 3),
-		LocalShadow = (1 << 4),
+		ShadowCaster = (1 << 3),  // Is a BSShadowLight, whether or not it has shadow data this frame.
+		LocalShadow = (1 << 4),   // Has a cached local shadow slice (localShadowIndex).
 
 		Initialised = (1 << 8),
 		Disabled = (1 << 9),

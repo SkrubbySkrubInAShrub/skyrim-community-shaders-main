@@ -9,6 +9,7 @@
 #include "State.h"
 #include "Utils/ExternalEmittance.h"
 
+#include <bit>
 #include <numbers>
 
 #define I18N_KEY_PREFIX "feature.light_limit_fix."
@@ -1190,8 +1191,9 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 	if (!loaded || REL::Module::IsVR())
 		return;
 
-	MatchShadowDistanceToLightFade(settings.EnableLocalShadows && Util::IsInterior());
-	if (!settings.EnableLocalShadows)
+	const bool cacheActive = IsLocalShadowCacheActive();
+	MatchShadowDistanceToLightFade(cacheActive && Util::IsInterior());
+	if (!cacheActive)
 		return;
 
 	auto smState = globals::game::smState;
@@ -1472,7 +1474,8 @@ void LightLimitFix::EnsureLocalShadowResources(ID3D11Texture2D* a_engineShadowMa
 	const uint32_t engineResolution = std::max(engineDesc.Width, 1u);
 	const uint32_t requestedResolution = settings.LocalShadowResolution == 0 ? engineResolution : std::max(settings.LocalShadowResolution, LOCAL_SHADOW_MIN_RESOLUTION);
 	uint32_t cacheResolution = std::min(requestedResolution, engineResolution);
-	if (engineResolution % cacheResolution != 0)
+	// LocalShadowCopyCS tree-reduces, so the downsample ratio must be a power of two.
+	if (engineResolution % cacheResolution != 0 || !std::has_single_bit(engineResolution / cacheResolution))
 		cacheResolution = engineResolution;
 	const uint32_t requestedSlots = std::clamp(settings.LocalShadowSlots, MIN_LOCAL_SHADOW_SLOTS, MAX_LOCAL_SHADOW_SLOTS);
 
@@ -1661,7 +1664,9 @@ void LightLimitFix::CopyLocalShadowMaps()
 	auto& runtimeData = shadowSceneNode->GetRuntimeData();
 	auto* sunLight = static_cast<RE::BSShadowLight*>(runtimeData.sunShadowDirLight);
 	const uint32_t scale = std::max(localShadowEngineResolution / localShadowCacheResolution, 1u);
-	const uint32_t groups = (localShadowCacheResolution + LOCAL_SHADOW_COPY_GROUP_SIZE - 1) / LOCAL_SHADOW_COPY_GROUP_SIZE;
+	assert(std::has_single_bit(scale));
+	const uint32_t threadsPerTexel = std::min(scale, LOCAL_SHADOW_COPY_GROUP_SIZE);
+	const uint32_t groups = (localShadowCacheResolution * threadsPerTexel + LOCAL_SHADOW_COPY_GROUP_SIZE - 1) / LOCAL_SHADOW_COPY_GROUP_SIZE;
 
 	bool computeBound = false;
 	static bool loggedMapping = false;
