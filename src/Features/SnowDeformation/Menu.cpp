@@ -268,6 +268,10 @@ void SnowDeformation::DrawSettings()
 		else
 			ImGui::TextDisabled("%s%s", T(TKEY("snow_pbr_config_using"), "using: "), snowPBRSetName.c_str());
 
+		ImGui::Checkbox(T(TKEY("match_landscape_snow_color"), "Match Landscape Snow Color"), &settings.MatchLandscapeSnowColor);
+		if (auto _ttMatchColor = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("match_landscape_snow_color_tooltip"), "Reads the color of a PBR snow texture the way Community Shaders reads it on your landscape, so the ground snow, object snow and recolored snow come out as bright as your landscape's own snow. Off = the older reading, which draws PBR snow brighter than the landscape: about twice as bright when the texture is saved in sRGB format. Snow textures without a PBR set look the same either way."));
+
 		ImGui::Checkbox(T(TKEY("snow_glints"), "Snow Sparkle"), &settings.SnowGlints);
 		if (auto _ttGlints = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_glints_tooltip"), "The glitter of light catching single snow crystals, on the ground snow and on object snow, using Community Shaders' TruePBR glints (needs TruePBR). The High, Medium and Low presets turn it off."));

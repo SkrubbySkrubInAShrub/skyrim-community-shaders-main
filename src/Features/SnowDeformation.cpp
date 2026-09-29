@@ -107,6 +107,7 @@
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(SnowPBRConfig) \
+	X(MatchLandscapeSnowColor) \
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
 	X(SnowBorderDithering) \
@@ -664,8 +665,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LODReplaceStart = 0.0f;
 	data.LODReplaceFadeInv = 1.0f / 2048.0f;
 	data.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
-	// PBR auto-detection only; the manual linear override for non-PBR sets was retired.
-	data.SnowIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
+	data.SnowIsLinear = (shellSnowTextureIsPBR && !settings.MatchLandscapeSnowColor) ? 1.0f : 0.0f;
 	data.SnowRoughnessScale = snowRoughnessScale;
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;

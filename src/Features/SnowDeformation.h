@@ -517,6 +517,8 @@ public:
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief "Snow PBR Config" (2026-09-22): pins the TruePBR texture set the shell takes its roughness, specular and glint from. Empty = the ranked automatic match. Exists because a modlist can hold several sets whose key contains the snow texture's basename and no rule fits every one - an AutoBlend stub with no glintParameters block once won on the letter B and took the sparkle off both shells. */
 		std::string SnowPBRConfig = "";
+		/** @brief "Match Landscape Snow Color": a PBR snow sample is used as sampled, as TruePBR's landscape does. Off = LinearToSrgb on it (the older, brighter reading). */
+		bool MatchLandscapeSnowColor = true;
 		/** @brief Radius multiplier for the workspace clearings (workstations, stalls, wells, shrines). */
 		float TrampleZoneScale = 0.75f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
