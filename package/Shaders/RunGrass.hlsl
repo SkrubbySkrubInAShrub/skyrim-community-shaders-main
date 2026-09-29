@@ -533,7 +533,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-			const float2x2 grassShadowRotation = LightLimitFix::GetShadowRotationMatrix(screenNoise);
 			[loop] for (uint i = 0; i < lightCount; ++i) {
 				LightLimitFix::Light light = LightLimitFix::lights[LightLimitFix::lightList[lightOffset + i]];
 				float3 lightVector = light.positionWS.xyz - input.WorldPosition.xyz;
@@ -551,7 +550,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float3 lightColor = Color::PointLight(light.color.xyz) * attenuation * light.fade;
 				float lightShadow = 1.0;
 				[branch] if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow)
-					lightShadow = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, float3(0.0, 0.0, 0.0), false, grassShadowRotation);
+					lightShadow = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, float3(0.0, 0.0, 0.0), false, screenNoise);
 				else if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
 					lightShadow = shadowColor[light.shadowLightIndex];
 				float3 lightDirection = lightVector / max(lightDist, EPSILON_DIVISION);
@@ -791,7 +790,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-			const float2x2 grassShadowRotation = LightLimitFix::GetShadowRotationMatrix(screenNoise);
 
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
@@ -819,7 +817,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float shadowComponent = 1.0;
 				[branch] if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow)
 				{
-					shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, float3(0.0, 0.0, 0.0), false, grassShadowRotation);
+					shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, float3(0.0, 0.0, 0.0), false, screenNoise);
 					lightShadow *= shadowComponent;
 				}
 				else if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
@@ -977,7 +975,6 @@ PS_OUTPUT main(PS_INPUT input)
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		if (lightCount) {
 			uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-			const float2x2 grassShadowRotation = LightLimitFix::GetShadowRotationMatrix(screenNoise);
 
 			[loop] for (uint i = 0; i < lightCount; i++)
 			{
@@ -1007,7 +1004,7 @@ PS_OUTPUT main(PS_INPUT input)
 				float shadowComponent = 1.0;
 				[branch] if (light.lightFlags & LightLimitFix::LightFlags::LocalShadow)
 				{
-					shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, float3(0.0, 0.0, 0.0), false, grassShadowRotation);
+					shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, float3(0.0, 0.0, 0.0), false, screenNoise);
 					lightShadow *= shadowComponent;
 				}
 				else if (light.lightFlags & LightLimitFix::LightFlags::Shadow)

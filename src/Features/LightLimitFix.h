@@ -66,10 +66,10 @@ public:
 	enum class LightFlags : std::uint32_t
 	{
 		PortalStrict = (1 << 0),
-		Shadow = (1 << 1),  // Has an engine shadow mask channel (shadowMaskIndex).
+		Shadow = (1 << 1), /**< Has an engine shadow mask channel (shadowMaskIndex). */
 		Simple = (1 << 2),
-		ShadowCaster = (1 << 3),  // Is a BSShadowLight, whether or not it has shadow data this frame.
-		LocalShadow = (1 << 4),   // Has a cached local shadow slice (localShadowIndex).
+		ShadowCaster = (1 << 3), /**< Is a BSShadowLight, whether or not it has shadow data this frame. */
+		LocalShadow = (1 << 4),  /**< Has a cached local shadow slice (localShadowIndex). */
 
 		Initialised = (1 << 8),
 		Disabled = (1 << 9),
@@ -102,18 +102,16 @@ public:
 
 	static constexpr uint32_t SHADOW_MASK_CHANNEL_COUNT = 4;
 	static constexpr uint32_t NO_SHADOW_MASK_INDEX = 255;
-	/** @brief Point/spot shadow maps the engine renders per frame, independent of the sun. */
-	static constexpr uint32_t ENGINE_LOCAL_SHADOW_CASTERS = 3;
 	static constexpr uint32_t ENGINE_SHADOW_MAP_SLICES = 8;
 	static constexpr uint32_t MIN_LOCAL_SHADOW_SLOTS = 4;
 	static constexpr uint32_t MAX_LOCAL_SHADOW_SLOTS = 64;
-	static constexpr uint64_t LOCAL_SHADOW_MAX_CACHE_BYTES = 2048ull * 1024ull * 1024ull;
+	static constexpr uint64_t LOCAL_SHADOW_MAX_CACHE_BYTES = 512ull * 1024ull * 1024ull;
+	/** @brief Frames to wait before retrying a cache allocation that failed. */
+	static constexpr uint32_t LOCAL_SHADOW_ALLOC_RETRY_FRAMES = 600;
 	static constexpr uint32_t LOCAL_SHADOW_SWEEP_INTERVAL = 30;
 	static constexpr uint32_t LOCAL_SHADOW_EVICT_AGE = 120;
 	static constexpr uint32_t LOCAL_SHADOW_REJECT_MAX_FRAMES = 120;
 	static constexpr uint32_t LOCAL_SHADOW_CAMERA_HOLD_FRAMES = 60;
-	/** @brief Frames a new caster's light is withheld while it waits for its first cached shadow. */
-	static constexpr uint32_t LOCAL_SHADOW_UNCACHED_GRACE_FRAMES = 8;
 	static constexpr uint32_t LOCAL_SHADOW_STATIC_STARVE_FRAMES = 60;
 	static constexpr float LOCAL_SHADOW_AGE_URGENCY = 64.0f;
 	static constexpr float LOCAL_SHADOW_ACTOR_SCORE = 1000.0f;
@@ -183,7 +181,6 @@ public:
 		RE::NiLight* niLight = nullptr;
 		int32_t slice = -1;
 		uint32_t lastSeenFrame = 0;
-		uint32_t firstSeenFrame = 0;
 		uint32_t lastEvaluatedFrame = 0;
 		uint32_t lastEligibleFrame = 0;
 		uint32_t lastRenderedFrame = 0;
@@ -356,10 +353,10 @@ public:
 	eastl::vector<LocalShadowActor> localShadowActors;
 	ankerl::unordered_dense::map<RE::FormID, RE::NiPoint3> localShadowActorHistory;
 	ankerl::unordered_dense::map<RE::FormID, RE::NiPoint3> localShadowActorHistoryNext;
-	eastl::vector<LocalShadowData> localShadowUpload;
 	bool localShadowSelecting = false;
 	bool shadowDistanceRaised = false;
 	uint32_t localShadowFrame = 0;
+	uint32_t localShadowEngineBudget = SHADOW_MASK_CHANNEL_COUNT - 1;
 	RE::NiPoint3 localShadowCameraPosition{};
 
 	eastl::unique_ptr<Texture2D> localShadowCache = nullptr;
@@ -374,6 +371,7 @@ public:
 	uint32_t localShadowEngineMipLevels = 1;
 	uint32_t localShadowEngineSlices = 0;
 	bool localShadowDirectCopy = false;
+	uint32_t localShadowAllocFailedFrame = 0;
 	RE::Setting* poissonRadiusScaleSetting = nullptr;
 	bool poissonRadiusScaleLookedUp = false;
 
@@ -390,9 +388,11 @@ public:
 
 	/**
 	 * @brief Picks which shadow casters the engine may render this frame so the cache covers every caster over time.
-	 * Runs before the engine selects its (at most three) point/spot shadow-casting lights.
+	 * Runs before the engine selects its point/spot shadow-casting lights.
 	 */
 	void ScheduleLocalShadowCasters();
+	/** @brief Point/spot shadow maps the engine can render this frame: every mask channel, minus one when the sun takes a shadow map. */
+	static uint32_t GetEngineLocalShadowBudget();
 	/** @brief Raises the engine's point/spot shadow cull distance to the light fade distance, or restores it when disabled. */
 	void MatchShadowDistanceToLightFade(bool a_enable);
 	/**
@@ -420,6 +420,8 @@ public:
 	static void TryAssignShadowMask(LightData& a_light, RE::BSShadowLight* a_shadowLight);
 	/** @brief Returns the shadow mask channel of a light, or NO_SHADOW_MASK_INDEX when it has none. */
 	static uint32_t GetShadowMaskIndex(RE::BSShadowLight* a_shadowLight);
+	/** @brief True when the engine rendered this light's shadow map this frame; maskIndex alone goes stale once a light is removed. */
+	static bool IsShadowMapRendered(RE::ShadowSceneNode* a_shadowSceneNode, RE::BSShadowLight* a_shadowLight);
 
 	/** @brief Adjusts the saturation of an RGB color value. */
 	static inline float3 Saturation(float3 color, float saturation);

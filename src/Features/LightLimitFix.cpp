@@ -459,9 +459,6 @@ void LightLimitFix::Prepass()
 	views[2] = lightGrid->srv.get();
 	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
 
-	if (IsLocalShadowCacheActive())
-		BindLocalShadowResources();
-
 	state->EndPerfEvent();
 }
 
@@ -587,12 +584,10 @@ void LightLimitFix::UpdateLights()
 							light.lightFlags.set(LightFlags::LocalShadow);
 						}
 						// Lights without a cached slice (cache full or not yet copied) fall back to the engine shadow mask.
-						if (light.lightFlags.none(LightFlags::LocalShadow))
+						if (light.lightFlags.none(LightFlags::LocalShadow) && IsShadowMapRendered(shadowSceneNode, shadowLight))
 							TryAssignShadowMask(light, shadowLight);
-						// Drop shadowless lights rather than leak light through walls; with the cache, only new casters and spot lights wait.
-						const bool withheld = !localShadowsActive || !caster || shadowLight->GetIsFrustumLight() ||
-						                      localShadowFrame - caster->firstSeenFrame < LOCAL_SHADOW_UNCACHED_GRACE_FRAMES;
-						if (light.lightFlags.none(LightFlags::LocalShadow, LightFlags::Shadow) && withheld)
+						// Drop shadowless lights rather than leak light through walls.
+						if (light.lightFlags.none(LightFlags::LocalShadow, LightFlags::Shadow))
 							return;
 					}
 
@@ -1083,20 +1078,11 @@ namespace
 		return true;
 	}
 
-	DXGI_FORMAT GetDepthCopyFamily(DXGI_FORMAT a_format)
+	/** @brief Typeless parent of a cache format, which is always R16_UNORM or R32_FLOAT. */
+	DXGI_FORMAT GetTypelessCacheFormat(DXGI_FORMAT a_cacheFormat)
 	{
-		switch (a_format) {
-		case DXGI_FORMAT_R16_TYPELESS:
-		case DXGI_FORMAT_D16_UNORM:
-		case DXGI_FORMAT_R16_UNORM:
-			return DXGI_FORMAT_R16_TYPELESS;
-		case DXGI_FORMAT_R32_TYPELESS:
-		case DXGI_FORMAT_D32_FLOAT:
-		case DXGI_FORMAT_R32_FLOAT:
-			return DXGI_FORMAT_R32_TYPELESS;
-		default:
-			return DXGI_FORMAT_UNKNOWN;
-		}
+		assert(a_cacheFormat == DXGI_FORMAT_R16_UNORM || a_cacheFormat == DXGI_FORMAT_R32_FLOAT);
+		return a_cacheFormat == DXGI_FORMAT_R16_UNORM ? DXGI_FORMAT_R16_TYPELESS : DXGI_FORMAT_R32_TYPELESS;
 	}
 
 	bool ReadLocalShadowRenderInfo(RE::BSShadowLight* a_light, LocalShadowRenderInfo& a_info)
@@ -1113,38 +1099,20 @@ namespace
 		std::memcpy(&a_info.lightTransform, &descriptor.lightTransform, sizeof(a_info.lightTransform));
 		return true;
 	}
-
-	// shadowLightsAccum is a slot-indexed accumulator: an omni light occupies shadowMapCount
-	// consecutive entries, and slots past the live count can hold freed pointers.
-	bool IsPlausibleShadowLightPtr(std::uintptr_t a_raw) noexcept
-	{
-		return a_raw >= 0x10000ull && a_raw < 0x0000800000000000ull && (a_raw & 0x7) == 0;
-	}
-
-	template <typename Fn>
-	void ForEachAccumulatedShadowLight(const RE::BSTArray<RE::BSShadowLight*>& a_accum, Fn&& a_fn)
-	{
-		const uint32_t count = static_cast<uint32_t>(a_accum.size());
-		uint32_t index = 0;
-		while (index < count) {
-			RE::BSShadowLight* light = a_accum[index];
-			if (!IsPlausibleShadowLightPtr(reinterpret_cast<std::uintptr_t>(light)))
-				break;
-			a_fn(light);
-			const uint32_t step = light->shadowMapCount;
-			if (step == 0)
-				break;
-			const uint64_t next = static_cast<uint64_t>(index) + step;
-			if (next >= count)
-				break;
-			index = static_cast<uint32_t>(next);
-		}
-	}
 }
 
 uint32_t LightLimitFix::GetShadowMaskIndex(RE::BSShadowLight* a_shadowLight)
 {
 	return a_shadowLight ? a_shadowLight->GetRuntimeData().maskIndex : NO_SHADOW_MASK_INDEX;
+}
+
+bool LightLimitFix::IsShadowMapRendered(RE::ShadowSceneNode* a_shadowSceneNode, RE::BSShadowLight* a_shadowLight)
+{
+	if (GetShadowMaskIndex(a_shadowLight) >= SHADOW_MASK_CHANNEL_COUNT)
+		return false;
+	// RemoveLight nulls a light's accumulator entries without resetting maskIndex, so a re-added light keeps a stale channel.
+	const auto& accumulated = a_shadowSceneNode->GetRuntimeData().shadowLightsAccum;
+	return std::find(accumulated.begin(), accumulated.end(), a_shadowLight) != accumulated.end();
 }
 
 void LightLimitFix::TryAssignShadowMask(LightData& a_light, RE::BSShadowLight* a_shadowLight)
@@ -1161,6 +1129,12 @@ LightLimitFix::LocalShadowCaster* LightLimitFix::FindLocalShadowCaster(RE::BSSha
 	if (auto it = localShadowCasterLookup.find(a_light); it != localShadowCasterLookup.end() && it->second < localShadowCasters.size())
 		return &localShadowCasters[it->second];
 	return nullptr;
+}
+
+uint32_t LightLimitFix::GetEngineLocalShadowBudget()
+{
+	static const auto& sunShadowSkipped = *reinterpret_cast<const uint8_t*>(REL::RelocationID(528095, 415040).address());
+	return sunShadowSkipped ? SHADOW_MASK_CHANNEL_COUNT : SHADOW_MASK_CHANNEL_COUNT - 1;
 }
 
 void LightLimitFix::MatchShadowDistanceToLightFade(bool a_enable)
@@ -1250,7 +1224,6 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 			localShadowCasterLookup[light] = static_cast<uint32_t>(localShadowCasters.size());
 			caster = &localShadowCasters.emplace_back();
 			caster->light = light;
-			caster->firstSeenFrame = frame;
 		}
 
 		const float teleportDistance = std::max(LOCAL_SHADOW_TELEPORT_DISTANCE, niLight->GetLightRuntimeData().radius.x * LOCAL_SHADOW_TELEPORT_RADIUS_FRACTION);
@@ -1261,7 +1234,6 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 			*caster = LocalShadowCaster{};
 			caster->light = light;
 			caster->slice = slice;
-			caster->firstSeenFrame = frame;
 		}
 		caster->niLight = niLight;
 
@@ -1382,7 +1354,9 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 	}
 	order.insert(order.end(), newcomers.begin(), newcomers.end());
 
-	size_t engineCapacity = ENGINE_LOCAL_SHADOW_CASTERS;
+	localShadowEngineBudget = GetEngineLocalShadowBudget();
+	size_t engineCapacity = localShadowEngineBudget;
+	// The engine stops evaluating lights once its budget fills, so a sweep leaves one channel free to reach every light.
 	if (needsSweep && order.size() >= engineCapacity && engineCapacity > 1)
 		engineCapacity--;
 	const size_t allowedCount = std::min<size_t>(order.size(), engineCapacity);
@@ -1422,12 +1396,6 @@ bool LightLimitFix::FilterLocalShadowCaster(RE::BSShadowLight* a_light, const RE
 {
 	if (!localShadowSelecting || !a_light)
 		return a_result;
-
-	// UpdateCamera's shadow-LOD sub-test zeroes lodDimmer for lights past the (much shorter)
-	// shadow distance. Rotation runs it on far more lights than vanilla, and UpdateLights
-	// multiplies fade by lodDimmer, so leaving it zeroed renders the light black.
-	if (a_light->lodDimmer == 0.0f)
-		a_light->lodDimmer = 1.0f;
 
 	if (a_camera)
 		localShadowCameraPosition = a_camera->world.translate;
@@ -1488,13 +1456,15 @@ void LightLimitFix::EnsureLocalShadowResources(ID3D11Texture2D* a_engineShadowMa
 			cacheFormat = DXGI_FORMAT_R16_UNORM;
 	}
 
-	const DXGI_FORMAT engineCopyFamily = GetDepthCopyFamily(engineDesc.Format);
+	// A typed depth format (D16_UNORM, D32_FLOAT) cannot be copied into a color format, only its typeless parent can.
 	localShadowDirectCopy = cacheResolution == engineResolution && engineDesc.Height == engineDesc.Width &&
-	                        engineCopyFamily != DXGI_FORMAT_UNKNOWN && engineCopyFamily == GetDepthCopyFamily(cacheFormat);
+	                        (engineDesc.Format == cacheFormat || engineDesc.Format == GetTypelessCacheFormat(cacheFormat));
 	localShadowEngineMipLevels = std::max(engineDesc.MipLevels, 1u);
 	localShadowEngineSlices = engineDesc.ArraySize;
 
-	if (requestedSlots == localShadowRequestedSlots && cacheResolution == localShadowCacheResolution && engineResolution == localShadowEngineResolution && cacheFormat == localShadowCacheFormat)
+	const uint32_t renderFrame = globals::state->frameCount;
+	const bool retryDue = !localShadowCache && renderFrame - localShadowAllocFailedFrame >= LOCAL_SHADOW_ALLOC_RETRY_FRAMES;
+	if (!retryDue && requestedSlots == localShadowRequestedSlots && cacheResolution == localShadowCacheResolution && engineResolution == localShadowEngineResolution && cacheFormat == localShadowCacheFormat)
 		return;
 
 	ReleaseLocalShadowResources();
@@ -1529,6 +1499,7 @@ void LightLimitFix::EnsureLocalShadowResources(ID3D11Texture2D* a_engineShadowMa
 	localShadowCacheFormat = cacheFormat;
 
 	if (!cacheTexture) {
+		localShadowAllocFailedFrame = renderFrame;
 		logger::warn("[LLF] Local shadow cache: could not allocate {} slots at {}x{}; using the game's shadow masks instead", requestedSlots, cacheResolution, cacheResolution);
 		return;
 	}
@@ -1683,26 +1654,27 @@ void LightLimitFix::CopyLocalShadowMaps()
 	pending.clear();
 	uint32_t sliceClaims[ENGINE_SHADOW_MAP_SLICES] = {};
 
-	ForEachAccumulatedShadowLight(runtimeData.shadowLightsAccum, [&](RE::BSShadowLight* light) {
-		if (light == sunLight)
-			return;
+	for (auto& entry : runtimeData.activeShadowLights) {
+		auto* light = entry.get();
+		if (!light || light == sunLight || !IsShadowMapRendered(shadowSceneNode, light))
+			continue;
 
 		auto* caster = FindLocalShadowCaster(light);
 		if (!caster || caster->lastRenderedFrame == frame)
-			return;
+			continue;
 
 		LocalShadowRenderInfo info{};
 		if (!ReadLocalShadowRenderInfo(light, info))
-			return;
+			continue;
 
 		if (info.renderTarget != static_cast<int32_t>(RE::RENDER_TARGETS_DEPTHSTENCIL::kSHADOWMAPS))
-			return;
+			continue;
 
 		if (info.engineSlice >= engineSliceCount) {
 			static uint32_t warnedFrame = 0;
 			if (ShouldLogThrottled(warnedFrame, frame))
 				logger::debug("[LLF] Shadow caster without a usable engine slice (shadowmapIndex {}, maskIndex {}, renderTarget {})", info.engineSlice, info.maskIndex, info.renderTarget);
-			return;
+			continue;
 		}
 		if (!loggedMapping) {
 			loggedMapping = true;
@@ -1711,7 +1683,7 @@ void LightLimitFix::CopyLocalShadowMaps()
 
 		sliceClaims[info.engineSlice]++;
 		pending.push_back({ light, caster, info });
-	});
+	}
 
 	for (auto& entry : pending) {
 		auto* light = entry.light;
@@ -1776,7 +1748,7 @@ void LightLimitFix::CopyLocalShadowMaps()
 		localShadowStatRendered++;
 	}
 
-	if (localShadowStatRendered < ENGINE_LOCAL_SHADOW_CASTERS) {
+	if (localShadowStatRendered < localShadowEngineBudget) {
 		for (auto* allowed : localShadowAllowed) {
 			auto* caster = FindLocalShadowCaster(allowed);
 			if (!caster || caster->lastRenderedFrame == frame)
@@ -1798,7 +1770,10 @@ void LightLimitFix::CopyLocalShadowMaps()
 
 	const auto& eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const float frameTime = globals::game::deltaTime ? std::clamp(*globals::game::deltaTime, 0.0f, LOCAL_SHADOW_MAX_FRAME_TIME) : 0.0f;
-	localShadowUpload.assign(localShadowCacheSlots, LocalShadowData{});
+	// Unwritten slots are left undefined by WRITE_DISCARD; no light flagged LocalShadow points at them.
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	DX::ThrowIfFailed(context->Map(localShadowBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
+	auto* upload = static_cast<LocalShadowData*>(mapped.pData);
 	for (auto& caster : localShadowCasters) {
 		if (caster.slice < 0 || caster.lastRenderedFrame == 0 || static_cast<uint32_t>(caster.slice) >= localShadowCacheSlots)
 			continue;
@@ -1813,13 +1788,9 @@ void LightLimitFix::CopyLocalShadowMaps()
 			data.Params2.y = std::min((expectedInterval - 1.0f) * (caster.actorSpeed + LOCAL_SHADOW_ANIMATION_SPEED * frameTime), LOCAL_SHADOW_MAX_SLACK);
 		}
 		data.Origin = { eye.x, eye.y, eye.z, 0.0f };
-		localShadowUpload[caster.slice] = data;
+		upload[caster.slice] = data;
 		localShadowStatCached++;
 	}
-
-	D3D11_MAPPED_SUBRESOURCE mapped{};
-	DX::ThrowIfFailed(context->Map(localShadowBuffer->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));
-	std::memcpy(mapped.pData, localShadowUpload.data(), localShadowUpload.size() * sizeof(LocalShadowData));
 	context->Unmap(localShadowBuffer->resource.get(), 0);
 }
 

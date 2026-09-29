@@ -1133,7 +1133,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
 		uint lightOffset = LightLimitFix::lightGrid[clusterIndex].offset;
-		const float2x2 localShadowRotation = LightLimitFix::GetShadowRotationMatrix(Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount));
+		const float localShadowNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
 		[loop] for (uint i = 0; i < lightCount; i++)
 		{
 			uint clusteredLightIndex = LightLimitFix::lightList[lightOffset + i];
@@ -1158,7 +1158,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 			float lightShadow = 1.0;
 			[branch] if (localShadow)
-				lightShadow = LightLimitFix::GetLocalShadow(DepthSampler, light.localShadowIndex, input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, normalizedLightDirection, false, localShadowRotation);
+				lightShadow = LightLimitFix::GetLocalShadow(DepthSampler, light.localShadowIndex, input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, normalizedLightDirection, false, localShadowNoise);
 
 			float3 H = normalize(normalizedLightDirection - viewDirection);
 			float HdotN = saturate(dot(H, normal));

@@ -99,7 +99,7 @@ namespace LightLimitFix
 		return lerp(lerp(lit.w, lit.z, weight.x), lerp(lit.x, lit.y, weight.x), weight.y);
 	}
 
-	float SampleLocalShadowPCF(SamplerState samp, uint slice, float2 uv, float receiverDepth, float2x2 rotationMatrix, float2 clampMin, float2 clampMax)
+	float SampleLocalShadowPCF(SamplerState samp, uint slice, float2 uv, float receiverDepth, float noise, float2 clampMin, float2 clampMax)
 	{
 		const uint sampleCount = SharedData::lightLimitFixSettings.LocalShadowSamples;
 		float shadow = 0.0;
@@ -110,6 +110,7 @@ namespace LightLimitFix
 		else
 		{
 			const float radiusUV = SharedData::lightLimitFixSettings.LocalShadowFilterRadius;
+			const float2x2 rotationMatrix = GetShadowRotationMatrix(noise);
 			const uint stride = sampleCount >= 8 ? 1 : 2;
 			float sum = 0.0;
 			[loop] for (uint i = 0; i < 8; i += stride)
@@ -123,7 +124,7 @@ namespace LightLimitFix
 	}
 
 	// position is relative to eyePosition; each cached projection is relative to its own Origin.
-	float GetLocalShadow(SamplerState samp, uint slice, float3 position, float3 eyePosition, float3 towardLight, bool skinnedReceiver, float2x2 rotationMatrix)
+	float GetLocalShadow(SamplerState samp, uint slice, float3 position, float3 eyePosition, float3 towardLight, bool skinnedReceiver, float noise)
 	{
 		LocalShadowData data = LocalShadows[slice];
 		float rawShadow = 1.0;
@@ -149,7 +150,7 @@ namespace LightLimitFix
 						float2 uv = positionLS.xy * 0.5 + 0.5;
 						float receiverDepth = positionLS.z - data.Params.z;
 						float spotFalloff = saturate(1.0 - pow(length(positionLS.xy), data.Params2.x));
-						rawShadow = SampleLocalShadowPCF(samp, slice, uv, receiverDepth, rotationMatrix, texel, 1.0 - texel) * spotFalloff;
+						rawShadow = SampleLocalShadowPCF(samp, slice, uv, receiverDepth, noise, texel, 1.0 - texel) * spotFalloff;
 					}
 				}
 			}
@@ -175,7 +176,7 @@ namespace LightLimitFix
 					}
 
 					float receiverDepth = saturate(length(positionLS.xyz) / data.Params.y) - data.Params.z;
-					rawShadow = SampleLocalShadowPCF(samp, slice, uv, receiverDepth, rotationMatrix, clampMin, clampMax);
+					rawShadow = SampleLocalShadowPCF(samp, slice, uv, receiverDepth, noise, clampMin, clampMax);
 				}
 			}
 		}
