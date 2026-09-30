@@ -7,6 +7,8 @@
 #include "Utils/D3D.h"
 #include "Utils/VersionedRelocation.h"
 
+#include <numbers>
+
 #define I18N_KEY_PREFIX "feature.skylighting."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -33,6 +35,10 @@ void Skylighting::RestoreDefaultSettings()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
+	// Unit SH (fully unoccluded), matching Skylighting::UNIT_SH; probes the occlusion map does not reach would otherwise keep the previous location's values
+	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
+
 	// ClearUnorderedAccessViewUint always reads four values
 	const UINT clr[4] = { 0, 0, 0, 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
