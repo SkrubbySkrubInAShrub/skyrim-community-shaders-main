@@ -561,7 +561,7 @@ public:
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
-		float SnowResistance = 33.0f;
+		float SnowResistance = 50.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
