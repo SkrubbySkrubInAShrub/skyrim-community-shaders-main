@@ -91,6 +91,13 @@ public:
 	 */
 	RE::NiPoint3 GetCelestialDirection(const RE::Sky* sky, Caster caster) const;
 
+	/**
+	 * @brief Gets the world-space direction towards the current shadow caster before shadow elevation locking,
+	 * blended across caster transitions like the shadow direction.
+	 * @return The unit direction, or nullopt when Sky Sync did not drive the lighting this frame.
+	 */
+	std::optional<RE::NiPoint3> GetCelestialLightDirection() const;
+
 private:
 	enum class CellFlagExt : uint16_t
 	{
@@ -121,6 +128,8 @@ private:
 	{
 		RE::NiPoint3 currentDir = { 0.0f, 0.0f, 1.0f };
 		RE::NiPoint3 startDir = { 0.0f, 0.0f, 1.0f };
+		RE::NiPoint3 celestialDir = { 0.0f, 0.0f, 1.0f };  // currentDir without the sun elevation lock
+		RE::NiPoint3 startCelestialDir = { 0.0f, 0.0f, 1.0f };
 		Caster target = Caster::Sun;
 		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
@@ -170,6 +179,7 @@ private:
 	bool sunSetting = false;
 	bool sunRising = false;
 	bool sunBelowHorizon = false;
+	bool celestialLightingValid = false;  // shadowFader ran this frame
 	ShadowFader shadowFader;
 
 	void DisableOnConflict(std::string_view conflictName);

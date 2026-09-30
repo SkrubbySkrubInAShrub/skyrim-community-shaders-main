@@ -8,6 +8,7 @@
 #include <pystring/pystring.h>
 
 #include "I18n/I18n.h"
+#include "SkySync.h"
 #include "State.h"
 #include "Util.h"
 
@@ -515,10 +516,16 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	if (a_refreshImmediately)
 		shadowUpdateIdx = 0;
 	if (shadowUpdateIdx == 0) {
-		const auto worldDirection = sunLight->GetWorldDirection();
-		float3 dirLightDir = { worldDirection.x, worldDirection.y, worldDirection.z };
-		if (dirLightDir.z > 0)
-			dirLightDir = -dirLightDir;
+		// Sky Sync holds the sun light above a minimum elevation at dusk; trace the real sun so ridges still occlude it
+		float3 dirLightDir;
+		if (const auto celestialDirection = globals::features::skySync.GetCelestialLightDirection()) {
+			dirLightDir = { -celestialDirection->x, -celestialDirection->y, -celestialDirection->z };
+		} else {
+			const auto worldDirection = sunLight->GetWorldDirection();
+			dirLightDir = { worldDirection.x, worldDirection.y, worldDirection.z };
+			if (dirLightDir.z > 0)
+				dirLightDir = -dirLightDir;
+		}
 
 		// in UV
 		float3 invScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;

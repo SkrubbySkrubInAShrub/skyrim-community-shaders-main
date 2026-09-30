@@ -262,6 +262,7 @@ void SkySync::PreparePendingTransitions()
 bool SkySync::Update(const RE::Sky* sky)
 {
 	std::fill(std::begin(rawDirections), std::end(rawDirections), RE::NiPoint3{});
+	celestialLightingValid = false;
 
 	if (!settings.Enabled) {
 		currentDim = 1.0f;
@@ -377,6 +378,7 @@ bool SkySync::Update(const RE::Sky* sky)
 
 	const bool transitionCompleted = immediateTransitionReady;
 	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
+	celestialLightingValid = true;
 	immediateTransitionReady = false;
 	return transitionCompleted;
 }
@@ -508,6 +510,18 @@ RE::NiPoint3 SkySync::GetCelestialDirection(const RE::Sky* sky, const Caster cas
 	return dir;
 }
 
+std::optional<RE::NiPoint3> SkySync::GetCelestialLightDirection() const
+{
+	const auto sky = globals::game::sky;
+	if (!loaded || !settings.Enabled || !celestialLightingValid || !sky || !sky->root)
+		return std::nullopt;
+
+	auto direction = sky->root->world.rotate * shadowFader.celestialDir;
+	if (direction.Unitize() <= FLT_EPSILON)
+		return std::nullopt;
+	return direction;
+}
+
 inline void SkySync::CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::NiPoint3& outDir, float& outDistance)
 {
 	outDir = sun->root->local.translate;
@@ -583,18 +597,21 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		best = Caster::Sun;
 	}
 
-	LockSunElevation(dirs);
-
 	// No valid caster points straight up so shadows fall directly down.
 	auto casterDir = [&](Caster c) {
 		return c == Caster::None ? RE::NiPoint3{ 0.0f, 0.0f, 1.0f } : dirs[static_cast<int>(c)];
 	};
+
+	// Terrain shadows trace the real caster, so capture it before the elevation lock below
+	const RE::NiPoint3 celestialTargetDir = casterDir(best);
+	LockSunElevation(dirs);
 
 	// If best source changed, begin a new transition
 	if (best != target) {
 		previousTarget = target;
 		target = best;
 		startDir = currentDir;
+		startCelestialDir = celestialDir;
 		fadeTimer = 0.0f;
 		transitioning = true;
 	}
@@ -603,6 +620,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 
 	if (!transitioning) {
 		currentDir = targetDir;
+		celestialDir = celestialTargetDir;
 		vlIntensityFactor = target == Caster::None ? 0.0f : 1.0f;
 		if (target != Caster::None)
 			immediateTransitionRemaining = 0.0f;
@@ -622,9 +640,17 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 	// Opposite start and target directions cancel at the midpoint; pass through straight up instead
 	if (currentDir.Unitize() <= FLT_EPSILON)
 		currentDir = { 0.0f, 0.0f, 1.0f };
+	celestialDir = {
+		std::lerp(startCelestialDir.x, celestialTargetDir.x, t),
+		std::lerp(startCelestialDir.y, celestialTargetDir.y, t),
+		std::lerp(startCelestialDir.z, celestialTargetDir.z, t)
+	};
+	if (celestialDir.Unitize() <= FLT_EPSILON)
+		celestialDir = { 0.0f, 0.0f, 1.0f };
 
 	if (t >= 1.0f) {
 		currentDir = targetDir;
+		celestialDir = celestialTargetDir;
 		transitioning = false;
 	}
 
