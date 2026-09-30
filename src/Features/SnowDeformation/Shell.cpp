@@ -1475,7 +1475,7 @@ void SnowDeformation::DrawShell()
 	// texture set reach the shell the same frame they reach the ground.
 	RefreshSnowPBRParams();
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
-	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR && !settings.MatchLandscapeSnowColor) ? 1.0f : 0.0f;
+	cbData.SnowTextureIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
 	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
 	// Tessellated relief amplitude, straight from the slider (world units;
 	// the PBR config's displacementScale is deliberately not multiplied in,
