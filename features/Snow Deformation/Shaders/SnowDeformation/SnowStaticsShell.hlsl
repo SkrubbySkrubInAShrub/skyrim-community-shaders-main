@@ -2904,8 +2904,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	[branch] if (HasSnowTexture != 0)
 	{
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
-		[flatten] if (SnowTextureIsLinear != 0.0)
-			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
+		kSnowAlbedo = SnowTextureIsLinear != 0.0 ? (ENABLE_LL ? kSnowAlbedo : Color::LinearToSrgb(kSnowAlbedo)) : Color::ColorToLinear(kSnowAlbedo);
 	}
 #ifdef SNOW_RUNE_GLYPHS
 	[branch] if (rune.colour.a > 0.004)

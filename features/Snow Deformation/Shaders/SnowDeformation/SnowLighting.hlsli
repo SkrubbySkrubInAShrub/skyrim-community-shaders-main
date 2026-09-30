@@ -139,10 +139,9 @@ namespace SnowLighting
 				// tile seam regardless of the sampler's address mode.
 				float2 snowRawUV = (worldXYRel + FrameBuffer::CameraPosAdjust.xy) / SnowDeformation::SnowUVTile;
 				float3 snowSample = SnowDeformation::HorizonSnowAlbedo.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).rgb;
-				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo):
-				// sRGB-encoded, no vanilla Diffuse() processing.
+				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
 				s.lodReplaceW = lodReplaceW;
-				s.lodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowSample) : snowSample;
+				s.lodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowSample : Color::LinearToSrgb(snowSample)) : Color::ColorToLinear(snowSample);
 				// Classification debug (bit 4): the baked recipe's pixels in magenta too.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.lodAlbedo = float3(1.0, 0.0, 1.0);
@@ -310,8 +309,8 @@ namespace SnowLighting
 #		else
 				float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
 #		endif
-				// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
-				s.projAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
+				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
+				s.projAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowProjSample : Color::LinearToSrgb(snowProjSample)) : Color::ColorToLinear(snowProjSample);
 				// Classification debug: everything this block replaces, in magenta.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.projAlbedo = float3(1.0, 0.0, 1.0);
@@ -329,12 +328,12 @@ namespace SnowLighting
 #		if defined(TRUE_PBR)
 				// PBR pixels are convention-correct already: albedo + the shell's
 				// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).
-				baseColor = lerp(baseColor, Color::ColorToLinear(s.projAlbedo), projectedMaterialWeight);
+				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
 				rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), projectedMaterialWeight);
 #		else
 				// Vanilla pixels get the albedo here; the write tail re-lights
 				// the snow fraction through the PBR evaluators (hue+brightness).
-				baseColor = lerp(baseColor, Color::ColorToLinear(s.projAlbedo) * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
+				baseColor = lerp(baseColor, s.projAlbedo * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
 #		endif
 				}
 			}
@@ -403,16 +402,16 @@ namespace SnowLighting
 				float3 snowTexWorld = worldRel + FrameBuffer::CameraPosAdjust.xyz;
 				float3 snowTexWeights = Triplanar::GetWeights(worldNormal, worldNormal);
 				float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-				float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowTexSample) : snowTexSample;
+				float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowTexSample : Color::LinearToSrgb(snowTexSample)) : Color::ColorToLinear(snowTexSample);
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					snowTexAlbedo = float3(1.0, 0.0, 1.0);
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
 					snowTexAlbedo = s.texWeight.xxx;
 #	if defined(TRUE_PBR)
-				baseColor = lerp(baseColor, Color::ColorToLinear(snowTexAlbedo), s.texWeight);
+				baseColor = lerp(baseColor, snowTexAlbedo, s.texWeight);
 				rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), s.texWeight);
 #	else
-				baseColor = lerp(baseColor, Color::ColorToLinear(snowTexAlbedo) * Color::VanillaDiffuseColorMult(), s.texWeight);
+				baseColor = lerp(baseColor, snowTexAlbedo * Color::VanillaDiffuseColorMult(), s.texWeight);
 #	endif
 			}
 		}

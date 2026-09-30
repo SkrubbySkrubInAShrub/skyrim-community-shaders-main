@@ -2825,10 +2825,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		dbgAlbedoRaw = kSnowAlbedo;
-		// PBR-authored textures store linear color; the rest of this path works
-		// in the pipeline's gamma space. Auto-enabled when the PBR set resolved.
-		[flatten] if (SnowTextureIsLinear != 0.0)
-			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
+		// The colour space the ground reads this texture in: TRUE_PBR's
+		// Color::Diffuse for a PBR set, ColorToLinear for a vanilla one.
+		kSnowAlbedo = SnowTextureIsLinear != 0.0 ? (ENABLE_LL ? kSnowAlbedo : Color::LinearToSrgb(kSnowAlbedo)) : Color::ColorToLinear(kSnowAlbedo);
 	}
 	// Scorch: a shock discharge leaves the snow burnt where it struck. Darkened
 	// rather than recoloured, and biased slightly warm, so it reads as fouled
