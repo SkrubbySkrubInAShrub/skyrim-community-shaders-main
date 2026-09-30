@@ -13,6 +13,7 @@
 #include "State.h"
 
 #include "Features/DynamicCubemaps.h"
+#include "Features/GrassOptimizations.h"
 
 #include "Plugin.h"
 
@@ -1325,7 +1326,12 @@ namespace SIE
 			}
 
 			const auto suffixNarrow = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString);
-			const std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
+			std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
+			// Grass Optimizations can be switched off at runtime, which compiles RunGrass without GRASS_OPTIMIZATIONS;
+			// keep that bytecode in its own entries so neither path loads the other's from disk.
+			const auto& grassOptimizations = globals::features::grassOptimizations;
+			if (name == "RunGrass" && grassOptimizations.loaded && !grassOptimizations.active)
+				suffix += L"_Vanilla";
 
 			const auto wname = std::wstring(name.begin(), name.end());
 			switch (shaderClass) {
