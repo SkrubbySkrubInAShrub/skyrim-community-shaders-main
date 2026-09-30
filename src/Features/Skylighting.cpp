@@ -33,9 +33,12 @@ void Skylighting::RestoreDefaultSettings()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
-	UINT clr[1] = { 0 };
+	// ClearUnorderedAccessViewUint always reads four values
+	const UINT clr[4] = { 0, 0, 0, 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
-	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clr);
+	// All 32 history bits lit, so a reset does not fade in from black while the history refills
+	const UINT litHistory[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
+	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), litHistory);
 
 	float clrf[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clrf);
