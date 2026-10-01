@@ -2089,7 +2089,9 @@ void SnowDeformation::DrawSettings()
 				// Height-field probe: the seven object maps under the player's
 				// feet, one frame old. The numbers behind every layer/height
 				// question - tops per peeled layer, the depth cones, and the
-				// bridged surface. Sentinels (no data) print as '-'.
+				// bridged surface. Sentinels (no data) print as '-'. Showing it
+				// keeps the cone built (RoadMapsWanted).
+				heightProbeShownFrame = globals::state->frameCount;
 				if (probeValid) {
 					auto fmtHeight = [](float v, char* out, size_t n) {
 						if (v < -50000.0f || v > 50000.0f)

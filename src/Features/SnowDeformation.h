@@ -2840,6 +2840,14 @@ public:
 	/** @brief Cone passes the coarse / fine chains ran this frame (of kConeSteps). */
 	uint32_t conePassesCoarse = 0;
 	uint32_t conePassesFine = 0;
+	/** @brief A/B, runtime-only: build the height chain's road-only outputs (both cone chains, the near level, sky openness) and the road heightfield channel every frame, as before the road gate. */
+	bool objectRoadGateOff = false;
+	/** @brief Only road skins, the trench patch, the march's road taps and the debug views read the cones and the near level: true when one of them can this frame. */
+	bool RoadMapsWanted() const;
+	/** @brief The sky-openness field holds the last height-map run's bake (Volume Snow reads that one), so a run that turns the bake back on need not bake it again before the volume draws. */
+	bool skyOpenCurrent = true;
+	/** @brief Frame the Debugging Options height probe readout last drew (its cone line needs the cone built). */
+	uint32_t heightProbeShownFrame = UINT32_MAX;
 	bool FineLevelOn() const { return !fineLevelDisabled && settings.ObjectSnowNearDetail; }
 	/** @brief Quality presets, Low (0) to Ultra (3); Ultra is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);

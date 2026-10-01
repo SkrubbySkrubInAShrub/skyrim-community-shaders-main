@@ -3056,7 +3056,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// beside them at full depth - so objects read brighter than the snow
 		// around them. The blockiness that motivated the skip was the POINT
 		// load, fixed below, not the taps.
-		bool objectTopUsable = HasObjectTop > 0.5;
+		// ShellFlags.y bit 0: a road wrote road tops into the skin-depth raster this
+		// frame. Without one no tap can take the road branch below.
+		bool objectTopUsable = HasObjectTop > 0.5 && (ShellFlags.y & 1) != 0;
 		[branch] if (objectTopUsable)
 		{
 			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;

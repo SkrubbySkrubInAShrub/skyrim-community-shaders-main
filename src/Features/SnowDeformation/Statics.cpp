@@ -1333,6 +1333,14 @@ ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, cons
 	return blob;
 }
 
+bool SnowDeformation::RoadMapsWanted() const
+{
+	// Every drawn non-road skin is S4, which reads neither outside a debug
+	// view; the probe readout prints the cone.
+	return capturedRoads > 0 || objectRoadGateOff || coneSkipDisabled || staticsDebugView != 0 ||
+	       globals::state->frameCount - heightProbeShownFrame < 3;
+}
+
 void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 {
 	// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see
@@ -1964,7 +1972,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
 	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
 	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
-	context->OMSetRenderTargets(3, heightRTVs, nullptr);
+	// Only road records write RT2 anything but its clear (SnowHeightCapture).
+	const bool roadRaster = capturedRoads > 0 || objectRoadGateOff;
+	context->OMSetRenderTargets(roadRaster ? 3 : 2, heightRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
@@ -1993,7 +2003,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	const uint32_t captureCount = (uint32_t)capturedStatics.size();
 	// Three blocks per capture: the coarse raster, the peel, and the near
 	// clipmap's raster (the same draw against a quarter-width window).
-	const bool fineLevel = FineLevelOn() && heightTopRawFine && objectSnowConeFine;
+	const bool roadMaps = RoadMapsWanted();
+	const bool fineLevel = roadMaps && FineLevelOn() && heightTopRawFine && objectSnowConeFine;
 	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
 	// Far road level: the road captures alone against the loaded-cell square,
 	// one block each, appended after the per-capture blocks. The window snaps
@@ -2228,6 +2239,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		globals::profiler->EndPass();
 		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+	} else {
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Map Fine");
 	}
 
 	// Far road level: the road captures alone, MAX-rasterized over the
@@ -2358,6 +2371,28 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->EndPass();
 	}
 
+	// P3: the sky-openness field from a layer-1 top (half-res; the consumers
+	// bilinear it). Only Volume Snow reads it, and the volume below reads the
+	// last run's: a run that turns the bake back on first bakes that one from
+	// the previous top, which this run has only read.
+	const bool skyWanted = (settings.VolumeSnow || objectRoadGateOff) && objectSkyOpenCS && objectSkyOpen;
+	auto bakeSkyOpen = [&](Texture2D* a_top) {
+		globals::profiler->BeginPass("SnowDeformation::Objects - Sky Openness");
+		context->CSSetShader(objectSkyOpenCS, nullptr, 0);
+		ID3D11ShaderResourceView* openSRV = a_top->srv.get();
+		ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
+		context->CSSetShaderResources(0, 1, &openSRV);
+		context->CSSetUnorderedAccessViews(0, 1, &openUAV, nullptr);
+		const uint32_t openDim = (kHeightMapDim / 2 + 7) / 8;
+		context->Dispatch(openDim, openDim, 1);
+		context->CSSetShaderResources(0, 1, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+		globals::profiler->EndPass();
+	};
+	if (settings.VolumeSnow && skyWanted && !skyOpenCurrent && heightTopRaw[previous])
+		bakeSkyOpen(heightTopRaw[previous]);
+
 	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive, captureParity);
 
 	ID3D11Buffer* nullVB = nullptr;
@@ -2423,11 +2458,18 @@ void SnowDeformation::RenderObjectHeightMap()
 	// raster, giving the skin's edge taper a ready-made snow surface to read.
 	// Seeded at full class depth over covered columns and at terrain height
 	// off them, so each object's layer slopes down to the ground at its rim.
-	if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
-		// The seed floor: objects carry no depth, so their columns seed at the
-		// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
+	// The seed floor: objects carry no depth, so their columns seed at the
+	// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
+	// Later passes read these constants whether or not the chains run.
+	processData.ObjectSnowDepth = 0.1f;
+	heightProcessCB->Update(processData);
+	conePassesCoarse = 0;
+	conePassesFine = 0;
+	if (!roadMaps) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes Fine");
+	} else if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
 		globals::profiler->BeginPass("SnowDeformation::Objects - Snow Slopes");
-		processData.ObjectSnowDepth = 0.1f;
 		const auto coarseSteps = activeConeSteps(processData, std::max(maxSeedDepth, processData.ObjectSnowDepth));
 		conePassesCoarse = uint32_t(coarseSteps.size());
 		// The chain lands back in its cone texture only over an even number of
@@ -2531,24 +2573,14 @@ void SnowDeformation::RenderObjectHeightMap()
 		} else {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes Fine");
 		}
-
-		// P3: bake the sky-openness field from the layer-1 tops, after the
-		// cone chains so the raster is final for this frame. Half-res
-		// output; the consumers bilinear it.
-		if (objectSkyOpenCS && objectSkyOpen) {
-			globals::profiler->BeginPass("SnowDeformation::Objects - Sky Openness");
-			context->CSSetShader(objectSkyOpenCS, nullptr, 0);
-			ID3D11ShaderResourceView* openSRV = heightTopRaw[heightCurrent]->srv.get();
-			ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
-			context->CSSetShaderResources(0, 1, &openSRV);
-			context->CSSetUnorderedAccessViews(0, 1, &openUAV, nullptr);
-			const uint32_t openDim = (kHeightMapDim / 2 + 7) / 8;
-			context->Dispatch(openDim, openDim, 1);
-			context->CSSetShaderResources(0, 1, nullCsSRVs);
-			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-			globals::profiler->EndPass();
-		}
 	}
+
+	// This run's field, for the next run's volume.
+	if (skyWanted && heightTopRaw[heightCurrent])
+		bakeSkyOpen(heightTopRaw[heightCurrent]);
+	else
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Sky Openness");
+	skyOpenCurrent = skyWanted && heightTopRaw[heightCurrent];
 
 	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(2, 2, nullTailSRVs);
