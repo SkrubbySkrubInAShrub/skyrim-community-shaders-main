@@ -947,8 +947,10 @@ void SnowDeformation::Prepass()
 	// New frame: publish last frame's statics-capture count and reset the
 	// list before this frame's opaque rendering fills it again.
 	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);
+	const size_t capturedLast = capturedStatics.size();
 	capturedStatics.clear();
 	capturedStaticsSet.clear();
+	capturedStaticsSet.reserve(capturedLast);
 	capturedLoadedPrev = capturedLoaded;
 	capturedLoaded = 0;
 	capturedRoads = 0;

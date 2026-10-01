@@ -2244,7 +2244,8 @@ public:
 	std::vector<CapturedWater> capturedWater;
 	/** @brief Fills capturedWater from TESWaterSystem::waterObjects (every live body's shape, culled or not); not from the water shader's draws, which also carry the LOD quadtree, skirts, the displacement mesh and the waterline-crossing effect. */
 	void GatherWaterObjects();
-	std::unordered_set<void*> capturedStaticsSet;
+	/** @brief Open addressing, reserved once: clear() keeps the slots, so a frame's captures allocate nothing. */
+	ankerl::unordered_dense::set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
 	/** @brief Per-frame projected-snow classification counters (render thread writes, Prepass publishes, menu debug section reads). */
@@ -3550,7 +3551,7 @@ public:
 	/** @brief Disables the per-draw offset bind path (on by default since 2026-09-06, Josef's call after the fourth re-look: -0.15 ms of CPU at the anchor, pixels identical). Set, every draw takes the Update path from the same records. The capability check and the 11.1 context query still gate the path at first use. */
 	bool staticsRecordDisabled = false;
 	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
-	static constexpr uint32_t kStaticsRecordMax = 4096;
+	static constexpr uint32_t kStaticsRecordMax = 8192;
 	bool EnsureStaticsRecordCB();
 	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count);
 	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, bool a_tessStages, uint32_t& a_parity);
@@ -3879,6 +3880,11 @@ protected:
 	bool GroundNearHasSnow(float a_x, float a_y);
 	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
 	uint32_t groundSnowCellCacheVersion = 0;
+	/** @brief Per-frame inputs of GroundNearHasSnow (interior flag, loaded square), taken once per frame. */
+	uint32_t groundSnowFrame = UINT32_MAX;
+	bool groundSnowFrameInterior = false;
+	bool groundSnowFrameHasSquare = false;
+	int groundSnowFrameSquare[4] = {};
 	int groundSnowCacheSquare[4] = { INT_MIN, INT_MIN, INT_MIN, INT_MIN };
 	uint8_t groundSnowSquareVerdict = kSnowGateUnknown;
 	bool groundSnowSquareValid = false;

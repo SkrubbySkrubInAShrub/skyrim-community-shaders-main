@@ -2028,7 +2028,7 @@ void SnowDeformation::DrawSettings()
 						entry.radius, entry.topZ, entry.distXY, entry.road ? " [road]" : "", entry.model.c_str());
 			}
 
-			WrapTextF("Snow mask cache: %zu entries, %llu hits, %llu misses",
+			WrapTextF("Snow mask cache: %zu entries, %llu hits, %llu misses (counted while Terrain Overlay is on)",
 				snowMasksSizeForUI(),
 				(unsigned long long)landMaskHits.load(std::memory_order_relaxed),
 				(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));

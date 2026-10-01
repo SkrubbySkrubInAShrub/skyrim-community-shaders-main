@@ -819,12 +819,23 @@ void SnowDeformation::UpdateShellTerrainWindow()
 			int vy = ty % kShellTexelsPerCell;
 			const ShellCellData* rowCell = nullptr;
 			uint64_t rowKey = ~0ull;
+			// The cell sets take each run of one cell's texels once.
+			bool rowSnowy = false;
+			auto flushRowCell = [&] {
+				if (!rowCell)
+					return;
+				statCells.insert(rowKey);
+				if (rowSnowy)
+					snowyCells.insert(rowKey);
+			};
 			for (int tx = 0; tx < kShellWindowDim; ++tx) {
 				int cellX = shellWindowCellX + tx / kShellTexelsPerCell;
 				int vx = tx % kShellTexelsPerCell;
 
 				uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
 				if (key != rowKey) {
+					flushRowCell();
+					rowSnowy = false;
 					auto it = shellCells.find(key);
 					// A cell baked in another worldspace is not this window's
 					// ground: city worldspaces reuse the coordinates of the
@@ -857,9 +868,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					// texels (x wins), so both meanings coexist in one channel.
 					texel[3] = rowCell->vertexAO[idx] * (0.499f / 255.0f);
 
-					statCells.insert(rowKey);
-					if (rampDepth > 0.0f)
-						snowyCells.insert(rowKey);
+					rowSnowy |= rampDepth > 0.0f;
 					statMinH = std::min(statMinH, texel[0]);
 					statMaxH = std::max(statMaxH, texel[0]);
 					if (texel[2] > 0.05f)
@@ -871,6 +880,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					texel[3] = 0.0f;
 				}
 			}
+			flushRowCell();
 		}
 	}
 
@@ -1120,7 +1130,8 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	// Clear first so bits never leak from the previous landscape draw.
 	state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::SnowLandIsSnowMask);
 
-	if (material == nullptr)
+	// The bits' only reader is the Terrain Overlay (SnowLighting.hlsli).
+	if (material == nullptr || !debugTerrainOverlay)
 		return;
 
 	uint8_t mask = 0;
@@ -1435,12 +1446,19 @@ uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_max
 
 bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 {
+	// The cell and the loaded square hold for the frame's captures.
+	if (groundSnowFrame != globals::state->frameCount) {
+		groundSnowFrame = globals::state->frameCount;
+		groundSnowFrameInterior = InInteriorCell();
+		groundSnowFrameHasSquare = LoadedCellSquare(groundSnowFrameSquare[0], groundSnowFrameSquare[1], groundSnowFrameSquare[2], groundSnowFrameSquare[3]);
+	}
 	// Snow in a cave is on its objects; classification alone decides there.
-	if (InInteriorCell())
+	if (groundSnowFrameInterior || !groundSnowFrameHasSquare)
 		return true;
-	int sqMinX, sqMinY, sqMaxX, sqMaxY;
-	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
-		return true;
+	const int sqMinX = groundSnowFrameSquare[0];
+	const int sqMinY = groundSnowFrameSquare[1];
+	const int sqMaxX = groundSnowFrameSquare[2];
+	const int sqMaxY = groundSnowFrameSquare[3];
 	// Stamp read BEFORE the lookup: a write racing the compute leaves a
 	// stale stamp and one extra recompute, never a stale verdict.
 	const uint32_t stamp = snowDepthVersion.load(std::memory_order_acquire);

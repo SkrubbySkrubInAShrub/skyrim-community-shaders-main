@@ -4894,6 +4894,18 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				ScopedTicks _geometryTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactGeometry], cpuCensus.spanCalls[CpuCensus::kSpanContactGeometry]);
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
+				// A part whose whole bound floats above the layer carves nothing,
+				// and the draws are the cost: on a standing actor that leaves the
+				// boots and calves, and a sheathed sword at the hip stays out until
+				// a swing brings it down. Corpses lie low and keep everything. Every
+				// test here only rejects, so this cheapest one goes first.
+				{
+					const auto& gb = a_geometry->worldBound;
+					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin) {
+						tally.above++;
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
+				}
 				// RaceMenu overlays ('[Ovl0]'..'[Ovl5]', '[SOvl0]') are clones of the
 				// body and hands that exist to layer textures: the same surface
 				// again, up to seven times over. One copy is enough.
@@ -4942,17 +4954,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					const char* name = a_geometry->name.c_str();
 					if ((name && _strnicmp(name, "Virtual", 7) == 0) || property->alpha < 0.01f) {
 						tally.proxy++;
-						return RE::BSVisit::BSVisitControl::kContinue;
-					}
-				}
-				// A part whose whole bound floats above the layer carves nothing,
-				// and the draws are the cost: on a standing actor that leaves the
-				// boots and calves, and a sheathed sword at the hip stays out until
-				// a swing brings it down. Corpses lie low and keep everything.
-				{
-					const auto& gb = a_geometry->worldBound;
-					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin) {
-						tally.above++;
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
