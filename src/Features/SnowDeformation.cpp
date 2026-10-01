@@ -267,12 +267,21 @@ void SnowDeformation::CreateDeformationTextures()
 	}
 
 	// Berm field: a bake of the 17-tap disc average the shells used to run per
-	// pixel. Same dimensions and format as the map it is derived from, and no
-	// ping-pong - it is rebuilt from scratch from the current map each frame.
-	delete bermFieldTexture;
-	bermFieldTexture = new Texture2D(texDesc, "SnowDeformation::BermField");
-	bermFieldTexture->CreateSRV(srvDesc);
-	bermFieldTexture->CreateUAV(uavDesc);
+	// pixel. Same dimensions as the map it is derived from, one half-float
+	// channel (every reader and the writer are scalar), and no ping-pong - it
+	// is rebuilt from scratch from the current map each frame.
+	{
+		D3D11_TEXTURE2D_DESC bermDesc = texDesc;
+		bermDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC bermSrvDesc = srvDesc;
+		bermSrvDesc.Format = bermDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC bermUavDesc = uavDesc;
+		bermUavDesc.Format = bermDesc.Format;
+		delete bermFieldTexture;
+		bermFieldTexture = new Texture2D(bermDesc, "SnowDeformation::BermField");
+		bermFieldTexture->CreateSRV(bermSrvDesc);
+		bermFieldTexture->CreateUAV(bermUavDesc);
+	}
 
 	// Trample extent: one texel per 8x8 map tile.
 	{
@@ -2239,6 +2248,11 @@ void SnowDeformation::ClearShaderCache()
 	if (patchShadowVS)
 		patchShadowVS->Release();
 	patchShadowVS = nullptr;
+	if (patchShadowVSIndexed)
+		patchShadowVSIndexed->Release();
+	patchShadowVSIndexed = nullptr;
+	delete patchCullCB;
+	patchCullCB = nullptr;
 	if (patchTessVS)
 		patchTessVS->Release();
 	patchTessVS = nullptr;
@@ -2289,6 +2303,9 @@ void SnowDeformation::ClearShaderCache()
 	if (heightPS)
 		heightPS->Release();
 	heightPS = nullptr;
+	if (heightPSTopOnly)
+		heightPSTopOnly->Release();
+	heightPSTopOnly = nullptr;
 	if (heightScrollCS)
 		heightScrollCS->Release();
 	heightScrollCS = nullptr;

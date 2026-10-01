@@ -2025,6 +2025,7 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch, uint patchId :
 [outputtopology("triangle_cw")]
 [outputcontrolpoints(4)]
 [patchconstantfunc("PatchConstants")]
+[maxtessfactor(8.0)]  // kTessMax; far relief tops out at 5
 TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputControlPointID)
 {
 	return patch[i];
@@ -2363,8 +2364,12 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 					// through the cascades, whose re-march copy is a doubled
 					// soft bleed. Grass lives under ~40 units.
 					float occH = occRel.z + ShellCameraPosAdjust.z - snowTop;
-					[flatten] if (occH > 2.0 && occH < casterCap)
+					// The candidates fall with i: the first hit is the maximum.
+					[branch] if (occH > 2.0 && occH < casterCap)
+					{
 						occl = max(occl, 1.0 - float(i) * 0.045);
+						break;
+					}
 				}
 			}
 		}

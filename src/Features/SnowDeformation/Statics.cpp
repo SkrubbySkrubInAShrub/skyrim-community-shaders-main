@@ -1374,20 +1374,87 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
 }
 
-ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
+uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const
+{
+	a_out = {};
+	// Inside where row . (p - cam, 1) >= 0, rewritten over absolute world p.
+	const auto& m = a_cb.CameraViewProj;
+	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
+	auto plane = [&](int a_row, double a_sign) {
+		std::array<double, 4> p{};
+		for (int c = 0; c < 4; c++)
+			p[c] = double(m.m[3][c]) + a_sign * (a_row < 3 ? double(m.m[a_row][c]) : 0.0);
+		p[3] -= p[0] * cam[0] + p[1] * cam[1] + p[2] * cam[2];
+		return p;
+	};
+	const std::array<double, 4> planes[5] = { plane(0, 1.0), plane(0, -1.0), plane(1, 1.0), plane(1, -1.0), plane(3, 0.0) };
+	uint32_t count = 0;
+	auto addLine = [&](double a_x, double a_y, double a_d) {
+		const double len = std::hypot(a_x, a_y);
+		if (len < 1e-9 || count >= 6)
+			return;
+		// Slack over the shader's float rounding at world-sized coordinates.
+		a_out.Lines[count++] = { float(a_x / len), float(a_y / len), float(a_d / len + 4.0), 0.0f };
+	};
+	// z eliminated (Fourier-Motzkin): each plane without z is a line as is,
+	// and every pair bounding z from opposite sides gives one.
+	for (const auto& p : planes)
+		if (p[2] == 0.0)
+			addLine(p[0], p[1], p[3]);
+	for (const auto& lo : planes) {
+		if (lo[2] <= 0.0)
+			continue;
+		for (const auto& hi : planes) {
+			if (hi[2] >= 0.0)
+				continue;
+			addLine(lo[2] * hi[0] - hi[2] * lo[0], lo[2] * hi[1] - hi[2] * lo[1], lo[2] * hi[3] - hi[2] * lo[3]);
+		}
+	}
+	a_out.LineCount = count;
+	return count;
+}
+
+ID3D11VertexShader* SnowDeformation::GetPatchShadowVS(bool a_indexed)
 {
 	// Lazy like GetShellShadowVS: the shadow pass runs before DrawShell has
 	// had a chance to create the statics shaders on early frames.
-	if (!patchShadowVS) {
+	auto*& slot = a_indexed ? patchShadowVSIndexed : patchShadowVS;
+	if (!slot) {
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_SHADOW_CAST"));
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_SHADOW_CAST", a_indexed ? "SNOW_PATCH_INDEXED" : nullptr));
 		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchShadowVS)))
-				Util::SetResourceName(patchShadowVS, "SnowDeformation::TrenchPatchShadowVS");
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &slot)))
+				Util::SetResourceName(slot, a_indexed ? "SnowDeformation::TrenchPatchShadowVS Indexed" : "SnowDeformation::TrenchPatchShadowVS");
 		}
 	}
-	return patchShadowVS;
+	return slot;
+}
+
+bool SnowDeformation::EnsurePatchCasterIB()
+{
+	if (patchCasterIB)
+		return true;
+	// Six indices per quad in the non-indexed VS's corner order, so the
+	// triangles and their order are the same.
+	constexpr uint32_t stride = kPatchGridDim + 1;
+	static constexpr uint32_t kCorners[6][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	std::vector<uint32_t> indices;
+	indices.reserve(size_t(kPatchGridDim) * kPatchGridDim * 6);
+	for (uint32_t qy = 0; qy < kPatchGridDim; qy++)
+		for (uint32_t qx = 0; qx < kPatchGridDim; qx++)
+			for (const auto& c : kCorners)
+				indices.push_back((qy + c[1]) * stride + qx + c[0]);
+	D3D11_BUFFER_DESC desc{};
+	desc.ByteWidth = UINT(indices.size() * sizeof(uint32_t));
+	desc.Usage = D3D11_USAGE_IMMUTABLE;
+	desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	D3D11_SUBRESOURCE_DATA data{ indices.data(), 0, 0 };
+	if (FAILED(globals::d3d::device->CreateBuffer(&desc, &data, patchCasterIB.put())))
+		return false;
+	Util::SetResourceName(patchCasterIB.get(), "SnowDeformation::TrenchPatchCasterIB");
+	patchCasterIndexCount = UINT(indices.size());
+	return true;
 }
 
 ID3D11PixelShader* SnowDeformation::GetStaticsPSPrepassKeepHidden()
@@ -1558,6 +1625,14 @@ bool SnowDeformation::EnsureStaticsShaders()
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPeelPS)))
 				Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
+		}
+	}
+	if (!heightPSTopOnly) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "TOP_ONLY"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPSTopOnly)))
+				Util::SetResourceName(heightPSTopOnly, "SnowDeformation::HeightCapturePS TopOnly");
 		}
 	}
 	// Volume snow (VOXEL): brick VS + marching PS. Optional; the draw guards
@@ -2190,12 +2265,14 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Near clipmap level 0: the same captures against a quarter-width window,
 	// so the layer-1 top lands at one world unit per texel. No ghost and no
 	// bottoms - readers fall back to the coarse level outside the window, and
-	// the shelter mask is the coarse level's business. RT1/RT2 stay unbound;
-	// the capture PS still writes them and the writes are dropped.
+	// the shelter mask is the coarse level's business. RT1/RT2 stay unbound,
+	// so the top-only PS writes the same RT0.
+	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly : heightPS;
 	if (fineLevel) {
 		context->ClearRenderTargetView(heightTopRawFine->rtv.get(), topClear);
 		ID3D11RenderTargetView* fineRTVs[1] = { heightTopRawFine->rtv.get() };
 		context->OMSetRenderTargets(1, fineRTVs, nullptr);
+		context->PSSetShader(topOnlyPS, nullptr, 0);
 		globals::profiler->BeginPass("SnowDeformation::Objects - Height Map Fine");
 		SD_DrawBinds fineBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
@@ -2246,11 +2323,12 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Far road level: the road captures alone, MAX-rasterized over the
 	// loaded-cell square into one top map. Rebuilt from this frame's list -
 	// roads never move, and an off-screen road needs no patch - so no ghost
-	// and no scroll. RT1/RT2 stay unbound; the PS's writes to them drop.
+	// and no scroll. RT0 alone, like the fine level.
 	if (farLevel) {
 		context->ClearRenderTargetView(heightTopRawFar->rtv.get(), topClear);
 		ID3D11RenderTargetView* farRTVs[1] = { heightTopRawFar->rtv.get() };
 		context->OMSetRenderTargets(1, farRTVs, nullptr);
+		context->PSSetShader(topOnlyPS, nullptr, 0);
 		globals::profiler->BeginPass("SnowDeformation::Objects - Height Map Roads");
 		SD_DrawBinds farBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
@@ -3534,8 +3612,12 @@ void SnowDeformation::DrawCapturedStatics()
 	// indirect draw arguments; the loops below draw through them.
 	auto* hiZBuild = skinCullDisabled ? nullptr : GetHiZBuildCS();
 	auto* skinCull = hiZBuild ? GetSkinCullCS() : nullptr;
+	// The pyramid covers the rendered rectangle (dynamic resolution draws into
+	// a corner of the display-size depth); every read is clamped to it.
+	const uint32_t hiZExtentW = (skinCullHiZFullTexture || vpCount == 0) ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftX + vps[0].Width));
+	const uint32_t hiZExtentH = (skinCullHiZFullTexture || vpCount == 0) ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
 	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
-	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV);
+	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV, hiZExtentW, hiZExtentH);
 	if (cullActive) {
 		const float liftMargin = settings.RoadMeshesDepth + kSkinCullMargin;
 		uint32_t clusterSkins = 0, trisTotal = 0;
@@ -3983,6 +4065,16 @@ void SnowDeformation::DrawCapturedStatics()
 			context->DSSetShaderResources(40, 1, &farTopSRV);
 			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 			context->DSSetSamplers(0, 1, &dsSampler);
+			// The hull's frustum footprint (b11), from the b0 this draw projects
+			// with; no lines culls nothing.
+			if (!patchCullCB)
+				patchCullCB = new ConstantBuffer(ConstantBufferDesc<PatchCullCB>(), "SnowDeformation::PatchCullCB");
+			PatchCullCB cullData{};
+			if (!patchFrustumCullOff && lastShellCBData)
+				FillPatchCullLines(*lastShellCBData, cullData);
+			patchCullCB->Update(cullData);
+			ID3D11Buffer* cullCB = patchCullCB->CB();
+			context->HSSetConstantBuffers(11, 1, &cullCB);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 		} else {
 			context->VSSetShader(patchVS, nullptr, 0);
@@ -4049,6 +4141,8 @@ void SnowDeformation::DrawCapturedStatics()
 		if (tessellatePatch) {
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
+			ID3D11Buffer* nullCullCB = nullptr;
+			context->HSSetConstantBuffers(11, 1, &nullCullCB);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		}
 
@@ -5271,14 +5365,17 @@ ID3D11ComputeShader* SnowDeformation::GetSkinCullCS()
 	return skinCullCS;
 }
 
-bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV)
+bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH)
 {
 	auto device = globals::d3d::device;
 	if (!skinCullCB)
 		skinCullCB = new ConstantBuffer(ConstantBufferDesc<SkinCullCB>(), "SnowDeformation::SkinCullCB");
 
-	// Max-depth pyramid sized from the scene depth: level 0 is half res,
-	// the chain runs to 1x1 so a footprint of any size finds its level.
+	// Max-depth pyramid over the scene depth's first a_extent pixels: level 0
+	// is half res, the chain runs to 1x1 so a footprint of any size finds its
+	// level. An odd extent short of the texture rounds up (the pixel past it
+	// is masked to 0); at the texture's edge the build's odd-tail fold covers
+	// the last pixel, as for the whole texture.
 	winrt::com_ptr<ID3D11Resource> depthRes;
 	a_mainDepthSRV->GetResource(depthRes.put());
 	auto depthTex = depthRes.try_as<ID3D11Texture2D>();
@@ -5286,8 +5383,12 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		return false;
 	D3D11_TEXTURE2D_DESC depthDesc{};
 	depthTex->GetDesc(&depthDesc);
-	const uint32_t w0 = std::max(1u, depthDesc.Width / 2);
-	const uint32_t h0 = std::max(1u, depthDesc.Height / 2);
+	auto halfExtent = [](uint32_t a_extent, uint32_t a_size) {
+		const uint32_t extent = std::clamp(a_extent, 1u, a_size);
+		return std::max(1u, extent / 2 + ((extent & 1) && extent < a_size ? 1u : 0u));
+	};
+	const uint32_t w0 = halfExtent(a_extentW, depthDesc.Width);
+	const uint32_t h0 = halfExtent(a_extentH, depthDesc.Height);
 	if (skinCullHiZ && (skinCullHiZ->desc.Width != w0 || skinCullHiZ->desc.Height != h0)) {
 		delete skinCullHiZ;
 		skinCullHiZ = nullptr;

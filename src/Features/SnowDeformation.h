@@ -2339,8 +2339,8 @@ public:
 	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height; mounds, drifts; casts. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellShadowVS();
 
-	/** @brief Lazily compiles the trench patch's shadow-caster VS. Implemented in SnowDeformation/Statics.cpp. */
-	ID3D11VertexShader* GetPatchShadowVS();
+	/** @brief Lazily compiles the trench patch's shadow-caster VS (a_indexed: the SNOW_PATCH_INDEXED twin). Implemented in SnowDeformation/Statics.cpp. */
+	ID3D11VertexShader* GetPatchShadowVS(bool a_indexed = false);
 	ID3D11VertexShader* shellShadowVS = nullptr;
 
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
@@ -2922,6 +2922,8 @@ public:
 	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
+	/** @brief Capture PS writing the top alone (TOP_ONLY): the fine and far rasters bind RT0 only. */
+	ID3D11PixelShader* heightPSTopOnly = nullptr;
 	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
@@ -3487,6 +3489,8 @@ public:
 	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
 	/** @brief A/B, runtime-only: build the chain through the scratch copies again. */
 	bool hiZCopyPath = false;
+	/** @brief A/B, runtime-only: size the pyramid from the whole display-size depth again instead of the rendered rectangle. */
+	bool skinCullHiZFullTexture = false;
 	uint32_t skinCullLevels = 0;
 	uint32_t skinCullDrawnLast = 0;
 	uint32_t skinCullCulledLast = 0;
@@ -3501,7 +3505,8 @@ public:
 	ID3D11ComputeShader* GetSkinCullCS();
 	ID3D11ComputeShader* hiZBuildCS = nullptr;
 	ID3D11ComputeShader* skinCullCS = nullptr;
-	bool EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV);
+	/** @brief a_extentW/H: the pixels the pyramid covers from the depth's origin (the rendered rectangle's far corner). */
+	bool EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH);
 	/** @brief Tessellated skin stages (optional; legacy path is the fallback): control-point VS, hull (edge-length/distance factors) and domain (displacement-map relief along the inflate normal). */
 	ID3D11VertexShader* staticsTessVS = nullptr;
 	ID3D11HullShader* staticsHS = nullptr;
@@ -3510,6 +3515,25 @@ public:
 	ID3D11VertexShader* patchVS = nullptr;
 	/** @brief Depth-only caster variant of the patch VS (PATCH + SNOW_SHADOW_CAST); drawn into the sun cascade slices by InjectShellShadowCasters. */
 	ID3D11VertexShader* patchShadowVS = nullptr;
+	/** @brief SNOW_PATCH_INDEXED twin: the same quads from an index buffer over the (kPatchGridDim + 1)^2 lattice, one VS invocation per shared vertex instead of six. */
+	ID3D11VertexShader* patchShadowVSIndexed = nullptr;
+	winrt::com_ptr<ID3D11Buffer> patchCasterIB;
+	uint32_t patchCasterIndexCount = 0;
+	bool EnsurePatchCasterIB();
+	/** @brief A/B, runtime-only: the patch caster draws six vertices per quad again. */
+	bool patchCasterNonIndexed = false;
+	/** @brief The tessellated patch hull's frustum footprint lines (SnowStaticsShell.hlsl PatchCullCB, b11). */
+	struct alignas(16) PatchCullCB
+	{
+		float4 Lines[6];
+		uint32_t LineCount;
+		uint32_t pad[3];
+	};
+	ConstantBuffer* patchCullCB = nullptr;
+	/** @brief The view frustum's five planes (rows of CameraViewProj, camera-relative) with z eliminated: lines in world XY, inside where dot(xy, p) + z >= 0. */
+	uint32_t FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const;
+	/** @brief A/B, runtime-only: no frustum test in the patch hull. */
+	bool patchFrustumCullOff = false;
 	/** @brief Tessellated patch stages (optional; legacy path is the fallback). */
 	ID3D11VertexShader* patchTessVS = nullptr;
 	ID3D11HullShader* patchHS = nullptr;

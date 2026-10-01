@@ -212,6 +212,12 @@ PEEL_OUTPUT main(VS_OUTPUT input)
 	o.Top = input.WorldZ;
 	return o;
 }
+#elif defined(PSHADER) && defined(TOP_ONLY)
+// The fine and far rasters bind RT0 alone.
+float main(VS_OUTPUT input) : SV_Target0
+{
+	return input.WorldZ;
+}
 #elif defined(PSHADER)
 // Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
 // window addressing is read here; names carry an H so they cannot clash

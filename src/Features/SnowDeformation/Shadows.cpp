@@ -664,13 +664,18 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// skins: capturedRoads is last frame's count here (Prepass resets it
 	// after the mask passes), the frame whose rasters this VS reads, and
 	// with none the VS kills every vertex.
-	if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS();
+	// Indexed over the shared lattice: one VS invocation per vertex, the
+	// same triangles in the same order.
+	const bool patchIndexed = !patchCasterNonIndexed && !SnowShadersPending(2) && GetPatchShadowVS(true) && EnsurePatchCasterIB();
+	if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS(patchIndexed);
 		patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
 		heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
 		settings.RoadMeshesDepth > 0.5f && capturedRoads > 0) {
 		if (!splitRow)
 			globals::profiler->BeginPass("SnowDeformation::Shadows - Trench Patch");
 		context->VSSetShader(patchCastVS, nullptr, 0);
+		if (patchIndexed)
+			context->IASetIndexBuffer(patchCasterIB.get(), DXGI_FORMAT_R32_UINT, 0);
 		ID3D11Buffer* patchCB1 = staticsCB->CB();
 		context->VSSetConstantBuffers(1, 1, &patchCB1);
 		ID3D11ShaderResourceView* patchCastSRVs[3] = {
@@ -692,7 +697,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 			if (splitRow)
 				globals::profiler->BeginPass(kCasterPatchRow[cascade]);
 			bindCascade(cascade);
-			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+			if (patchIndexed)
+				context->DrawIndexed(patchCasterIndexCount, 0, 0);
+			else
+				context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
 			if (splitRow)
 				globals::profiler->EndPass();
 		}

@@ -1596,9 +1596,15 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 // wherever the patch owns the column (see the PS).
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
+#	ifdef SNOW_PATCH_INDEXED
+	// Indexed draw over the (kPatchGridDim + 1)^2 lattice: vertexID is the lattice index.
+	const uint latticeStride = kPatchGridDim + 1;
+	float2 gridXY = float2(vertexID % latticeStride, vertexID / latticeStride);
+#	else
 	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	uint quadIndex = vertexID / 6;
 	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kCorners[vertexID % 6];
+#	endif
 	// WorldRow0.xy carries the snapped patch CENTRE (see the CPU fill).
 	float2 worldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
 	return FinishPatchVertex(BuildPatchVertex(worldXY, false));
@@ -1637,6 +1643,32 @@ struct TessFactorsPatch
 #include "SnowDeformation/SnowParallax.hlsli"
 
 #if defined(HULLSHADER) && defined(PATCH)
+// The view frustum's footprint on the world XY plane: its five planes with z
+// eliminated (Fourier-Motzkin), filled per frame on the CPU from CameraViewProj.
+// A patch's vertices keep its corners' XY hull, so a patch whose XY box is
+// outside one line has no point in the frustum at any height.
+cbuffer PatchCullCB : register(b11)
+{
+	float4 PatchCullLines[6];  // xy normal, z offset: inside where dot(xy, p) + z >= 0
+	uint PatchCullLineCount;
+	uint3 patchCullPad;
+}
+
+bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
+{
+	float2 lo = min(min(a, b), min(c, d)) - 16.0;
+	float2 hi = max(max(a, b), max(c, d)) + 16.0;
+	bool outside = false;
+	[unroll] for (uint i = 0; i < 6; i++)
+	{
+		float4 l = PatchCullLines[i];
+		float2 pv = float2(l.x > 0.0 ? hi.x : lo.x, l.y > 0.0 ? hi.y : lo.y);
+		if (i < PatchCullLineCount && dot(l.xy, pv) + l.z < 0.0)
+			outside = true;
+	}
+	return outside;
+}
+
 // Same trench-aware quad factors as the landscape shell: the patch IS the
 // trench layer, so deformed edges get extended detail reach.
 float PatchEdgeTessFactor(float2 worldA, float2 worldB)
@@ -1664,18 +1696,21 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 	// Cull patches with no live corner (off the footprint or untrampled);
 	// the cheap kill terms only, the domain shader kills per vertex.
 	bool anyLive = false;
-	[unroll] for (uint i = 0; i < 4; i++)
+	[branch] if (!PatchOutsideFootprint(patch[0].WorldXY, patch[1].WorldXY, patch[2].WorldXY, patch[3].WorldXY))
 	{
-		float2 w = patch[i].WorldXY;
-		if (PatchTop(w) > -50000.0 && PatchSkinDepth(w).x >= 1.0)
+		[unroll] for (uint i = 0; i < 4; i++)
+		{
+			float2 w = patch[i].WorldXY;
+			if (PatchTop(w) > -50000.0 && PatchSkinDepth(w).x >= 1.0)
+				anyLive = true;
+		}
+		// A road narrower than a coarse quad's diagonal can cross it between all
+		// four corners; the centre catches that (any road wider than ~180 units
+		// hits a corner or the centre of a 256-unit quad).
+		float2 centre = 0.25 * (patch[0].WorldXY + patch[1].WorldXY + patch[2].WorldXY + patch[3].WorldXY);
+		if (PatchTop(centre) > -50000.0 && PatchSkinDepth(centre).x >= 1.0)
 			anyLive = true;
 	}
-	// A road narrower than a coarse quad's diagonal can cross it between all
-	// four corners; the centre catches that (any road wider than ~180 units
-	// hits a corner or the centre of a 256-unit quad).
-	float2 centre = 0.25 * (patch[0].WorldXY + patch[1].WorldXY + patch[2].WorldXY + patch[3].WorldXY);
-	if (PatchTop(centre) > -50000.0 && PatchSkinDepth(centre).x >= 1.0)
-		anyLive = true;
 	if (!anyLive) {
 		f.Edge[0] = f.Edge[1] = f.Edge[2] = f.Edge[3] = 0.0;
 		f.Inside[0] = f.Inside[1] = 0.0;
@@ -1696,6 +1731,7 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 [outputtopology("triangle_cw")]
 [outputcontrolpoints(4)]
 [patchconstantfunc("PatchConstants")]
+[maxtessfactor(16.0)]  // PatchEdgeTessFactor clamps to 16
 TessControlPointPatch main(InputPatch<TessControlPointPatch, 4> patch, uint i : SV_OutputControlPointID)
 {
 	return patch[i];
@@ -1862,7 +1898,10 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// a ring walk, which facets curved rims into spikes.
 	float support = 1.0;
 	float rimT = 1.0;
-	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
+	// The S4 branch below resets depth; rimT and support reach only non-S4
+	// shading and the debug views; the shelter clamp is a no-op at or under kShelterDust.
+	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001 &&
+				 (ProjPixelEnable < 1.5 || StaticsDebugView != 0.0 || depthTarget > kShelterDust))
 	{
 		// The field is seeded with the deepest class in play, so normalizing
 		// by that recovers distance-to-rim: 0 at the rim, 1 in the interior.
@@ -1926,8 +1965,9 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// depth so the fillet, crest freeze and taper compress uniformly, and
 	// thinning toward the dusting rather than zero, matching the landscape
 	// shell's under-roof rule. The casters share this path, so shadow and
-	// shape stay one surface.
-	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
+	// shape stay one surface. lerp(x, min(x, kShelterDust), s) is x when x <= kShelterDust.
+	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001 &&
+				 max(depth, max(coverDepth, depthTarget)) > kShelterDust)
 	{
 		float open = SampleSkyOpenness(worldBase.xy);
 		[flatten] if (ProjPixelEnable > 1.5)
@@ -2596,8 +2636,12 @@ float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool t
 					float3 st = SampleTerrainStatics(occLocal);
 					float snowTop = st.x + max(st.y, 0.0);
 					float occH = occRel.z + ShellCameraPosAdjust.z - snowTop;
-					[flatten] if (occH > 2.0 && occH < casterCap)
+					// The candidates fall with i: the first hit is the maximum.
+					[branch] if (occH > 2.0 && occH < casterCap)
+					{
 						occl = max(occl, 1.0 - float(i) * 0.045);
+						break;
+					}
 				}
 			}
 		}
