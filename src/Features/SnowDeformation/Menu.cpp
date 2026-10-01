@@ -1951,6 +1951,24 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_caster_split"), "Split Caster Row"), &shellCasterSplitDebug);
 			if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the snow shadow rows (Shadows - Ground, Shadows - Trench Patch) become one row per shadow cascade, so the near and far cascades can be read apart. Their sum is the pair of rows. The profiler cannot nest passes, which is why the two rows go away while this is on."));
+			ImGui::Checkbox(T(TKEY("shell_cast_bake_off"), "Evaluate the Shadow Caster Live (A/B)"), &shellCastBakeOff);
+			if (auto _ttCastBake = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_cast_bake_off_tooltip"), "A/B: the snow's sun-shadow caster normally reads the surface height the shell's vertex bake worked out last frame, which nothing has changed since, instead of working it out again in every shadow cascade. Tick to work it out live again. Same shadows either way; the Shadows - Ground row is the difference. The live path is also taken by itself whenever the bake did not run (Tessellation off) or the grid has moved since."));
+			if (ImGui::Checkbox(T(TKEY("shell_cast_bake_check"), "Shadow Caster Bake Check"), &shellCastBakeCheck) && shellCastBakeCheck) {
+				castCheckMismatches = 0;
+				castCheckVertices = 0;
+				castCheckFrames = 0;
+				for (auto& issued : castCheckIssued)
+					issued = false;
+			}
+			if (auto _ttCastCheck = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_cast_bake_check_tooltip"), "Proof for the caster bake: the caster works the surface out live as well and counts every vertex whose numbers differ from the baked ones by a single bit. The count below must stay at zero. Needs Direct3D 11.1 hardware; costs the live work on top while on."));
+			if (shellCastBakeCheck)
+				WrapTextDisabledF("Caster bake %s; %llu mismatching of %llu vertices checked over %u frames", shellCastBakedLast ? "in use" : "not in use this frame",
+					(unsigned long long)castCheckMismatches, (unsigned long long)castCheckVertices, castCheckFrames);
+			ImGui::Checkbox(T(TKEY("screen_rects_off"), "Full-Target Screen Copies (A/B)"), &screenRectsOff);
+			if (auto _ttScreenRects = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("screen_rects_off_tooltip"), "A/B: the copies of the game's Masks target and depth, and the depth sync into Terrain Blending's copies, normally cover only the rectangle the frame was rendered into (with upscaling it is a corner of the screen-sized targets) and skip the Masks copy when no snow draws. Tick to copy and sync the whole targets every frame again. Same image either way; the Ground - Masks Copy, Depth Copy and Depth Sync rows are the difference."));
 
 
 			ImGui::Checkbox(T(TKEY("debug_overlay"), "Terrain Overlay"), &debugTerrainOverlay);
@@ -2138,6 +2156,19 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttConeSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("cone_skip_disabled_tooltip"), "Measurement aid: the object snow's slope passes spread snow down edges in steps of 64 down to 1 texel, and a step longer than the deepest snow divided by the slope cannot change anything. Normally those passes are skipped; tick to run all of them and A/B. Same result either way."));
 			WrapTextDisabledF("Cone passes run this frame: coarse %u, fine %u of 8", conePassesCoarse, conePassesFine);
+			ImGui::Checkbox(T(TKEY("object_road_gate_off"), "Build Road Maps Every Frame (A/B)"), &objectRoadGateOff);
+			if (auto _ttRoadGate = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_road_gate_off_tooltip"), "A/B: the snow slopes, the near detail level and the sky openness field are read only by roads, the trench patch, the debug views and Volume Snow, so with no road captured (and Volume Snow off) they are not built. Tick to build them every frame again. Same image either way; the Objects - Snow Slopes, Snow Slopes Fine, Height Map Fine and Sky Openness rows are the difference."));
+			WrapTextDisabledF("Roads captured this frame: %u", capturedRoads);
+			ImGui::Checkbox(T(TKEY("patch_frustum_cull_off"), "Disable Trench Patch View Cull (A/B)"), &patchFrustumCullOff);
+			if (auto _ttPatchCull = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("patch_frustum_cull_off_tooltip"), "A/B: the tessellated trench patch normally drops the patches that lie wholly outside the view, at any height, before they are tessellated. Tick to tessellate all of them again. They draw nothing on screen either way; the Trails - Trench Patch row is the difference."));
+			ImGui::Checkbox(T(TKEY("patch_caster_nonindexed"), "Non-indexed Trench Patch Caster (A/B)"), &patchCasterNonIndexed);
+			if (auto _ttPatchIdx = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("patch_caster_nonindexed_tooltip"), "A/B: the trench patch's sun-shadow caster normally draws through an index buffer, so each grid vertex is worked out once. Tick to draw six vertices per quad again. Same triangles in the same order; the Shadows - Trench Patch row is the difference."));
+			ImGui::Checkbox(T(TKEY("skin_cull_hiz_full_texture"), "Full-Size Cull Depth Pyramid (A/B)"), &skinCullHiZFullTexture);
+			if (auto _ttHiZFull = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("skin_cull_hiz_full_texture_tooltip"), "A/B: the occlusion cull's far-depth pyramid normally covers only the rectangle the frame was rendered into. Tick to build it over the whole screen-sized depth again. The cull only ever skips what could not have drawn, so the image is the same either way; the Objects - Occlusion Cull row is the difference."));
 			ImGui::Checkbox(T(TKEY("statics_fine_level_disabled"), "Disable Near Detail Level"), &fineLevelDisabled);
 			if (auto _ttFineLevel = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("statics_fine_level_disabled_tooltip"), "The object height raster the skin's shape is read from covers 4096 units around the camera in 2048 texels, so one texel is 4 world units and no snow shape finer than that can exist. The near level rasterises the same objects a second time over 1024 units, where a texel is 1 unit, and the skin reads it wherever it reaches, fading back to the coarse map at the border. Tick to switch it off and A/B the shape. Cost is the ObjectHeightMapFine pass plus one cone chain."));
