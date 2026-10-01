@@ -784,7 +784,21 @@ void SnowDeformation::CapturePreDecalMasks()
 	ID3D11DepthStencilView* dsv = nullptr;
 	context->OMGetRenderTargets(8, rtvs, &dsv);
 	context->OMSetRenderTargets(0, nullptr, nullptr);
-	CopySRVResource(masksSRV, "SnowDeformation::PreDecalMasks", preDecalMasksTex, preDecalMasksSRV);
+	// The bound viewport is the main pass's: the skins read inside it, +-1 pixel.
+	UINT vpCount = 1;
+	D3D11_VIEWPORT vp{};
+	context->RSGetViewports(&vpCount, &vp);
+	winrt::com_ptr<ID3D11Resource> masksRes;
+	masksSRV->GetResource(masksRes.put());
+	D3D11_TEXTURE2D_DESC masksDesc{};
+	if (auto masksTex = masksRes.try_as<ID3D11Texture2D>())
+		masksTex->GetDesc(&masksDesc);
+	const D3D11_BOX masksBox = ScreenRectBox(vpCount ? &vp : nullptr, masksDesc.Width, masksDesc.Height, 1);
+	// Called from inside the game's draws: an open terrain-run row would nest.
+	CloseLandscapeRun();
+	globals::profiler->BeginPass("SnowDeformation::Objects - Pre-Decal Masks");
+	CopySRVResource(masksSRV, "SnowDeformation::PreDecalMasks", preDecalMasksTex, preDecalMasksSRV, &masksBox);
+	globals::profiler->EndPass();
 	context->OMSetRenderTargets(8, rtvs, dsv);
 	for (auto* rtv : rtvs)
 		if (rtv)

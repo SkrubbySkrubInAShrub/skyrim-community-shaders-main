@@ -24,20 +24,42 @@ Texture2D<float> PreSnowDepth : register(t2);
 RWTexture2D<float> BlendedDepth : register(u0);
 RWTexture2D<float> BlendedDepth16 : register(u1);
 
+// The rendered rectangle (dynamic resolution renders into a corner of the
+// display-size targets); the snow passes write nothing outside it.
+cbuffer DepthSyncCB : register(b2)
+{
+	uint2 SyncOrigin;
+	uint2 SyncExtent;
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID)
 {
 	uint2 dims;
 	MainDepth.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
+	const uint2 p = dtid.xy + SyncOrigin;
+	if (any(dtid.xy >= SyncExtent) || any(p >= dims))
 		return;
 
-	float src = MainDepth[dtid.xy];
-	if (ShellRasterDepth[dtid.xy] <= 0.0 && src >= PreSnowDepth[dtid.xy])
+	float src = MainDepth[p];
+	if (ShellRasterDepth[p] <= 0.0 && src >= PreSnowDepth[p])
 		return;
-	float blended = min(BlendedDepth[dtid.xy], src);
-	BlendedDepth[dtid.xy] = blended;
-	BlendedDepth16[dtid.xy] = blended;
+	float blended = min(BlendedDepth[p], src);
+	BlendedDepth[p] = blended;
+	BlendedDepth16[p] = blended;
+}
+
+// Pre-snow depth over the rendered rectangle, as the float main()'s Load reads.
+RWTexture2D<float> PreSnowDepthOut : register(u2);
+
+[numthreads(8, 8, 1)] void PreSnowCopyCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	MainDepth.GetDimensions(dims.x, dims.y);
+	const uint2 p = dtid.xy + SyncOrigin;
+	if (any(dtid.xy >= SyncExtent) || any(p >= dims))
+		return;
+	PreSnowDepthOut[p] = MainDepth[p];
 }
 
 // Shell prepass fill: turns the prepass's raster-depth colour target into

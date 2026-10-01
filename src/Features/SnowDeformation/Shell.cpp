@@ -1078,10 +1078,31 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 			return false;
 		Util::SetResourceName(shellTestDepthSRV.get(), "SnowDeformation::ShellTestDepth SRV");
 
-		// Pre-snow copy of the main depth (CopyResource: same format as the
-		// source, read through the game's own SRV format).
+		// Pre-snow copy of the main depth: R32F, written by PreSnowCopyCS over
+		// the rendered rectangle only (DepthSync reads nothing outside it).
 		preSnowDepth = nullptr;
 		preSnowDepthSRV = nullptr;
+		preSnowDepthUAV = nullptr;
+		D3D11_TEXTURE2D_DESC copyDesc = desc;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC copyUavDesc{};
+		copyUavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		copyUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		if (SUCCEEDED(device->CreateTexture2D(&copyDesc, nullptr, preSnowDepth.put()))) {
+			Util::SetResourceName(preSnowDepth.get(), "SnowDeformation::PreSnowDepth");
+			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &srvDesc, preSnowDepthSRV.put())) ||
+				FAILED(device->CreateUnorderedAccessView(preSnowDepth.get(), &copyUavDesc, preSnowDepthUAV.put()))) {
+				preSnowDepth = nullptr;
+				preSnowDepthSRV = nullptr;
+				preSnowDepthUAV = nullptr;
+			} else {
+				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
+				Util::SetResourceName(preSnowDepthUAV.get(), "SnowDeformation::PreSnowDepth UAV");
+			}
+		}
+		// Copy of the main depth (CopyResource: same format as the source,
+		// read through the game's own SRV format), taken between the
+		// landscape shell and the skins.
 		D3D11_TEXTURE2D_DESC preDesc = depthDesc;
 		preDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		preDesc.MiscFlags = 0;
@@ -1089,14 +1110,6 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		preDesc.Usage = D3D11_USAGE_DEFAULT;
 		D3D11_SHADER_RESOURCE_VIEW_DESC mainSrvDesc{};
 		a_mainDepthSRV->GetDesc(&mainSrvDesc);
-		if (SUCCEEDED(device->CreateTexture2D(&preDesc, nullptr, preSnowDepth.put()))) {
-			Util::SetResourceName(preSnowDepth.get(), "SnowDeformation::PreSnowDepth");
-			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &mainSrvDesc, preSnowDepthSRV.put())))
-				preSnowDepth = nullptr;
-			else
-				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
-		}
-		// Same copy, taken between the landscape shell and the skins.
 		bloodPreSkinDepth = nullptr;
 		bloodPreSkinDepthSRV = nullptr;
 		if (SUCCEEDED(device->CreateTexture2D(&preDesc, nullptr, bloodPreSkinDepth.put()))) {
@@ -1218,6 +1231,33 @@ ID3D11DomainShader* SnowDeformation::GetShellDS()
 		shellDS = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "ds_5_0"));
 	}
 	return shellDS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetPreSnowCopyCS()
+{
+	if (!preSnowCopyCS) {
+		logger::debug("Compiling DepthSyncCS PreSnowCopyCS");
+		preSnowCopyCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "PreSnowCopyCS"));
+	}
+	if (!depthSyncRectCB)
+		depthSyncRectCB = new ConstantBuffer(ConstantBufferDesc<DepthSyncRectCB>(), "SnowDeformation::DepthSyncRectCB");
+	return preSnowCopyCS;
+}
+
+D3D11_BOX SnowDeformation::ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const
+{
+	D3D11_BOX box{ 0, 0, 0, a_width, a_height, 1 };
+	if (screenRectsOff || !a_viewport || a_viewport->Width <= 0.0f || a_viewport->Height <= 0.0f)
+		return box;
+	const int64_t left = int64_t(std::floor(a_viewport->TopLeftX)) - a_guard;
+	const int64_t top = int64_t(std::floor(a_viewport->TopLeftY)) - a_guard;
+	const int64_t right = int64_t(std::ceil(a_viewport->TopLeftX + a_viewport->Width)) + a_guard;
+	const int64_t bottom = int64_t(std::ceil(a_viewport->TopLeftY + a_viewport->Height)) + a_guard;
+	box.left = UINT(std::clamp<int64_t>(left, 0, a_width));
+	box.top = UINT(std::clamp<int64_t>(top, 0, a_height));
+	box.right = UINT(std::clamp<int64_t>(right, int64_t(box.left), a_width));
+	box.bottom = UINT(std::clamp<int64_t>(bottom, int64_t(box.top), a_height));
+	return box;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetDepthSyncCS()
@@ -1738,7 +1778,8 @@ void SnowDeformation::DrawShell()
 	// Every reader of these fields (shell, skins, trench patch, caster,
 	// volume) is off in a bare square with nothing captured.
 	spanClock.Lap(CpuCensus::kSpanShellSetup);
-	if (!shellGround && capturedStatics.empty() && !settings.VolumeSnow)
+	const bool nothingDraws = !shellGround && capturedStatics.empty() && !settings.VolumeSnow;
+	if (nothingDraws)
 		SkipObjectHeightMap();
 	else if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
@@ -1794,9 +1835,14 @@ void SnowDeformation::DrawShell()
 	// around the copy; our own targets are set immediately after.
 	{
 		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
-		if (masksRT.SRV) {
+		// Read by the shell PS (shellGround) and the skins (any capture) only.
+		if (masksRT.SRV && masksRT.texture && (screenRectsOff || !nothingDraws)) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
-			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
+			globals::profiler->BeginPass("SnowDeformation::Ground - Masks Copy");
+			D3D11_TEXTURE2D_DESC masksDesc{};
+			masksRT.texture->GetDesc(&masksDesc);
+			const D3D11_BOX masksBox = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, masksDesc.Width, masksDesc.Height, 1);
+			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV, &masksBox);
 			// The game's blood decals wrote Masks.y = 0 under themselves, which
 			// the coat reads as no paint: over their rectangle the copy takes
 			// the masks from before the first decal drew (Blood.cpp).
@@ -1805,6 +1851,9 @@ void SnowDeformation::DrawShell()
 				const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
 				context->CopySubresourceRegion(landMasksCopyTex.get(), 0, box.left, box.top, 0, bloodPreDecalMasksTex.get(), 0, &box);
 			}
+			globals::profiler->EndPass();
+		} else {
+			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Masks Copy");
 		}
 		// The G-buffer before any snow, over the blood decals' rectangle: the
 		// overlay puts the decals' own contribution back over thin snow
@@ -1831,12 +1880,29 @@ void SnowDeformation::DrawShell()
 	preSnowDepthThisFrame = false;
 	if (shellGround || capturedLoaded > 0 || (settings.VolumeSnow && !capturedStatics.empty())) {
 		auto preDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-		if (preDepthSRV && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV) {
-			winrt::com_ptr<ID3D11Resource> depthRes;
-			preDepthSRV->GetResource(depthRes.put());
+		auto* copyCS = GetPreSnowCopyCS();
+		if (preDepthSRV && copyCS && depthSyncRectCB && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV && preSnowDepthUAV) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			globals::profiler->BeginPass("SnowDeformation::Ground - Depth Copy");
-			context->CopyResource(preSnowDepth.get(), depthRes.get());
+			D3D11_TEXTURE2D_DESC preDesc{};
+			preSnowDepth->GetDesc(&preDesc);
+			const D3D11_BOX rect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, preDesc.Width, preDesc.Height, 0);
+			DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
+			depthSyncRectCB->Update(rectData);
+			ID3D11Buffer* rectCB = depthSyncRectCB->CB();
+			ID3D11UnorderedAccessView* copyUAV = preSnowDepthUAV.get();
+			context->CSSetConstantBuffers(2, 1, &rectCB);
+			context->CSSetShaderResources(0, 1, &preDepthSRV);
+			context->CSSetUnorderedAccessViews(2, 1, &copyUAV, nullptr);
+			context->CSSetShader(copyCS, nullptr, 0);
+			context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
+			ID3D11ShaderResourceView* nullCopySRV = nullptr;
+			ID3D11UnorderedAccessView* nullCopyUAV = nullptr;
+			ID3D11Buffer* nullCopyCB = nullptr;
+			context->CSSetShaderResources(0, 1, &nullCopySRV);
+			context->CSSetUnorderedAccessViews(2, 1, &nullCopyUAV, nullptr);
+			context->CSSetConstantBuffers(2, 1, &nullCopyCB);
+			context->CSSetShader(nullptr, nullptr, 0);
 			globals::profiler->EndPass();
 			preSnowDepthThisFrame = true;
 		}
@@ -2523,24 +2589,34 @@ void SnowDeformation::DrawShell()
 	if (!syncable)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Sync");
 	if (syncable && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
-		if (auto cs = GetDepthSyncCS()) {
+		if (auto cs = GetDepthSyncCS(); cs && GetPreSnowCopyCS() && depthSyncRectCB) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };
 			ID3D11ShaderResourceView* syncSRVs[3] = { mainDepthSRV,
 				rasterMarks ? shellRasterDepth->srv.get() : nullptr,
 				preSnowDepthThisFrame ? preSnowDepthSRV.get() : nullptr };
+			// Outside the rendered rectangle nothing moved the main depth and the raster
+			// marks are clear: the full-target pass returned there. The pre-snow copy
+			// covers this same rectangle.
+			const auto& depthDesc = tb.blendedDepthTexture->desc;
+			const D3D11_BOX rect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, depthDesc.Width, depthDesc.Height, 0);
+			DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
+			depthSyncRectCB->Update(rectData);
+			ID3D11Buffer* rectCB = depthSyncRectCB->CB();
+			context->CSSetConstantBuffers(2, 1, &rectCB);
 			context->CSSetShaderResources(0, 3, syncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, syncUAVs, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
-			const auto& depthDesc = tb.blendedDepthTexture->desc;
 			globals::profiler->BeginPass("SnowDeformation::Ground - Depth Sync");
-			context->Dispatch((depthDesc.Width + 7) / 8, (depthDesc.Height + 7) / 8, 1);
+			context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
 			globals::profiler->EndPass();
 
 			ID3D11ShaderResourceView* nullSyncSRVs[3] = { nullptr, nullptr, nullptr };
 			ID3D11UnorderedAccessView* nullSyncUAVs[2] = { nullptr, nullptr };
+			ID3D11Buffer* nullSyncCB = nullptr;
 			context->CSSetShaderResources(0, 3, nullSyncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, nullSyncUAVs, nullptr);
+			context->CSSetConstantBuffers(2, 1, &nullSyncCB);
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}

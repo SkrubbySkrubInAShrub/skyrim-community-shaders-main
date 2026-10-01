@@ -1845,10 +1845,24 @@ public:
 	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
 	/** @brief Read view of shellTestDepth for the object-snow prepass's write-back into the main depth. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellTestDepthSRV;
-	/** @brief Main depth before any snow draw this frame: DepthSync syncs the pixels the snow passes (shell, skins, patch) moved nearer. */
+	/** @brief Main depth before any snow draw this frame: DepthSync syncs the pixels the snow passes (shell, skins, patch) moved nearer. R32F, the float the main depth's SRV returns, written over the rendered rectangle by PreSnowCopyCS. */
 	winrt::com_ptr<ID3D11Texture2D> preSnowDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSnowDepthSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> preSnowDepthUAV;
 	bool preSnowDepthThisFrame = false;
+	/** @brief A/B, runtime-only: the pre-snow depth copy, Depth Sync and both Masks copies cover the whole display-size target again, and LandMasksCopy runs on frames with no reader. */
+	bool screenRectsOff = false;
+	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution, the whole target with screenRectsOff. */
+	struct alignas(16) DepthSyncRectCB
+	{
+		uint32_t Origin[2];
+		uint32_t Extent[2];
+	};
+	ConstantBuffer* depthSyncRectCB = nullptr;
+	ID3D11ComputeShader* GetPreSnowCopyCS();
+	ID3D11ComputeShader* preSnowCopyCS = nullptr;
+	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target when screenRectsOff or no viewport. */
+	D3D11_BOX ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const;
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellFillDepthState;
 	/** @brief A/B measurement: returns the shell to the near/far split draws without the depth prepass. Runtime-only. */
