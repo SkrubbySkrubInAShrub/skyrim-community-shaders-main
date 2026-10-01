@@ -117,6 +117,7 @@
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
 	X(Tessellation) \
+	X(TrenchParallax) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
@@ -2141,6 +2142,14 @@ void SnowDeformation::ClearShaderCache()
 	if (shellVSNonIndexed)
 		shellVSNonIndexed->Release();
 	shellVSNonIndexed = nullptr;
+	for (auto*& trenchVS : shellVSTrenchPOM) {
+		if (trenchVS)
+			trenchVS->Release();
+		trenchVS = nullptr;
+	}
+	if (shellPSTrenchPOM)
+		shellPSTrenchPOM->Release();
+	shellPSTrenchPOM = nullptr;
 	if (shellShadowVSNonIndexed)
 		shellShadowVSNonIndexed->Release();
 	shellShadowVSNonIndexed = nullptr;

@@ -402,6 +402,11 @@ struct VS_OUTPUT
 	float DebugHeight : TEXCOORD5;
 	// xyz: smooth per-vertex terrain normal, w: coverage alpha (taper*fade).
 	float4 TerrainNormalAlpha : TEXCOORD6;
+#ifdef SNOW_TRENCH_POM
+	// Trenches by parallax: x = uncarved depth under the sheet, y = how far
+	// the sheet stands over the untouched top (the berm and lip bound).
+	float2 TrenchPOM : TEXCOORD8;
+#endif
 #ifdef SNOW_SHELL_PATCH_ID
 	// Prepass draw only: the patch (+1) for the visible-patch cull, from the DS.
 	nointerpolation uint PatchId : TEXCOORD7;
@@ -1006,6 +1011,53 @@ float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2
 	return t;
 }
 
+#if defined(PSHADER) && defined(SNOW_TRENCH_POM)
+// Height of the carved, bermed surface over the sheet at a point, the sheet
+// standing raise over the untouched top. March-grade taps.
+float TrenchRelief(float2 gridLocal, float depth, float raise)
+{
+	float d = saturate(SampleDeformationMarch(gridLocal));
+	float bermD = BermField(gridLocal);
+	return CarveProfile(d, depth, GridOrigin + gridLocal) - depth - raise +
+	       BermShape(bermD) * saturate(1.0 - d) * depth * BermHeightAmp * BermDepthGate(depth);
+}
+
+// Distance along the unit view ray (dir) from the sheet to the carved
+// surface over the sheet's tangent plane (slope): linear steps down to the
+// deepest floor, then a secant refine. 0 = the sheet itself.
+float TrenchParallaxT(float3 dir, float2 slope, float2 gridLocal, float depth, float raise)
+{
+	float rise = dir.z - dot(dir.xy, slope);
+	float drop = raise + depth * (1.0 - saturate(BorderStyle.y));
+	float t = 0.0;
+	[branch] if (rise <= -0.02 && drop > 0.05)
+	{
+		float span = -drop / rise;
+		float steps = clamp(ceil(span / 3.0), 6.0, 32.0);
+		float dt = span / steps;
+		float prevT = 0.0;
+		float prevGap = -TrenchRelief(gridLocal, depth, raise);
+		[branch] if (prevGap > 0.0)
+		{
+			t = span;
+			[loop] for (float i = 1.0; i <= steps; i += 1.0)
+			{
+				float ti = dt * i;
+				float gap = rise * ti - TrenchRelief(gridLocal + dir.xy * ti, depth, raise);
+				[branch] if (gap <= 0.0)
+				{
+					t = lerp(prevT, ti, prevGap / max(prevGap - gap, 1e-6));
+					break;
+				}
+				prevT = ti;
+				prevGap = gap;
+			}
+		}
+	}
+	return t;
+}
+#endif
+
 // Class borders are hard edges in the baked depth/coverage data: a +30
 // snow class meeting a -5 mud class produces a ravine wall along the
 // texture seam. BorderNoise domain-warps where the border falls and
@@ -1182,6 +1234,26 @@ float3 SampleTerrainShaped(float2 gridLocal)
 // so boundaries between differently-deep snows are geometric depth ramps;
 // negative depths (roads) submerge the shell below the surface.
 // Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
+#ifdef SNOW_TRENCH_POM
+// What ShellSurfaceZ left for the vertex that called it: (uncarved depth, raise).
+static float2 gTrenchPOM = float2(0.0, 0.0);
+
+// Bound on what stands over the untouched top near a lattice vertex - berms
+// and the rim lip - from the baked berm field's max across the vertex's own
+// lattice step, which covers every triangle it touches.
+float TrenchRaise(float2 gridLocal, float depth)
+{
+	float2 centered = gridLocal - WarpedHalfSpan;
+	float2 uAxis = float2(InverseWarpAxis(centered.x), InverseWarpAxis(centered.y));
+	float stepLen = GridSpacing * max(WarpBand(abs(uAxis.x)).x, WarpBand(abs(uAxis.y)).x);
+	float field = 0.0;
+	[unroll] for (int y = -1; y <= 1; y++)
+		[unroll] for (int x = -1; x <= 1; x++)
+			field = max(field, BermField(gridLocal + float2(x, y) * stepLen));
+	return BermShape(field) * depth * BermHeightAmp * BermDepthGate(depth) + (field > 0.001 ? RimStyle.x * depth : 0.0);
+}
+#endif
+
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
 	// Beyond the loaded-cell seam the recolored LOD terrain owns the ground:
@@ -1369,6 +1441,16 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// fraction of the uncarved depth and tapers toward class borders,
 		// where a full floor would leave a hard-edged slab over bare ground.
 		// Undulation rides on top, scaled by remaining depth.
+#ifdef SNOW_TRENCH_POM
+		// Trenches by parallax: the sheet holds the untouched top, raised over
+		// what stands above it; the PS marches carve, berms and lip from there.
+		[flatten] if (depth > 0.0)
+		{
+			float raise = TrenchRaise(gridLocal, depth);
+			gTrenchPOM = float2(depth, raise);
+			depth += raise + UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
+		}
+#else
 		[flatten] if (depth > 0.0)
 		{
 			float deformation = saturate(SampleDeformation(gridLocal));
@@ -1393,6 +1475,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 				depth += ChurnNoiseScaled(GridOrigin + gridLocal, kClodSizeScale) * RimStyle.z *
 				         BermShape(bermD) * saturate(1.0 - deformation) * BermDepthGate(uncarved);
 		}
+#endif
 
 		surfaceZ = terrainHeight + depth;
 	}
@@ -1575,7 +1658,13 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
 
+#ifdef SNOW_TRENCH_POM
+	VS_OUTPUT trenchOut = FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+	trenchOut.TrenchPOM = gTrenchPOM;
+	return trenchOut;
+#else
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+#endif
 }
 #endif
 
@@ -2166,7 +2255,11 @@ struct PS_OUTPUT
 	// rejection for the whole draw. SNOW_SHELL_NO_DEPTH_EXPORT drops it to
 	// measure what that costs.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
+#		ifdef SNOW_TRENCH_POM
+	float DepthLE : SV_Depth;
+#		else
 	float DepthLE : SV_DepthLessEqual;
+#		endif
 #	endif
 #	ifndef SNOW_LOD_HISTOGRAM
 	float4 MotionVectors : SV_Target1;
@@ -2338,6 +2431,29 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 PS_OUTPUT main(VS_OUTPUT input)
 #endif
 {
+#if defined(SNOW_TRENCH_POM) && !defined(SNOW_SHELL_DEPTH_PREPASS)
+	// Trenches by parallax: march from the sheet to the carved surface, then
+	// carry on as if the geometry stood there - position, grid, both clips
+	// and the raster depth the export clamps from. The viewport's depth range
+	// is taken off the sheet's own fragment.
+	[branch] if (input.TrenchPOM.x > 0.5)
+	{
+		float3 dir = normalize(input.WorldPos);
+		float2 slope = -input.TerrainNormalAlpha.xy / max(input.TerrainNormalAlpha.z, 0.1);
+		float t = TrenchParallaxT(dir, slope, input.GridLocal, input.TrenchPOM.x, input.TrenchPOM.y);
+		[branch] if (t > 0.0)
+		{
+			float4 sheetClip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+			float depthScale = input.Position.z / max(sheetClip.z / sheetClip.w, 1e-6);
+			input.WorldPos += dir * t;
+			input.GridLocal += dir.xy * t;
+			input.CurrentClip = mul(CameraViewProjUnjittered, float4(input.WorldPos, 1.0));
+			input.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(input.WorldPos + ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz, 1.0));
+			float4 hitClip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+			input.Position.z = hitClip.z / hitClip.w * depthScale;
+		}
+	}
+#endif
 	// Same convention as MotionBlur::GetSSMotionVector.
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 

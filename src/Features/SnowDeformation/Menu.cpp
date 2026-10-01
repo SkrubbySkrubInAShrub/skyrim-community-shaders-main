@@ -828,6 +828,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on. Off costs nothing but leaves every trench as angular as the grid beneath it."));
 
+		ImGui::Checkbox(T(TKEY("trench_parallax"), "Trenches by Parallax (Experimental)"), &settings.TrenchParallax);
+		if (auto _ttTrenchPom = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_parallax_tooltip"), "Draws the ground snow without tessellation and carves the trenches in the pixel shader instead: a short march along the view ray finds the trench floor, walls and berms, and the depth buffer gets the point it hits, so characters still stand inside them. No small triangles, but a trench edge has no true outline at low angles. Overrides Tessellate Trenches for the ground snow (the road trench patch keeps it). The first tick compiles two shaders, a short pause."));
+
 		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
 			ClearTrenchStore("the Remember Trenches toggle");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
