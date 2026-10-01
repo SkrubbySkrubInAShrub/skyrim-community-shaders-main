@@ -281,6 +281,12 @@ Texture2D<float> SceneDepth : register(t3);
 // The hull (SNOW_HS_BAKE) reads .w for its edge corners.
 Texture2D<float4> ShellVertexBake : register(t9);
 Texture2D<float2> ShellVertexBakeSlope : register(t23);
+// Last frame's BakeCS surface height per vertex, read by the SNOW_CAST_BAKED caster.
+Texture2D<float> ShellCastBake : register(t63);
+#ifdef SNOW_CAST_BAKED_CHECK
+// [0] vertices whose baked inputs differ from the live evaluation, [4] vertices checked.
+RWByteAddressBuffer ShellCastCheck : register(u1);
+#endif
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
@@ -1531,7 +1537,34 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 
 	float coverage;
 	float terrainHeight;
+#ifdef SNOW_CAST_BAKED
+	// Lattice vertex (x, y) is BakeCS thread (x, y); the CPU binds this variant only
+	// while the bake's inputs still match this frame's.
+	const int3 bakeTexel = int3((int2)gridPos, 0);
+	float z = ShellCastBake.Load(bakeTexel);
+	{
+		const float4 baked = ShellVertexBake.Load(bakeTexel);
+		coverage = baked.y;
+		terrainHeight = baked.z;
+	}
+	const float2 bakedSlope = ShellVertexBakeSlope.Load(bakeTexel);
+#	ifdef SNOW_CAST_BAKED_CHECK
+	{
+		float liveCoverage;
+		float liveTerrain;
+		const float liveZ = ShellSurfaceZ(gridLocal, liveCoverage, liveTerrain);
+		const float2 liveSlope = ShellVertexSlope(gridLocal);
+		const bool same = asuint(liveZ) == asuint(z) && asuint(liveCoverage) == asuint(coverage) &&
+		                  asuint(liveTerrain) == asuint(terrainHeight) && all(asuint(liveSlope) == asuint(bakedSlope));
+		uint prior;
+		[branch] if (!same)
+			ShellCastCheck.InterlockedAdd(0, 1, prior);
+		ShellCastCheck.InterlockedAdd(4, 1, prior);
+	}
+#	endif
+#else
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+#endif
 
 #ifdef SNOW_SHADOW_CAST
 	// Shadow-caster variant: only the excess height above the ambient snow
@@ -1575,7 +1608,11 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
 
+#ifdef SNOW_CAST_BAKED
+	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, bakedSlope.x, bakedSlope.y);
+#else
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+#endif
 }
 #endif
 
@@ -2000,10 +2037,8 @@ TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputC
 // The vertex surface: ShellSurfaceZ plus the skirt descent and the
 // displacement relief. One function for the domain shader's live path and
 // for BakeCS, so a baked corner and a live vertex are the same bits.
-float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight)
+float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainHeight)
 {
-	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
-
 	float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	// Coarser mips with distance: vertex density falls below texel density
@@ -2066,6 +2101,12 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 	}
 
 	return z;
+}
+
+float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight)
+{
+	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+	return ShellVertexZFrom(gridLocal, z, coverage, terrainHeight);
 }
 #endif  // DOMAINSHADER || COMPUTESHADER
 
@@ -3491,6 +3532,8 @@ RWStructuredBuffer<float> ProbeHeights : register(u0);
 // waves, so nothing here is worth tracking dirty.
 RWTexture2D<float4> ShellVertexBakeOut : register(u1);
 RWTexture2D<float2> ShellVertexBakeSlopeOut : register(u2);
+// ShellSurfaceZ before the descent and relief: the sun caster's height (SNOW_CAST_BAKED).
+RWTexture2D<float> ShellCastBakeOut : register(u3);
 
 [numthreads(8, 8, 1)] void BakeCS(uint3 id : SV_DispatchThreadID)
 {
@@ -3499,9 +3542,11 @@ RWTexture2D<float2> ShellVertexBakeSlopeOut : register(u2);
 	float2 gridLocal = ShellGridVertexLocal(id.xy);
 	float coverage;
 	float terrainHeight;
-	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
+	float surfaceZ = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+	float z = ShellVertexZFrom(gridLocal, surfaceZ, coverage, terrainHeight);
 	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, SampleDeformation(gridLocal));
 	ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
+	ShellCastBakeOut[id.xy] = surfaceZ;
 }
 
 static const uint kProbeAzimuths = 24;

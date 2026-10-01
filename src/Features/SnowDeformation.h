@@ -1712,6 +1712,30 @@ public:
 	bool shellFrustumCullDisabled = false;
 	/** @brief Measurement: the domain shader evaluates baked corners live as well and lifts any mismatching vertex by 50 units. Runtime-only. */
 	bool shellVertexBakeCheck = false;
+	/** @brief BakeCS's ShellSurfaceZ per vertex (R32F, the bake's lattice): next frame's sun caster loads it (SNOW_CAST_BAKED) with the bake's coverage, terrain and slope instead of evaluating the surface in every cascade. */
+	Texture2D* shellCastBake = nullptr;
+	/** @brief The last DrawShell baked and no field has been written since: cleared at the top of Prepass, set by the bake dispatch. The caster also requires its refreshed grid placement to equal the snapshot's. */
+	bool shellCastBakeValid = false;
+	/** @brief A/B, runtime-only: the caster evaluates the surface live in every cascade again. */
+	bool shellCastBakeOff = false;
+	/** @brief Measurement: the baked caster also evaluates the surface live and counts the vertices whose bits differ (castCheck*). Needs UAVs at every stage (feature level 11_1). */
+	bool shellCastBakeCheck = false;
+	/** @brief The baked caster drew in the last shadow pass. */
+	bool shellCastBakedLast = false;
+	ID3D11VertexShader* GetShellShadowVSBaked(bool a_check);
+	ID3D11VertexShader* shellShadowVSBaked = nullptr;
+	ID3D11VertexShader* shellShadowVSBakedCheck = nullptr;
+	static constexpr int kCastCheckRing = 3;
+	winrt::com_ptr<ID3D11Buffer> castCheckBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> castCheckUAV;
+	winrt::com_ptr<ID3D11Buffer> castCheckStaging[kCastCheckRing];
+	bool castCheckIssued[kCastCheckRing] = {};
+	int castCheckRing = 0;
+	uint64_t castCheckMismatches = 0;
+	uint64_t castCheckVertices = 0;
+	uint32_t castCheckFrames = 0;
+	bool EnsureCastCheckResources();
+	void ReadCastCheck(ID3D11DeviceContext* a_context);
 
 	/** @brief Measurement: D3D11 pipeline-statistics + occlusion queries around the shell grid draws and the statics pass. PS invocations over samples passed is overdraw x overshade; DS/HS/VS invocations check the geometry-stage arithmetic. Ring of three, read back without flushing. Runtime-only. */
 	bool shellPipelineStatsEnabled = false;

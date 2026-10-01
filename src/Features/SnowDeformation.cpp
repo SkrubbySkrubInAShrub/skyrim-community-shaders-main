@@ -888,6 +888,8 @@ float SnowDeformation::ComputeSnowfallIntensity() const
 
 void SnowDeformation::Prepass()
 {
+	// The fields the vertex bake read are rewritten from here on.
+	shellCastBakeValid = false;
 	LoadTraceFramePulse();
 	RollCpuCensus();
 	cpuCensusArmed = globals::state->frameCount <= cpuCensusArmedUntil;
@@ -2138,6 +2140,13 @@ void SnowDeformation::ClearShaderCache()
 	if (shellShadowVS)
 		shellShadowVS->Release();
 	shellShadowVS = nullptr;
+	if (shellShadowVSBaked)
+		shellShadowVSBaked->Release();
+	shellShadowVSBaked = nullptr;
+	if (shellShadowVSBakedCheck)
+		shellShadowVSBakedCheck->Release();
+	shellShadowVSBakedCheck = nullptr;
+	shellCastBakeValid = false;
 	if (shellVSNonIndexed)
 		shellVSNonIndexed->Release();
 	shellVSNonIndexed = nullptr;

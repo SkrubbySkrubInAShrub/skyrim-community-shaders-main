@@ -233,6 +233,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetShellBakeCS(); },
 		[&] { GetShellTessVS(); },
 		[&] { GetShellShadowVS(); },
+		[&] { GetShellShadowVSBaked(false); },
 		[&] { GetShellPSNoDepth(); },
 		[&] { GetDepthSyncCS(); },
 		[&] { GetHiZBuildCS(); },

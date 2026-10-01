@@ -476,6 +476,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->PSGetShaderResources(4, 1, &srv);
 		prevPSSRV4.attach(srv);
 	}
+	// The vertex bake (t9, t23, t63) and the water windows (t19, t27, t28).
+	static constexpr UINT kCasterExtraSlots[6] = { 9, 19, 23, 27, 28, 63 };
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsExtra[6];
+	for (uint32_t i = 0; i < 6; i++)
+		context->VSGetShaderResources(kCasterExtraSlots[i], 1, prevVSSRVsExtra[i].put());
 
 	// ---- Common caster state.
 	context->PSSetShader(nullptr, nullptr, 0);  // depth-only
@@ -514,9 +519,50 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// its geometry parts company with the drawn shell's.
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
+	// The shore cap's water windows, as DrawShell binds them.
+	ID3D11ShaderResourceView* waterSRV = waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
+	ID3D11ShaderResourceView* waterSRVs[2] = { waterSRV, waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
+	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
+	context->VSSetShaderResources(27, 2, waterSRVs);
+	context->VSSetShaderResources(19, 1, &waterNearSRV);
 	ID3D11Buffer* cb0 = shellCB->CB();
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	// Last frame's bake stands in for the surface evaluation while nothing it
+	// read has been written since and this frame's placement is the one it
+	// baked. ObjectLiftCap > 1 reads t11/t12, which the grid caster leaves
+	// as it finds them.
+	ID3D11VertexShader* casterVS = vs;
+	bool castCheckLive = false;
+	shellCastBakedLast = false;
+	if (shellCastBakeValid && !shellCastBakeOff && !shellGridNonIndexed && lastShellCBData->ObjectLiftCap <= 1.0f &&
+		shellVertexBake && shellVertexBakeSlope && shellCastBake) {
+		ShellCB placed = *lastShellCBData;
+		RefreshShellGridPlacement(placed);
+		if (std::memcmp(&placed, lastShellCBData.get(), sizeof(ShellCB)) == 0) {
+			ID3D11VertexShader* bakedVS = nullptr;
+			if (shellCastBakeCheck && EnsureCastCheckResources()) {
+				ReadCastCheck(context);
+				bakedVS = GetShellShadowVSBaked(true);
+				castCheckLive = bakedVS != nullptr;
+			}
+			if (!bakedVS)
+				bakedVS = GetShellShadowVSBaked(false);
+			if (bakedVS) {
+				casterVS = bakedVS;
+				shellCastBakedLast = true;
+				ID3D11ShaderResourceView* bakeSRVs[3] = { shellVertexBake->srv.get(), shellVertexBakeSlope->srv.get(), shellCastBake->srv.get() };
+				context->VSSetShaderResources(9, 1, &bakeSRVs[0]);
+				context->VSSetShaderResources(23, 1, &bakeSRVs[1]);
+				context->VSSetShaderResources(63, 1, &bakeSRVs[2]);
+			}
+		}
+	}
+	if (castCheckLive) {
+		const UINT zero[4] = {};
+		context->ClearUnorderedAccessViewUint(castCheckUAV.get(), zero);
+	}
 
 	// Stage-major: every cascade's ground, then every cascade's trench patch,
 	// one row each. Both are depth-only into the cascade, so the order cannot
@@ -574,7 +620,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		ID3D11Buffer* nullVB = nullptr;
 		UINT zero = 0;
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
-		context->VSSetShader(vs, nullptr, 0);
+		context->VSSetShader(casterVS, nullptr, 0);
 	}
 	if (!splitRow)
 		globals::profiler->BeginPass("SnowDeformation::Shadows - Ground");
@@ -584,12 +630,23 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (splitRow)
 			globals::profiler->BeginPass(kCasterGridRow[cascade]);
 		const ShellCB shadowCB = bindCascade(cascade);
+		if (castCheckLive) {
+			ID3D11UnorderedAccessView* checkUAV = castCheckUAV.get();
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shadowAtlasDSV[cascade].get(), 1, 1, &checkUAV, nullptr);
+		}
 		DrawShellCasterGrid(context, shadowCB);
 		if (splitRow)
 			globals::profiler->EndPass();
 	}
 	if (!splitRow)
 		globals::profiler->EndPass();
+	if (castCheckLive) {
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		context->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &nullUAV, nullptr);
+		context->CopyResource(castCheckStaging[castCheckRing].get(), castCheckBuffer.get());
+		castCheckIssued[castCheckRing] = true;
+		castCheckRing = (castCheckRing + 1) % kCastCheckRing;
+	}
 
 	// The TRENCH PATCH casts too - attempt two of "road snow casts
 	// shadows" (Josef: trench walls throw no shadow onto their own
@@ -691,6 +748,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		for (uint32_t i = 0; i < 4; i++)
 			skinSrvs[i] = prevVSSRVsSkin[i].get();
 		context->VSSetShaderResources(10, 4, skinSrvs);
+		for (uint32_t i = 0; i < 6; i++) {
+			ID3D11ShaderResourceView* srv = prevVSSRVsExtra[i].get();
+			context->VSSetShaderResources(kCasterExtraSlots[i], 1, &srv);
+		}
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();
@@ -700,5 +761,64 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	{
 		ID3D11ShaderResourceView* srv = prevPSSRV4.get();
 		context->PSSetShaderResources(4, 1, &srv);
+	}
+}
+
+bool SnowDeformation::EnsureCastCheckResources()
+{
+	if (castCheckBuffer && castCheckUAV && castCheckStaging[kCastCheckRing - 1])
+		return true;
+	auto device = globals::d3d::device;
+	// The counter is written from the vertex shader.
+	if (device->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_1)
+		return false;
+	castCheckBuffer = nullptr;
+	castCheckUAV = nullptr;
+	for (auto& staging : castCheckStaging)
+		staging = nullptr;
+	D3D11_BUFFER_DESC desc{};
+	desc.ByteWidth = 16;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+	desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+	if (FAILED(device->CreateBuffer(&desc, nullptr, castCheckBuffer.put())))
+		return false;
+	Util::SetResourceName(castCheckBuffer.get(), "SnowDeformation::CastCheck");
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+	uavDesc.Buffer.NumElements = 4;
+	uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+	if (FAILED(device->CreateUnorderedAccessView(castCheckBuffer.get(), &uavDesc, castCheckUAV.put())))
+		return false;
+	Util::SetResourceName(castCheckUAV.get(), "SnowDeformation::CastCheck UAV");
+	D3D11_BUFFER_DESC stagingDesc{};
+	stagingDesc.ByteWidth = 16;
+	stagingDesc.Usage = D3D11_USAGE_STAGING;
+	stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	for (auto& staging : castCheckStaging) {
+		if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, staging.put())))
+			return false;
+		Util::SetResourceName(staging.get(), "SnowDeformation::CastCheck Staging");
+	}
+	for (auto& issued : castCheckIssued)
+		issued = false;
+	return true;
+}
+
+void SnowDeformation::ReadCastCheck(ID3D11DeviceContext* a_context)
+{
+	for (int i = 0; i < kCastCheckRing; i++) {
+		if (!castCheckIssued[i] || !castCheckStaging[i])
+			continue;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (a_context->Map(castCheckStaging[i].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped) != S_OK)
+			continue;
+		const auto* counts = static_cast<const uint32_t*>(mapped.pData);
+		castCheckMismatches += counts[0];
+		castCheckVertices += counts[1];
+		castCheckFrames++;
+		a_context->Unmap(castCheckStaging[i].get(), 0);
+		castCheckIssued[i] = false;
 	}
 }

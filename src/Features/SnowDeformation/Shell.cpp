@@ -591,6 +591,19 @@ ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
 	return shellShadowVS;
 }
 
+ID3D11VertexShader* SnowDeformation::GetShellShadowVSBaked(bool a_check)
+{
+	auto*& slot = a_check ? shellShadowVSBakedCheck : shellShadowVSBaked;
+	if (!slot) {
+		logger::debug("Compiling SnowShell shadow-cast VS ({})", a_check ? "baked check" : "baked");
+		std::vector<std::pair<const char*, const char*>> defines = { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" }, { "SNOW_CAST_BAKED", "" } };
+		if (a_check)
+			defines.push_back({ "SNOW_CAST_BAKED_CHECK", "" });
+		slot = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "vs_5_0"));
+	}
+	return slot;
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellPS()
 {
 	// Setting changes reach here from the menu, a settings load and a preset
@@ -1154,8 +1167,8 @@ ID3D11DomainShader* SnowDeformation::GetShellDSBake(bool a_check)
 
 bool SnowDeformation::EnsureShellVertexBake()
 {
-	if (shellVertexBake && shellVertexBakeSlope)
-		return shellVertexBake->srv && shellVertexBake->uav && shellVertexBakeSlope->srv && shellVertexBakeSlope->uav;
+	if (shellVertexBake && shellVertexBakeSlope && shellCastBake)
+		return shellVertexBake->srv && shellVertexBake->uav && shellVertexBakeSlope->srv && shellVertexBakeSlope->uav && shellCastBake->srv && shellCastBake->uav;
 	constexpr UINT dim = kShellGridDim + 1;
 	auto make = [&](DXGI_FORMAT a_format, const char* a_name) {
 		D3D11_TEXTURE2D_DESC desc{};
@@ -1186,7 +1199,9 @@ bool SnowDeformation::EnsureShellVertexBake()
 		shellVertexBake = make(DXGI_FORMAT_R32G32B32A32_FLOAT, "SnowDeformation::ShellVertexBake");
 	if (!shellVertexBakeSlope)
 		shellVertexBakeSlope = make(DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::ShellVertexBakeSlope");
-	return shellVertexBake->srv && shellVertexBake->uav && shellVertexBakeSlope->srv && shellVertexBakeSlope->uav;
+	if (!shellCastBake)
+		shellCastBake = make(DXGI_FORMAT_R32_FLOAT, "SnowDeformation::ShellCastBake");
+	return shellVertexBake->srv && shellVertexBake->uav && shellVertexBakeSlope->srv && shellVertexBakeSlope->uav && shellCastBake->srv && shellCastBake->uav;
 }
 
 ID3D11DomainShader* SnowDeformation::GetShellDS()
@@ -2099,13 +2114,16 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(29, 1, &undulationSRV);
 		ID3D11SamplerState* csSampler = shellSnowSampler.get();
 		context->CSSetSamplers(0, 1, &csSampler);
-		ID3D11UnorderedAccessView* bakeUAVs[2] = { shellVertexBake->uav.get(), shellVertexBakeSlope->uav.get() };
-		context->CSSetUnorderedAccessViews(1, 2, bakeUAVs, nullptr);
+		ID3D11UnorderedAccessView* bakeUAVs[3] = { shellVertexBake->uav.get(), shellVertexBakeSlope->uav.get(), shellCastBake->uav.get() };
+		context->CSSetUnorderedAccessViews(1, 3, bakeUAVs, nullptr);
 		context->CSSetShader(bakeCS, nullptr, 0);
 		constexpr UINT bakeGroups = (kShellGridDim + 1 + 7) / 8;
 		context->Dispatch(bakeGroups, bakeGroups, 1);
-		ID3D11UnorderedAccessView* nullBakeUAVs[2] = {};
-		context->CSSetUnorderedAccessViews(1, 2, nullBakeUAVs, nullptr);
+		ID3D11UnorderedAccessView* nullBakeUAVs[3] = {};
+		context->CSSetUnorderedAccessViews(1, 3, nullBakeUAVs, nullptr);
+		// Every field ShellSurfaceZ reads is final for this frame here and is next
+		// written in Prepass, which runs after the next frame's shadow mask.
+		shellCastBakeValid = true;
 		context->CSSetShader(nullptr, nullptr, 0);
 		// The field textures are written by compute passes next Prepass;
 		// leave none of them bound as CS inputs.
