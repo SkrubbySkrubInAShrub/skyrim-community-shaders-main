@@ -545,8 +545,6 @@ public:
 		float UndulationSpacing = 0.5f;
 		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth. */
 		bool Tessellation = true;
-		/** @brief Trenches by parallax (experimental): the landscape shell draws untessellated with its sheet at the untouched top, and the pixel shader marches the carve, berms and rim lip from it, writing the depth it hits. The trench patch keeps Tessellation. */
-		bool TrenchParallax = false;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
 		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
@@ -1656,11 +1654,6 @@ public:
 	/** @brief Returns the shell vertex/pixel shaders, compiling them on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellVS();
 	ID3D11PixelShader* GetShellPS();
-	/** @brief Settings::TrenchParallax's pair (SNOW_TRENCH_POM): the grid VS holding the sheet at the untouched top over a berm bound, and the PS that marches the carve from it. Compiled on first use, or by the prime when the setting is on at startup; [1] = the non-indexed A/B grid. */
-	ID3D11VertexShader* GetShellVSTrenchPOM();
-	ID3D11PixelShader* GetShellPSTrenchPOM();
-	ID3D11VertexShader* shellVSTrenchPOM[2] = { nullptr, nullptr };
-	ID3D11PixelShader* shellPSTrenchPOM = nullptr;
 	ID3D11VertexShader* shellVS = nullptr;
 	ID3D11PixelShader* shellPS = nullptr;
 

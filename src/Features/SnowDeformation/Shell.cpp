@@ -575,32 +575,6 @@ ID3D11VertexShader* SnowDeformation::GetShellVS()
 	return shellVS;
 }
 
-ID3D11VertexShader* SnowDeformation::GetShellVSTrenchPOM()
-{
-	auto*& slot = shellVSTrenchPOM[shellGridNonIndexed ? 1 : 0];
-	if (!slot) {
-		logger::debug("Compiling SnowShell VS (trenches by parallax{})", shellGridNonIndexed ? ", non-indexed A/B" : "");
-		std::vector<std::pair<const char*, const char*>> defines = { { "VSHADER", "" }, { "SNOW_TRENCH_POM", "" } };
-		if (shellGridNonIndexed)
-			defines.push_back({ "SNOW_GRID_NONINDEXED", "" });
-		slot = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "vs_5_0"));
-	}
-	return slot;
-}
-
-ID3D11PixelShader* SnowDeformation::GetShellPSTrenchPOM()
-{
-	// Always exports depth: the march's hit is the only depth this shell has.
-	if (!shellPSTrenchPOM) {
-		logger::debug("Compiling SnowShell PS (trenches by parallax)");
-		auto defines = ShellPSDefines("SNOW_TRENCH_POM");
-		if (shellMarchBicubicRestored)
-			defines.emplace_back("SNOW_MARCH_BICUBIC", "");
-		shellPSTrenchPOM = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
-	}
-	return shellPSTrenchPOM;
-}
-
 ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
 {
 	if (shellGridNonIndexed) {
@@ -1441,13 +1415,6 @@ void SnowDeformation::DrawShell()
 	auto ps = GetShellPS();
 	if (!vs || !ps)
 		return;
-	// Trenches by parallax: the untessellated grid with the march pair. A
-	// failed compile leaves the tessellated path as it was.
-	const bool trenchParallax = settings.TrenchParallax && GetShellVSTrenchPOM() && GetShellPSTrenchPOM();
-	if (trenchParallax) {
-		vs = shellVSTrenchPOM[shellGridNonIndexed ? 1 : 0];
-		ps = shellPSTrenchPOM;
-	}
 
 	ScopedTicks _drawShellTicks(cpuCensus.spanTicks[CpuCensus::kSpanDrawShell], cpuCensus.spanCalls[CpuCensus::kSpanDrawShell]);
 	SpanClock spanClock;
@@ -2087,16 +2054,15 @@ void SnowDeformation::DrawShell()
 	// client is trench smoothness (the hull factors key off the deformation
 	// map), and that must survive relief being turned off. With relief at 0
 	// the factors collapse to 1 on undeformed ground, so the path stays cheap.
-	const bool shellTessellate = settings.Tessellation && !trenchParallax;
-	auto* tessVS = shellTessellate ? GetShellTessVS() : nullptr;
+	auto* tessVS = settings.Tessellation ? GetShellTessVS() : nullptr;
 	// Vertex bake: the base-grid corners' surface is evaluated once per
 	// frame by a compute pass and read back by index; the bake DS is chosen
 	// only once the pass and its texture are known good, so a failure falls
 	// to the live DS rather than to an unbound read.
-	ID3D11ComputeShader* bakeCS = (shellTessellate && !shellVertexBakeDisabled && !shellFlatDSDebug) ? GetShellBakeCS() : nullptr;
+	ID3D11ComputeShader* bakeCS = (settings.Tessellation && !shellVertexBakeDisabled && !shellFlatDSDebug) ? GetShellBakeCS() : nullptr;
 	bool bake = bakeCS && EnsureShellVertexBake();
 	ID3D11DomainShader* tessDS = nullptr;
-	if (shellTessellate) {
+	if (settings.Tessellation) {
 		if (bake)
 			tessDS = GetShellDSBake(shellVertexBakeCheck);
 		if (!tessDS) {
@@ -2107,7 +2073,7 @@ void SnowDeformation::DrawShell()
 	// Hull twins read the edge corners' deformation taps from the bake; a
 	// missing twin falls to the live hull, which is always valid.
 	ID3D11HullShader* tessHS = nullptr;
-	if (shellTessellate) {
+	if (settings.Tessellation) {
 		if (bake)
 			tessHS = GetShellHS(true);
 		if (!tessHS)

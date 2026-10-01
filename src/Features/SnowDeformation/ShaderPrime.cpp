@@ -222,12 +222,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { ShaderSourcesFingerprint(); },
 		[&] { GetShellVS(); },
 		[&] { GetShellPS(); },
-		[&] {
-			if (settings.TrenchParallax) {
-				GetShellVSTrenchPOM();
-				GetShellPSTrenchPOM();
-			}
-		},
 		[&] { GetShellHS(false); },
 		[&] { GetShellHS(true); },
 		[&] { GetShellHSNear(false); },
