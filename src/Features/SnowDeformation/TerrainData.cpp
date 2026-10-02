@@ -1203,7 +1203,8 @@ void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 	}
 	landscapeRunsThisFrame++;
 	landscapeRunOpen = true;
-	globals::profiler->BeginPass("SnowDeformation::Ground - Game Terrain Draws");
+	// The game's own terrain shading, so it is grouped apart from the module's rows.
+	globals::profiler->BeginPass("Game Terrain::Deferred Draws (snow-timed)");
 }
 
 void SnowDeformation::CloseLandscapeRun()

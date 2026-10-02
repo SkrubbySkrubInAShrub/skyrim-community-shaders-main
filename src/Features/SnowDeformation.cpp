@@ -360,6 +360,26 @@ void SnowDeformation::CreateDeformationTextures()
 		DX::ThrowIfFailed(device->CreateShaderResourceView(bermTileBuffer.get(), nullptr, bermTileSRV.put()));
 		Util::SetResourceName(bermTileSRV.get(), "SnowDeformation::BermTiles SRV");
 
+		bermOccupancyTexture = nullptr;
+		bermOccupancyUAV = nullptr;
+		bermOccupancySRV = nullptr;
+		DX::ThrowIfFailed(device->CreateTexture2D(&occDesc, nullptr, bermOccupancyTexture.put()));
+		Util::SetResourceName(bermOccupancyTexture.get(), "SnowDeformation::BermOccupancy");
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(bermOccupancyTexture.get(), nullptr, bermOccupancyUAV.put()));
+		Util::SetResourceName(bermOccupancyUAV.get(), "SnowDeformation::BermOccupancy UAV");
+		DX::ThrowIfFailed(device->CreateShaderResourceView(bermOccupancyTexture.get(), nullptr, bermOccupancySRV.put()));
+		Util::SetResourceName(bermOccupancySRV.get(), "SnowDeformation::BermOccupancy SRV");
+
+		untouchedTilesTexture = nullptr;
+		untouchedTilesUAV = nullptr;
+		untouchedTilesSRV = nullptr;
+		DX::ThrowIfFailed(device->CreateTexture2D(&occDesc, nullptr, untouchedTilesTexture.put()));
+		Util::SetResourceName(untouchedTilesTexture.get(), "SnowDeformation::UntouchedTiles");
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(untouchedTilesTexture.get(), nullptr, untouchedTilesUAV.put()));
+		Util::SetResourceName(untouchedTilesUAV.get(), "SnowDeformation::UntouchedTiles UAV");
+		DX::ThrowIfFailed(device->CreateShaderResourceView(untouchedTilesTexture.get(), nullptr, untouchedTilesSRV.put()));
+		Util::SetResourceName(untouchedTilesSRV.get(), "SnowDeformation::UntouchedTiles SRV");
+
 		// Occupancy and berm-dirty content is unknown until the next Prepass
 		// seeds both all-1.
 		tileGridsNeedInit = true;
@@ -1423,6 +1443,9 @@ void SnowDeformation::Prepass()
 				const UINT allDirty[4] = { 1, 1, 1, 1 };
 				context->ClearUnorderedAccessViewUint(occupancyUAV.get(), allDirty);
 				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), allDirty);
+				context->ClearUnorderedAccessViewUint(bermOccupancyUAV.get(), allDirty);
+				const UINT allTouched[4] = { 0, 0, 0, 0 };
+				context->ClearUnorderedAccessViewUint(untouchedTilesUAV.get(), allTouched);
 				tileGridsNeedInit = false;
 			}
 			// Every texel's taps moved: rebuild the whole berm field. With the
@@ -1631,8 +1654,11 @@ void SnowDeformation::Prepass()
 				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
 				ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
+				ID3D11UnorderedAccessView* bermOccUAV = bermOccupancyUAV.get();
+				context->CSSetUnorderedAccessViews(2, 1, &bermOccUAV, nullptr);
 				context->CSSetShader(bermCS, nullptr, 0);
 				context->DispatchIndirect(bermArgsBuffer.get(), 0);
+				context->CSSetUnorderedAccessViews(2, 1, &nullUav, nullptr);
 			}
 			globals::profiler->EndPass();
 
@@ -1649,6 +1675,25 @@ void SnowDeformation::Prepass()
 				const uint extentGroups = (deformMapDim / 8 + 7) / 8;
 				context->Dispatch(extentGroups, extentGroups, 1);
 				context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
+				globals::profiler->EndPass();
+			}
+
+			// Untouched tiles, from the map's and the berm's occupancy as they
+			// stand after this frame's writers.
+			if (auto* untouchedCS = GetUntouchedTilesCS()) {
+				globals::profiler->BeginPass("SnowDeformation::Ground - Untouched Tiles");
+				ID3D11UnorderedAccessView* nullTileUavs[4] = {};
+				context->CSSetUnorderedAccessViews(0, 4, nullTileUavs, nullptr);
+				ID3D11ShaderResourceView* occSrvs[2] = { occupancySRV.get(), bermOccupancySRV.get() };
+				context->CSSetShaderResources(3, 2, occSrvs);
+				ID3D11UnorderedAccessView* untouchedUAV = untouchedTilesUAV.get();
+				context->CSSetUnorderedAccessViews(3, 1, &untouchedUAV, nullptr);
+				context->CSSetShader(untouchedCS, nullptr, 0);
+				const uint tileGroups = (deformMapDim / 8 + 7) / 8;
+				context->Dispatch(tileGroups, tileGroups, 1);
+				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);
+				ID3D11ShaderResourceView* nullOccSrvs[2] = {};
+				context->CSSetShaderResources(3, 2, nullOccSrvs);
 				globals::profiler->EndPass();
 			}
 
@@ -1847,6 +1892,15 @@ ID3D11ComputeShader* SnowDeformation::GetExtentFieldCS()
 	return extentFieldCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetUntouchedTilesCS()
+{
+	if (!untouchedTilesCS) {
+		logger::debug("Compiling BermFieldCS:UntouchedCS");
+		untouchedTilesCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0", "UntouchedCS"));
+	}
+	return untouchedTilesCS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetBermFieldTiledCS()
 {
 	if (!bermFieldTiledCS) {
@@ -2043,6 +2097,9 @@ void SnowDeformation::ClearShaderCache()
 	if (bermFieldTiledCS)
 		bermFieldTiledCS->Release();
 	bermFieldTiledCS = nullptr;
+	if (untouchedTilesCS)
+		untouchedTilesCS->Release();
+	untouchedTilesCS = nullptr;
 	if (undulationFieldCS)
 		undulationFieldCS->Release();
 	undulationFieldCS = nullptr;

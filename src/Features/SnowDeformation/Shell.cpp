@@ -1143,7 +1143,7 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 
 ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 {
-	if (shellPSNoDepth && shellMarchBicubicCompiledPSNoDepth != shellMarchBicubicRestored) {
+	if (shellPSNoDepth && (shellMarchBicubicCompiledPSNoDepth != shellMarchBicubicRestored || shellPSLegacyBitsCompiled != shellPSLegacyBits)) {
 		shellPSNoDepth->Release();
 		shellPSNoDepth = nullptr;
 	}
@@ -1153,7 +1153,14 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 		defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
 		if (shellMarchBicubicRestored)
 			defines.emplace_back("SNOW_MARCH_BICUBIC", "");
+		if (shellPSLegacyBits & 1)
+			defines.emplace_back("SNOW_TEETH_UNGATED", "");
+		if (shellPSLegacyBits & 2)
+			defines.emplace_back("SNOW_REMARCH_SERIAL", "");
+		if (shellPSLegacyBits & 4)
+			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
 		shellMarchBicubicCompiledPSNoDepth = shellMarchBicubicRestored;
+		shellPSLegacyBitsCompiled = shellPSLegacyBits;
 		shellPSNoDepth = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPSNoDepth;
@@ -2004,6 +2011,8 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
 	context->VSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 	context->PSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
+	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
+	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
 	// Blood detail tiles (t66-t69): cell index, pigment atlas, (t68 retired with the soak), clock blocks.
@@ -2528,8 +2537,9 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);
 	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
-	// The extent field is a compute target next Prepass.
+	// The extent field and the untouched mask are compute targets next Prepass.
 	context->PSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
+	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullFinePS[0]);
 	context->VSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
 	context->DSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);

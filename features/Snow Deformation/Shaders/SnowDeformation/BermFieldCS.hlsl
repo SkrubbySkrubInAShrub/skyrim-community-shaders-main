@@ -28,6 +28,16 @@ StructuredBuffer<uint> BermTilesIn : register(t1);
 Texture2D<float> BermFieldIn : register(t2);
 RWTexture2D<float> OutExtentField : register(u1);
 
+// Per-tile "a berm texel is non-zero", written by every bake group for its own
+// tile, so a stale bake still reads as touched.
+RWTexture2D<uint> OutBermOccupancy : register(u2);
+groupshared uint gBermNonZero;
+
+// UntouchedCS: the map's tile occupancy and the berm's, dilated one tile.
+Texture2D<uint> DeformOccupancyIn : register(t3);
+Texture2D<uint> BermOccupancyIn : register(t4);
+RWTexture2D<uint> OutUntouched : register(u3);
+
 // Shares DeformationUpdateCS's PerFrame buffer; only TexelSize is read, but
 // the leading layout must match it exactly.
 cbuffer PerFrame : register(b0)
@@ -110,12 +120,12 @@ float Tap(float2 texel, float2 dims)
 	return TapBilinear(texel, dims);
 }
 
-void BermTexel(uint2 phys)
+bool BermTexel(uint2 phys)
 {
 	float2 dims;
 	DeformationMap.GetDimensions(dims.x, dims.y);
 	if (any(float2(phys) >= dims))
-		return;
+		return false;
 
 	// Tap offsets are authored in world units; the window resizes with the
 	// Trenches range slider, so convert through the live texel size. Tap
@@ -128,26 +138,66 @@ void BermTexel(uint2 phys)
 	[unroll] for (int i = 0; i < 16; i++)
 		b += Tap(centre + kBermTaps[i] * (BermReach * invTexel), dims);
 
-	OutBermField[phys] = saturate(b / 17.0);
+	const float berm = saturate(b / 17.0);
+	OutBermField[phys] = berm;
+	return berm != 0.0;
 }
 
 [numthreads(8, 8, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+void main(uint3 dtid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint GIdx : SV_GroupIndex)
 {
-	BermTexel(dtid.xy);
+	if (GIdx == 0)
+		gBermNonZero = 0;
+	GroupMemoryBarrierWithGroupSync();
+	if (BermTexel(dtid.xy))
+		InterlockedOr(gBermNonZero, 1u);
+	GroupMemoryBarrierWithGroupSync();
+	if (GIdx == 0)
+		OutBermOccupancy[Gid.xy] = gBermNonZero;
 }
 
 // Indirect over ScanBermCS's list: only tiles whose inputs changed (plus
 // the tap-reach halo) rebuild; everything else keeps last frame's bake,
 // which the toroidal layout keeps valid across scrolls.
 [numthreads(8, 8, 1)]
-void BermTiledCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+void BermTiledCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID, uint GIdx : SV_GroupIndex)
 {
+	// Uniform per group, so the early-out never splits a barrier.
 	const uint listIndex = Gid.y * 1024u + Gid.x;
 	if (listIndex >= BermTilesIn[0])
 		return;
 	const uint packed = BermTilesIn[1 + listIndex];
-	BermTexel(uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy);
+	const uint2 tile = uint2(packed & 0xFFFFu, packed >> 16u);
+	if (GIdx == 0)
+		gBermNonZero = 0;
+	GroupMemoryBarrierWithGroupSync();
+	if (BermTexel(tile * 8u + GTid.xy))
+		InterlockedOr(gBermNonZero, 1u);
+	GroupMemoryBarrierWithGroupSync();
+	if (GIdx == 0)
+		OutBermOccupancy[tile] = gBermNonZero;
+}
+
+// 1 where neither the map nor the berm field holds a non-zero texel within one
+// tile: every map or berm read the shells take there returns exactly zero.
+// Wrapped neighbours across the window border only over-include.
+[numthreads(8, 8, 1)]
+void UntouchedCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	DeformOccupancyIn.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+	uint touched = 0;
+	[unroll] for (int dy = -1; dy <= 1; dy++)
+	{
+		[unroll] for (int dx = -1; dx <= 1; dx++)
+		{
+			const uint2 t = (dtid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+			touched |= DeformOccupancyIn[t] | BermOccupancyIn[t];
+		}
+	}
+	OutUntouched[dtid.xy] = touched == 0 ? 1u : 0u;
 }
 
 // ---- Trample extent ----

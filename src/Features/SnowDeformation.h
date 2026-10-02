@@ -894,6 +894,8 @@ public:
 	ID3D11ShaderResourceView* GetExtentFieldSRV() const { return extentFieldTexture ? extentFieldTexture->srv.get() : nullptr; }
 	/** @brief Shell SRV slot of the trample extent field, bound wherever the berm field (t14) is. */
 	static constexpr UINT kExtentFieldSlot = 56;
+	/** @brief PS slot of the untouched-tile mask (BermFieldCS UntouchedCS), read by the shell PS's skip. */
+	static constexpr UINT kUntouchedTilesSlot = 57;
 
 
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
@@ -1386,6 +1388,17 @@ public:
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermArgsUAV;
 	/** @brief Last consumed berm-tile census (activity readback). */
 	uint32_t bermTilesLast = 0;
+	/** @brief Per-tile "a berm texel is non-zero", written by each bake group for its own tile. Recreated with the map; seeded all-1. */
+	winrt::com_ptr<ID3D11Texture2D> bermOccupancyTexture;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bermOccupancyUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bermOccupancySRV;
+	/** @brief 1 per tile where the map and the berm field are zero within one tile (UntouchedCS, after the berm bake). The shell PS skips its carve/berm reads there. Seeded all-0 (touched). */
+	winrt::com_ptr<ID3D11Texture2D> untouchedTilesTexture;
+	winrt::com_ptr<ID3D11UnorderedAccessView> untouchedTilesUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> untouchedTilesSRV;
+	/** @brief Returns BermFieldCS.hlsl:UntouchedCS, compiling it on first use. */
+	ID3D11ComputeShader* GetUntouchedTilesCS();
+	ID3D11ComputeShader* untouchedTilesCS = nullptr;
 
 	/** @brief Arriving-band rect in logical texel space; see ComputeArrivalRects. */
 	struct ArrivalRect
@@ -1983,6 +1996,9 @@ public:
 	bool shellMarchBicubicRestored = false;
 	bool shellMarchBicubicCompiledPS = false;
 	bool shellMarchBicubicCompiledPSNoDepth = false;
+	/** @brief Measurement A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 2 serial SSS re-march loads, 4 no untouched-tile skip. Rekeys the no-export PS. */
+	uint32_t shellPSLegacyBits = 0;
+	uint32_t shellPSLegacyBitsCompiled = 0;
 
 	/** @brief Clamp state the cached shellPS was compiled against; a mismatch releases it. The clamp is a debug A/B now (shellDepthClampDisabled), not a setting. */
 	bool shellDepthClampCompiled = true;

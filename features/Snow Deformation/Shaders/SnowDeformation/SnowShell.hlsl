@@ -317,6 +317,9 @@ Texture2D<float3> LandMasksCopy : register(t10);
 Texture2D<float> BermFieldMap : register(t14);
 // Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
 Texture2D<float> ExtentFieldMap : register(t56);
+// 1 per 8x8 physical map tile where the map and the berm field read zero
+// within one tile (BermFieldCS UntouchedCS). Unbound reads 0 = touched.
+Texture2D<uint> UntouchedTiles : register(t57);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);
@@ -2308,6 +2311,35 @@ bool ShellPrepassHidden(float rasterZ, float rawSceneDepth, float shellZ, float 
 	return !ShellFarClampWindow(shellZ, sceneZ) && !ShellNearClampWindow(shellZ, sceneZ) && rasterZ > rawSceneDepth + 1e-6;
 }
 
+// Every lane of the quad is hidden, so the exit is quad-uniform and the
+// derivatives fxc sinks below it stay valid.
+bool ShellPrepassQuadHidden(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ)
+{
+	float hidden = ShellPrepassHidden(rasterZ, rawSceneDepth, shellZ, sceneZ) ? 1.0 : 0.0;
+	float hx = ddx_fine(hidden);
+	return hidden > 0.5 && hx == 0.0 && ddy_fine(hidden) == 0.0 && ddy_fine(hx) == 0.0;
+}
+
+
+// Every map and berm read within 8 units of here returns exactly zero, so the
+// carve, berm and surface-state terms equal their zero-input results. Just
+// outside the window a tap can still reach in, so only far outside skips.
+bool ShellUntouched(float2 gridLocal)
+{
+#ifdef SNOW_UNTOUCHED_SKIP_OFF
+	return false;
+#else
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	float2 pad = 8.0 * DeformInvWorldSize;
+	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	int2 logical = clamp(int2(uv * dims), 0, int2(dims) - 1);
+	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
+	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
+	return BermBakeActive > 0.5 && (farOutside || (inside && zeroTile));
+#endif
+}
 
 // SHELL-SURFACE SSS RE-MARCH (opt-in, CompactLook.y).
 //
@@ -2333,6 +2365,18 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 	// Contact range: grass and rails are short casters, so the steps stay
 	// tight and grow geometrically rather than reaching for distance.
 	static const float kRemarchStep[8] = { 6.0, 13.0, 23.0, 38.0, 60.0, 92.0, 140.0, 210.0 };
+#ifndef SNOW_REMARCH_SERIAL
+	// All eight depth loads up front, so they overlap instead of each waiting
+	// on the branch before it. Steps the tests below reject never read theirs.
+	float rawStepDepth[8];
+	[unroll] for (uint j = 0; j < 8; j++)
+	{
+		float3 sampleRel = relPos + L * (kRemarchStep[j] * (0.7 + 0.6 * noise));
+		float4 clip = mul(CameraViewProjUnjittered, float4(sampleRel, 1.0));
+		float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
+		rawStepDepth[j] = SceneDepth.Load(int3(int2(uv * dynRes * SharedData::BufferDim.xy), 0));
+	}
+#endif
 	float occl = 0.0;
 	[unroll] for (uint i = 0; i < 8; i++)
 	{
@@ -2343,8 +2387,12 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 			float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
 			[branch] if (all(uv > 0.0) && all(uv < 1.0))
 			{
+#ifdef SNOW_REMARCH_SERIAL
 				int2 px = int2(uv * dynRes * SharedData::BufferDim.xy);
 				float occZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
+#else
+				float occZ = SharedData::GetScreenDepth(rawStepDepth[i]);
+#endif
 				// Something stands between this step and the camera - and,
 				// with the streak fix on, within the thin-shell window of
 				// the ray point rather than anywhere in front of it.
@@ -2393,12 +2441,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
 	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
-	// The prepass's only derivatives, taken above its exit.
+	// The prepass's only derivatives.
 	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
 #if defined(SNOW_SHELL_DEPTH_PREPASS) && !defined(SNOW_PREPASS_KEEP_HIDDEN)
-	// The depth export denies early-Z; a hidden fragment skips the alpha cut.
-	[branch] if (ShellPrepassHidden(input.Position.z, rawSceneDepth, shellZ, sceneZ))
+	// The depth export denies early-Z; a hidden quad skips the alpha cut.
+	[branch] if (ShellPrepassQuadHidden(input.Position.z, rawSceneDepth, shellZ, sceneZ))
 	{
 		discard;
 		return (PS_PREPASS_OUTPUT)0;
@@ -2497,7 +2545,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// they dither away view-dependently: carved trench floors, and the shell
 	// riding a raised height field. The carve override is also what ends
 	// trenches hard at class borders while untrampled snow dissolves softly.
-	float pixelCarve = saturate(SampleDeformation(gridLocal));
+	const bool pixelUntouched = ShellUntouched(gridLocal);
+	float pixelCarve = 0.0;
+	[branch] if (!pixelUntouched)
+		pixelCarve = saturate(SampleDeformation(gridLocal));
 	float pixelLift = 0.0;
 	float2 pixelShelter = SampleExclusionMask(GridOrigin + gridLocal);
 	[branch] if (ObjectLiftCap > 1.0)
@@ -2626,46 +2677,53 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the shared carve profile (central differences at the deformation
 	// map's resolution), so trench walls AND the edge berm shade by the
 	// same shape the geometry displaces.
-	const float step = 4.0;
-	float dXP = SampleDeformation(gridLocal + float2(step, 0.0));
-	float dXN = SampleDeformation(gridLocal - float2(step, 0.0));
-	float dYP = SampleDeformation(gridLocal + float2(0.0, step));
-	float dYN = SampleDeformation(gridLocal - float2(0.0, step));
-
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
 	// Shading depth mirrors ShellSurfaceZ's uncarved depth: the touch-down
 	// toe, then melt thins toward kFireMeltFloor. Every relief gradient below
 	// scales by it, so a print in a melt basin shades as flat as it is built.
 	float pixelDepth = max(TouchDownToe(pixelRampDepth), 0.0);
 	pixelDepth = lerp(pixelDepth, min(pixelDepth, kFireMeltFloor), pixelMelt);
-	float2 profileGrad = float2(
-		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
-		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
-	// Berm shading: numerical gradient of the SAME blurred hill the
-	// geometry displaces by, so the light/shadow break sits on the hill's
-	// true flanks (the analytic shortcut put the terminator on the crest).
-	// A steeper berm can shrink its step below the profile's; the mask then
-	// needs its own taps at the same points.
-	const float bStep = BermGradStep();
-	float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
-	[branch] if (bStep < step - 0.01)
+	// Untouched: every profile tap is pixelDepth and every berm tap zero, so
+	// both gradients and the centre are +0.
+	float2 profileGrad = 0.0;
+	float2 bermGrad = 0.0;
+	float bermCenter = 0.0;
+	[branch] if (!pixelUntouched)
 	{
-		mXP = SampleDeformation(gridLocal + float2(bStep, 0.0));
-		mXN = SampleDeformation(gridLocal - float2(bStep, 0.0));
-		mYP = SampleDeformation(gridLocal + float2(0.0, bStep));
-		mYN = SampleDeformation(gridLocal - float2(0.0, bStep));
+		const float step = 4.0;
+		float dXP = SampleDeformation(gridLocal + float2(step, 0.0));
+		float dXN = SampleDeformation(gridLocal - float2(step, 0.0));
+		float dYP = SampleDeformation(gridLocal + float2(0.0, step));
+		float dYN = SampleDeformation(gridLocal - float2(0.0, step));
+		profileGrad = float2(
+			CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+			CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
+		// Berm shading: numerical gradient of the SAME blurred hill the
+		// geometry displaces by, so the light/shadow break sits on the hill's
+		// true flanks (the analytic shortcut put the terminator on the crest).
+		// A steeper berm can shrink its step below the profile's; the mask then
+		// needs its own taps at the same points.
+		const float bStep = BermGradStep();
+		float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
+		[branch] if (bStep < step - 0.01)
+		{
+			mXP = SampleDeformation(gridLocal + float2(bStep, 0.0));
+			mXN = SampleDeformation(gridLocal - float2(bStep, 0.0));
+			mYP = SampleDeformation(gridLocal + float2(0.0, bStep));
+			mYN = SampleDeformation(gridLocal - float2(0.0, bStep));
+		}
+		float bermXP = BermField(gridLocal + float2(bStep, 0.0));
+		float bermXN = BermField(gridLocal - float2(bStep, 0.0));
+		float bermYP = BermField(gridLocal + float2(0.0, bStep));
+		float bermYN = BermField(gridLocal - float2(0.0, bStep));
+		// Differenced WITH the (1 - deformation) mask, so the shading gradient is
+		// of the exact surface the vertex path displaces - an unmasked gradient
+		// here shades a hill the geometry no longer has.
+		bermGrad = float2(
+			BermShape(bermXP) * saturate(1.0 - mXP) - BermShape(bermXN) * saturate(1.0 - mXN),
+			BermShape(bermYP) * saturate(1.0 - mYP) - BermShape(bermYN) * saturate(1.0 - mYN)) / (2.0 * bStep);
+		bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	}
-	float bermXP = BermField(gridLocal + float2(bStep, 0.0));
-	float bermXN = BermField(gridLocal - float2(bStep, 0.0));
-	float bermYP = BermField(gridLocal + float2(0.0, bStep));
-	float bermYN = BermField(gridLocal - float2(0.0, bStep));
-	// Differenced WITH the (1 - deformation) mask, so the shading gradient is
-	// of the exact surface the vertex path displaces - an unmasked gradient
-	// here shades a hill the geometry no longer has.
-	float2 bermGrad = float2(
-		BermShape(bermXP) * saturate(1.0 - mXP) - BermShape(bermXN) * saturate(1.0 - mXN),
-		BermShape(bermYP) * saturate(1.0 - mYP) - BermShape(bermYN) * saturate(1.0 - mYN)) / (2.0 * bStep);
-	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	// Meeting a captured object: the sheet's MACRO slope goes halfway to the
 	// object's (ShellObjectMeet); the coat comes the other half
 	// (SnowStaticsShell.hlsl). Relief and grain stay the sheet's own.
@@ -2744,8 +2802,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// One quad fetch for both: the scorch read further down wants the same
 	// four texels of the same map at the same place, and both sites are
 	// unconditional, so sharing costs nothing and skips four loads.
-	float scorchRaw, crustRaw;
-	SampleScorchCrust(gridLocal, scorchRaw, crustRaw);
+	float scorchRaw = 0.0, crustRaw = 0.0;
+	[branch] if (!pixelUntouched)
+		SampleScorchCrust(gridLocal, scorchRaw, crustRaw);
 	float crustAmount = saturate(crustRaw * SpellShading.y);
 	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
@@ -3050,10 +3109,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 				float depth0 = max(st0.y, 0.0);
 				float2 mask0 = SampleExclusionMask(GridOrigin + gridLocal);
 				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(mask0.y));
-				float deform0 = SampleDeformationMarch(gridLocal);
-				float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
-				depth0 = CarveProfile(deform0, depth0, GridOrigin + gridLocal) +
-				         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
+				// Untouched: CarveProfile of a zero carve is depth0, the berm +0.
+				[branch] if (!pixelUntouched)
+				{
+					float deform0 = SampleDeformationMarch(gridLocal);
+					float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
+					depth0 = CarveProfile(deform0, depth0, GridOrigin + gridLocal) +
+					         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
+				}
 				marchRef = st0.x + depth0 + Undulation(GridOrigin + gridLocal) * saturate(depth0 / 8.0);
 			}
 		}
@@ -3076,15 +3139,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 				float sampleMelt = saturate(sampleMask.y);
 				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 			}
-			float sampleDeform = SampleDeformationMarch(sampleLocal);
-			// The berm occluder reads the berm FIELD, as the geometry does.
-			// BermShape of a raw deformation value peaks across the trench's
-			// sloping wall, which rings every trail with a phantom ridge. One
-			// bilinear tap when the bake is live; the unbaked A/B path skips
-			// the term rather than paying 17 taps per march step.
-			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-			sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
-			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
+			[branch] if (!ShellUntouched(sampleLocal))
+			{
+				float sampleDeform = SampleDeformationMarch(sampleLocal);
+				// The berm occluder reads the berm FIELD, as the geometry does.
+				// BermShape of a raw deformation value peaks across the trench's
+				// sloping wall, which rings every trail with a phantom ridge. One
+				// bilinear tap when the bake is live; the unbaked A/B path skips
+				// the term rather than paying 17 taps per march step.
+				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+				sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
+				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
+			}
 			// Live undulation ON PURPOSE: in the march, ALU is free and loads
 			// are the bottleneck, so the bake's 4 loads per tap were a
 			// regression here (2026-08-30). Geometry and shading keep the bake.

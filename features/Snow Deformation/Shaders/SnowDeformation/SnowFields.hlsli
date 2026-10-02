@@ -464,10 +464,16 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	// cut-wall vocabulary, dimples stay smooth.
 	[branch] if (RimStyle.y > 0.001)
 	{
-		float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
-		              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
 		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
-		d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
+		// Outside the band the notch adds a signed zero.
+#ifndef SNOW_TEETH_UNGATED
+		[branch] if (rimBand > 0.0 && depthT > 0.0)
+#endif
+		{
+			float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
+			              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
+			d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
+		}
 	}
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
