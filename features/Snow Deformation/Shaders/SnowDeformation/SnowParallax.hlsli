@@ -126,6 +126,16 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 // derivatives (standard mipmapping takes max), then floor. Deliberately
 // sharper than hardware - a blurred height field resolves to mush. Takes
 // derivatives, so call it in uniform flow, not inside the shadow branch.
+// The same rule from uv derivatives handed in (deferred shading).
+float SnowHeightMipGrad(float2 duvdx, float2 duvdy)
+{
+	float2 dims;
+	SnowHeightMap.GetDimensions(dims.x, dims.y);
+	float2 dx = duvdx * dims;
+	float2 dy = duvdy * dims;
+	return floor(max(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-8)) + SharedData::MipBias, 0.0));
+}
+
 float SnowHeightMip(float2 uv)
 {
 	float2 dims;

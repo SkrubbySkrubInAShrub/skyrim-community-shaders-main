@@ -46,6 +46,17 @@ float EMParallaxCustomHeight(float2 uv, float mip);
 #	include "SnowDeformation/SnowLights.hlsli"
 #endif
 
+#if defined(PSHADER) && defined(SNOW_SHELL_DEFERRED)
+// Deferred shading: the prepass's own coarse derivatives of GridLocal and of
+// WorldPos.z, read back per pixel. A full-screen pass has no triangle to take
+// them from; every derivative the shading needs is a chain-rule product of
+// these two.
+static float2 gDeferredGridDx;
+static float2 gDeferredGridDy;
+static float gDeferredZDx;
+static float gDeferredZDy;
+#endif
+
 cbuffer ShellCB : register(b0)
 {
 	// row_major matches the game's FrameBuffer.hlsli declarations; the CPU
@@ -2237,6 +2248,14 @@ struct PS_PREPASS_OUTPUT
 	// pass's hull culls every patch that won no pixel.
 	uint PatchId : SV_Target1;
 #	endif
+#	ifdef SNOW_PREPASS_ATTR
+	// Deferred shading's inputs for each winning pixel: GridLocal and the
+	// terrain normal's xy; GridLocal's coarse derivatives; the view depth and
+	// WorldPos.z's coarse derivatives.
+	float4 AttrGrid : SV_Target1;
+	float4 AttrGridDeriv : SV_Target2;
+	float4 AttrDepth : SV_Target3;
+#	endif
 	float DepthLE : SV_DepthLessEqual;
 };
 
@@ -2426,7 +2445,61 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 }
 #endif
 
-#ifdef SNOW_SHELL_DEPTH_PREPASS
+#ifdef SNOW_LANE_CENSUS
+// Lane census (measurement only): the shading draws re-issued with no depth
+// test, so each lane decides itself whether the EQUAL test would pass. Counts
+// [0] live pixels, [4] quads with a live lane (the quads early-Z launches),
+// [8] live pixels on untouched tiles, [12..24] quads by live-lane count 1-4.
+RWByteAddressBuffer LaneCensus : register(u0);
+Texture2D<float> CensusTestDepth : register(t61);
+
+// The four lanes' values of v in quad order (0,0) (1,0) (0,1) (1,1).
+float4 QuadGather(float v, uint2 pixel)
+{
+	float dx = ddx_fine(v);
+	float dy = ddy_fine(v);
+	float dxy = ddy_fine(dx);
+	float px = (float)(pixel.x & 1);
+	float py = (float)(pixel.y & 1);
+	float dyCol0 = dy - px * dxy;
+	float a = v - px * dx - py * dyCol0;
+	float dxRow0 = dx - py * dxy;
+	float c = a + dyCol0;
+	return float4(a, a + dxRow0, c, c + dxRow0 + dxy);
+}
+
+void main(VS_OUTPUT input, uint coverage : SV_Coverage)
+{
+	uint2 pixel = uint2(input.Position.xy);
+	bool live = coverage != 0 && CensusTestDepth.Load(int3(pixel, 0)) == input.Position.z;
+	float4 q = QuadGather(live ? 1.0 : 0.0, pixel);
+	// The gather feeds the condition, so fxc cannot sink its derivatives into
+	// the branch where the helper lanes no longer run.
+	[branch] if (live && dot(q, 1.0) > 0.5)
+	{
+		uint lane = (pixel.x & 1) + 2 * (pixel.y & 1);
+		bool first = true;
+		[unroll] for (uint k = 0; k < 3; k++)
+		{
+			if (k < lane && q[k] > 0.5)
+				first = false;
+		}
+		uint ignored;
+		LaneCensus.InterlockedAdd(0, 1, ignored);
+		[branch] if (first)
+		{
+			uint liveCount = clamp((uint)round(q.x + q.y + q.z + q.w), 1, 4);
+			LaneCensus.InterlockedAdd(4, 1, ignored);
+			LaneCensus.InterlockedAdd(8 + 4 * liveCount, 1, ignored);
+		}
+		[branch] if (ShellUntouched(input.GridLocal))
+			LaneCensus.InterlockedAdd(8, 1, ignored);
+	}
+}
+#else
+#if defined(SNOW_SHELL_DEFERRED)
+PS_OUTPUT ShellShade(VS_OUTPUT input)
+#elif defined(SNOW_SHELL_DEPTH_PREPASS)
 PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #else
 PS_OUTPUT main(VS_OUTPUT input)
@@ -2443,7 +2516,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float shellZ = input.CurrentClip.w;
 	// The prepass's only derivatives.
 	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+#ifdef SNOW_SHELL_DEFERRED
+	float edgeSnowMip = SnowHeightMipGrad(gDeferredGridDx / kSnowUVTile, gDeferredGridDy / kSnowUVTile);
+#else
 	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+#endif
+#ifdef SNOW_PREPASS_ATTR
+	const float4 attrGridDeriv = float4(ddx_coarse(input.GridLocal), ddy_coarse(input.GridLocal));
+	const float2 attrZDeriv = float2(ddx_coarse(input.WorldPos.z), ddy_coarse(input.WorldPos.z));
+#endif
 #if defined(SNOW_SHELL_DEPTH_PREPASS) && !defined(SNOW_PREPASS_KEEP_HIDDEN)
 	// The depth export denies early-Z; a hidden quad skips the alpha cut.
 	[branch] if (ShellPrepassQuadHidden(input.Position.z, rawSceneDepth, shellZ, sceneZ))
@@ -2583,6 +2664,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the sheet fall back to a hard cut whenever that was off. Multiplied in,
 	// so the class design and the overrides keep their word; dirt can only eat
 	// in, and the slice layer carries the outward side.
+#ifndef SNOW_SHELL_DEFERRED
 	float contestFade = 1.0 - smoothstep(1024.0, 2048.0, shellZ);
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
@@ -2633,6 +2715,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// stochastic snow just BEYOND the cut (the 0.2..0.5 alpha tail) - dust
 	// from the intersection onto the ground, never upward into the
 	// committed sheet; off is a clean binary cut.
+#endif
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	float3 objectMeet = float3(0.0, 0.0, 0.0);
 	[branch] if (shellZ < 2048.0)
@@ -2640,6 +2723,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		objectMeet = ShellObjectMeet(GridOrigin + gridLocal, input.WorldPos.z + ShellCameraPosAdjust.z);
 		objectMeet.x *= 1.0 - smoothstep(1024.0, 2048.0, shellZ);
 	}
+#ifdef SNOW_SHELL_DEFERRED
+	// Only the prepass's winners reach this pass, and it already ran the cut.
+	coverageAlpha = 1.0;
+#else
 	[branch] if (ShellLODDebug == 1)
 	{
 		// Heatmap analyzes the covered snow surface only: bare/submerged
@@ -2658,6 +2745,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			discard;
 		coverageAlpha = 1.0;
 	}
+#endif
 
 	// A melted floor is as thin as an edge: it takes the near micro-clamp
 	// too, which the unmelted depth alone never asked for.
@@ -2667,6 +2755,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	prepassOut.RasterDepth = input.Position.z;
 #	ifdef SNOW_SHELL_PREPASS_PATCH
 	prepassOut.PatchId = input.PatchId;
+#	endif
+#	ifdef SNOW_PREPASS_ATTR
+	prepassOut.AttrGrid = float4(input.GridLocal, normalize(input.TerrainNormalAlpha.xyz).xy);
+	prepassOut.AttrGridDeriv = attrGridDeriv;
+	prepassOut.AttrDepth = float4(input.CurrentClip.w, attrZDeriv, 0.0);
 #	endif
 	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ, input.Position.xy));
 	return prepassOut;
@@ -2808,10 +2901,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float crustAmount = saturate(crustRaw * SpellShading.y);
 	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+#ifdef SNOW_SHELL_DEFERRED
+	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXYPS);
+	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
+	snowTaps.duvdy = gDeferredGridDy / kSnowUVTile;
+	float snowHeightMip = SnowHeightMipGrad(snowTaps.duvdx, snowTaps.duvdy);
+#else
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
 	// Uniform flow: the parallax shadow branch below is divergent, and
 	// derivatives taken inside it would be garbage at its edges.
 	float snowHeightMip = SnowHeightMip(snowUV);
+#endif
 	// Two-plane projection: top-down uv smears down near-vertical trench walls,
 	// so steep pixels blend in a side-plane sample. Keyed on the per-pixel
 	// trench normal, captured BEFORE the normal map perturbs normalWS - the
@@ -2830,10 +2930,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// precision; derivatives and mip come from the UNFOLDED uv.
 	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
 	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
+#ifdef SNOW_SHELL_DEFERRED
+	SnowTaps snowTapsSide = ComputeSnowTapsNoGrad(snowUVSide, snowSidePlane);
+	snowTapsSide.duvdx = (snowSideDropsX ? float2(gDeferredGridDx.y, gDeferredZDx) : float2(gDeferredGridDx.x, gDeferredZDx)) / kSnowUVTile;
+	snowTapsSide.duvdy = (snowSideDropsX ? float2(gDeferredGridDy.y, gDeferredZDy) : float2(gDeferredGridDy.x, gDeferredZDy)) / kSnowUVTile;
+	float snowHeightMipSide = SnowHeightMipGrad(snowTapsSide.duvdx, snowTapsSide.duvdy);
+#else
 	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
 	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
 	snowTapsSide.duvdy = ddy(snowUVSideUnfolded);
 	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
+#endif
 	// Tangent basis for the snow maps. The snow uv is a world-XY planar
 	// projection, so the frame is axis-aligned by construction: bumpT is
 	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
@@ -2910,9 +3017,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float e = 1.5 / texDims.x;
 		float2 detailUV = worldXYPS / kBumpTile;
 		const float3 kLum = float3(0.30, 0.45, 0.25);
+#ifdef SNOW_SHELL_DEFERRED
+		const float2 detailDx = gDeferredGridDx / kBumpTile;
+		const float2 detailDy = gDeferredGridDy / kBumpTile;
+		float h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
+		float hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
+		float hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
+#else
 		float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
 		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
+#endif
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
@@ -2948,7 +3063,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bloodFresh = 0.0;
 	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
 	float4 bloodPaint;
+#ifdef SNOW_SHELL_DEFERRED
+	SampleBloodTiles(worldXYPS, gDeferredGridDx, gDeferredGridDy, blood, bloodFresh, bloodPaint);
+#else
 	SampleBloodTiles(worldXYPS, ddx(worldXYPS), ddy(worldXYPS), blood, bloodFresh, bloodPaint);
+#endif
 	[branch] if (blood.a > 0.002)
 	{
 		float3 pigment = Color::LinearToSrgb(blood.rgb);
@@ -2970,7 +3089,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	const float bloodCover = max(blood.a, bloodPaint.a);
 	// A rune's glyph lies on the snow as the game's decal lies on the ground:
 	// its colour over the albedo by its alpha, its glow added after lighting.
+#ifdef SNOW_SHELL_DEFERRED
+	RuneGlyph rune = SampleRunes(worldXYPS, gDeferredGridDx, gDeferredGridDy);
+#else
 	RuneGlyph rune = SampleRunes(worldXYPS, ddx(worldXYPS), ddy(worldXYPS));
+#endif
 	float3 runeEmission = rune.emission;
 	[branch] if (rune.colour.a > 0.004)
 	{
@@ -3585,6 +3708,52 @@ PS_OUTPUT main(VS_OUTPUT input)
 	return psout;
 #endif  // !SNOW_SHELL_DEPTH_PREPASS
 }
+
+#ifdef SNOW_SHELL_DEFERRED
+// Deferred shading (Shell Shader Performance > Deferred Shell Shading): one
+// full-screen triangle at depth 0, tested LESS against the fill's private
+// depth, so it shades exactly the prepass's winners and every quad is whole.
+// The prepass's attributes stand in for the interpolants.
+Texture2D<float4> DeferredGrid : register(t91);
+Texture2D<float4> DeferredGridDeriv : register(t92);
+Texture2D<float4> DeferredDepth : register(t93);
+
+PS_OUTPUT main(float4 pos : SV_Position)
+{
+	const int3 px = int3(pos.xy, 0);
+	const float4 grid = DeferredGrid.Load(px);
+	const float4 gridDeriv = DeferredGridDeriv.Load(px);
+	const float4 depth = DeferredDepth.Load(px);
+	gDeferredGridDx = gridDeriv.xy;
+	gDeferredGridDy = gridDeriv.zw;
+	gDeferredZDx = depth.y;
+	gDeferredZDy = depth.z;
+
+	// The raster point back from its view depth: rows 0, 1 and 3 of the
+	// jittered view-projection solved for rel (Cramer), the pixel centre
+	// mapped through the render viewport.
+	const float w = depth.x;
+	const float2 ndc = float2(pos.x / TessScreen.y - 1.0, 1.0 - pos.y / TessScreen.z);
+	const float3 r0 = CameraViewProj[0].xyz;
+	const float3 r1 = CameraViewProj[1].xyz;
+	const float3 r3 = CameraViewProj[3].xyz;
+	const float3 c0 = cross(r1, r3);
+	const float3 c1 = cross(r3, r0);
+	const float3 c2 = cross(r0, r1);
+	const float3 b = float3(ndc.x * w - CameraViewProj[0].w, ndc.y * w - CameraViewProj[1].w, w - CameraViewProj[3].w);
+	const float3 rel = (b.x * c0 + b.y * c1 + b.z * c2) / dot(r0, c0);
+
+	VS_OUTPUT input = (VS_OUTPUT)0;
+	input.Position = float4(pos.xy, 0.0, 1.0);
+	input.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	input.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(rel + ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz, 1.0));
+	input.WorldPos = rel;
+	input.GridLocal = grid.xy;
+	input.TerrainNormalAlpha = float4(grid.zw, sqrt(saturate(1.0 - dot(grid.zw, grid.zw))), 1.0);
+	return ShellShade(input);
+}
+#endif
+#endif  // !SNOW_LANE_CENSUS
 #endif
 
 #ifdef COMPUTESHADER

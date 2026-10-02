@@ -2344,6 +2344,15 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::TreePop();
 		}
+
+		// Shell shader changes that are not exact: A/B by eye.
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell_perf"), "Shell Shader Performance"))) {
+			ImGui::Checkbox(T(TKEY("shell_deferred_shading"), "Deferred Shell Shading"), &shellDeferredShading);
+			if (auto _ttDeferred = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_deferred_shading_tooltip"), "The ground snow is shaded in one full-screen pass after its depth prepass, instead of drawing its triangles a second time. Small and sliver triangles no longer make the GPU shade unused pixel lanes, which was a large share of the snow's cost on open snowfields. Near-exact: positions are rebuilt from the prepass's depth, texture filtering uses the prepass's own derivatives, and trampled churn's parallax keeps a constant texture detail level. Debug views keep the old path."));
+			ImGui::TextDisabled("%s", shellDeferredThisFrame ? T(TKEY("shell_deferred_active"), "Deferred pass: drawing") : T(TKEY("shell_deferred_inactive"), "Deferred pass: not drawing"));
+			ImGui::TreePop();
+		}
 		ImGui::TreePop();
 	}
 #endif

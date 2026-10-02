@@ -1166,6 +1166,154 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 	return shellPSNoDepth;
 }
 
+bool SnowDeformation::EnsureDeferredResources()
+{
+	if (!shellRasterDepth)
+		return false;
+	const auto& base = shellRasterDepth->desc;
+	static constexpr DXGI_FORMAT kFormats[3] = { DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT };
+	static constexpr const char* kNames[3] = { "SnowDeformation::ShellDeferredGrid", "SnowDeformation::ShellDeferredGridDeriv", "SnowDeformation::ShellDeferredDepth" };
+	for (int i = 0; i < 3; i++) {
+		auto*& attr = shellDeferredAttr[i];
+		if (attr && (attr->desc.Width != base.Width || attr->desc.Height != base.Height)) {
+			delete attr;
+			attr = nullptr;
+		}
+		if (!attr) {
+			D3D11_TEXTURE2D_DESC desc = base;
+			desc.Format = kFormats[i];
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			};
+			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			attr = new Texture2D(desc, kNames[i]);
+			attr->CreateSRV(srvDesc);
+			attr->CreateRTV(rtvDesc);
+		}
+	}
+	if (!shellDeferredDepthState) {
+		D3D11_DEPTH_STENCIL_DESC dsDesc{};
+		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.DepthFunc = D3D11_COMPARISON_LESS;
+		if (FAILED(globals::d3d::device->CreateDepthStencilState(&dsDesc, shellDeferredDepthState.put())))
+			return false;
+		Util::SetResourceName(shellDeferredDepthState.get(), "SnowDeformation::ShellDeferredDepthState");
+	}
+	return shellDeferredAttr[0]->rtv && shellDeferredAttr[1]->rtv && shellDeferredAttr[2]->rtv;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
+{
+	if (shellPSDeferred && shellPSDeferredLegacyBits != shellPSLegacyBits) {
+		shellPSDeferred->Release();
+		shellPSDeferred = nullptr;
+	}
+	if (!shellPSDeferred) {
+		logger::debug("Compiling SnowShell PS (deferred)");
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
+		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
+		if (shellPSLegacyBits & 1)
+			defines.emplace_back("SNOW_TEETH_UNGATED", "");
+		if (shellPSLegacyBits & 2)
+			defines.emplace_back("SNOW_REMARCH_SERIAL", "");
+		if (shellPSLegacyBits & 4)
+			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
+		shellPSDeferredLegacyBits = shellPSLegacyBits;
+		shellPSDeferred = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	}
+	return shellPSDeferred;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
+{
+	auto*& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0];
+	if (!slot) {
+		logger::debug("Compiling SnowShell PS (depth prepass, deferred attributes{})", a_keepHidden ? ", hidden kept" : "");
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
+		defines.emplace_back("SNOW_PREPASS_ATTR", "");
+		if (a_keepHidden)
+			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
+		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	}
+	return slot;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellPSCensus()
+{
+	if (!shellPSCensus) {
+		logger::debug("Compiling SnowShell PS (lane census)");
+		shellPSCensus = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellPSDefines("SNOW_LANE_CENSUS"), "ps_5_0"));
+	}
+	return shellPSCensus;
+}
+
+bool SnowDeformation::EnsureLaneCensusResources()
+{
+	if (laneCensusBuffer)
+		return true;
+	auto device = globals::d3d::device;
+	D3D11_BUFFER_DESC desc{};
+	desc.ByteWidth = 32;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+	desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+	if (FAILED(device->CreateBuffer(&desc, nullptr, laneCensusBuffer.put())))
+		return false;
+	Util::SetResourceName(laneCensusBuffer.get(), "SnowDeformation::LaneCensus");
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+	uavDesc.Buffer.NumElements = 8;
+	uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+	if (FAILED(device->CreateUnorderedAccessView(laneCensusBuffer.get(), &uavDesc, laneCensusUAV.put()))) {
+		laneCensusBuffer = nullptr;
+		return false;
+	}
+	Util::SetResourceName(laneCensusUAV.get(), "SnowDeformation::LaneCensus UAV");
+	D3D11_BUFFER_DESC stagingDesc{};
+	stagingDesc.ByteWidth = 32;
+	stagingDesc.Usage = D3D11_USAGE_STAGING;
+	stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	for (auto& staging : laneCensusStaging) {
+		if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, staging.put()))) {
+			laneCensusBuffer = nullptr;
+			laneCensusUAV = nullptr;
+			return false;
+		}
+	}
+	return true;
+}
+
+void SnowDeformation::ReadLaneCensus(ID3D11DeviceContext* a_context)
+{
+	for (int r = 0; r < kLaneCensusRing; r++) {
+		if (!laneCensusPending[r] || !laneCensusStaging[r])
+			continue;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(a_context->Map(laneCensusStaging[r].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
+			continue;
+		const auto* v = static_cast<const uint32_t*>(mapped.pData);
+		laneCensus.frames++;
+		laneCensus.pixels += v[0];
+		laneCensus.quads += v[1];
+		laneCensus.untouched += v[2];
+		for (int k = 0; k < 4; k++)
+			laneCensus.quadLive[k] += v[3 + k];
+		a_context->Unmap(laneCensusStaging[r].get(), 0);
+		laneCensusPending[r] = false;
+	}
+}
+
 ID3D11ComputeShader* SnowDeformation::GetShellBakeCS()
 {
 	if (!shellBakeCS) {
@@ -2313,7 +2461,12 @@ void SnowDeformation::DrawShell()
 				// Visible-patch cull: the prepass records each pixel's winning
 				// patch, the fill folds that into one flag per patch, and the
 				// shading pass's hull skips every patch that won nothing.
-				auto* hsVisible = shellVisibleCull && EnsureVisiblePatchResources() ? GetShellHSVisible(bake) : nullptr;
+				// Deferred shading: no shading geometry, so no visible-patch flags
+				// or lists either. Debug views keep the raster path.
+				const bool deferred = shellDeferredShading && cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0 && !lodHeatmap &&
+				                      EnsureDeferredResources() && GetShellPSPrepassAttr(keepHidden) && GetShellPSDeferred();
+				shellDeferredThisFrame = deferred;
+				auto* hsVisible = !deferred && shellVisibleCull && EnsureVisiblePatchResources() ? GetShellHSVisible(bake) : nullptr;
 				auto* hsTrust = hsVisible && !shellHullTrustOff ? GetShellHSVisible(bake, true) : nullptr;
 				auto* hsMain = hsTrust ? hsTrust : hsVisible;
 				auto* fillPSVisible = hsVisible ? GetShellFillPSVisible() : nullptr;
@@ -2322,14 +2475,21 @@ void SnowDeformation::DrawShell()
 				const bool visibleCull = dsPrepassPatch != nullptr;
 				if (visibleCull)
 					psPrepass = psPrepassPatch;
+				if (deferred)
+					psPrepass = GetShellPSPrepassAttr(keepHidden);
 
 				splitRow("SnowDeformation::Ground - Shell Depth Prepass");
 				const float rasterClear[4] = {};
 				context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
-				ID3D11RenderTargetView* prepassRTVs[2] = { shellRasterDepth->rtv.get(), visibleCull ? shellRasterPatch->rtv.get() : nullptr };
+				ID3D11RenderTargetView* prepassRTVs[4] = { shellRasterDepth->rtv.get(), visibleCull ? shellRasterPatch->rtv.get() : nullptr, nullptr, nullptr };
 				if (visibleCull)
 					context->ClearRenderTargetView(prepassRTVs[1], rasterClear);
-				context->OMSetRenderTargets(visibleCull ? 2 : 1, prepassRTVs, dsv);
+				// The attributes are read only where the prepass won, so no clear.
+				if (deferred) {
+					for (int i = 0; i < 3; i++)
+						prepassRTVs[1 + i] = shellDeferredAttr[i]->rtv.get();
+				}
+				context->OMSetRenderTargets(deferred ? 4 : (visibleCull ? 2 : 1), prepassRTVs, dsv);
 				if (visibleCull)
 					context->DSSetShader(dsPrepassPatch, nullptr, 0);
 				const bool prepassLastFrame = visibleCull && shellPrepassLastFrame && shellVisiblePrevValid && shellVisiblePrevSRV;
@@ -2406,6 +2566,21 @@ void SnowDeformation::DrawShell()
 
 				splitRow("SnowDeformation::Ground - Shell Shading");
 				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
+				if (deferred) {
+					// One full-screen triangle at z 0: LESS passes wherever the
+					// fill left a prepass winner's depth, rejects the cleared 0.
+					context->OMSetDepthStencilState(shellDeferredDepthState.get(), 0);
+					context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+					context->VSSetShader(fillVS, nullptr, 0);
+					context->HSSetShader(nullptr, nullptr, 0);
+					context->DSSetShader(nullptr, nullptr, 0);
+					ID3D11ShaderResourceView* attrSRVs[3] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get() };
+					context->PSSetShaderResources(91, 3, attrSRVs);
+					context->PSSetShader(shellPSDeferred, nullptr, 0);
+					context->Draw(3, 0);
+					ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
+					context->PSSetShaderResources(91, 3, nullAttrSRVs);
+				}
 				context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
 				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 				context->VSSetShader(tessVS, nullptr, 0);
@@ -2418,8 +2593,33 @@ void SnowDeformation::DrawShell()
 				context->PSSetShader(psPrepassMain, nullptr, 0);
 				if (split)
 					DrawShellPatchLists(context, tessVS, tessDS);
-				else
+				else if (!deferred)
 					context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+				// Lane census: the same lists again, no depth test, the PS
+				// deciding EQUAL itself and counting live lanes and quads.
+				const bool censusPending = laneCensusPending[0] || laneCensusPending[1] || laneCensusPending[2];
+				if (split && (laneCensusFramesLeft > 0 || censusPending) && EnsureLaneCensusResources() && GetShellPSCensus()) {
+					ReadLaneCensus(context);
+					if (laneCensusFramesLeft > 0 && !laneCensusPending[laneCensusRing]) {
+						const UINT zeros[4] = {};
+						context->ClearUnorderedAccessViewUint(laneCensusUAV.get(), zeros);
+						ID3D11UnorderedAccessView* censusUAV = laneCensusUAV.get();
+						context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 1, &censusUAV, nullptr);
+						ID3D11ShaderResourceView* testDepthSRV = shellTestDepthSRV.get();
+						context->PSSetShaderResources(61, 1, &testDepthSRV);
+						context->PSSetShader(shellPSCensus, nullptr, 0);
+						DrawShellPatchLists(context, tessVS, tessDS);
+						ID3D11ShaderResourceView* nullTestSRV = nullptr;
+						context->PSSetShaderResources(61, 1, &nullTestSRV);
+						ID3D11UnorderedAccessView* nullCensusUAV = nullptr;
+						context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 1, &nullCensusUAV, nullptr);
+						context->CopyResource(laneCensusStaging[laneCensusRing].get(), laneCensusBuffer.get());
+						laneCensusPending[laneCensusRing] = true;
+						laneCensusRing = (laneCensusRing + 1) % kLaneCensusRing;
+						laneCensusFramesLeft--;
+					}
+					context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
+				}
 				if (visibleCull) {
 					ID3D11ShaderResourceView* nullVisibleSRV = nullptr;
 					context->HSSetShaderResources(60, 1, &nullVisibleSRV);

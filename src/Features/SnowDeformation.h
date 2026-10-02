@@ -1790,6 +1790,42 @@ public:
 	ID3D11PixelShader* shellPSNoDepth = nullptr;
 	ID3D11PixelShader* GetShellPSNoDepth();
 
+	/** @brief Lane census (DevBench laneCensus, measurement only): for this many frames the shading draws are re-issued with SNOW_LANE_CENSUS and no depth test, counting live pixels and the quads early-Z would launch. Totals accumulate in laneCensus, read back kLaneCensusRing frames late. */
+	uint32_t laneCensusFramesLeft = 0;
+	static constexpr int kLaneCensusRing = 3;
+	winrt::com_ptr<ID3D11Buffer> laneCensusBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> laneCensusUAV;
+	winrt::com_ptr<ID3D11Buffer> laneCensusStaging[kLaneCensusRing];
+	bool laneCensusPending[kLaneCensusRing] = {};
+	int laneCensusRing = 0;
+	struct LaneCensusTotals
+	{
+		uint64_t frames = 0;
+		uint64_t pixels = 0;
+		uint64_t quads = 0;
+		uint64_t untouched = 0;
+		uint64_t quadLive[4] = {};
+	} laneCensus;
+	ID3D11PixelShader* shellPSCensus = nullptr;
+	ID3D11PixelShader* GetShellPSCensus();
+
+	/** @brief Shell Shader Performance > Deferred Shell Shading (runtime, not serialised): the prepass also writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners instead of the patch lists. Near-exact: the position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. */
+	bool shellDeferredShading = false;
+	/** @brief Whether the deferred pass drew this frame (the toggle can be on while a debug view keeps the raster path). */
+	bool shellDeferredThisFrame = false;
+	/** @brief The deferred pass's inputs, display-size like shellRasterDepth: [0] GridLocal.xy + normal.xy (RGBA32F), [1] GridLocal's coarse derivatives (RGBA16F), [2] view depth + WorldPos.z's coarse derivatives (RGBA32F). */
+	Texture2D* shellDeferredAttr[3] = {};
+	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
+	bool EnsureDeferredResources();
+	ID3D11PixelShader* shellPSDeferred = nullptr;
+	uint32_t shellPSDeferredLegacyBits = 0;
+	ID3D11PixelShader* GetShellPSDeferred();
+	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept]. */
+	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
+	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
+	bool EnsureLaneCensusResources();
+	void ReadLaneCensus(ID3D11DeviceContext* a_context);
+
 	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's clamped depth into the main buffer (alpha cut + export clamp) and its raster depth into shellRasterDepth; the fill pass copies that into shellTestDepth, a private depth buffer the shading pass tests EQUAL against with writes off, so occluded, self-hidden and alpha-cut fragments are rejected by hardware early-Z. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11PixelShader* GetShellPSPrepass(bool a_patch = false, bool a_keepHidden = false);
 	ID3D11PixelShader* shellPSPrepass = nullptr;

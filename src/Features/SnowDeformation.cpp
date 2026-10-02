@@ -2141,6 +2141,17 @@ void SnowDeformation::ClearShaderCache()
 	if (shellPSNoDepth)
 		shellPSNoDepth->Release();
 	shellPSNoDepth = nullptr;
+	if (shellPSCensus)
+		shellPSCensus->Release();
+	shellPSCensus = nullptr;
+	if (shellPSDeferred)
+		shellPSDeferred->Release();
+	shellPSDeferred = nullptr;
+	for (auto& attrPS : shellPSPrepassAttr) {
+		if (attrPS)
+			attrPS->Release();
+		attrPS = nullptr;
+	}
 	if (shellPSPrepass)
 		shellPSPrepass->Release();
 	shellPSPrepass = nullptr;
