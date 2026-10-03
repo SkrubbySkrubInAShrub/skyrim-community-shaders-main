@@ -3197,6 +3197,33 @@ void SnowDeformation::DrawCapturedStatics()
 	if (!EnsureStaticsShaders())
 		return;
 
+	// The skins' depth prepass (see the fills below), decided here: the
+	// pre-snow copy DrawShell left to this pass rides its first fill.
+	auto* fillVS = GetShellFillVS();
+	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
+	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
+	const bool prepass = !staticsDepthPrepassDisabled && lodDebugView != 1 && staticsPSPrepassNoDepth &&
+	                     fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
+	// No statics draw has written the main depth yet. The first fill writes
+	// the copy where its viewport is exactly the copy's rectangle; otherwise
+	// it is taken now.
+	bool fillPreSnow = false;
+	if (preSnowDepthDeferred) {
+		preSnowDepthDeferred = false;
+		D3D11_VIEWPORT vp0{};
+		UINT vpOne = 1;
+		globals::d3d::context->RSGetViewports(&vpOne, &vp0);
+		D3D11_TEXTURE2D_DESC preDesc{};
+		preSnowDepth->GetDesc(&preDesc);
+		const D3D11_BOX fillBox = ScreenRectBox(vpOne ? &vp0 : nullptr, preDesc.Width, preDesc.Height, 0);
+		const bool wholePixels = vpOne && vp0.TopLeftX == std::floor(vp0.TopLeftX) && vp0.TopLeftY == std::floor(vp0.TopLeftY) &&
+		                         vp0.Width == std::floor(vp0.Width) && vp0.Height == std::floor(vp0.Height);
+		fillPreSnow = prepass && preSnowDepthRTV && GetShellFillPSPreSnow() && wholePixels && !screenRectsOff &&
+		              std::memcmp(&fillBox, &preSnowRect, sizeof(D3D11_BOX)) == 0;
+		if (!fillPreSnow)
+			TakePreSnowCopy(globals::d3d::context, mainDepthSRV);
+	}
+
 	// One-shot capture histogram by camera distance. Every draw-loop skip is
 	// already logged and none fire, so if distant objects are missing skins the
 	// gate is either up in the capture hook (nothing captured out there) or
@@ -3430,11 +3457,6 @@ void SnowDeformation::DrawCapturedStatics()
 	// The write-back then hands every skin's depth to the main buffer exactly
 	// as the single loop would have left it; nothing else writes depth in
 	// between.
-	auto* fillVS = GetShellFillVS();
-	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
-	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-	const bool prepass = !staticsDepthPrepassDisabled && lodDebugView != 1 && staticsPSPrepassNoDepth &&
-	                     fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
 	ID3D11DepthStencilState* boundDepthState = nullptr;
 
 	// Render-target and viewport snapshot. The cull's compute reads the scene
@@ -3897,8 +3919,9 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 
 	if (prepass) {
-		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source) {
-			context->OMSetRenderTargets(0, nullptr, a_target);
+		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source, bool a_preSnow) {
+			ID3D11RenderTargetView* preSnowRTV = preSnowDepthRTV.get();
+			context->OMSetRenderTargets(a_preSnow ? 1 : 0, a_preSnow ? &preSnowRTV : nullptr, a_target);
 			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
 			context->RSSetState(shellRasterState.get());
 			if (vpCount)
@@ -3909,7 +3932,7 @@ void SnowDeformation::DrawCapturedStatics()
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			context->PSSetShaderResources(9, 1, &a_source);
-			context->PSSetShader(fillPS, nullptr, 0);
+			context->PSSetShader(a_preSnow ? GetShellFillPSPreSnow() : fillPS, nullptr, 0);
 			context->Draw(3, 0);
 			ID3D11ShaderResourceView* nullFillSRV = nullptr;
 			context->PSSetShaderResources(9, 1, &nullFillSRV);
@@ -3930,7 +3953,11 @@ void SnowDeformation::DrawCapturedStatics()
 			context->CopyResource(bloodPreSkinDepth.get(), mainDepthResource.get());
 			bloodPreSkinDepthThisFrame = true;
 		}
-		fill(shellTestDepthDSV.get(), mainDepthSRV);
+		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow);
+		if (fillPreSnow) {
+			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Copy");
+			preSnowDepthThisFrame = true;
+		}
 		statsRow("SnowDeformation::Objects - Depth Prepass");
 		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
@@ -3959,7 +3986,7 @@ void SnowDeformation::DrawCapturedStatics()
 		}
 
 		statsRow("SnowDeformation::Objects - Depth Write-back");
-		fill(dsv.get(), shellTestDepthSRV.get());
+		fill(dsv.get(), shellTestDepthSRV.get(), false);
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	} else {

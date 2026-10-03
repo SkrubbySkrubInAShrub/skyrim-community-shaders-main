@@ -2173,6 +2173,9 @@ void SnowDeformation::ClearShaderCache()
 	if (shellFillPS)
 		shellFillPS->Release();
 	shellFillPS = nullptr;
+	if (shellFillPSPreSnow)
+		shellFillPSPreSnow->Release();
+	shellFillPSPreSnow = nullptr;
 	if (shellFillPSVisible)
 		shellFillPSVisible->Release();
 	shellFillPSVisible = nullptr;

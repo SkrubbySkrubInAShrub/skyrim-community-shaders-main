@@ -83,15 +83,33 @@ Texture2D<uint> FillPatch : register(t61);
 RWStructuredBuffer<uint> VisiblePatchesOut : register(u1);
 #endif
 
+#ifdef FILL_PRE_SNOW
+// The skins' first fill also leaves the pre-snow depth for DepthSync: off the
+// shell prepass's raster marks the main depth still holds it here.
+struct FillPreSnowOut
+{
+	float depth : SV_Depth;
+	float preSnow : SV_Target0;
+};
+
+FillPreSnowOut FillPS(float4 pos : SV_Position)
+{
+	FillPreSnowOut o;
+	o.depth = FillSource.Load(int3(pos.xy, 0));
+	o.preSnow = o.depth;
+	return o;
+}
+#else
 float FillPS(float4 pos : SV_Position) : SV_Depth
 {
-#ifdef FILL_VISIBLE_PATCHES
+#	ifdef FILL_VISIBLE_PATCHES
 	const uint patch = FillPatch.Load(int3(pos.xy, 0));
 	[branch] if (patch != 0)
 		VisiblePatchesOut[(patch & 0x7FFFFFFF) - 1] = (patch >> 31) != 0 ? 1 : 2;
-#endif
+#	endif
 	return FillSource.Load(int3(pos.xy, 0));
 }
+#endif
 
 // Whole-skin occlusion cull for the object snow. HiZBuildCS folds the scene
 // depth into a max pyramid (level 0 = half res; an odd source folds its

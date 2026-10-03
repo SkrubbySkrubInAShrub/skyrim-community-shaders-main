@@ -767,6 +767,15 @@ ID3D11PixelShader* SnowDeformation::GetShellFillPS()
 	return shellFillPS;
 }
 
+ID3D11PixelShader* SnowDeformation::GetShellFillPSPreSnow()
+{
+	if (!shellFillPSPreSnow) {
+		logger::debug("Compiling DepthSyncCS FillPS (pre-snow)");
+		shellFillPSPreSnow = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_PRE_SNOW", "" } }, "ps_5_0", "FillPS"));
+	}
+	return shellFillPSPreSnow;
+}
+
 ID3D11DomainShader* SnowDeformation::GetShellDSPatch(bool a_bake, bool a_check)
 {
 	auto*& slot = shellDSPatch[a_bake ? (a_check ? 2 : 1) : 0];
@@ -1186,21 +1195,28 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		preSnowDepth = nullptr;
 		preSnowDepthSRV = nullptr;
 		preSnowDepthUAV = nullptr;
+		preSnowDepthRTV = nullptr;
 		D3D11_TEXTURE2D_DESC copyDesc = desc;
-		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
 		D3D11_UNORDERED_ACCESS_VIEW_DESC copyUavDesc{};
 		copyUavDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		copyUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+		D3D11_RENDER_TARGET_VIEW_DESC copyRtvDesc{};
+		copyRtvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		copyRtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 		if (SUCCEEDED(device->CreateTexture2D(&copyDesc, nullptr, preSnowDepth.put()))) {
 			Util::SetResourceName(preSnowDepth.get(), "SnowDeformation::PreSnowDepth");
 			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &srvDesc, preSnowDepthSRV.put())) ||
-				FAILED(device->CreateUnorderedAccessView(preSnowDepth.get(), &copyUavDesc, preSnowDepthUAV.put()))) {
+				FAILED(device->CreateUnorderedAccessView(preSnowDepth.get(), &copyUavDesc, preSnowDepthUAV.put())) ||
+				FAILED(device->CreateRenderTargetView(preSnowDepth.get(), &copyRtvDesc, preSnowDepthRTV.put()))) {
 				preSnowDepth = nullptr;
 				preSnowDepthSRV = nullptr;
 				preSnowDepthUAV = nullptr;
+				preSnowDepthRTV = nullptr;
 			} else {
 				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
 				Util::SetResourceName(preSnowDepthUAV.get(), "SnowDeformation::PreSnowDepth UAV");
+				Util::SetResourceName(preSnowDepthRTV.get(), "SnowDeformation::PreSnowDepth RTV");
 			}
 		}
 		// Copy of the main depth (CopyResource: same format as the source,
@@ -1516,6 +1532,40 @@ D3D11_BOX SnowDeformation::ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint3
 	box.right = UINT(std::clamp<int64_t>(right, int64_t(box.left), a_width));
 	box.bottom = UINT(std::clamp<int64_t>(bottom, int64_t(box.top), a_height));
 	return box;
+}
+
+void SnowDeformation::TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV)
+{
+	ID3D11RenderTargetView* rawRTVs[8] = {};
+	ID3D11DepthStencilView* rawDSV = nullptr;
+	a_context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
+	a_context->OMSetRenderTargets(0, nullptr, nullptr);
+	globals::profiler->BeginPass("SnowDeformation::Ground - Depth Copy");
+	DepthSyncRectCB rectData{ { preSnowRect.left, preSnowRect.top }, { preSnowRect.right - preSnowRect.left, preSnowRect.bottom - preSnowRect.top } };
+	depthSyncRectCB->Update(rectData);
+	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
+	ID3D11UnorderedAccessView* copyUAV = preSnowDepthUAV.get();
+	a_context->CSSetConstantBuffers(2, 1, &rectCB);
+	a_context->CSSetShaderResources(0, 1, &a_mainDepthSRV);
+	a_context->CSSetUnorderedAccessViews(2, 1, &copyUAV, nullptr);
+	a_context->CSSetShader(GetPreSnowCopyCS(), nullptr, 0);
+	a_context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
+	ID3D11ShaderResourceView* nullCopySRV = nullptr;
+	ID3D11UnorderedAccessView* nullCopyUAV = nullptr;
+	ID3D11Buffer* nullCopyCB = nullptr;
+	a_context->CSSetShaderResources(0, 1, &nullCopySRV);
+	a_context->CSSetUnorderedAccessViews(2, 1, &nullCopyUAV, nullptr);
+	a_context->CSSetConstantBuffers(2, 1, &nullCopyCB);
+	a_context->CSSetShader(nullptr, nullptr, 0);
+	globals::profiler->EndPass();
+	a_context->OMSetRenderTargets(8, rawRTVs, rawDSV);
+	for (auto* rtv : rawRTVs) {
+		if (rtv)
+			rtv->Release();
+	}
+	if (rawDSV)
+		rawDSV->Release();
+	preSnowDepthThisFrame = true;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetDepthSyncCS()
@@ -2143,42 +2193,80 @@ void SnowDeformation::DrawShell()
 		preSkinNormalsCopySRV = nullptr;
 	}
 
+	// Tessellated path: 4-control-point patches through the hull/domain
+	// stages, so near-camera snow renders the deformation map and the PBR
+	// displacement relief as real geometry. The domain shader runs the full
+	// surface evaluation, so it needs the same field textures and CB the
+	// legacy VS reads, plus the height map and its sampler.
+	// Gated on Tessellation, NOT on ReliefDepth: the tessellated path's real
+	// client is trench smoothness (the hull factors key off the deformation
+	// map), and that must survive relief being turned off. With relief at 0
+	// the factors collapse to 1 on undeformed ground, so the path stays cheap.
+	auto* tessVS = settings.Tessellation ? GetShellTessVS() : nullptr;
+	// Vertex bake: the base-grid corners' surface is evaluated once per
+	// frame by a compute pass and read back by index; the bake DS is chosen
+	// only once the pass and its texture are known good, so a failure falls
+	// to the live DS rather than to an unbound read.
+	ID3D11ComputeShader* bakeCS = (settings.Tessellation && !shellVertexBakeDisabled && !shellFlatDSDebug) ? GetShellBakeCS() : nullptr;
+	bool bake = bakeCS && EnsureShellVertexBake();
+	ID3D11DomainShader* tessDS = nullptr;
+	if (settings.Tessellation) {
+		if (bake)
+			tessDS = GetShellDSBake(shellVertexBakeCheck);
+		if (!tessDS) {
+			bake = false;
+			tessDS = GetShellDS();
+		}
+	}
+	// Hull twins read the edge corners' deformation taps from the bake; a
+	// missing twin falls to the live hull, which is always valid.
+	ID3D11HullShader* tessHS = nullptr;
+	if (settings.Tessellation) {
+		if (bake)
+			tessHS = GetShellHS(true);
+		if (!tessHS)
+			tessHS = GetShellHS(false);
+	}
+	const bool tessellate = tessVS && tessHS && tessDS;
+	const bool lodHeatmap = lodDebugView == 1 && EnsureLODDebugResources() && GetShellLODPS();
+	// The shell prepass, decided before the pre-snow copy: its raster marks
+	// decide whether the copy is needed here.
+	const bool prepassWanted = shellGround && tessellate && !shellDepthPrepassDisabled && !shellDepthClampDisabled && !lodHeatmap;
+	// The hidden-fragment exit reads Terrain Blending's blended depth as the main depth.
+	const bool keepHidden = shellPrepassExitOff || !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
+	auto* psPrepass = prepassWanted ? GetShellPSPrepass(false, keepHidden) : nullptr;
+	auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
+	auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
+	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
+	const bool prepass = fillPS && EnsurePrepassResources(renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV);
+
 	// Main depth before any snow draw: DepthSync syncs the pixels the snow
 	// passes (shell, skins, patch) move nearer than this copy. Targets are
 	// unbound around the copy like the masks copy above. Not for LOD-batch
 	// coats alone: they lie on their mesh, past anything Terrain Blending
-	// softened.
+	// softened. With the prepass's raster marks DepthSync reads it only off
+	// the shell's pixels, where the main depth keeps the pre-snow value until
+	// a statics pass writes: then no copy is taken without one, and with one
+	// DrawCapturedStatics takes it (in the skins' first fill when it can).
 	shellPrepassThisFrame = false;
 	preSnowDepthThisFrame = false;
+	preSnowDepthDeferred = false;
 	if (shellGround || capturedLoaded > 0 || (settings.VolumeSnow && !capturedStatics.empty())) {
 		auto preDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-		auto* copyCS = GetPreSnowCopyCS();
-		if (preDepthSRV && copyCS && depthSyncRectCB && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV && preSnowDepthUAV) {
-			context->OMSetRenderTargets(0, nullptr, nullptr);
-			globals::profiler->BeginPass("SnowDeformation::Ground - Depth Copy");
+		if (preDepthSRV && GetPreSnowCopyCS() && depthSyncRectCB && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV && preSnowDepthUAV) {
 			D3D11_TEXTURE2D_DESC preDesc{};
 			preSnowDepth->GetDesc(&preDesc);
-			const D3D11_BOX rect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, preDesc.Width, preDesc.Height, 0);
-			DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
-			depthSyncRectCB->Update(rectData);
-			ID3D11Buffer* rectCB = depthSyncRectCB->CB();
-			ID3D11UnorderedAccessView* copyUAV = preSnowDepthUAV.get();
-			context->CSSetConstantBuffers(2, 1, &rectCB);
-			context->CSSetShaderResources(0, 1, &preDepthSRV);
-			context->CSSetUnorderedAccessViews(2, 1, &copyUAV, nullptr);
-			context->CSSetShader(copyCS, nullptr, 0);
-			context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
-			ID3D11ShaderResourceView* nullCopySRV = nullptr;
-			ID3D11UnorderedAccessView* nullCopyUAV = nullptr;
-			ID3D11Buffer* nullCopyCB = nullptr;
-			context->CSSetShaderResources(0, 1, &nullCopySRV);
-			context->CSSetUnorderedAccessViews(2, 1, &nullCopyUAV, nullptr);
-			context->CSSetConstantBuffers(2, 1, &nullCopyCB);
-			context->CSSetShader(nullptr, nullptr, 0);
-			globals::profiler->EndPass();
-			preSnowDepthThisFrame = true;
+			preSnowRect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, preDesc.Width, preDesc.Height, 0);
+			// Skins, patch and volume all draw past DrawCapturedStatics's
+			// empty-capture return.
+			if (prepass && shellRasterDepth && shellRasterDepth->srv)
+				preSnowDepthDeferred = !capturedStatics.empty();
+			else
+				TakePreSnowCopy(context, preDepthSRV);
 		}
 	}
+	if (!preSnowDepthThisFrame && !preSnowDepthDeferred)
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Copy");
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.
@@ -2206,7 +2294,6 @@ void SnowDeformation::DrawShell()
 	// occlusion) so poke-under pixels survive to be measured, and the
 	// G-buffer shrinks to kMAIN so the histogram UAV fits under the FL11.0
 	// 8-slot RTV+UAV limit.
-	const bool lodHeatmap = lodDebugView == 1 && EnsureLODDebugResources() && GetShellLODPS();
 	if (lodHeatmap) {
 		const UINT histClear[4] = {};
 		context->ClearUnorderedAccessViewUint(lodHistogramUAV.get(), histClear);
@@ -2411,41 +2498,6 @@ void SnowDeformation::DrawShell()
 
 	context->PSSetShader(ps, nullptr, 0);
 
-	// Tessellated path: 4-control-point patches through the hull/domain
-	// stages, so near-camera snow renders the deformation map and the PBR
-	// displacement relief as real geometry. The domain shader runs the full
-	// surface evaluation, so it needs the same field textures and CB the
-	// legacy VS reads, plus the height map and its sampler.
-	// Gated on Tessellation, NOT on ReliefDepth: the tessellated path's real
-	// client is trench smoothness (the hull factors key off the deformation
-	// map), and that must survive relief being turned off. With relief at 0
-	// the factors collapse to 1 on undeformed ground, so the path stays cheap.
-	auto* tessVS = settings.Tessellation ? GetShellTessVS() : nullptr;
-	// Vertex bake: the base-grid corners' surface is evaluated once per
-	// frame by a compute pass and read back by index; the bake DS is chosen
-	// only once the pass and its texture are known good, so a failure falls
-	// to the live DS rather than to an unbound read.
-	ID3D11ComputeShader* bakeCS = (settings.Tessellation && !shellVertexBakeDisabled && !shellFlatDSDebug) ? GetShellBakeCS() : nullptr;
-	bool bake = bakeCS && EnsureShellVertexBake();
-	ID3D11DomainShader* tessDS = nullptr;
-	if (settings.Tessellation) {
-		if (bake)
-			tessDS = GetShellDSBake(shellVertexBakeCheck);
-		if (!tessDS) {
-			bake = false;
-			tessDS = GetShellDS();
-		}
-	}
-	// Hull twins read the edge corners' deformation taps from the bake; a
-	// missing twin falls to the live hull, which is always valid.
-	ID3D11HullShader* tessHS = nullptr;
-	if (settings.Tessellation) {
-		if (bake)
-			tessHS = GetShellHS(true);
-		if (!tessHS)
-			tessHS = GetShellHS(false);
-	}
-	const bool tessellate = tessVS && tessHS && tessDS;
 	if (!shellGround)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Vertex Bake");
 	if (shellGround && tessellate && bake) {
@@ -2570,15 +2622,7 @@ void SnowDeformation::DrawShell()
 			// the rasterised one, and a GREATER_EQUAL variant that let a software
 			// test decide launched the full shader on every occluded fragment and
 			// measured slower than no prepass at all.
-			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-			const bool prepassWanted = !shellDepthPrepassDisabled && !shellDepthClampDisabled && !lodHeatmap;
-			// The hidden-fragment exit reads Terrain Blending's blended depth as the main depth.
-			const bool keepHidden = shellPrepassExitOff || !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
-			auto* psPrepass = prepassWanted ? GetShellPSPrepass(false, keepHidden) : nullptr;
-			auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
-			auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
-			auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
-			const bool prepass = fillPS && EnsurePrepassResources(mainDepthSRV);
+			// The prepass decision is taken above, before the pre-snow copy.
 			shellPrepassThisFrame = prepass;
 			const bool splitWanted = !prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled;
 			auto* hsNear = splitWanted ? GetShellHSNear(bake) : nullptr;

@@ -1948,7 +1948,17 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> preSnowDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSnowDepthSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> preSnowDepthUAV;
+	/** @brief Render-target view of preSnowDepth for the skins' first fill (FILL_PRE_SNOW). */
+	winrt::com_ptr<ID3D11RenderTargetView> preSnowDepthRTV;
 	bool preSnowDepthThisFrame = false;
+	/** @brief The copy waits for DrawCapturedStatics: the shell prepass leaves raster marks, so DepthSync reads it only where the main depth still holds the pre-snow value until a statics pass writes. */
+	bool preSnowDepthDeferred = false;
+	/** @brief The rendered rectangle DrawShell's copy and DepthSync cover this frame. */
+	D3D11_BOX preSnowRect{};
+	/** @brief Takes the pre-snow copy now (PreSnowCopyCS over preSnowRect), with the output-merger bindings saved and restored around it. */
+	void TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV);
+	ID3D11PixelShader* GetShellFillPSPreSnow();
+	ID3D11PixelShader* shellFillPSPreSnow = nullptr;
 	/** @brief A/B, runtime-only: the pre-snow depth copy, Depth Sync and both Masks copies cover the whole display-size target again, and LandMasksCopy runs on frames with no reader. */
 	bool screenRectsOff = false;
 	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution, the whole target with screenRectsOff. */
