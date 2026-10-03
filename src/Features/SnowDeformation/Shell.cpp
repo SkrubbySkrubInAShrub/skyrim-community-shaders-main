@@ -2134,6 +2134,11 @@ void SnowDeformation::DrawShell()
 	winrt::com_ptr<ID3D11ShaderResourceView> prevShellSRVs[9];
 	for (uint i = 0; i < 9; i++)
 		context->PSGetShaderResources(i, 1, prevShellSRVs[i].put());
+	// The frost pair takes t16/t17; t17 is CS's shared scene depth, bound once
+	// a frame and read by the forward passes. Restored at the end of DrawShell.
+	winrt::com_ptr<ID3D11ShaderResourceView> prevFrostSlotSRVs[2];
+	for (uint i = 0; i < 2; i++)
+		context->PSGetShaderResources(16 + i, 1, prevFrostSlotSRVs[i].put());
 	context->PSSetShaderResources(0, 9, shellSRVs);
 	context->PSSetShaderResources(13, 1, &fineSRV);
 	context->PSSetShaderResources(27, 2, waterSRVs);
@@ -2832,6 +2837,9 @@ void SnowDeformation::DrawShell()
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}
+	// After Depth Sync: its UAV write unbinds the blended depth from PS t17.
+	ID3D11ShaderResourceView* restoreFrostSlotSRVs[2] = { prevFrostSlotSRVs[0].get(), prevFrostSlotSRVs[1].get() };
+	context->PSSetShaderResources(16, 2, restoreFrostSlotSRVs);
 	spanClock.Lap(CpuCensus::kSpanShellTail);
 }
 
