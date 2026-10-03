@@ -499,9 +499,10 @@ bool SnowDeformation::EnsureShellGridIndexBuffers()
 		}
 		Util::SetResourceName(shellGridIB[parity].get(), parity ? "SnowDeformation::ShellGridIB1" : "SnowDeformation::ShellGridIB0");
 
-		// Caster subset: castVis kills every vertex past 4900 u of the grid
-		// centre; the geomorph moves a vertex at most one band step first.
-		constexpr float kCasterRadius = 4900.0f + 256.0f;
+		// Caster subset: castVis's distance factor alone kills every vertex past
+		// 4062.9 u of the grid centre; the nearest lattice distances either side
+		// are 4062.685 and 4063.15.
+		constexpr float kCasterRadius = 4063.0f;
 		std::vector<uint32_t> casterIndices;
 		casterIndices.reserve(indices.size() / 2);
 		for (uint y = 0; y < N; ++y) {
