@@ -119,23 +119,26 @@ SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 
 	float3 worldPos, float3 camPosAdjust, float sunShadow,
 	float2 glintUV, float2 uvDDX, float2 uvDDY)
 {
-	// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
-	// Lighting.hlsl feeds its dir light context.
-	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
+	// Every direct term carries sunShadow as a factor (PBRFlags 0).
+	DirectLightingOutput lightingOutput = (DirectLightingOutput)0;
+	[branch] if (sunShadow != 0.0)
+	{
+		// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
+		// Lighting.hlsl feeds its dir light context.
+		float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
 
-	// Ground dims its sun by the height-fog line integral (Lighting.hlsl:2202,
-	// RunGrass.hlsl:450); strongest at grazing sun, which is exactly where the
-	// shell read warmer than the ground beside it.
+		// Ground dims its sun by the height-fog line integral (Lighting.hlsl:2202,
+		// RunGrass.hlsl:450); strongest at grazing sun, which is exactly where the
+		// shell read warmer than the ground beside it.
 #if defined(SNOW_EXP_HEIGHT_FOG)
-	[branch] if (SharedData::exponentialHeightFogSettings.enabled)
-		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPos, camPosAdjust);
+		[branch] if (SharedData::exponentialHeightFogSettings.enabled)
+			sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPos, camPosAdjust);
 #endif
 
-	float3 L = SharedData::DirLightDirection.xyz;
-	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, sunColor, sunShadow, sunShadow);
-
-	DirectLightingOutput lightingOutput;
-	EvaluateLighting(context, mtl.material, mtl.tbnTr, glintUV, uvDDX, uvDDY, lightingOutput);
+		float3 L = SharedData::DirLightDirection.xyz;
+		DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, sunColor, sunShadow, sunShadow);
+		EvaluateLighting(context, mtl.material, mtl.tbnTr, glintUV, uvDDX, uvDDY, lightingOutput);
+	}
 
 	IndirectContext indirectContext = CreateIndirectLightingContext(normalWS, normalWS, V);
 	IndirectLobeWeights lobeWeights;

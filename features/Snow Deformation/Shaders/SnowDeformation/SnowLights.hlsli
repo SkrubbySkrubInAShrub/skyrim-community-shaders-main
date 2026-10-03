@@ -30,6 +30,16 @@
 
 namespace SnowLights
 {
+	// Lights listed for the pixel's cluster; 0 outside the cluster volume.
+	uint ClusterLightCount(float2 clusterUV, float viewZ)
+	{
+		uint clusterIndex = 0;
+		uint count = 0;
+		[branch] if (LightLimitFix::GetClusterIndex(clusterUV, viewZ, clusterIndex))
+			count = LightLimitFix::lightGrid[clusterIndex].lightCount;
+		return count;
+	}
+
 	// Adds the clustered point lights to the shell's direct lobes, each
 	// light shaded through the SAME routed PBR path as the sun
 	// (SnowEvaluateLightPBR - ROUTING-ROADMAP M3), so point lights carry

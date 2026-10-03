@@ -2380,6 +2380,14 @@ bool ShellUntouched(float2 gridLocal)
 // The shell pass does not bind FrameBuffer b12, so the DR scale rides
 // CompactLook.zw from the CPU.
 #if defined(PSHADER)
+// LLF cluster lookup coordinates for a camera-relative position.
+void ShellClusterCoords(float3 relPos, out float viewZ, out float2 clusterUV)
+{
+	viewZ = mul(CameraView, float4(relPos, 1.0)).z;
+	float4 clip = mul(CameraViewProj, float4(relPos, 1.0));
+	clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+}
+
 float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow, float casterCap)
 {
 	// Bend SSS's anti-streak device (SurfaceThickness): an occluder shadows
@@ -3453,8 +3461,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
 	                                   fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3). Soaked snow
-	// does not sparkle.
-	const float glintsHere = EnableGlints * (1.0 - saturate(bloodCover * 3.0));
+	// does not sparkle. Glints reach only the direct lobes: the sun's, zero
+	// without sunShadow, and the cluster's lights.
+	bool glintsLit = sunShadow != 0.0;
+	[branch] if (!glintsLit && PointLightsActive > 0.5)
+	{
+		float glintViewZ;
+		float2 glintClusterUV;
+		ShellClusterCoords(input.WorldPos, glintViewZ, glintClusterUV);
+		glintsLit = SnowLights::ClusterLightCount(glintClusterUV, glintViewZ) > 0;
+	}
+	const float glintsHere = glintsLit ? EnableGlints * (1.0 - saturate(bloodCover * 3.0)) : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
@@ -3478,9 +3495,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shadow-casting light's own map sampled at the shell surface.
 	[branch] if (PointLightsActive > 0.5)
 	{
-		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
-		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
-		float2 clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		float viewZ;
+		float2 clusterUV;
+		ShellClusterCoords(input.WorldPos, viewZ, clusterUV);
 		SnowLights::AccumulatePointLights(snowMtl, shadePos, shadePos + ShellCameraPosAdjust.xyz,
 			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), directDiffuse, directSpecular);
 	}
