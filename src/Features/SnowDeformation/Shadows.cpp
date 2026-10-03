@@ -622,24 +622,32 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(casterVS, nullptr, 0);
 	}
-	if (!splitRow)
-		globals::profiler->BeginPass("SnowDeformation::Shadows - Ground");
-	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
-		if (!shadowAtlasDSV[cascade])
-			continue;
-		if (splitRow)
-			globals::profiler->BeginPass(kCasterGridRow[cascade]);
-		const ShellCB shadowCB = bindCascade(cascade);
-		if (castCheckLive) {
-			ID3D11UnorderedAccessView* checkUAV = castCheckUAV.get();
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shadowAtlasDSV[cascade].get(), 1, 1, &checkUAV, nullptr);
+	// Every cell the grid can sample bare: castVis kills every vertex.
+	const bool gridMayCast = CasterDiscMayCast();
+	if (!gridMayCast) {
+		if (!splitRow)
+			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Ground");
+		castCheckLive = false;
+	} else {
+		if (!splitRow)
+			globals::profiler->BeginPass("SnowDeformation::Shadows - Ground");
+		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
+			if (!shadowAtlasDSV[cascade])
+				continue;
+			if (splitRow)
+				globals::profiler->BeginPass(kCasterGridRow[cascade]);
+			const ShellCB shadowCB = bindCascade(cascade);
+			if (castCheckLive) {
+				ID3D11UnorderedAccessView* checkUAV = castCheckUAV.get();
+				context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shadowAtlasDSV[cascade].get(), 1, 1, &checkUAV, nullptr);
+			}
+			DrawShellCasterGrid(context, shadowCB);
+			if (splitRow)
+				globals::profiler->EndPass();
 		}
-		DrawShellCasterGrid(context, shadowCB);
-		if (splitRow)
+		if (!splitRow)
 			globals::profiler->EndPass();
 	}
-	if (!splitRow)
-		globals::profiler->EndPass();
 	if (castCheckLive) {
 		ID3D11UnorderedAccessView* nullUAV = nullptr;
 		context->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &nullUAV, nullptr);

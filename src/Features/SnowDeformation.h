@@ -3901,6 +3901,8 @@ protected:
 	std::unordered_map<uint64_t, uint32_t> shellFillerCells;
 	/** @brief Cells in the current window whose blended depth goes positive somewhere, keyed like shellCells. Rebuilt with the window; read per frame by DeformationWindowHasSnow. */
 	std::unordered_set<uint64_t> shellSnowyCells;
+	/** @brief Cells in the current window baked for its worldspace with zero coverage in every texel, keyed like shellCells. Rebuilt with the window (same mutex as shellSnowyCells); read by CasterDiscMayCast. */
+	std::unordered_set<uint64_t> shellBareCells;
 	mutable std::shared_mutex shellSnowyCellMutex;
 	/** @brief Snow-presence verdicts, for the gate readout and the fail-open rule. */
 	enum SnowGateVerdict : uint32_t
@@ -3944,6 +3946,8 @@ protected:
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
 	/** @brief WindowHasSnow over the shell's own footprint, which reaches far past the deformation window. False means no shell geometry can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
+	/** @brief False only when every cell the sun caster's grid can sample is baked with zero coverage: castVis then kills every grid vertex, so the grid draws nothing. Unbaked, filler and out-of-window cells answer true. */
+	bool CasterDiscMayCast() const;
 	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
 	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
 	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square), for the debug menu. */

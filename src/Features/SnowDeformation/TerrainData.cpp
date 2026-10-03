@@ -808,6 +808,8 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	// deformation map can ever show. Filled from this loop's own arithmetic,
 	// so it costs one comparison per texel.
 	std::unordered_set<uint64_t> snowyCells;
+	// Cells with coverage in any texel; the baked rest are the bare cells.
+	std::unordered_set<uint64_t> coveredCells;
 	float statMinH = FLT_MAX;
 	float statMaxH = -FLT_MAX;
 	std::unordered_set<uint64_t> statCells;
@@ -821,12 +823,15 @@ void SnowDeformation::UpdateShellTerrainWindow()
 			uint64_t rowKey = ~0ull;
 			// The cell sets take each run of one cell's texels once.
 			bool rowSnowy = false;
+			bool rowCovered = false;
 			auto flushRowCell = [&] {
 				if (!rowCell)
 					return;
 				statCells.insert(rowKey);
 				if (rowSnowy)
 					snowyCells.insert(rowKey);
+				if (rowCovered)
+					coveredCells.insert(rowKey);
 			};
 			for (int tx = 0; tx < kShellWindowDim; ++tx) {
 				int cellX = shellWindowCellX + tx / kShellTexelsPerCell;
@@ -836,6 +841,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				if (key != rowKey) {
 					flushRowCell();
 					rowSnowy = false;
+					rowCovered = false;
 					auto it = shellCells.find(key);
 					// A cell baked in another worldspace is not this window's
 					// ground: city worldspaces reuse the coordinates of the
@@ -869,6 +875,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					texel[3] = rowCell->vertexAO[idx] * (0.499f / 255.0f);
 
 					rowSnowy |= rampDepth > 0.0f;
+					rowCovered |= texel[2] > 0.0f;
 					statMinH = std::min(statMinH, texel[0]);
 					statMaxH = std::max(statMaxH, texel[0]);
 					if (texel[2] > 0.05f)
@@ -884,9 +891,14 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		}
 	}
 
+	std::unordered_set<uint64_t> bareCells;
+	for (const uint64_t key : statCells)
+		if (!coveredCells.contains(key))
+			bareCells.insert(key);
 	{
 		const std::unique_lock snowLock(shellSnowyCellMutex);
 		shellSnowyCells = std::move(snowyCells);
+		shellBareCells = std::move(bareCells);
 	}
 	// The snowy set only covers the window; a move changes every cell
 	// verdict near its edge.
@@ -1387,6 +1399,35 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 					*a_verdictOut = kSnowGateUnknown;
 				return true;
 			}
+		}
+	}
+	return false;
+}
+
+// castVis kills every grid vertex past 4062.9 u of the grid centre and every
+// vertex whose raw bilinear coverage is zero; a vertex's footprint reaches one
+// texel on each axis. Two texels of margin, grid centre as the caster places it.
+bool SnowDeformation::CasterDiscMayCast() const
+{
+	constexpr float kCellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	constexpr float kReach = 4063.0f + 2.0f * kShellVertexSpacing;
+	const auto camAdjust = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const float centreX = std::floor(camAdjust.x / kShellOriginSnap) * kShellOriginSnap;
+	const float centreY = std::floor(camAdjust.y / kShellOriginSnap) * kShellOriginSnap;
+	const int cellMinX = (int)std::floor((centreX - kReach) / kCellSize);
+	const int cellMaxX = (int)std::floor((centreX + kReach) / kCellSize);
+	const int cellMinY = (int)std::floor((centreY - kReach) / kCellSize);
+	const int cellMaxY = (int)std::floor((centreY + kReach) / kCellSize);
+	const std::shared_lock lock(shellSnowyCellMutex);
+	for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
+		for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
+			const float dx = std::max({ float(cx) * kCellSize - centreX, 0.0f, centreX - float(cx + 1) * kCellSize });
+			const float dy = std::max({ float(cy) * kCellSize - centreY, 0.0f, centreY - float(cy + 1) * kCellSize });
+			if (dx * dx + dy * dy > kReach * kReach)
+				continue;
+			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			if (!shellBareCells.contains(key))
+				return true;
 		}
 	}
 	return false;
