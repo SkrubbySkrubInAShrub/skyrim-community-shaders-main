@@ -3335,7 +3335,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// so applying it near paints buried objects through the snow. Cascades own
 	// the near field; SSS blends in only beyond them, where it is the only
 	// source and the shell hugs the ground the march ran on.
-	[branch] if (ScreenSpaceShadowsActive > 0.5)
+	// A zero handoff leaves sunShadow exactly as it is; view 4 still wants the gate.
+	[branch] if (ScreenSpaceShadowsActive > 0.5 && (SnowShadow::GetSssHandoff(shellZ) > 0.0 || ShellDebugData == 4))
 	{
 		// Depth agreement is the gate: trust the mask only where the shell hugs
 		// the surface the march saw. Measured VERTICALLY, not along the view
