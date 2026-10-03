@@ -325,8 +325,8 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color.xyz = Color::Sky(skyGradientColor) + skyScale;
 
 #				if defined(EFFECTS11)
-	// Multiplicative dither vanishes near black and bands dark skies; fade to additive dither there
-	[branch] if (SharedData::enbSettings.Enable && !SharedData::enbSettings.FixBlackCrush)
+	// FixBlackCrush: multiplicative dither vanishes near black and bands dark skies, so fade to additive dither there
+	[branch] if (SharedData::enbSettings.Enable && SharedData::enbSettings.FixBlackCrush)
 	{
 		float3 additiveDither = max(psout.Color.xyz + noiseGrad * 0.1, 0.0);
 		psout.Color.xyz = lerp(additiveDither, psout.Color.xyz * (1.0 + noiseGrad), saturate(dot(psout.Color.xyz, 8.0)));
