@@ -83,6 +83,7 @@ private:
 	std::vector<const Setting*> CollectRows(const std::string& a_category, const char* a_name) const;
 	void DrawCategory(const std::string& a_category, const char* a_name, const char* a_description, const std::vector<const Setting*>& a_rows);
 	void DrawCategoryWeatherToggle(const std::string& a_category);
+	void DrawParticleOwnershipToggle();
 	void DrawWeatherFileList();
 	void DrawSettingRow(const Setting& a_setting, bool a_categoryActive);
 	void DrawTimeOfDayRows(const Setting& a_setting, const char* a_label, bool a_editable, bool& a_labelHovered);

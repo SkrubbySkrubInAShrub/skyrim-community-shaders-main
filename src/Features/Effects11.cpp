@@ -49,6 +49,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.LightSpriteIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "LIGHTSPRITE");
 	data.LightSpriteCurve = settingManager.GetInterpolatedTimeOfDayValue("Curve", "LIGHTSPRITE");
 
+	data.EnableParticle = enableEffect && !settings.IgnorePresetParticles;
 	data.ParticleIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "PARTICLE");
 	data.ParticleLightingInfluence = settingManager.GetInterpolatedTimeOfDayValue("LightingInfluence", "PARTICLE");
 	data.ParticleAmbientInfluence = settingManager.GetInterpolatedTimeOfDayValue("AmbientInfluence", "PARTICLE");
@@ -93,9 +94,28 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	return data;
 }
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Effects11::Settings,
+	IgnorePresetParticles)
+
 void Effects11::DrawSettings()
 {
 	Effects11Editor::GetSingleton().DrawLauncher();
+}
+
+void Effects11::LoadSettings(json& o_json)
+{
+	settings = o_json;
+}
+
+void Effects11::SaveSettings(json& o_json)
+{
+	o_json = settings;
+}
+
+void Effects11::RestoreDefaultSettings()
+{
+	settings = {};
 }
 
 void Effects11::ToggleEnabled()

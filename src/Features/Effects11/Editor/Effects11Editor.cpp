@@ -740,6 +740,8 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const bool active = settingManager.IsCategoryEnabled(a_category);
 	const bool exteriorOnly = settingManager.IsCategoryExteriorOnly(a_category);
 	const bool weatherAware = settingManager.IsWeatherSystemEnabled() && settingManager.CategoryHasWeatherSupport(a_category);
+	const bool isParticle = a_category == "PARTICLE";
+	const bool handledByCS = isParticle && globals::features::effects11.settings.IgnorePresetParticles;
 
 	if (!settingsFilter.empty())
 		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -749,9 +751,11 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const std::string weatherTag = weatherAware ? EditTargetFile(a_category) : std::string();
 	const char* exteriorTag = exteriorOnly && IsInterior() ? T(TKEY("tag_exterior_only"), "Exterior only") : nullptr;
 	const char* offTag = active ? nullptr : T(TKEY("tag_off"), "Off");
+	const char* csTag = handledByCS ? T(TKEY("tag_handled_by_cs"), "Handled by CS") : nullptr;
 	Effects11UI::HeaderTags({ { weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
 		{ exteriorTag, Util::Colors::GetWarning() },
-		{ offTag, Util::Colors::GetDisabled() } });
+		{ offTag, Util::Colors::GetDisabled() },
+		{ csTag, Util::Colors::GetInfo() } });
 
 	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) && ImGui::BeginTooltip()) {
 		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
@@ -795,12 +799,15 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 		Util::Text::WrappedWarning("%s", unavailable.c_str());
 	}
 
+	if (isParticle)
+		DrawParticleOwnershipToggle();
+
 	if (weatherAware)
 		DrawCategoryWeatherToggle(a_category);
 
 	if (Effects11UI::BeginPropertyTable("##rows")) {
 		for (const auto* setting : a_rows)
-			DrawSettingRow(*setting, active && usable);
+			DrawSettingRow(*setting, active && usable && !handledByCS);
 		Effects11UI::EndPropertyTable();
 	}
 
@@ -839,6 +846,14 @@ void Effects11Editor::DrawCategoryWeatherToggle(const std::string& a_category)
 	SameLineIfFits(ImGui::CalcTextSize(target.c_str()).x);
 	ImGui::AlignTextToFramePadding();
 	Util::Text::Info("%s", target.c_str());
+}
+
+void Effects11Editor::DrawParticleOwnershipToggle()
+{
+	ImGui::Checkbox(T(TKEY("cs_particles"), "Let Community Shaders handle particles"), &globals::features::effects11.settings.IgnorePresetParticles);
+	Util::AddTooltip(T(TKEY("cs_particles_tip"),
+		"Ignores the preset's [PARTICLE] values so smoke, mist and waterfalls are lit as with Effects 11 off.\n"
+		"Saved with Community Shaders' Save Settings, not with the preset."));
 }
 
 void Effects11Editor::DrawWeatherFileList()
@@ -1522,6 +1537,8 @@ void Effects11Editor::DrawLauncher()
 		if (Util::SuccessButton(T(TKEY("save"), "Save")))
 			Save();
 	}
+
+	DrawParticleOwnershipToggle();
 
 	if (!effectManager.enbEffect.IsFilePresent())
 		return;

@@ -501,7 +501,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	ShadowSampling::ExtractLighting(color, dirColor, ambientColor);
 
 #		if defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable) {
+	if (SharedData::enbSettings.EnableParticle) {
 		dirColor = ShadowSampling::GetDirectionalLighting();
 		ambientColor = ShadowSampling::GetAmbientLighting();
 		dirColor *= SharedData::enbSettings.ParticleLightingInfluence;
@@ -549,7 +549,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		float4 lightDistanceSquared = (PLightPositionX[0] - msPosition.xxxx) * (PLightPositionX[0] - msPosition.xxxx) + (PLightPositionY[0] - msPosition.yyyy) * (PLightPositionY[0] - msPosition.yyyy) + (PLightPositionZ[0] - msPosition.zzzz) * (PLightPositionZ[0] - msPosition.zzzz);
 		float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
 #		if defined(EFFECTS11)
-		float pointScale = SharedData::enbSettings.Enable ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
+		float pointScale = SharedData::enbSettings.EnableParticle ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
 #		else
 		float pointScale = 1.0;
 #		endif
@@ -675,7 +675,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 #		if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
+	if (SharedData::enbSettings.EnableParticle && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
 		propertyColor *= SharedData::enbSettings.ParticleIntensity;
 #		endif
 #	endif
@@ -691,7 +691,7 @@ PS_OUTPUT main(PS_INPUT input)
 	bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
 
 #			if defined(EFFECTS11)
-	float clusteredPointScale = SharedData::enbSettings.Enable ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
+	float clusteredPointScale = SharedData::enbSettings.EnableParticle ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
 #			else
 	float clusteredPointScale = 1.0;
 #			endif

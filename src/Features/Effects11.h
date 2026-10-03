@@ -59,7 +59,8 @@ public:
 		float ProceduralGradientWeightCurve;
 
 		float LightSpriteCurve;
-		float pad1[3];
+		uint EnableParticle;
+		float pad1[2];
 
 		float ParticleIntensity;
 		float ParticleLightingInfluence;
@@ -74,6 +75,11 @@ public:
 		float VolumetricRaysDesaturation;
 		float3 VolumetricRaysColorFilter;
 	};
+
+	struct Settings
+	{
+		bool IgnorePresetParticles = false;
+	} settings;
 
 	bool enableEffect = false;
 
@@ -97,6 +103,9 @@ public:
 	PerFrame GetCommonBufferData();
 
 	virtual void DrawSettings() override;
+	virtual void LoadSettings(json& o_json) override;
+	virtual void SaveSettings(json& o_json) override;
+	virtual void RestoreDefaultSettings() override;
 	virtual void SetupResources() override;
 	virtual void Prepass() override;
 	virtual void ClearShaderCache() override;
