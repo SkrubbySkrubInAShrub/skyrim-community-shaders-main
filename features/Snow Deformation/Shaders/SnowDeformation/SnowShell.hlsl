@@ -2872,6 +2872,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// clod heights out, so the ray is marched through them here and the point
 	// it meets is shaded. Depth-buffer work stays on the sheet.
 	float3 shadePos = input.WorldPos;
+#ifdef SNOW_SHELL_DEFERRED
+	bool gridShifted = false;
+#endif
 	[branch] if ((ShellFlags.x & 16) != 0)
 	{
 		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
@@ -2884,6 +2887,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 			shadePos = input.WorldPos + dir * t;
 			worldXYPS += dir.xy * t;
 			gridLocal += dir.xy * t;
+#ifdef SNOW_SHELL_DEFERRED
+			gridShifted = true;
+#endif
 		}
 	}
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
@@ -3244,6 +3250,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// onto the snow behind them; contact detail the game's cascades cannot
 	// hold. Geometric growth in the tap distances gives sharp close shadows
 	// and long soft ones at low sun angles.
+	float pixelVertexAO = -1.0;
 	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Redistributed toward the NEAR field. The first tap set the finest
@@ -3263,11 +3270,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float marchRef = surfZ;
 		{
 			float3 st0 = SampleTerrain(gridLocal);
+#ifdef SNOW_SHELL_DEFERRED
+			// Same four texels: the vertex AO below takes them from here.
+			pixelVertexAO = SampleTerrainVertexAO(gridLocal);
+#endif
 			[branch] if (st0.x > -50000.0)
 			{
 				float depth0 = max(st0.y, 0.0);
-				float2 mask0 = SampleExclusionMask(GridOrigin + gridLocal);
-				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(mask0.y));
+#ifdef SNOW_SHELL_DEFERRED
+				// pixelMelt is this read at the unshifted gridLocal.
+				float melt0 = pixelMelt;
+				[branch] if (gridShifted)
+					melt0 = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
+#else
+				float melt0 = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
+#endif
+				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), melt0);
 				// Untouched: CarveProfile of a zero carve is depth0, the berm +0.
 				[branch] if (!pixelUntouched)
 				{
@@ -3521,7 +3539,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// (Lighting.hlsl:2633-2636): linearized max component, VertexAOStrength
 	// lerp. Skylighting darkens only BEYOND it (the function divides), and
 	// the composite's SSGI reads its complement from Masks2.
-	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(gridLocal).xxx).x;
+	[branch] if (pixelVertexAO < 0.0)
+		pixelVertexAO = SampleTerrainVertexAO(gridLocal);
+	float landVertexAO = Color::ColorToLinear(pixelVertexAO.xxx).x;
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	// Skylighting parity with Lighting.hlsl's deferred tail: the ambient is
 	// darkened by the probe volume with the same multi-bounce term terrain
