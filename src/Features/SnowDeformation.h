@@ -910,6 +910,8 @@ public:
 	static constexpr UINT kExtentFieldSlot = 56;
 	/** @brief PS slot of the untouched-tile mask (BermFieldCS UntouchedCS), read by the shell PS's skip. */
 	static constexpr UINT kUntouchedTilesSlot = 57;
+	/** @brief SampleTerrain's terrain window (TerrainWetSRV), bound wherever the shell's t0 is. */
+	static constexpr UINT kTerrainWetSlot = 58;
 
 
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
@@ -1444,6 +1446,19 @@ public:
 
 	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, spare). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
 	Texture2D* shellTerrainTexture = nullptr;
+	/** @brief shellTerrainTexture with WaterBareTexel applied per texel (TerrainCutCS), bound at t21 for SampleTerrain while the water cut is on. Rebuilt when the terrain window, the bound water window or its version changes. */
+	Texture2D* shellTerrainWet = nullptr;
+	ID3D11ComputeShader* shellTerrainCutCS = nullptr;
+	ID3D11ComputeShader* GetShellTerrainCutCS();
+	/** @brief Rebuilds shellTerrainWet when its inputs changed. Call after the water cover pass, before any landscape-shell pass. */
+	void UpdateTerrainWet();
+	/** @brief SampleTerrain's t21: the cut window while a_cut and it is current, else the raw window. */
+	ID3D11ShaderResourceView* TerrainWetSRV(bool a_cut) const;
+	/** @brief The inputs shellTerrainWet was cut from: terrain version, water window version, water SRV. */
+	uint64_t shellTerrainWetKey[3] = {};
+	bool shellTerrainWetValid = false;
+	/** @brief The SRV DrawShell and the caster bind at t27 (WaterWindow). */
+	ID3D11ShaderResourceView* ShellWaterSRV() const;
 	/** @brief The ground as the engine renders it, at the land mesh's own 32-unit spacing: bicubic Catmull-Rom of the 128-texel window with cell edges extrapolated (TerrainFineCS), 9 cells centred on the camera's cell, rebuilt with the window. SampleTerrain's height reads it with the land's own checkerboard triangulation, so every shell vertex lies on the visible surface. */
 	static constexpr int kShellFineCells = 9;
 	static constexpr float kShellFineTexel = 32.0f;
@@ -2969,6 +2984,8 @@ public:
 	/** @brief WaterCoverCS reruns when the water raster (waterCoverDirty) or the terrain window (shellTerrainVersion) changed. */
 	bool waterCoverDirty = true;
 	uint32_t waterCoverTerrainVersion = 0;
+	/** @brief Bumped on every write of the water windows bound at t27 (the raster and its covered copy). */
+	uint32_t waterWindowVersion = 0;
 	void CoverWaterWindow();
 	float2 waterFineCenter = { 0, 0 };
 	float waterFineHalf = 0.0f;

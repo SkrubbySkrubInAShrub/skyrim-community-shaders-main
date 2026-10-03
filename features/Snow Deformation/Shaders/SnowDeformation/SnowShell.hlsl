@@ -269,6 +269,9 @@ float3 WaterBareTexel(float3 texel, int2 t)
 	texel.y = texel.x < water - kWaterTexelDepth ? min(texel.y, -8.0) : texel.y;
 	return texel;
 }
+// TerrainWindow with WaterBareTexel already applied (TerrainCutCS), or the
+// raw window while the cut is off (CompactLook.x): SampleTerrain's taps.
+Texture2D<float4> TerrainWindowWet : register(t58);
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
 // The land mesh is then flat between these points with a checkerboard
@@ -517,17 +520,10 @@ float3 SampleTerrain(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
 
-	float3 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).xyz;
-	float3 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).xyz;
-	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).xyz;
-	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
-	[branch] if (CompactLook.x > 0.5)
-	{
-		s00 = WaterBareTexel(s00, t0);
-		s10 = WaterBareTexel(s10, int2(t1.x, t0.y));
-		s01 = WaterBareTexel(s01, int2(t0.x, t1.y));
-		s11 = WaterBareTexel(s11, t1);
-	}
+	float3 s00 = TerrainWindowWet.Load(int3(t0.x, t0.y, 0)).xyz;
+	float3 s10 = TerrainWindowWet.Load(int3(t1.x, t0.y, 0)).xyz;
+	float3 s01 = TerrainWindowWet.Load(int3(t0.x, t1.y, 0)).xyz;
+	float3 s11 = TerrainWindowWet.Load(int3(t1.x, t1.y, 0)).xyz;
 
 	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	// Land-exact height: the ground as the engine renders it (LandHeightFine).
@@ -759,12 +755,10 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 	{
 		[loop] for (int x = i0.x; x <= i1.x; ++x)
 		{
-			float3 t = TerrainWindow.Load(int3(x, y, 0)).xyz;
+			float3 t = TerrainWindowWet.Load(int3(x, y, 0)).xyz;
 			// Sentinel texels carry no data; leave them to the full evaluation.
 			[branch] if (t.x < -50000.0)
 				return false;
-			[flatten] if (CompactLook.x > 0.5)
-				t = WaterBareTexel(t, int2(x, y));
 			maxDepth = max(maxDepth, t.y + (-8.0) * saturate(1.0 - saturate(t.z)));
 		}
 	}
@@ -3905,6 +3899,21 @@ RWTexture2D<float> ShellCastBakeOut : register(u3);
 	[branch] if ((ShellFlags.y & 2) == 0)
 		ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
 	ShellCastBakeOut[id.xy] = surfaceZ;
+}
+#endif
+
+#ifdef SNOW_TERRAIN_CUT_CS
+// TerrainWindowWet's builder: one WaterBareTexel per texel, run when the
+// terrain or the water window changes rather than in every terrain tap.
+RWTexture2D<float4> TerrainWetOut : register(u4);
+
+[numthreads(8, 8, 1)] void TerrainCutCS(uint3 id : SV_DispatchThreadID)
+{
+	if (any(id.xy >= TerrainDim))
+		return;
+	float4 texel = TerrainWindow.Load(int3(id.xy, 0));
+	texel.xyz = WaterBareTexel(texel.xyz, int2(id.xy));
+	TerrainWetOut[id.xy] = texel;
 }
 #endif
 

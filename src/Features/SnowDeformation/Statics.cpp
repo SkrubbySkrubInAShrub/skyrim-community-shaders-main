@@ -4449,6 +4449,7 @@ void SnowDeformation::RenderWaterCapture()
 		waterBakeKeys.swap(waterBakeScratch);
 		waterBakeValid = true;
 		waterCoverDirty = true;
+		waterWindowVersion++;
 	}
 	// The terrain window's frame, rebuilt whenever the list or the cell
 	// moves (never kept across a change: a plane from an earlier frame - the
@@ -4577,6 +4578,7 @@ void SnowDeformation::CoverWaterWindow()
 		return;
 	waterCoverDirty = false;
 	waterCoverTerrainVersion = shellTerrainVersion;
+	waterWindowVersion++;
 	auto context = globals::d3d::context;
 	if (!heightWaterCoverCS || !shellTerrainTexture || !shellTerrainTexture->srv || !heightProcessCB) {
 		context->CopyResource(waterVisibleTexture->resource.get(), waterHeightTexture->resource.get());

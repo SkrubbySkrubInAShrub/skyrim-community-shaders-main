@@ -566,6 +566,9 @@ void SnowDeformation::SetupResources()
 		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
 		shellTerrainTexture->CreateSRV(terrainSrvDesc);
 		shellTerrainTexture->CreateUAV(terrainUavDesc);
+		shellTerrainWet = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWet");
+		shellTerrainWet->CreateSRV(terrainSrvDesc);
+		shellTerrainWet->CreateUAV(terrainUavDesc);
 	}
 
 	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");
@@ -2222,6 +2225,10 @@ void SnowDeformation::ClearShaderCache()
 		shellBakeCS->Release();
 	shellBakeCS = nullptr;
 	shellSlopeKeyValid = false;
+	if (shellTerrainCutCS)
+		shellTerrainCutCS->Release();
+	shellTerrainCutCS = nullptr;
+	shellTerrainWetValid = false;
 	if (shellShadowVS)
 		shellShadowVS->Release();
 	shellShadowVS = nullptr;
