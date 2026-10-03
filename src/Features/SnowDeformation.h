@@ -1855,8 +1855,8 @@ public:
 	ID3D11PixelShader* shellPSCensus = nullptr;
 	ID3D11PixelShader* GetShellPSCensus();
 
-	/** @brief Shell Shader Performance > Deferred Shell Shading (runtime, not serialised): the prepass also writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners instead of the patch lists. Near-exact: the position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. */
-	bool shellDeferredShading = false;
+	/** @brief Shell Shader Performance > Deferred Shell Shading (runtime, not serialised): the prepass also writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners instead of the patch lists. Near-exact: the position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. Default on. */
+	bool shellDeferredShading = true;
 	/** @brief Whether the deferred pass drew this frame (the toggle can be on while a debug view keeps the raster path). */
 	bool shellDeferredThisFrame = false;
 	/** @brief The deferred pass's inputs, display-size like shellRasterDepth: [0] GridLocal.xy + normal.xy (RGBA32F), [1] GridLocal's coarse derivatives (RGBA16F), [2] view depth + WorldPos.z's coarse derivatives (RGBA32F). */
