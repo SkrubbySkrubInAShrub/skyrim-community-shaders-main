@@ -187,15 +187,20 @@ void VolumetricShadows::CopyShadowLightData()
 
 					context->CSSetSamplers(0, 1, &linearSampler);
 
-					// Dispatch covers full input: each thread gathers 2x2, 8 threads per group
-					auto dispatchSize = srcDesc.Width / 16;
+					// Dispatch covers full input: each thread gathers 2x2 blocks over its span, 8 threads per group.
+					// Must match threadSpan in DownsampleShadowCS.hlsl: past a 16x reduction a thread covers more texels.
+					auto dispatchSize = [&](uint32_t a_outputSize) {
+						const uint32_t threadSpan = std::max(srcDesc.Width / a_outputSize / 8, 2u);
+						return srcDesc.Width / (8 * threadSpan);
+					};
 
 					// Mip 0 (cascade 1)
 					ID3D11UnorderedAccessView* csUavs[1]{ shadowCopyMip0UAV };
 					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
 					context->CSSetShader(downsampleShadowMip0CS, nullptr, 0);
 					globals::profiler->BeginPass("VolumetricShadows::DownsampleMip0");
-					context->Dispatch(dispatchSize, dispatchSize, 1);
+					const auto mip0Dispatch = dispatchSize(SHADOW_COPY_SIZE);
+					context->Dispatch(mip0Dispatch, mip0Dispatch, 1);
 					globals::profiler->EndPass();
 
 					// Mip 1 (cascade 0)
@@ -203,7 +208,8 @@ void VolumetricShadows::CopyShadowLightData()
 					context->CSSetUnorderedAccessViews(0, 1, csUavs, nullptr);
 					context->CSSetShader(downsampleShadowMip1CS, nullptr, 0);
 					globals::profiler->BeginPass("VolumetricShadows::DownsampleMip1");
-					context->Dispatch(dispatchSize, dispatchSize, 1);
+					const auto mip1Dispatch = dispatchSize(SHADOW_COPY_SIZE / 2);
+					context->Dispatch(mip1Dispatch, mip1Dispatch, 1);
 					globals::profiler->EndPass();
 
 					// Unbind SRVs before blur passes
