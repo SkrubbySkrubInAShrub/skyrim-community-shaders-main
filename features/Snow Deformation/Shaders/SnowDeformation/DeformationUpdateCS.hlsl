@@ -293,12 +293,10 @@ StructuredBuffer<uint> StampTiles : register(t2);
 RWTexture2D<uint> Occupancy : register(u3);
 Texture2D<uint> OccupancyIn : register(t4);
 // Evolve tile list: [0] = count, then packed tiles (x | y<<16). Appended by
-// ScanEvolveCS, sized into indirect args by TileArgsCS, consumed by
-// EvolveCS - count and list never touch the CPU.
+// ScanEvolveCS, whose last group writes the count and the indirect args;
+// consumed by EvolveCS - count and list never touch the CPU.
 RWStructuredBuffer<uint> EvolveTiles : register(u4);
 StructuredBuffer<uint> EvolveTilesIn : register(t3);
-// TileArgsCS: whatever list is bound at t5 becomes indirect args at u5.
-StructuredBuffer<uint> TileListIn : register(t5);
 // Lowest surface over each column this frame from the moving props' own
 // render meshes, MIN-blended; CONTACT_NONE where nothing was drawn. The
 // terrain window gives the ground and the layer depth the contact is
@@ -313,13 +311,15 @@ Texture2D<float2> ObjectSkinDepth : register(t9);
 Texture2D<float> TrampleExtentIn : register(t10);
 #define CONTACT_NONE 1.0e30
 static const float kNoRoadTop = -1000000.0;
+// A scan's indirect args (bytes 0-11), its append counter (12) and its
+// finished-group counter (16). Both counters are zero between scans.
 RWByteAddressBuffer TileArgs : register(u5);
 
 // Per-tile "the map changed here this frame" - the berm bake's dirty set,
 // marked by every writer (the ring unconditionally: departing ground zeroed
 // is as much a berm-input change as arriving ground injected). Accumulates
-// until a berm rebuild consumes it (the CPU clears it after), so a berm
-// A/B toggle re-enabling picks up exactly what it missed.
+// until a berm rebuild consumes it (each rebuilt tile clears its own mark),
+// so a berm A/B toggle re-enabling picks up exactly what it missed.
 RWTexture2D<uint> BermDirty : register(u6);
 Texture2D<uint> BermDirtyIn : register(t6);
 // Berm tile list, same shape as the evolve list.
@@ -696,75 +696,104 @@ bool EvolveTexel(uint2 phys)
 	}
 }
 
+// A scan's last group to finish: true in its first thread, which takes the
+// final count (an atomic read; every other group's appends completed before
+// its own finish increment), zeroes both counters for the next scan and
+// writes the indirect args (x capped at 1024, the remainder in y -
+// 4096-dim full-dirty is 262144 tiles, past the 65535 one-dimension cap).
+// The caller stores the count at its list's [0]. Called by every thread.
+bool ScanFinish(uint GIdx, uint2 dims, out uint count)
+{
+	count = 0;
+	bool last = false;
+	DeviceMemoryBarrierWithGroupSync();
+	[branch] if (GIdx == 0)
+	{
+		uint done;
+		TileArgs.InterlockedAdd(16, 1u, done);
+		[branch] if (done + 1u >= ((dims.x + 7u) / 8u) * ((dims.y + 7u) / 8u))
+		{
+			TileArgs.InterlockedExchange(12, 0u, count);
+			TileArgs.InterlockedExchange(16, 0u, done);
+			TileArgs.Store3(0, uint3(min(count, 1024u), (count + 1023u) / 1024u, 1u));
+			last = true;
+		}
+	}
+	return last;
+}
+
 // Lists the tiles evolve must visit: any occupancy within the slump reach,
 // tested in wrapped physical space (logical adjacency survives the seam;
 // the extra cross-border pairs are harmless over-inclusion). At extreme
 // range/resolution combos the halo grows to a few hundred taps per tile -
 // accepted, the scan is R8 reads against a 4M-texel pass saved.
 [numthreads(8, 8, 1)] void ScanEvolveCS(uint3 DTid
-										: SV_DispatchThreadID) {
+										: SV_DispatchThreadID, uint GIdx
+										: SV_GroupIndex) {
 	uint2 dims;
 	// The SRV, not the UAV: the grid reaches this pass as OccupancyIn (u3 is
 	// deliberately unbound), and an unbound view's GetDimensions returns 0x0
 	// - which silently killed every scan thread at the bounds guard and
 	// dispatched an evolve of zero tiles. The census is what caught it.
 	OccupancyIn.GetDimensions(dims.x, dims.y);
-	if (any(DTid.xy >= dims))
-		return;
 
-	bool need = ForceAllDirty != 0;
-	if (!need) {
-		const int halo = (int)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
-		for (int dy = -halo; dy <= halo && !need; dy++)
-			for (int dx = -halo; dx <= halo && !need; dx++) {
-				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
-				need = OccupancyIn[t] != 0;
-			}
+	bool need = false;
+	[branch] if (all(DTid.xy < dims))
+	{
+		need = ForceAllDirty != 0;
+		if (!need) {
+			const int halo = (int)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
+			for (int dy = -halo; dy <= halo && !need; dy++)
+				for (int dx = -halo; dx <= halo && !need; dx++) {
+					const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+					need = OccupancyIn[t] != 0;
+				}
+		}
 	}
-	if (!need)
-		return;
-
-	uint idx;
-	InterlockedAdd(EvolveTiles[0], 1u, idx);
-	EvolveTiles[1 + idx] = DTid.x | (DTid.y << 16);
-	// Census, riding the activity readback.
-	ActivityFlag.InterlockedAdd(44, 1u);
+	[branch] if (need)
+	{
+		uint idx;
+		TileArgs.InterlockedAdd(12, 1u, idx);
+		EvolveTiles[1 + idx] = DTid.x | (DTid.y << 16);
+		// Census, riding the activity readback.
+		ActivityFlag.InterlockedAdd(44, 1u);
+	}
+	uint count;
+	if (ScanFinish(GIdx, dims, count))
+		EvolveTiles[0] = count;
 }
 
 // Lists the tiles the berm bake must rebuild: the map changed within the
 // tap reach (40 units x BermReach). Same wrapped-space dilation as the evolve scan.
 [numthreads(8, 8, 1)] void ScanBermCS(uint3 DTid
-									  : SV_DispatchThreadID) {
+									  : SV_DispatchThreadID, uint GIdx
+									  : SV_GroupIndex) {
 	uint2 dims;
 	BermDirtyIn.GetDimensions(dims.x, dims.y);
-	if (any(DTid.xy >= dims))
-		return;
 
-	bool need = ForceAllDirty != 0;
-	if (!need) {
-		const int halo = (int)ceil((40.0 * BermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
-		for (int dy = -halo; dy <= halo && !need; dy++)
-			for (int dx = -halo; dx <= halo && !need; dx++) {
-				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
-				need = BermDirtyIn[t] != 0;
-			}
+	bool need = false;
+	[branch] if (all(DTid.xy < dims))
+	{
+		need = ForceAllDirty != 0;
+		if (!need) {
+			const int halo = (int)ceil((40.0 * BermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
+			for (int dy = -halo; dy <= halo && !need; dy++)
+				for (int dx = -halo; dx <= halo && !need; dx++) {
+					const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+					need = BermDirtyIn[t] != 0;
+				}
+		}
 	}
-	if (!need)
-		return;
-
-	uint idx;
-	InterlockedAdd(BermTiles[0], 1u, idx);
-	BermTiles[1 + idx] = DTid.x | (DTid.y << 16);
-	ActivityFlag.InterlockedAdd(48, 1u);
-}
-
-// A list's count becomes indirect dispatch args (x capped at 1024, the
-// remainder in y - 4096-dim full-dirty is 262144 tiles, past the 65535
-// one-dimension cap), so the CPU never reads a count back.
-[numthreads(1, 1, 1)] void TileArgsCS(uint3 DTid
-									  : SV_DispatchThreadID) {
-	const uint count = TileListIn[0];
-	TileArgs.Store3(0, uint3(min(count, 1024u), (count + 1023u) / 1024u, 1u));
+	[branch] if (need)
+	{
+		uint idx;
+		TileArgs.InterlockedAdd(12, 1u, idx);
+		BermTiles[1 + idx] = DTid.x | (DTid.y << 16);
+		ActivityFlag.InterlockedAdd(48, 1u);
+	}
+	uint count;
+	if (ScanFinish(GIdx, dims, count))
+		BermTiles[0] = count;
 }
 
 // Actors acting on the map: stamp capsules, RMW on the

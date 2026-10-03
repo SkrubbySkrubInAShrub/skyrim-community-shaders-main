@@ -453,23 +453,26 @@ void SnowDeformation::SetupResources()
 		DX::ThrowIfFailed(device->CreateShaderResourceView(stampTileBuffer.get(), &tileSrvDesc, stampTileSRV.put()));
 		Util::SetResourceName(stampTileSRV.get(), "SnowDeformation::StampTiles SRV");
 
-		// Indirect args for the evolve dispatch, written by TileArgsCS.
-		// Dimension-independent (always three uints).
+		// Indirect args for the evolve and berm dispatches, written by their
+		// scans' last group: three uints of args, then the scan's append and
+		// finished-group counters, zero at creation and after every scan.
 		D3D11_BUFFER_DESC argsDesc{};
-		argsDesc.ByteWidth = 3 * sizeof(uint32_t);
+		argsDesc.ByteWidth = 5 * sizeof(uint32_t);
 		argsDesc.Usage = D3D11_USAGE_DEFAULT;
 		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		DX::ThrowIfFailed(device->CreateBuffer(&argsDesc, nullptr, evolveArgsBuffer.put()));
+		const uint32_t argsZero[5] = {};
+		const D3D11_SUBRESOURCE_DATA argsInit{ argsZero, 0, 0 };
+		DX::ThrowIfFailed(device->CreateBuffer(&argsDesc, &argsInit, evolveArgsBuffer.put()));
 		Util::SetResourceName(evolveArgsBuffer.get(), "SnowDeformation::EvolveArgs");
 		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUavDesc{};
 		argsUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		argsUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		argsUavDesc.Buffer.NumElements = 3;
+		argsUavDesc.Buffer.NumElements = 5;
 		argsUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(evolveArgsBuffer.get(), &argsUavDesc, evolveArgsUAV.put()));
 		Util::SetResourceName(evolveArgsUAV.get(), "SnowDeformation::EvolveArgs UAV");
-		DX::ThrowIfFailed(device->CreateBuffer(&argsDesc, nullptr, bermArgsBuffer.put()));
+		DX::ThrowIfFailed(device->CreateBuffer(&argsDesc, &argsInit, bermArgsBuffer.put()));
 		Util::SetResourceName(bermArgsBuffer.get(), "SnowDeformation::BermArgs");
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(bermArgsBuffer.get(), &argsUavDesc, bermArgsUAV.put()));
 		Util::SetResourceName(bermArgsUAV.get(), "SnowDeformation::BermArgs UAV");
@@ -1054,7 +1057,7 @@ void SnowDeformation::Prepass()
 	// Before the scroll is consumed. Latched until ClearShaderCache so a failed compile is not retried per frame.
 	if (deformationCSFailed)
 		return;
-	if (!GetDeformationRingCS() || !GetDeformationScanEvolveCS() || !GetDeformationTileArgsCS() || !GetDeformationEvolveCS() ||
+	if (!GetDeformationRingCS() || !GetDeformationScanEvolveCS() || !GetDeformationEvolveCS() ||
 		!GetDeformationStampCS() || !GetDeformationStampAllCS() || !GetDeformationScanBermCS()) {
 		deformationCSFailed = true;
 		logger::error("[SNOW DEFORMATION] DeformationUpdateCS failed to compile, deformation passes disabled");
@@ -1506,7 +1509,8 @@ void SnowDeformation::Prepass()
 			// the ring, or arriving texels would evolve from the departed
 			// ground that used to stand at their physical position. The
 			// dispatch is indirect over ScanEvolveCS's occupied-plus-halo
-			// list; neither the list nor its count ever touches the CPU.
+			// list, sized by the scan's own last group; neither the list nor
+			// its count ever touches the CPU.
 			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
@@ -1514,32 +1518,24 @@ void SnowDeformation::Prepass()
 				context->CopyResource(scratch->resource.get(), map->resource.get());
 				globals::profiler->EndPass();
 
-				// Scan: occupancy (SRV, so drop its UAV bind) + halo -> list.
+				// Scan: occupancy (SRV, so drop its UAV bind) + halo -> list
+				// (u4) and indirect args (u5).
 				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);
-				const UINT zeroList[4] = { 0, 0, 0, 0 };
-				context->ClearUnorderedAccessViewUint(evolveTileUAV.get(), zeroList);
 				ID3D11ShaderResourceView* occSRV = occupancySRV.get();
 				context->CSSetShaderResources(4, 1, &occSRV);
-				ID3D11UnorderedAccessView* listUAV = evolveTileUAV.get();
-				context->CSSetUnorderedAccessViews(4, 1, &listUAV, nullptr);
+				ID3D11UnorderedAccessView* scanUAVs[2] = { evolveTileUAV.get(), evolveArgsUAV.get() };
+				context->CSSetUnorderedAccessViews(4, 2, scanUAVs, nullptr);
 				context->CSSetShader(GetDeformationScanEvolveCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Accumulation - Tile Scan");
 				const uint tilesPerAxis = deformMapDim / 8;
 				context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
-
-				// List count -> indirect args.
-				context->CSSetUnorderedAccessViews(4, 1, &nullUav, nullptr);
-				ID3D11ShaderResourceView* listSRV = evolveTileSRV.get();
-				context->CSSetShaderResources(5, 1, &listSRV);
-				ID3D11UnorderedAccessView* argsUAV = evolveArgsUAV.get();
-				context->CSSetUnorderedAccessViews(5, 1, &argsUAV, nullptr);
-				context->CSSetShader(GetDeformationTileArgsCS(), nullptr, 0);
-				context->Dispatch(1, 1, 1);
 				globals::profiler->EndPass();
-				context->CSSetUnorderedAccessViews(5, 1, &nullUav, nullptr);
+				ID3D11UnorderedAccessView* nullScanUAVs[2] = { nullptr, nullptr };
+				context->CSSetUnorderedAccessViews(4, 2, nullScanUAVs, nullptr);
 				ID3D11ShaderResourceView* nullOcc = nullptr;
 				context->CSSetShaderResources(4, 1, &nullOcc);
 
+				ID3D11ShaderResourceView* listSRV = evolveTileSRV.get();
 				ID3D11ShaderResourceView* srvs[2] = { scratch->srv.get(), trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 				context->CSSetShaderResources(3, 1, &listSRV);
@@ -1625,11 +1621,12 @@ void SnowDeformation::Prepass()
 
 		// Berm bake, rebuilt only where the map changed (plus the tap-reach
 		// halo): scan the dirty grid AFTER the stamp pass so its marks are
-		// in, size the indirect args, rebuild the listed tiles, consume the
-		// marks. The toroidal layout is what makes the unrebuilt remainder
-		// stay valid across scrolls. While the A/B toggle holds the shells on
-		// their per-pixel path, marks ACCUMULATE instead - re-enabling (which
-		// bermHeal forces to execute) rebuilds exactly what was missed.
+		// in (the scan sizes the indirect args), rebuild the listed tiles,
+		// each consuming its own mark. The toroidal layout is what makes the
+		// unrebuilt remainder stay valid across scrolls. While the A/B toggle
+		// holds the shells on their per-pixel path, marks ACCUMULATE instead -
+		// re-enabling (which bermHeal forces to execute) rebuilds exactly what
+		// was missed.
 		if (shellBermBakeDisabled || !bermFieldTexture) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Berms");
 			globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Extent");
@@ -1638,29 +1635,26 @@ void SnowDeformation::Prepass()
 			ID3D11UnorderedAccessView* nullUav = nullptr;
 			// The dirty grid moves from UAV (writers) to SRV (scan).
 			context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
-			const UINT zeroList[4] = { 0, 0, 0, 0 };
-			context->ClearUnorderedAccessViewUint(bermTileUAV.get(), zeroList);
 			ID3D11ShaderResourceView* dirtySRV = bermDirtySRV.get();
 			context->CSSetShaderResources(6, 1, &dirtySRV);
+			ID3D11UnorderedAccessView* bermArgs = bermArgsUAV.get();
+			context->CSSetUnorderedAccessViews(5, 1, &bermArgs, nullptr);
 			ID3D11UnorderedAccessView* bermListUAV = bermTileUAV.get();
 			context->CSSetUnorderedAccessViews(7, 1, &bermListUAV, nullptr);
 			context->CSSetShader(GetDeformationScanBermCS(), nullptr, 0);
 			const uint tilesPerAxis = deformMapDim / 8;
 			context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
-
 			context->CSSetUnorderedAccessViews(7, 1, &nullUav, nullptr);
-			ID3D11ShaderResourceView* bermListSRV = bermTileSRV.get();
-			context->CSSetShaderResources(5, 1, &bermListSRV);
-			ID3D11UnorderedAccessView* bermArgs = bermArgsUAV.get();
-			context->CSSetUnorderedAccessViews(5, 1, &bermArgs, nullptr);
-			context->CSSetShader(GetDeformationTileArgsCS(), nullptr, 0);
-			context->Dispatch(1, 1, 1);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUav, nullptr);
+			// The bake takes the grid back as a UAV.
+			ID3D11ShaderResourceView* nullDirty = nullptr;
+			context->CSSetShaderResources(6, 1, &nullDirty);
 
 			if (auto* bermCS = GetBermFieldTiledCS()) {
 				// The freshly written map is still bound as a UAV; a texture
 				// cannot be read and written at once, so drop that binding
-				// first. BermFieldCS's own binding space: t0 map, t1 list.
+				// first. BermFieldCS's own binding space: t0 map, t1 list,
+				// u6 the dirty grid (each group clears its tile's mark).
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				ID3D11ShaderResourceView* bermSrvs[2] = { map->srv.get(), bermTileSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
@@ -1668,52 +1662,50 @@ void SnowDeformation::Prepass()
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
 				ID3D11UnorderedAccessView* bermOccUAV = bermOccupancyUAV.get();
 				context->CSSetUnorderedAccessViews(2, 1, &bermOccUAV, nullptr);
+				ID3D11UnorderedAccessView* dirtyUAV = bermDirtyUAV.get();
+				context->CSSetUnorderedAccessViews(6, 1, &dirtyUAV, nullptr);
 				context->CSSetShader(bermCS, nullptr, 0);
 				context->DispatchIndirect(bermArgsBuffer.get(), 0);
 				context->CSSetUnorderedAccessViews(2, 1, &nullUav, nullptr);
+				context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
+			} else {
+				// Consumed all the same: the next frame's marks start clean.
+				const UINT zeroMarks[4] = { 0, 0, 0, 0 };
+				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), zeroMarks);
 			}
 			globals::profiler->EndPass();
 
 			// Trample extent, whole field, from the berm bake just finished
-			// (which leaves u0 so it can be read).
-			if (auto* extentCS = (extentFieldTexture && !debugTrampleFreeze) ? GetExtentFieldCS() : nullptr) {
-				globals::profiler->BeginPass("SnowDeformation::Trails - Extent");
-				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				ID3D11ShaderResourceView* extentSrc = bermFieldTexture->srv.get();
-				context->CSSetShaderResources(2, 1, &extentSrc);
-				ID3D11UnorderedAccessView* extentUav = extentFieldTexture->uav.get();
-				context->CSSetUnorderedAccessViews(1, 1, &extentUav, nullptr);
-				context->CSSetShader(extentCS, nullptr, 0);
-				const uint extentGroups = (deformMapDim / 8 + 7) / 8;
-				context->Dispatch(extentGroups, extentGroups, 1);
-				context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
-				globals::profiler->EndPass();
-			}
-
-			// Untouched tiles, from the map's and the berm's occupancy as they
-			// stand after this frame's writers.
-			if (auto* untouchedCS = GetUntouchedTilesCS()) {
-				globals::profiler->BeginPass("SnowDeformation::Ground - Untouched Tiles");
+			// (which leaves u0 so it can be read), and in the same dispatch
+			// the untouched tiles, from the map's and the berm's occupancy as
+			// they stand after this frame's writers. Untouched runs alone
+			// while the extent is frozen.
+			auto* extentCS = (extentFieldTexture && !debugTrampleFreeze) ? GetExtentFieldCS() : nullptr;
+			auto* untouchedCS = extentCS ? nullptr : GetUntouchedTilesCS();
+			if (extentCS || untouchedCS) {
+				globals::profiler->BeginPass(extentCS ? "SnowDeformation::Trails - Extent" : "SnowDeformation::Ground - Untouched Tiles");
 				ID3D11UnorderedAccessView* nullTileUavs[4] = {};
 				context->CSSetUnorderedAccessViews(0, 4, nullTileUavs, nullptr);
 				ID3D11ShaderResourceView* occSrvs[2] = { occupancySRV.get(), bermOccupancySRV.get() };
 				context->CSSetShaderResources(3, 2, occSrvs);
 				ID3D11UnorderedAccessView* untouchedUAV = untouchedTilesUAV.get();
 				context->CSSetUnorderedAccessViews(3, 1, &untouchedUAV, nullptr);
-				context->CSSetShader(untouchedCS, nullptr, 0);
+				if (extentCS) {
+					ID3D11ShaderResourceView* extentSrc = bermFieldTexture->srv.get();
+					context->CSSetShaderResources(2, 1, &extentSrc);
+					ID3D11UnorderedAccessView* extentUav = extentFieldTexture->uav.get();
+					context->CSSetUnorderedAccessViews(1, 1, &extentUav, nullptr);
+				}
+				context->CSSetShader(extentCS ? extentCS : untouchedCS, nullptr, 0);
 				const uint tileGroups = (deformMapDim / 8 + 7) / 8;
 				context->Dispatch(tileGroups, tileGroups, 1);
-				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);
+				context->CSSetUnorderedAccessViews(0, 4, nullTileUavs, nullptr);
 				ID3D11ShaderResourceView* nullOccSrvs[2] = {};
 				context->CSSetShaderResources(3, 2, nullOccSrvs);
 				globals::profiler->EndPass();
+				if (extentCS)
+					globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Untouched Tiles");
 			}
-
-			// Consumed: the next frame's marks start clean. (Drop the scan's
-			// SRV bind first so the clear sees no aliased view.)
-			ID3D11ShaderResourceView* nullDirty = nullptr;
-			context->CSSetShaderResources(6, 1, &nullDirty);
-			context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), zeroList);
 		}
 
 		context->CSSetShader(nullptr, nullptr, 0);
@@ -1875,15 +1867,6 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationScanEvolveCS()
 		deformationScanEvolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanEvolveCS"));
 	}
 	return deformationScanEvolveCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationTileArgsCS()
-{
-	if (!deformationTileArgsCS) {
-		logger::debug("Compiling DeformationUpdateCS:TileArgsCS");
-		deformationTileArgsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "TileArgsCS"));
-	}
-	return deformationTileArgsCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetDeformationScanBermCS()
@@ -2100,9 +2083,6 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationScanEvolveCS)
 		deformationScanEvolveCS->Release();
 	deformationScanEvolveCS = nullptr;
-	if (deformationTileArgsCS)
-		deformationTileArgsCS->Release();
-	deformationTileArgsCS = nullptr;
 	if (deformationScanBermCS)
 		deformationScanBermCS->Release();
 	deformationScanBermCS = nullptr;

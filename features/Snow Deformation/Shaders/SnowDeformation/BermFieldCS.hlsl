@@ -33,10 +33,15 @@ RWTexture2D<float> OutExtentField : register(u1);
 RWTexture2D<uint> OutBermOccupancy : register(u2);
 groupshared uint gBermNonZero;
 
-// UntouchedCS: the map's tile occupancy and the berm's, dilated one tile.
+// UntouchedTile: the map's tile occupancy and the berm's, dilated one tile.
 Texture2D<uint> DeformOccupancyIn : register(t3);
 Texture2D<uint> BermOccupancyIn : register(t4);
 RWTexture2D<uint> OutUntouched : register(u3);
+
+// DeformationUpdateCS's BermDirty grid: BermTiledCS consumes each rebuilt
+// tile's mark. ScanBermCS lists every marked tile (its halo includes the tile
+// itself), so no mark outlives the bake.
+RWTexture2D<uint> OutBermDirty : register(u6);
 
 // Shares DeformationUpdateCS's PerFrame buffer; only TexelSize is read, but
 // the leading layout must match it exactly.
@@ -174,30 +179,38 @@ void BermTiledCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID, uint GId
 	if (BermTexel(tile * 8u + GTid.xy))
 		InterlockedOr(gBermNonZero, 1u);
 	GroupMemoryBarrierWithGroupSync();
-	if (GIdx == 0)
+	if (GIdx == 0) {
 		OutBermOccupancy[tile] = gBermNonZero;
+		OutBermDirty[tile] = 0u;
+	}
 }
 
 // 1 where neither the map nor the berm field holds a non-zero texel within one
 // tile: every map or berm read the shells take there returns exactly zero.
 // Wrapped neighbours across the window border only over-include.
-[numthreads(8, 8, 1)]
-void UntouchedCS(uint3 dtid : SV_DispatchThreadID)
+void UntouchedTile(uint2 tile)
 {
 	uint2 dims;
 	DeformOccupancyIn.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
+	if (any(tile >= dims))
 		return;
 	uint touched = 0;
 	[unroll] for (int dy = -1; dy <= 1; dy++)
 	{
 		[unroll] for (int dx = -1; dx <= 1; dx++)
 		{
-			const uint2 t = (dtid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+			const uint2 t = (tile + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
 			touched |= DeformOccupancyIn[t] | BermOccupancyIn[t];
 		}
 	}
-	OutUntouched[dtid.xy] = touched == 0 ? 1u : 0u;
+	OutUntouched[tile] = touched == 0 ? 1u : 0u;
+}
+
+// Alone only while the extent is frozen or absent; ExtentCS runs it otherwise.
+[numthreads(8, 8, 1)]
+void UntouchedCS(uint3 dtid : SV_DispatchThreadID)
+{
+	UntouchedTile(dtid.xy);
 }
 
 // ---- Trample extent ----
@@ -222,9 +235,13 @@ float ExtentTap(int2 t, int2 dims)
 	return v;
 }
 
+// The untouched tiles ride along: the same tile grid, inputs no part of
+// this pass writes.
 [numthreads(8, 8, 1)]
 void ExtentCS(uint3 dtid : SV_DispatchThreadID)
 {
+	UntouchedTile(dtid.xy);
+
 	uint2 outDims;
 	OutExtentField.GetDimensions(outDims.x, outDims.y);
 	if (any(dtid.xy >= outDims))

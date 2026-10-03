@@ -1369,11 +1369,11 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> occupancyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> occupancyUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> occupancySRV;
-	/** @brief Evolve tile list: [0] count, then packed tiles. GPU-only (scan appends, TileArgsCS sizes the indirect dispatch); the CPU never reads it. */
+	/** @brief Evolve tile list: [0] count, then packed tiles. GPU-only (scan appends; its last group writes the count and sizes the indirect dispatch); the CPU never reads it. */
 	winrt::com_ptr<ID3D11Buffer> evolveTileBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> evolveTileUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> evolveTileSRV;
-	/** @brief Indirect dispatch args for the evolve pass, written by TileArgsCS. */
+	/** @brief Indirect dispatch args for the evolve pass (bytes 0-11), then the scan's append and finished-group counters (zero between scans). */
 	winrt::com_ptr<ID3D11Buffer> evolveArgsBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> evolveArgsUAV;
 	/** @brief Set when the map (and with it the occupancy grid) was (re)created; the next Prepass seeds occupancy all-1. */
@@ -1383,18 +1383,15 @@ public:
 
 	/** @brief Returns the evolve-scan compute shader (occupancy + halo -> tile list), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationScanEvolveCS();
-	/** @brief Returns the list-count -> indirect-args shader, compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationTileArgsCS();
 	/** @brief Returns the berm-scan compute shader (dirty grid + tap-reach halo -> tile list), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationScanBermCS();
 	/** @brief Returns the tiled berm bake (indirect over the berm tile list), compiling it on first use. */
 	ID3D11ComputeShader* GetBermFieldTiledCS();
 	ID3D11ComputeShader* deformationScanEvolveCS = nullptr;
-	ID3D11ComputeShader* deformationTileArgsCS = nullptr;
 	ID3D11ComputeShader* deformationScanBermCS = nullptr;
 	ID3D11ComputeShader* bermFieldTiledCS = nullptr;
 
-	/** @brief Per-tile "the map changed here" - the berm bake's dirty set, marked by every map writer and ACCUMULATED until a berm rebuild consumes it (cleared after), so the A/B toggle re-enabling rebuilds exactly what it missed. Recreated with the map; seeded all-1. */
+	/** @brief Per-tile "the map changed here" - the berm bake's dirty set, marked by every map writer and ACCUMULATED until a berm rebuild consumes it (each rebuilt tile clears its own mark), so the A/B toggle re-enabling rebuilds exactly what it missed. Recreated with the map; seeded all-1. */
 	winrt::com_ptr<ID3D11Texture2D> bermDirtyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermDirtyUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bermDirtySRV;
@@ -1410,7 +1407,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> bermOccupancyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermOccupancyUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bermOccupancySRV;
-	/** @brief 1 per tile where the map and the berm field are zero within one tile (UntouchedCS, after the berm bake). The shell PS skips its carve/berm reads there. Seeded all-0 (touched). */
+	/** @brief 1 per tile where the map and the berm field are zero within one tile (ExtentCS, or UntouchedCS while the extent is frozen; after the berm bake). The shell PS skips its carve/berm reads there. Seeded all-0 (touched). */
 	winrt::com_ptr<ID3D11Texture2D> untouchedTilesTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> untouchedTilesUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> untouchedTilesSRV;
