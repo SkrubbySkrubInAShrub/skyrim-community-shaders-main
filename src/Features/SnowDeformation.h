@@ -1902,6 +1902,9 @@ public:
 	/** @brief Prepass-draw DS variants that also carry the patch id (SNOW_SHELL_PATCH_ID): [0] live, [1] bake, [2] bake check. */
 	ID3D11DomainShader* GetShellDSPatch(bool a_bake, bool a_check);
 	ID3D11DomainShader* shellDSPatch[3] = {};
+	/** @brief The prepass draw's bake DS writing only what the prepass PS reads (SNOW_DS_LEAN): [0] plain, [1] with the patch id. */
+	ID3D11DomainShader* GetShellDSLean(bool a_patchId);
+	ID3D11DomainShader* shellDSLean[2] = {};
 	ID3D11HullShader* GetShellHSVisible(bool a_bake, bool a_trust = false);
 	ID3D11HullShader* shellHSVisible = nullptr;
 	ID3D11HullShader* shellHSVisibleBake = nullptr;

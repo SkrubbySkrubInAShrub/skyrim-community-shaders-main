@@ -1527,13 +1527,22 @@ VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, flo
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
-	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
 	vsout.GridLocal = gridLocal;
+#ifdef SNOW_DS_LEAN
+	// The prepass PS reads CurrentClip.w and the normal's xyz of the rest.
+	vsout.CurrentClip = float4(0.0, 0.0, 0.0, mul(CameraViewProjUnjittered, float4(rel, 1.0)).w);
+	vsout.PreviousClip = 0.0;
+	vsout.Snowness = 0.0;
+	vsout.DebugHeight = 0.0;
+	vsout.TerrainNormalAlpha = float4(terrainNormal, 0.0);
+#else
+	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.Snowness = coverage;
 	vsout.DebugHeight = terrainHeight;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
+#endif
 	return vsout;
 }
 

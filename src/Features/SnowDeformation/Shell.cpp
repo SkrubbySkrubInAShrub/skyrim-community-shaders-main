@@ -780,6 +780,19 @@ ID3D11DomainShader* SnowDeformation::GetShellDSPatch(bool a_bake, bool a_check)
 	return slot;
 }
 
+ID3D11DomainShader* SnowDeformation::GetShellDSLean(bool a_patchId)
+{
+	auto*& slot = shellDSLean[a_patchId ? 1 : 0];
+	if (!slot) {
+		logger::debug("Compiling SnowShell DS (lean prepass{})", a_patchId ? ", patch id" : "");
+		std::vector<std::pair<const char*, const char*>> defines = { { "SNOW_DS_BAKE", "" }, { "SNOW_DS_LEAN", "" } };
+		if (a_patchId)
+			defines.push_back({ "SNOW_SHELL_PATCH_ID", "" });
+		slot = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ds_5_0"));
+	}
+	return slot;
+}
+
 ID3D11HullShader* SnowDeformation::GetShellHSVisible(bool a_bake, bool a_trust)
 {
 	auto*& slot = a_trust ? (a_bake ? shellHSVisibleTrustBake : shellHSVisibleTrust) : (a_bake ? shellHSVisibleBake : shellHSVisible);
@@ -2531,7 +2544,12 @@ void SnowDeformation::DrawShell()
 						prepassRTVs[1 + i] = shellDeferredAttr[i]->rtv.get();
 				}
 				context->OMSetRenderTargets(deferred ? 4 : (visibleCull ? 2 : 1), prepassRTVs, dsv);
-				if (visibleCull)
+				// The prepass PS reads few of the DS outputs; the lean bake DS writes
+				// only those. The shading draw binds tessDS again.
+				auto* dsLean = bake && !shellVertexBakeCheck ? GetShellDSLean(visibleCull) : nullptr;
+				if (dsLean)
+					context->DSSetShader(dsLean, nullptr, 0);
+				else if (visibleCull)
 					context->DSSetShader(dsPrepassPatch, nullptr, 0);
 				const bool prepassLastFrame = visibleCull && shellPrepassLastFrame && shellVisiblePrevValid && shellVisiblePrevSRV;
 				if (prepassLastFrame) {

@@ -2177,6 +2177,11 @@ void SnowDeformation::ClearShaderCache()
 			ds->Release();
 		ds = nullptr;
 	}
+	for (auto*& ds : shellDSLean) {
+		if (ds)
+			ds->Release();
+		ds = nullptr;
+	}
 	if (shellHSVisible)
 		shellHSVisible->Release();
 	shellHSVisible = nullptr;
