@@ -3805,7 +3805,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float wallClearance = 0.0;
 	float wallHasData = 0.0;
 #	ifndef PATCH
-	[branch] if (HasObjectTop > 0.5)
+	// An S4 draw zeroes coverageAlpha below and carves only as LegacySkin, so
+	// there the rim wall reaches nothing but the debug views.
+	[branch] if (HasObjectTop > 0.5 && (!pdMode || LegacySkin > 0.5 || StaticsDebugView != 0.0))
 	{
 		float objTop = PatchTop(worldXY);
 		[flatten] if (objTop > -50000.0)
