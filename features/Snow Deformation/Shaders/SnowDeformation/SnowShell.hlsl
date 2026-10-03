@@ -526,24 +526,21 @@ float3 SampleTerrain(float2 gridLocal)
 	}
 
 	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Land-exact height: the ground as the engine renders it (LandHeightFine).
+	// Outside the fine window, or over missing data, the 128-texel height
+	// below stands, so nothing changes at the seam.
+	float fine = -100000.0;
+	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0)
+		fine = LandHeightFine(gridLocal);
 	// Height follows the mesh's triangulation; depth and coverage stay bilinear,
 	// being material blends rather than geometry. Skipped where any corner is the
 	// missing-data sentinel: bilinear poisons the result so callers can detect it
 	// with `< -50000`, and a max would pick the surviving triangle and hide the
 	// gap instead.
-	[flatten] if (ShellTriHeight > 0.5 && min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
+	[branch] if (fine > -50000.0)
+		result.x = fine;
+	else if (ShellTriHeight > 0.5 && min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
 		result.x = TriangulatedHeight(s00.x, s10.x, s01.x, s11.x, f);
-
-	// Land-exact height: the ground as the engine renders it (LandHeightFine).
-	// Outside the fine window, or over missing data, the 128-texel height
-	// above stands, so nothing changes at the seam.
-	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0)
-	{
-		float fine = LandHeightFine(gridLocal);
-		[flatten] if (fine > -50000.0)
-			result.x = fine;
-
-	}
 	// the accumulated layer scales depth HERE, at the one point
 	// every reader funnels through, so geometry, shading, the berm gate and the
 	// self-shadow march cannot disagree about how deep the snow is. Positive
