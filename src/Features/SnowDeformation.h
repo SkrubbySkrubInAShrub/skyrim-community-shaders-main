@@ -1735,6 +1735,14 @@ public:
 	Texture2D* shellVertexBake = nullptr;
 	/** @brief Companion to shellVertexBake: the vertex normal's two height differences, so a baked corner skips FinishShellVertex's four terrain taps as well. */
 	Texture2D* shellVertexBakeSlope = nullptr;
+	/** @brief Bit patterns of everything ShellVertexSlope reads: the placement CB fields and the terrain and fine windows' versions. While they match the last bake's, ShellFlags.y bit 1 tells BakeCS to keep the stored slope. */
+	using ShellSlopeKey = std::array<uint32_t, 17>;
+	ShellSlopeKey MakeShellSlopeKey(const ShellCB& a_cb) const;
+	ShellSlopeKey shellSlopeKey{};
+	ShellSlopeKey shellSlopeKeyPending{};
+	bool shellSlopeKeyValid = false;
+	/** @brief Bumped on every write of shellTerrainFine (BuildTerrainFineWindow). */
+	uint32_t shellFineVersion = 0;
 	/** @brief A/B measurement: returns the domain shader to evaluating every vertex live. Runtime-only. */
 	bool shellVertexBakeDisabled = false;
 	/** @brief A/B measurement: stops the hull's view-frustum patch cull (ShellFlags.x bit 1), so the whole grid is tessellated and rasterised as before. The cull is bit-identical - the rasteriser discards those triangles anyway - and it does NOT reach the shadow caster, which draws from the light's matrix through its own non-tessellated VS. Runtime-only. */

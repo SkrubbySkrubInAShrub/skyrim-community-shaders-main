@@ -2216,6 +2216,7 @@ void SnowDeformation::ClearShaderCache()
 	if (shellBakeCS)
 		shellBakeCS->Release();
 	shellBakeCS = nullptr;
+	shellSlopeKeyValid = false;
 	if (shellShadowVS)
 		shellShadowVS->Release();
 	shellShadowVS = nullptr;

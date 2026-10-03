@@ -1201,6 +1201,32 @@ float3 SampleTerrainShaped(float2 gridLocal)
 // so boundaries between differently-deep snows are geometric depth ramps;
 // negative depths (roads) submerge the shell below the surface.
 // Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
+// Every map and berm read within 8 units of here returns exactly zero, so the
+// carve, berm and surface-state terms equal their zero-input results. Just
+// outside the window a tap can still reach in, so only far outside skips.
+bool ShellUntouched(float2 gridLocal)
+{
+#ifdef SNOW_UNTOUCHED_SKIP_OFF
+	return false;
+#else
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	float2 pad = 8.0 * DeformInvWorldSize;
+	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	int2 logical = clamp(int2(uv * dims), 0, int2(dims) - 1);
+	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
+	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
+	return BermBakeActive > 0.5 && (farOutside || (inside && zeroTile));
+#endif
+}
+
+#ifdef SNOW_BAKE_CS
+// ShellSurfaceZ's raw deformation tap at the vertex, read once: the bake's .w
+// and the descent's billow take it from here.
+static float gBakeDeformationTap;
+#endif
+
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
 	// Beyond the loaded-cell seam the recolored LOD terrain owns the ground:
@@ -1208,11 +1234,20 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	// return keeps fxc's X4000 quiet (early return + out params misfires).
 	float edgeFade = ShellEdgeFade(gridLocal);
 	float surfaceZ;
+#ifdef SNOW_BAKE_CS
+	// Untouched, every map and berm read at the vertex returns exactly zero.
+	const bool bakeUntouched = ShellUntouched(gridLocal);
+	gBakeDeformationTap = 0.0;
+#endif
 	[branch] if (edgeFade <= 0.0)
 	{
 		terrainHeight = SampleTerrain(gridLocal).x;
 		coverage = 0.0;
 		surfaceZ = terrainHeight - 32.0;
+#ifdef SNOW_BAKE_CS
+		[branch] if (!bakeUntouched)
+			gBakeDeformationTap = SampleDeformation(gridLocal);
+#endif
 	}
 	else
 	{
@@ -1383,6 +1418,14 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// fought the land for every pixel of the basin.
 		depth = lerp(depth, min(depth, kFireMeltFloor), saturate(shelterMask.y));
 
+#ifdef SNOW_BAKE_CS
+		float bakeBerm = 0.0;
+		[branch] if (!bakeUntouched)
+		{
+			gBakeDeformationTap = SampleDeformation(gridLocal);
+			bakeBerm = BermField(gridLocal);
+		}
+#endif
 		// Carves only where the layer is raised; the negative-depth submerge at
 		// class edges is untouched. The floor holds at the Trench Floor
 		// fraction of the uncarved depth and tapers toward class borders,
@@ -1390,8 +1433,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// Undulation rides on top, scaled by remaining depth.
 		[flatten] if (depth > 0.0)
 		{
+#ifdef SNOW_BAKE_CS
+			float deformation = saturate(gBakeDeformationTap);
+			float bermD = bakeBerm;
+#else
 			float deformation = saturate(SampleDeformation(gridLocal));
 			float bermD = BermField(gridLocal);
+#endif
 			float uncarved = depth;
 			// The berm is spoil piled on snow that was NOT dug. Unmasked, the
 			// blurred field also lifted the trench floor and walls - a narrow
@@ -2075,7 +2123,11 @@ float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainH
 	[branch] if (HasSnowHeight > 0.5 && descentBlend > 1.0 && z > terrainHeight && wEdge < 0.999)
 	{
 		float hDescent = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
+#ifdef SNOW_BAKE_CS
+		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(gBakeDeformationTap))) *
+#else
 		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)))) *
+#endif
 		                (1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0));
 		const float kEdgeBillowShift = 0.35;
 		float wBillow = saturate(wEdge + (hDescent - 0.5) * kEdgeBillowShift * billowW);
@@ -2347,26 +2399,6 @@ bool ShellPrepassQuadHidden(float rasterZ, float rawSceneDepth, float shellZ, fl
 	return hidden > 0.5 && hx == 0.0 && ddy_fine(hidden) == 0.0 && ddy_fine(hx) == 0.0;
 }
 
-
-// Every map and berm read within 8 units of here returns exactly zero, so the
-// carve, berm and surface-state terms equal their zero-input results. Just
-// outside the window a tap can still reach in, so only far outside skips.
-bool ShellUntouched(float2 gridLocal)
-{
-#ifdef SNOW_UNTOUCHED_SKIP_OFF
-	return false;
-#else
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	float2 pad = 8.0 * DeformInvWorldSize;
-	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	int2 logical = clamp(int2(uv * dims), 0, int2(dims) - 1);
-	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
-	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
-	return BermBakeActive > 0.5 && (farOutside || (inside && zeroTile));
-#endif
-}
 
 // SHELL-SURFACE SSS RE-MARCH (opt-in, CompactLook.y).
 //
@@ -3849,6 +3881,7 @@ RWTexture2D<float2> ShellVertexBakeSlopeOut : register(u2);
 // ShellSurfaceZ before the descent and relief: the sun caster's height (SNOW_CAST_BAKED).
 RWTexture2D<float> ShellCastBakeOut : register(u3);
 
+#ifdef SNOW_BAKE_CS
 [numthreads(8, 8, 1)] void BakeCS(uint3 id : SV_DispatchThreadID)
 {
 	if (any(id.xy > GridDim))
@@ -3858,10 +3891,13 @@ RWTexture2D<float> ShellCastBakeOut : register(u3);
 	float terrainHeight;
 	float surfaceZ = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 	float z = ShellVertexZFrom(gridLocal, surfaceZ, coverage, terrainHeight);
-	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, SampleDeformation(gridLocal));
-	ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
+	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, gBakeDeformationTap);
+	// ShellFlags.y bit 1: the slope's inputs match its last store.
+	[branch] if ((ShellFlags.y & 2) == 0)
+		ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
 	ShellCastBakeOut[id.xy] = surfaceZ;
 }
+#endif
 
 static const uint kProbeAzimuths = 24;
 static const uint kProbeRadii = 12;

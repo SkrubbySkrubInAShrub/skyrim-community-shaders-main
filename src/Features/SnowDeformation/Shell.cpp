@@ -575,6 +575,17 @@ void SnowDeformation::ShellSeamRows(const ShellCB& a_cb, uint32_t& a_first, uint
 		a_end--;
 }
 
+SnowDeformation::ShellSlopeKey SnowDeformation::MakeShellSlopeKey(const ShellCB& a_cb) const
+{
+	// The leaves of BakeCS's slope output: SampleTerrain's .x (no water cut, no
+	// depth scale) at four grid offsets, through the fine layer.
+	const auto f = [](float a_v) { return std::bit_cast<uint32_t>(a_v); };
+	return { f(a_cb.GridOrigin.x), f(a_cb.GridOrigin.y), f(a_cb.GridSpacing), f(a_cb.WarpedHalfSpan), a_cb.GridDim,
+		f(a_cb.GridToTerrainOffset.x), f(a_cb.GridToTerrainOffset.y), f(a_cb.TerrainTexelSize), a_cb.TerrainDim,
+		f(a_cb.ShellTriHeight), f(a_cb.FineWindow.x), f(a_cb.FineWindow.y), f(a_cb.FineWindow.z), f(a_cb.FineWindow.w),
+		uint32_t(a_cb.ShellFlags.x), shellTerrainVersion, shellFineVersion };
+}
+
 ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
 	if (shellGridNonIndexed) {
@@ -1334,7 +1345,7 @@ ID3D11ComputeShader* SnowDeformation::GetShellBakeCS()
 {
 	if (!shellBakeCS) {
 		logger::debug("Compiling SnowShell BakeCS");
-		shellBakeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "cs_5_0", "BakeCS"));
+		shellBakeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_BAKE_CS", "" } }, "cs_5_0", "BakeCS"));
 	}
 	return shellBakeCS;
 }
@@ -1897,6 +1908,11 @@ void SnowDeformation::DrawShell()
 		if (kill & (1u << 9))
 			cbData.HasSnowTexture = 0;
 	}
+	// Bit 1: the slope's inputs match the last bake's store, so BakeCS keeps it.
+	// In .y: the caster's placement memcmp rewrites .x.
+	shellSlopeKeyPending = MakeShellSlopeKey(cbData);
+	if (shellSlopeKeyValid && shellSlopeKeyPending == shellSlopeKey)
+		cbData.ShellFlags.y |= 2;
 	shellCB->Update(cbData);
 
 	// Back up the pipeline state we touch so the composite and later game
@@ -2358,6 +2374,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 		context->CSSetShaderResources(15, 1, &exclusionSRV);
 		context->CSSetShaderResources(29, 1, &undulationSRV);
+		context->CSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
 		ID3D11SamplerState* csSampler = shellSnowSampler.get();
 		context->CSSetSamplers(0, 1, &csSampler);
 		ID3D11UnorderedAccessView* bakeUAVs[3] = { shellVertexBake->uav.get(), shellVertexBakeSlope->uav.get(), shellCastBake->uav.get() };
@@ -2370,6 +2387,8 @@ void SnowDeformation::DrawShell()
 		// Every field ShellSurfaceZ reads is final for this frame here and is next
 		// written in Prepass, which runs after the next frame's shadow mask.
 		shellCastBakeValid = true;
+		shellSlopeKey = shellSlopeKeyPending;
+		shellSlopeKeyValid = true;
 		context->CSSetShader(nullptr, nullptr, 0);
 		// The field textures are written by compute passes next Prepass;
 		// leave none of them bound as CS inputs.
@@ -2379,6 +2398,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(11, 2, nullCSSRVs);
 		context->CSSetShaderResources(13, 3, nullCSSRVs);
 		context->CSSetShaderResources(kExtentFieldSlot, 1, nullCSSRVs);
+		context->CSSetShaderResources(kUntouchedTilesSlot, 1, nullCSSRVs);
 		context->CSSetShaderResources(24, 1, &nullCSSRVs[0]);
 		context->CSSetShaderResources(26, 1, &nullCSSRVs[1]);
 		context->CSSetShaderResources(29, 1, nullCSSRVs);

@@ -932,6 +932,7 @@ void SnowDeformation::BuildTerrainFineWindow()
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
 	shellFineValid = false;
+	shellFineVersion++;
 	auto* cs = GetTerrainFineCS();
 	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv)
 		return;
