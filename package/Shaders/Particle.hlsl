@@ -192,7 +192,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #		if defined(ENVCUBE) && defined(RAIN) && defined(EFFECTS11)
-	// Corner offsets are scaled by particle size (e.g. +-3), so use their sign as quad UVs
+	// Corner offsets are +-particle size; their sign is the UV within the quad's atlas cell, so one drop fills each particle
 	vsout.RaindropData.xy = step(0, input.TexCoord1.xy);
 #		endif
 
