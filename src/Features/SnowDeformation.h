@@ -912,6 +912,8 @@ public:
 	static constexpr UINT kUntouchedTilesSlot = 57;
 	/** @brief SampleTerrain's terrain window (TerrainWetSRV), bound wherever the shell's t0 is. */
 	static constexpr UINT kTerrainWetSlot = 58;
+	/** @brief SampleTerrainShaped's plain-texel flags (TerrainPlainSRV), bound with kTerrainWetSlot. */
+	static constexpr UINT kTerrainPlainSlot = 59;
 
 
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
@@ -1448,6 +1450,8 @@ public:
 	Texture2D* shellTerrainTexture = nullptr;
 	/** @brief shellTerrainTexture with WaterBareTexel applied per texel (TerrainCutCS), bound at t21 for SampleTerrain while the water cut is on. Rebuilt when the terrain window, the bound water window or its version changes. */
 	Texture2D* shellTerrainWet = nullptr;
+	/** @brief R8_UINT, 1 where shellTerrainWet's depth and coverage are bit-identical over the 4x4 texels around a texel's quad (TerrainCutCS, same dispatch). */
+	Texture2D* shellTerrainPlain = nullptr;
 	ID3D11ComputeShader* shellTerrainCutCS = nullptr;
 	ID3D11ComputeShader* GetShellTerrainCutCS();
 	/** @brief Rebuilds shellTerrainWet when its inputs changed. Call after the water cover pass, before any landscape-shell pass. */
@@ -1707,6 +1711,8 @@ public:
 	void DrawShellGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
 	/** @brief Patch rows [a_first, a_end) that can reach the seam square; every patch of a row wholly outside it fails ShellBeyondSeam in the hull. One row of margin; the whole grid without seam data. */
 	static void ShellSeamRows(const ShellCB& a_cb, uint32_t& a_first, uint32_t& a_end);
+	/** @brief SampleTerrainShaped's t59: the flags while they describe the bound t58 and no border tap can reach past one texel, else null (reads 0, every tap taken). */
+	ID3D11ShaderResourceView* TerrainPlainSRV(const ShellCB& a_cb) const;
 	winrt::com_ptr<ID3D11Buffer> shellGridIB[2];
 	/** @brief The caster's subset per parity: quads with a corner inside the castVis kill radius (SnowShell.hlsl); the VS NaNs every vertex past it. */
 	winrt::com_ptr<ID3D11Buffer> shellGridCasterIB[2];

@@ -569,6 +569,15 @@ void SnowDeformation::SetupResources()
 		shellTerrainWet = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWet");
 		shellTerrainWet->CreateSRV(terrainSrvDesc);
 		shellTerrainWet->CreateUAV(terrainUavDesc);
+		D3D11_TEXTURE2D_DESC plainDesc = terrainDesc;
+		plainDesc.Format = DXGI_FORMAT_R8_UINT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC plainSrvDesc = terrainSrvDesc;
+		plainSrvDesc.Format = plainDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC plainUavDesc = terrainUavDesc;
+		plainUavDesc.Format = plainDesc.Format;
+		shellTerrainPlain = new Texture2D(plainDesc, "SnowDeformation::ShellTerrainPlain");
+		shellTerrainPlain->CreateSRV(plainSrvDesc);
+		shellTerrainPlain->CreateUAV(plainUavDesc);
 	}
 
 	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");

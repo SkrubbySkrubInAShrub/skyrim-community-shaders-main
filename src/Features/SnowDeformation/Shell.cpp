@@ -794,6 +794,16 @@ ID3D11ShaderResourceView* SnowDeformation::ShellWaterSRV() const
 	return waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
 }
 
+ID3D11ShaderResourceView* SnowDeformation::TerrainPlainSRV(const ShellCB& a_cb) const
+{
+	// The flags hold for the cut window, over a 4x4 block: a tap must stay
+	// within one texel of the quad (SampleTerrainShaped's jitter plus ring).
+	const float reach = std::min(a_cb.BorderNoise, 16.0f) + 0.6f * a_cb.BorderNoise + a_cb.BorderSmooth;
+	if (a_cb.CompactLook.x <= 0.5f || !shellTerrainWetValid || !shellTerrainPlain || !(reach < kShellVertexSpacing - 1.0f))
+		return nullptr;
+	return shellTerrainPlain->srv.get();
+}
+
 ID3D11ShaderResourceView* SnowDeformation::TerrainWetSRV(bool a_cut) const
 {
 	if (a_cut && shellTerrainWetValid)
@@ -809,7 +819,7 @@ void SnowDeformation::UpdateTerrainWet()
 		return;
 	shellTerrainWetValid = false;
 	auto* cs = GetShellTerrainCutCS();
-	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv || !shellTerrainWet || !shellTerrainWet->uav)
+	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv || !shellTerrainWet || !shellTerrainWet->uav || !shellTerrainPlain || !shellTerrainPlain->uav)
 		return;
 	auto context = globals::d3d::context;
 	globals::profiler->BeginPass("SnowDeformation::Ground - Terrain Cut");
@@ -818,12 +828,12 @@ void SnowDeformation::UpdateTerrainWet()
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetShaderResources(0, 1, &terrainSRV);
 	context->CSSetShaderResources(27, 1, &water);
-	ID3D11UnorderedAccessView* wetUAV = shellTerrainWet->uav.get();
-	context->CSSetUnorderedAccessViews(4, 1, &wetUAV, nullptr);
+	ID3D11UnorderedAccessView* wetUAVs[2] = { shellTerrainWet->uav.get(), shellTerrainPlain->uav.get() };
+	context->CSSetUnorderedAccessViews(4, 2, wetUAVs, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
-	ID3D11UnorderedAccessView* nullUAV = nullptr;
-	context->CSSetUnorderedAccessViews(4, 1, &nullUAV, nullptr);
+	ID3D11UnorderedAccessView* nullUAVs[2] = {};
+	context->CSSetUnorderedAccessViews(4, 2, nullUAVs, nullptr);
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	context->CSSetShaderResources(0, 1, &nullSRV);
 	context->CSSetShaderResources(27, 1, &nullSRV);
@@ -2226,6 +2236,8 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(0, 6, shellSRVs);
 	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV(cbData.CompactLook.x > 0.5f);
 	context->VSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+	ID3D11ShaderResourceView* plainSRV = TerrainPlainSRV(cbData);
+	context->VSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &fineSRV);
 	ID3D11ShaderResourceView* waterSRV = waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
@@ -2248,6 +2260,7 @@ void SnowDeformation::DrawShell()
 		context->PSGetShaderResources(16 + i, 1, prevFrostSlotSRVs[i].put());
 	context->PSSetShaderResources(0, 9, shellSRVs);
 	context->PSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+	context->PSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
 	context->PSSetShaderResources(13, 1, &fineSRV);
 	context->PSSetShaderResources(27, 2, waterSRVs);
 	context->PSSetShaderResources(19, 1, &waterNearSRV);
@@ -2441,6 +2454,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
 		context->CSSetShaderResources(0, 6, shellSRVs);
 		context->CSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+		context->CSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
 		context->CSSetShaderResources(13, 1, &fineSRV);
 		context->CSSetShaderResources(27, 2, waterSRVs);
 		context->CSSetShaderResources(19, 1, &waterNearSRV);
@@ -2476,7 +2490,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(13, 3, nullCSSRVs);
 		context->CSSetShaderResources(kExtentFieldSlot, 1, nullCSSRVs);
 		context->CSSetShaderResources(kUntouchedTilesSlot, 1, nullCSSRVs);
-		context->CSSetShaderResources(kTerrainWetSlot, 1, nullCSSRVs);
+		context->CSSetShaderResources(kTerrainWetSlot, 2, nullCSSRVs);
 		context->CSSetShaderResources(24, 1, &nullCSSRVs[0]);
 		context->CSSetShaderResources(26, 1, &nullCSSRVs[1]);
 		context->CSSetShaderResources(29, 1, nullCSSRVs);
@@ -2512,6 +2526,8 @@ void SnowDeformation::DrawShell()
 			context->DSSetShaderResources(0, 6, shellSRVs);
 			context->HSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 			context->DSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+			context->HSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+			context->DSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
 			context->HSSetShaderResources(13, 1, &fineSRV);
 			context->DSSetShaderResources(13, 1, &fineSRV);
 			context->HSSetShaderResources(27, 2, waterSRVs);
@@ -2836,8 +2852,8 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* nullDSSRVs[24] = {};
 		context->DSSetShaderResources(0, 24, nullDSSRVs);
 		context->HSSetShaderResources(0, 24, nullDSSRVs);
-		context->DSSetShaderResources(kTerrainWetSlot, 1, nullDSSRVs);
-		context->HSSetShaderResources(kTerrainWetSlot, 1, nullDSSRVs);
+		context->DSSetShaderResources(kTerrainWetSlot, 2, nullDSSRVs);
+		context->HSSetShaderResources(kTerrainWetSlot, 2, nullDSSRVs);
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);
@@ -2857,8 +2873,8 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(24, 1, &nullFarSRVs[0]);
 	context->VSSetShaderResources(26, 1, &nullFarSRVs[1]);
 	context->PSSetShaderResources(0, 16, nullSRVs);
-	context->VSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
-	context->PSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
+	context->VSSetShaderResources(kTerrainWetSlot, 2, nullSRVs);
+	context->PSSetShaderResources(kTerrainWetSlot, 2, nullSRVs);
 	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or
 	// D3D silently drops the binding with warning spam. t20 (glint noise) and
@@ -3063,6 +3079,8 @@ void SnowDeformation::RunLODProbePass()
 			// The drawn shell's water cut, as DrawShell binds it.
 			ID3D11ShaderResourceView* probeWetSRV = TerrainWetSRV(lastShellCBData && lastShellCBData->CompactLook.x > 0.5f);
 			context->CSSetShaderResources(kTerrainWetSlot, 1, &probeWetSRV);
+			ID3D11ShaderResourceView* probePlainSRV = lastShellCBData ? TerrainPlainSRV(*lastShellCBData) : nullptr;
+			context->CSSetShaderResources(kTerrainPlainSlot, 1, &probePlainSRV);
 			ID3D11ShaderResourceView* probeFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 			context->CSSetShaderResources(13, 1, &probeFineSRV);
 			ID3D11ShaderResourceView* probeWaterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
@@ -3087,7 +3105,7 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 			ID3D11ShaderResourceView* nullSRVs[6] = {};
 			context->CSSetShaderResources(0, 6, nullSRVs);
-			context->CSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
+			context->CSSetShaderResources(kTerrainWetSlot, 2, nullSRVs);
 			context->CSSetShaderResources(11, 2, nullSRVs);
 			context->CSSetShaderResources(14, 1, nullSRVs);
 			context->CSSetShaderResources(kExtentFieldSlot, 1, nullSRVs);

@@ -272,6 +272,10 @@ float3 WaterBareTexel(float3 texel, int2 t)
 // TerrainWindow with WaterBareTexel already applied (TerrainCutCS), or the
 // raw window while the cut is off (CompactLook.x): SampleTerrain's taps.
 Texture2D<float4> TerrainWindowWet : register(t58);
+// 1 where TerrainWindowWet's .yz are bit-identical over the 4x4 texels a
+// shaped tap can reach from this texel's quad (TerrainCutCS; unbound while
+// the border reach could pass one texel): every tap there reads one value.
+Texture2D<uint> TerrainPlain : register(t59);
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
 // The land mesh is then flat between these points with a checkerboard
@@ -1158,34 +1162,63 @@ float3 SampleTerrainShaped(float2 gridLocal)
 	float3 result = SampleTerrain(gridLocal);
 	[branch] if (BorderNoise >= 0.01 || BorderSmooth >= 0.01)
 	{
-		float2 worldXY = GridOrigin + gridLocal;
-		// Coarse wander + fine raggedness: the coarse octave is
-		// the ORIGINAL 37-unit model but capped at the strength its old 16
-		// setting had - enough organic wander, never the lobes/islands the
-		// uncapped version folded into; the fine 8-unit octave scales on
-		// with the slider for the ragged detail.
-		float coarseAmp = min(BorderNoise, 16.0);
-		float2 jitter = float2(
-							ShapeNoise(worldXY / 37.0) - 0.5,
-							ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
-		                    (2.0 * coarseAmp) +
-		                float2(
-							ShapeNoise(worldXY / 8.0) - 0.5,
-							ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
-		                    (1.2 * BorderNoise);
-		float2 shapedLocal = gridLocal + jitter;
-
-		float2 depthCoverage = SampleTerrain(shapedLocal).yz;
-		[branch] if (BorderSmooth >= 0.01)
+		int2 plainT = (int2)clamp((GridToTerrainOffset + gridLocal) / TerrainTexelSize, 0.0, (float)(TerrainDim - 1) - 0.001);
+		[branch] if (TerrainPlain.Load(int3(plainT, 0)) != 0)
 		{
-			float r = BorderSmooth;
-			depthCoverage += SampleTerrain(shapedLocal + float2(r, 0.0)).yz;
-			depthCoverage += SampleTerrain(shapedLocal - float2(r, 0.0)).yz;
-			depthCoverage += SampleTerrain(shapedLocal + float2(0.0, r)).yz;
-			depthCoverage += SampleTerrain(shapedLocal - float2(0.0, r)).yz;
-			depthCoverage *= 0.2;
+			// Every tap returns the base's depth and coverage. The mean is summed
+			// in the taps' order from the quad's own texels, which fxc cannot
+			// fold, so it keeps the tapped mean's bits.
+			[branch] if (BorderSmooth >= 0.01)
+			{
+				int2 plainT1 = min(plainT + 1, int2(TerrainDim - 1, TerrainDim - 1));
+				float2 q00 = TerrainWindowWet.Load(int3(plainT.x, plainT.y, 0)).yz;
+				float2 q10 = TerrainWindowWet.Load(int3(plainT1.x, plainT.y, 0)).yz;
+				float2 q01 = TerrainWindowWet.Load(int3(plainT.x, plainT1.y, 0)).yz;
+				float2 q11 = TerrainWindowWet.Load(int3(plainT1.x, plainT1.y, 0)).yz;
+				q00.x = max(q00.x, 0.0) * RimStyle.w + min(q00.x, 0.0);
+				q10.x = max(q10.x, 0.0) * RimStyle.w + min(q10.x, 0.0);
+				q01.x = max(q01.x, 0.0) * RimStyle.w + min(q01.x, 0.0);
+				q11.x = max(q11.x, 0.0) * RimStyle.w + min(q11.x, 0.0);
+				float2 depthCoverage = result.yz;
+				depthCoverage += q00;
+				depthCoverage += q10;
+				depthCoverage += q01;
+				depthCoverage += q11;
+				depthCoverage *= 0.2;
+				result.yz = depthCoverage;
+			}
 		}
-		result.yz = depthCoverage;
+		else
+		{
+			float2 worldXY = GridOrigin + gridLocal;
+			// Coarse wander + fine raggedness: the coarse octave is
+			// the ORIGINAL 37-unit model but capped at the strength its old 16
+			// setting had - enough organic wander, never the lobes/islands the
+			// uncapped version folded into; the fine 8-unit octave scales on
+			// with the slider for the ragged detail.
+			float coarseAmp = min(BorderNoise, 16.0);
+			float2 jitter = float2(
+								ShapeNoise(worldXY / 37.0) - 0.5,
+								ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
+			                    (2.0 * coarseAmp) +
+			                float2(
+								ShapeNoise(worldXY / 8.0) - 0.5,
+								ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
+			                    (1.2 * BorderNoise);
+			float2 shapedLocal = gridLocal + jitter;
+
+			float2 depthCoverage = SampleTerrain(shapedLocal).yz;
+			[branch] if (BorderSmooth >= 0.01)
+			{
+				float r = BorderSmooth;
+				depthCoverage += SampleTerrain(shapedLocal + float2(r, 0.0)).yz;
+				depthCoverage += SampleTerrain(shapedLocal - float2(r, 0.0)).yz;
+				depthCoverage += SampleTerrain(shapedLocal + float2(0.0, r)).yz;
+				depthCoverage += SampleTerrain(shapedLocal - float2(0.0, r)).yz;
+				depthCoverage *= 0.2;
+			}
+			result.yz = depthCoverage;
+		}
 	}
 	return result;
 }
@@ -3906,6 +3939,7 @@ RWTexture2D<float> ShellCastBakeOut : register(u3);
 // TerrainWindowWet's builder: one WaterBareTexel per texel, run when the
 // terrain or the water window changes rather than in every terrain tap.
 RWTexture2D<float4> TerrainWetOut : register(u4);
+RWTexture2D<uint> TerrainPlainOut : register(u5);
 
 [numthreads(8, 8, 1)] void TerrainCutCS(uint3 id : SV_DispatchThreadID)
 {
@@ -3914,6 +3948,27 @@ RWTexture2D<float4> TerrainWetOut : register(u4);
 	float4 texel = TerrainWindow.Load(int3(id.xy, 0));
 	texel.xyz = WaterBareTexel(texel.xyz, int2(id.xy));
 	TerrainWetOut[id.xy] = texel;
+
+	// The 4x4 block [t-1, t+2] holds every quad a tap within one texel of
+	// this quad reads; window-edge texels stay off.
+	uint plain = 0;
+	[branch] if (all(id.xy >= 1) && all(id.xy + 2 < TerrainDim))
+	{
+		int2 b = int2(id.xy) - 1;
+		float2 ref = WaterBareTexel(TerrainWindow.Load(int3(b, 0)).xyz, b).yz;
+		bool same = all(abs(ref) < 1e30);
+		[unroll] for (int j = 0; j < 4; j++)
+		{
+			[unroll] for (int i = 0; i < 4; i++)
+			{
+				int2 t = b + int2(i, j);
+				float2 yz = WaterBareTexel(TerrainWindow.Load(int3(t, 0)).xyz, t).yz;
+				same = same && all(asuint(yz) == asuint(ref));
+			}
+		}
+		plain = same ? 1 : 0;
+	}
+	TerrainPlainOut[id.xy] = plain;
 }
 #endif
 

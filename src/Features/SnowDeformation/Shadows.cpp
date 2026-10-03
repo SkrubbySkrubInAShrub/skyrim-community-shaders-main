@@ -503,6 +503,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// SampleTerrain's taps, cut as DrawShell cut them for this CB.
 	ID3D11ShaderResourceView* casterWetSRV = TerrainWetSRV(lastShellCBData->CompactLook.x > 0.5f);
 	context->VSSetShaderResources(kTerrainWetSlot, 1, &casterWetSRV);
+	ID3D11ShaderResourceView* casterPlainSRV = TerrainPlainSRV(*lastShellCBData);
+	context->VSSetShaderResources(kTerrainPlainSlot, 1, &casterPlainSRV);
 	// The land-exact height layer (t13): the caster must stand on the same
 	// ground as the visible shell or it shadows its own snow.
 	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
@@ -763,6 +765,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->VSSetShaderResources(13, 1, &nullBermSRV);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);
 		context->VSSetShaderResources(kTerrainWetSlot, 1, &nullBermSRV);
+		context->VSSetShaderResources(kTerrainPlainSlot, 1, &nullBermSRV);
 		// The patch caster's map set.
 		ID3D11ShaderResourceView* skinSrvs[4];
 		for (uint32_t i = 0; i < 4; i++)
