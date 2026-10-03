@@ -1870,8 +1870,8 @@ public:
 	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
 
-	/** @brief S1, Shell Shader Performance > Join the Game's Depth Prepass (runtime, not serialised): DrawShellEarlyPrepass runs the ground prepass at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the edge and floor contests) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Deferred Shell Shading and Terrain Blending. */
-	bool shellJoinZPrepass = false;
+	/** @brief S1, Shell Shader Performance > Join the Game's Depth Prepass (runtime, not serialised): DrawShellEarlyPrepass runs the ground prepass at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the edge and floor contests) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Deferred Shell Shading and Terrain Blending. Default on. */
+	bool shellJoinZPrepass = true;
 	enum class EarlyPrepass : uint8_t
 	{
 		Off,
