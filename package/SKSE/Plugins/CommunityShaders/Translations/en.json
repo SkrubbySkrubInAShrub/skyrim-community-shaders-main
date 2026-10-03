@@ -1386,7 +1386,7 @@
     "feature.snow_deformation.border_smoothness": "Border Smoothness",
     "feature.snow_deformation.border_smoothness_tooltip": "Widens the depth ramp between neighboring classes so deep snow meets shallow ground in a slope instead of a ravine wall.",
     "feature.snow_deformation.camera_above_snow": "Keep Camera Above the Snow",
-    "feature.snow_deformation.camera_above_snow_tooltip": "The game's camera collides with the ground, not with the snow, so a low third-person camera can slip under the sheet and show its underside. On, the camera is pulled in toward you when that happens, the way it is against a hillside.",
+    "feature.snow_deformation.camera_above_snow_tooltip": "The game's camera collides with the ground, not with the snow, so a low third-person camera, or the camera while you are knocked down, can slip under the sheet and show its underside. On, the camera is pulled in toward you when that happens, the way it is against a hillside, and lifted clear of the snow while you are down.",
     "feature.snow_deformation.churn_height": "Churn Height",
     "feature.snow_deformation.churn_height_tooltip": "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth.",
     "feature.snow_deformation.churn_size": "Churn Size",

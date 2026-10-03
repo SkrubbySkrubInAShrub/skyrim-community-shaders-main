@@ -1905,7 +1905,18 @@ void SnowDeformation::ClampCameraAboveSnow()
 		return;
 	cameraProbeState = 4;
 	cameraProbeCamState = camera && camera->currentState ? uint32_t(camera->currentState->id) : 99u;
-	if (!camera || !camera->cameraRoot || !camera->IsInThirdPerson())
+	if (!camera || !camera->cameraRoot || !camera->currentState)
+		return;
+	// ThirdPersonState with its Mount, Bleedout and Dragon subclasses, and PCTransition:
+	// a ragdoll or death runs in Bleedout and gets up through PCTransition.
+	const uint32_t thirdPerson = REL::Module::IsVR() ? RE::CameraState::kVRThirdPerson : RE::CameraState::kThirdPerson;
+	const uint32_t state = camera->currentState->id;
+	const bool followState = (state >= thirdPerson && state <= thirdPerson + 3) || state == RE::CameraState::kPCTransition;
+	// Knocked down, ragdolled or dead: any state but the free camera.
+	const bool down = player->IsInRagdollState() || player->IsDead() ||
+	                  player->AsActorState()->GetKnockState() != RE::KNOCK_STATE_ENUM::kNormal;
+	cameraProbeDown = down;
+	if (!followState && !(down && state != RE::CameraState::kFree))
 		return;
 	auto* root = camera->cameraRoot.get();
 	const RE::NiPoint3 cam = root->world.translate;
@@ -1922,24 +1933,31 @@ void SnowDeformation::ClampCameraAboveSnow()
 		cameraProbeState = 2;
 		return;
 	}
-	cameraProbeState = 3;
-	// Pull in along the line from the player's head, like a terrain hit:
-	// bisect for the farthest point on it that clears the snow.
-	const RE::NiPoint3 anchor = player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 120.0f };
-	float anchorSurface;
-	if (SampleShellSurface(anchor.x, anchor.y, anchorSurface) && anchor.z < anchorSurface + clearance)
-		return;
-	float lo = 0.0f, hi = 1.0f;
-	for (int i = 0; i < 10; ++i) {
-		const float mid = (lo + hi) * 0.5f;
-		const RE::NiPoint3 p = anchor + (cam - anchor) * mid;
-		float s;
-		if (!SampleShellSurface(p.x, p.y, s) || p.z >= s + clearance)
-			lo = mid;
-		else
-			hi = mid;
+	RE::NiPoint3 target = cam;
+	if (down) {
+		// The body is no anchor while it tumbles.
+		cameraProbeState = 6;
+		target.z = surface + clearance;
+	} else {
+		cameraProbeState = 3;
+		// Pull in along the line from the player's head, like a terrain hit:
+		// bisect for the farthest point on it that clears the snow.
+		const RE::NiPoint3 anchor = player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 120.0f };
+		float anchorSurface;
+		if (SampleShellSurface(anchor.x, anchor.y, anchorSurface) && anchor.z < anchorSurface + clearance)
+			return;
+		float lo = 0.0f, hi = 1.0f;
+		for (int i = 0; i < 10; ++i) {
+			const float mid = (lo + hi) * 0.5f;
+			const RE::NiPoint3 p = anchor + (cam - anchor) * mid;
+			float s;
+			if (!SampleShellSurface(p.x, p.y, s) || p.z >= s + clearance)
+				lo = mid;
+			else
+				hi = mid;
+		}
+		target = anchor + (cam - anchor) * lo;
 	}
-	const RE::NiPoint3 target = anchor + (cam - anchor) * lo;
 	root->local.translate += target - cam;
 	RE::NiUpdateData data{ 0.0f, RE::NiUpdateData::Flag::kNone };
 	root->Update(data);

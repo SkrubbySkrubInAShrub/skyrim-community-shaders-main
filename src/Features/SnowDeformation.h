@@ -2435,16 +2435,17 @@ public:
 	float APISnowAccumulation() const;
 	/** @brief Snow surface (ground + class depth, accumulation-scaled) at a world XY from the CPU terrain window; false where the window has no ground or no snow. */
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
-	/** @brief Third person only: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would. */
+	/** @brief Third person, mount, bleedout (ragdoll, death), dragon and PCTransition, plus any non-free camera while the player is down: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would; while knocked down, ragdolled or dead, lift it straight up instead. */
 	void ClampCameraAboveSnow();
 	/** @brief Holds dropped items at their depth in the snow. From the camera-update hook: before the frame's first pass, main thread. */
 	void ItemSinkUpdate();
 	/** @brief Raises the rune and frost pieces the spell scan queued. From the camera-update hook: main thread, before the frame's first pass. */
 	void ApplySpellLifts();
-	/** @brief Probe readout of the last clamp: 0 not third person / off, 1 no shell data under the camera, 2 clear, 3 pulled in. */
+	/** @brief Probe readout of the last clamp: 0 hook never ran, 1 no shell data under the camera, 2 clear, 3 pulled in, 4 camera state not clamped, 5 off, 6 lifted (player down). */
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
 	uint32_t cameraProbeCamState = 0;
+	bool cameraProbeDown = false;
 	float cameraProbeZ = 0.0f;
 	float cameraProbeSurface = 0.0f;
 

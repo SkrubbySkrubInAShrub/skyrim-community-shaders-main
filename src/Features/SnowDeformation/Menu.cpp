@@ -282,7 +282,7 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("camera_above_snow"), "Keep Camera Above the Snow"), &settings.CameraAboveSnow);
 			if (auto _ttCam = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("camera_above_snow_tooltip"), "The game's camera collides with the ground, not with the snow, so a low third-person camera can slip under the sheet and show its underside. On, the camera is pulled in toward you when that happens, the way it is against a hillside."));
+				ImGui::Text("%s", T(TKEY("camera_above_snow_tooltip"), "The game's camera collides with the ground, not with the snow, so a low third-person camera, or the camera while you are knocked down, can slip under the sheet and show its underside. On, the camera is pulled in toward you when that happens, the way it is against a hillside, and lifted clear of the snow while you are down."));
 
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);
 			if (auto _ttHm = Util::HoverTooltipWrapper())
@@ -2132,9 +2132,9 @@ void SnowDeformation::DrawSettings()
 					char probeLine3[160];
 					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | bodies listed %u, drawn %u", wz, statWaterCaptured, statWaterDrawn);
 					WrapText(probeLine3);
-					static const char* cameraStates[] = { "hook never ran", "no shell data under it", "clear", "pulled in", "not third person", "off / player not loaded" };
-					char probeLine4[160];
-					snprintf(probeLine4, sizeof(probeLine4), "camera: z %.0f | snow surface %.0f | %s | hook calls %u, camera state %u", cameraProbeZ, cameraProbeSurface, cameraStates[std::min<uint8_t>(cameraProbeState, 5)], cameraProbeFired, cameraProbeCamState);
+					static const char* cameraStates[] = { "hook never ran", "no shell data under it", "clear", "pulled in", "camera state not clamped", "off / player not loaded", "lifted (player down)" };
+					char probeLine4[192];
+					snprintf(probeLine4, sizeof(probeLine4), "camera: z %.0f | snow surface %.0f | %s | hook calls %u, camera state %u%s", cameraProbeZ, cameraProbeSurface, cameraStates[std::min<uint8_t>(cameraProbeState, 6)], cameraProbeFired, cameraProbeCamState, cameraProbeDown ? ", player down" : "");
 					WrapText(probeLine4);
 				}
 				if (auto _ttSdv = Util::HoverTooltipWrapper())
