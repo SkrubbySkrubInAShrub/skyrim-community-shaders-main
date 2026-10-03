@@ -1648,6 +1648,8 @@ public:
 		float4 TrampleStyle;
 		/** @brief Shell tessellation screen-size cap: x = target pixels per segment (0 = the distance factor alone), yz = viewport half size in pixels. Appended last; mirror in both shells. */
 		float4 TessScreen;
+		/** @brief GetDimensions of the field maps every landscape-shell pass binds, 0 where unbound: x deformation (t1), y berm field (t14), z object maps (t4), w exclusion field (t15). All square. Landscape shell only (SnowShell.hlsl SNOW_FIELD_DIMS); appended last. */
+		float4 FieldDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");

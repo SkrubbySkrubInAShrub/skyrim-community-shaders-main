@@ -196,6 +196,7 @@ cbuffer ShellCB : register(b0)
 	// Trampled ground (see SnowShell.hlsl); consumed inside ChurnWeight.
 	float4 TrampleStyle;
 	float4 TessScreen;  // landscape shell only (SnowShell.hlsl)
+	// FieldDims follows, landscape shell only: not declared here.
 }
 
 cbuffer StaticCB : register(b1)

@@ -2023,6 +2023,11 @@ void SnowDeformation::DrawShell()
 	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	if (prevViewportCount)
 		cbData.TessScreen = { std::max(shellTessTargetPx, 0.0f), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, 0.0f };
+	// GetDimensions of the field maps every landscape-shell pass binds from here
+	// on; they change size only in Prepass, so they hold for the next frame's
+	// caster too.
+	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
+	cbData.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
 	shellCB->Update(cbData);
 
 	// Snapshot for next frame's shadow-caster injection (it runs at the

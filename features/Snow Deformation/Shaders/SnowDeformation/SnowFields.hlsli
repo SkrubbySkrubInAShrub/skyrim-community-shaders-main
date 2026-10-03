@@ -25,6 +25,19 @@
 // context. Callers here are unchanged.
 #include "SnowDeformation/SnowNoise.hlsli"
 
+// Field map sizes. The landscape shell (SNOW_FIELD_DIMS) takes them from
+// ShellCB.FieldDims, GetDimensions of what DrawShell binds (0 where unbound);
+// elsewhere the macros expand to the query itself, token for token.
+#ifdef SNOW_FIELD_DIMS
+#	define SNOW_DEFORM_DIMS(d) float2 d = FieldDims.xx
+#	define SNOW_BERM_DIMS(d) float2 d = FieldDims.yy
+#	define SNOW_EXCLUSION_DIMS(d) float2 d = FieldDims.ww
+#else
+#	define SNOW_DEFORM_DIMS(d) 		float2 d;               		DeformationMap.GetDimensions(d.x, d.y)
+#	define SNOW_BERM_DIMS(d) 		float2 d;             		BermFieldMap.GetDimensions(d.x, d.y)
+#	define SNOW_EXCLUSION_DIMS(d) 		float2 d;                  		ExclusionFieldMap.GetDimensions(d.x, d.y)
+#endif
+
 // Two-octave domain warp for snow boundaries: a capped 37-unit coarse wander
 // plus a fine 8-unit octave for raggedness. Moves WHERE a border falls without
 // touching what is sampled there, so a boundary stops following the data
@@ -84,8 +97,7 @@ static const float2 kBermTaps[16] = {
 // facets); exactly 4 at the default reach.
 float BermGradStep()
 {
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	return min(4.0, max(4.0 * BermReach, 0.5 / (DeformInvWorldSize * dims.x)));
 }
 
@@ -98,8 +110,7 @@ float BermFieldBaked(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	BermFieldMap.GetDimensions(dims.x, dims.y);
+	SNOW_BERM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -189,8 +200,7 @@ float SampleMelted(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -212,8 +222,7 @@ float SampleScorch(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -240,8 +249,7 @@ void SampleScorchCrust(float2 gridLocal, out float scorch, out float crust)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -267,8 +275,7 @@ float SampleCrust(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -341,8 +348,7 @@ float2 SampleExclusionField(float2 worldXY)
 		float2 local = (worldXY - ExclusionFieldWindow.xy) * ExclusionFieldWindow.z;
 		[branch] if (all(abs(local) < 0.995))
 		{
-			float2 dims;
-			ExclusionFieldMap.GetDimensions(dims.x, dims.y);
+			SNOW_EXCLUSION_DIMS(dims);
 			float2 uv = local * 0.5 + 0.5;
 			float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
 			int2 t0 = (int2)t;

@@ -238,6 +238,9 @@ cbuffer ShellCB : register(b0)
 	// x = tessellation target, pixels per segment (0 = distance only);
 	// yz = viewport half size in pixels.
 	float4 TessScreen;
+	// GetDimensions of the bound field maps (0 = unbound): x deformation (t1),
+	// y berm field (t14), z object maps (t4), w exclusion field (t15).
+	float4 FieldDims;
 }
 
 
@@ -358,6 +361,7 @@ SamplerState SnowSampler : register(s0);
 // (SnowFields.hlsli).
 #define SNOW_RUNE_GLYPHS
 #define SNOW_BLOOD_TILES
+#define SNOW_FIELD_DIMS
 #include "SnowDeformation/SnowFields.hlsli"
 
 
@@ -599,8 +603,7 @@ float SampleDeformation(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	float2 t = uv * dims - 0.5;
 	float2 i = floor(t);
 	float2 f = t - i;
@@ -636,8 +639,7 @@ float SampleDisplacedFast(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -664,8 +666,7 @@ float SampleDeformationFast(float2 gridLocal)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	return SampleDeformationBilinear(uv * dims - 0.5, dims);
 }
 
@@ -689,7 +690,7 @@ float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
 {
 	float2 local = (worldXY - ObjectHeightCenter) / ObjectHeightHalfExtent;
 	valid = all(abs(local) < 0.98);
-	ObjectHeights.GetDimensions(dims.x, dims.y);
+	dims = FieldDims.zz;
 	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
 	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 }
@@ -1212,8 +1213,7 @@ bool ShellUntouched(float2 gridLocal)
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
 	float2 pad = 8.0 * DeformInvWorldSize;
 	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
+	SNOW_DEFORM_DIMS(dims);
 	int2 logical = clamp(int2(uv * dims), 0, int2(dims) - 1);
 	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
 	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
