@@ -776,6 +776,15 @@ ID3D11PixelShader* SnowDeformation::GetShellFillPSPreSnow()
 	return shellFillPSPreSnow;
 }
 
+ID3D11PixelShader* SnowDeformation::GetShellFillPSClaim()
+{
+	if (!shellFillPSClaim) {
+		logger::debug("Compiling DepthSyncCS FillPS (claim)");
+		shellFillPSClaim = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_CLAIM", "" } }, "ps_5_0", "FillPS"));
+	}
+	return shellFillPSClaim;
+}
+
 ID3D11DomainShader* SnowDeformation::GetShellDSPatch(bool a_bake, bool a_check)
 {
 	auto*& slot = shellDSPatch[a_bake ? (a_check ? 2 : 1) : 0];
@@ -1367,6 +1376,82 @@ ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
 	return slot;
 }
 
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepassEarly(bool a_keepHidden)
+{
+	auto*& slot = shellPSPrepassEarly[a_keepHidden ? 1 : 0];
+	if (!slot) {
+		logger::debug("Compiling SnowShell PS (early depth prepass{})", a_keepHidden ? ", hidden kept" : "");
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
+		defines.emplace_back("SNOW_PREPASS_ATTR", "");
+		defines.emplace_back("SNOW_PREPASS_EARLY", "");
+		if (a_keepHidden)
+			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
+		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	}
+	return slot;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellPSEarlyResolve()
+{
+	if (!shellPSEarlyResolve) {
+		logger::debug("Compiling SnowShell PS (early prepass resolve)");
+		shellPSEarlyResolve = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellPSDefines("SNOW_S1_RESOLVE"), "ps_5_0"));
+	}
+	return shellPSEarlyResolve;
+}
+
+bool SnowDeformation::EnsureEarlyPrepassResources()
+{
+	if (!shellRasterDepth)
+		return false;
+	const auto& base = shellRasterDepth->desc;
+	auto ensure = [&](Texture2D*& a_tex, DXGI_FORMAT a_format, const char* a_name) {
+		if (a_tex && (a_tex->desc.Width != base.Width || a_tex->desc.Height != base.Height)) {
+			delete a_tex;
+			a_tex = nullptr;
+		}
+		if (!a_tex) {
+			D3D11_TEXTURE2D_DESC desc = base;
+			desc.Format = a_format;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+				.Format = a_format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			};
+			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+				.Format = a_format,
+				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			a_tex = new Texture2D(desc, a_name);
+			a_tex->CreateSRV(srvDesc);
+			a_tex->CreateRTV(rtvDesc);
+		}
+		return a_tex->srv && a_tex->rtv;
+	};
+	return ensure(shellEarlyPending, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::ShellEarlyPending") &&
+	       ensure(shellEarlyMarks, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::ShellEarlyMarks");
+}
+
+uint32_t SnowDeformation::ShellDebugDataCode() const
+{
+	return shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : (shellEdgeHeightDebug ? 6u : (shellTrampleDebug ? 7u : 0u))))));
+}
+
+void SnowDeformation::SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY)
+{
+	// The fade band sits ~29 m OUTSIDE the true boundary, over the
+	// recolored LOD terrain: full-height shell up to the seam, melting
+	// into same-material ground beyond it. Ending the fade AT the seam
+	// left a visible unshelled strip of full terrain just inside it.
+	constexpr float kSeamOverlap = 2048.0f;
+	a_cb.SeamBounds = { a_minX * 4096.0f - kSeamOverlap, a_minY * 4096.0f - kSeamOverlap,
+		(a_maxX + 1) * 4096.0f + kSeamOverlap, (a_maxY + 1) * 4096.0f + kSeamOverlap };
+	a_cb.SeamRampInv = 1.0f / 2048.0f;
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellPSCensus()
 {
 	if (!shellPSCensus) {
@@ -1759,6 +1844,352 @@ void SnowDeformation::TickEffectCostProbe()
 	}
 }
 
+// S1 (shellJoinZPrepass): the ground prepass at the end of Prepass, before the
+// game's opaque draws. Last DrawShell's CB re-placed for this frame's camera
+// and windows: the deformation map and its fields are this frame's, the
+// object maps and water windows last frame's.
+void SnowDeformation::DrawShellEarlyPrepass()
+{
+	if (!shellJoinZPrepass) {
+		shellEarlyState = EarlyPrepass::Off;
+		return;
+	}
+	shellEarlyState = EarlyPrepass::NotDrawing;
+	const uint32_t frame = globals::state->frameCount;
+	if (!settings.EnableSnowDeformation || !globals::state->inWorld || SnowShadersPending(1) || !lastShellCBData ||
+		shellDrawViewportFrame + 1 != frame || !shellDrawGroundGated)
+		return;
+	// The water windows and the wet cut follow the terrain window only in
+	// DrawShell, and the viewport is last frame's: a window this Prepass moved
+	// or a new render size leaves this frame to DrawShell's own prepass.
+	const auto& frameDynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
+	if (shellTerrainVersion != shellDrawTerrainVersion || frameDynRes.x != shellDrawDynRes[0] || frameDynRes.y != shellDrawDynRes[1])
+		return;
+	if (!shellDeferredShading || ShellDebugDataCode() != 0 || lodDebugView != 0) {
+		shellEarlyState = EarlyPrepass::NeedsDeferred;
+		return;
+	}
+	auto& tb = globals::features::terrainBlending;
+	if (!tb.loaded || !tb.settings.Enabled || !tb.blendedDepthTexture || !tb.blendedDepthTexture->srv) {
+		shellEarlyState = EarlyPrepass::NeedsTerrainBlending;
+		return;
+	}
+	shellEarlyState = EarlyPrepass::Unavailable;
+	if (!settings.Tessellation || shellDepthPrepassDisabled || shellDepthClampDisabled || shellVertexBakeDisabled || shellFlatDSDebug || shellVertexBakeCheck)
+		return;
+	auto renderer = globals::game::renderer;
+	const auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	auto* tessVS = GetShellTessVS();
+	auto* tessHS = GetShellHS(true);
+	auto* dsLean = GetShellDSLean(false);
+	auto* bakeCS = GetShellBakeCS();
+	auto* psEarly = GetShellPSPrepassEarly(shellPrepassExitOff);
+	auto* fillVS = GetShellFillVS();
+	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
+	auto* fillClaim = fillVS ? GetShellFillPSClaim() : nullptr;
+	// DrawShell returns before the resolve without its own two.
+	if (!GetShellVS() || !GetShellPS() || !tessVS || !tessHS || !dsLean || !bakeCS || !psEarly || !fillPS || !fillClaim || !GetShellPSEarlyResolve() ||
+		!GetShellPSDeferred() || !mainDepth.views[0] || !mainDepth.texture || !shellFillDepthState)
+		return;
+	// DrawShell sizes the prepass targets from the main depth; checked here only
+	// (until Terrain Blending's replay the main depth's SRV is its blended copy).
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	mainDepth.texture->GetDesc(&mainDesc);
+	if (!shellRasterDepth || shellRasterDepth->desc.Width != mainDesc.Width || shellRasterDepth->desc.Height != mainDesc.Height || !shellTestDepthDSV ||
+		!EnsureShellVertexBake() || !EnsureDeferredResources() || !EnsureEarlyPrepassResources() || !shellTerrainTexture || !shellTerrainTexture->srv ||
+		!heightTopFiltered || !heightBottomFiltered || !heightTopRaw[heightCurrent] || !heightSkinDepth)
+		return;
+
+	auto context = globals::d3d::context;
+	auto& fb = globals::game::frameBufferCached;
+	ShellCB cb = *lastShellCBData;
+	cb.CameraViewProj = fb.GetCameraViewProj();
+	cb.CameraViewProjUnjittered = fb.GetCameraViewProjUnjittered();
+	cb.CameraPreviousViewProjUnjittered = fb.GetCameraPreviousViewProjUnjittered();
+	cb.CameraView = fb.GetCameraView();
+	cb.CameraPosAdjust = fb.GetCameraPosAdjust();
+	cb.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
+	RefreshShellGridPlacement(cb);
+	cb.SeamRampInv = 0.0f;
+	int seamMinX, seamMinY, seamMaxX, seamMaxY;
+	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY))
+		SetShellSeamBounds(cb, seamMinX, seamMinY, seamMaxX, seamMaxY);
+	cb.ShellDebugData = 0;
+	cb.ShellLODDebug = 0;
+	cb.DeformInvWorldSize = 1.0f / deformWorldSize;
+	cb.ObjectHeightCenter = heightWindowCenter;
+	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
+	cb.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;
+	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
+		1.0f / kUndulationFieldHalfExtent,
+		(undulationFieldValid && !shellUndulationBakeDisabled) ? 1.0f : 0.0f };
+	cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
+		1.0f / kExclusionFieldHalfExtent,
+		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
+	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
+	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
+	const auto& dynRes = fb.GetDynamicResolutionParams1();
+	cb.CompactLook = { cb.CompactLook.x, cb.CompactLook.y, dynRes.x, dynRes.y };
+	cb.TessScreen = { std::max(shellTessTargetPx, 0.0f), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
+	shellSlopeKeyPending = MakeShellSlopeKey(cb);
+	cb.ShellFlags.y = (cb.ShellFlags.y & ~2) | ((shellSlopeKeyValid && shellSlopeKeyPending == shellSlopeKey) ? 2 : 0);
+	shellCB->Update(cb);
+
+	// The game re-binds only what its state cache believes changed: every slot
+	// this pass touches goes back as found.
+	struct StageBinds
+	{
+		ID3D11ShaderResourceView* srv[34]{};
+		ID3D11Buffer* cb[4]{};
+		ID3D11SamplerState* sampler = nullptr;
+	};
+	StageBinds saved[5];
+#define SNOW_SAVE_STAGE(P, b)                                    \
+	context->P##GetShaderResources(0, 30, b.srv);                \
+	context->P##GetShaderResources(56, 4, b.srv + 30);           \
+	context->P##GetConstantBuffers(0, 1, b.cb);                  \
+	context->P##GetConstantBuffers(4, 3, b.cb + 1);              \
+	context->P##GetSamplers(0, 1, &b.sampler)
+#define SNOW_RESTORE_STAGE(P, b)                                 \
+	context->P##SetShaderResources(0, 30, b.srv);                \
+	context->P##SetShaderResources(56, 4, b.srv + 30);           \
+	context->P##SetConstantBuffers(0, 1, b.cb);                  \
+	context->P##SetConstantBuffers(4, 3, b.cb + 1);              \
+	context->P##SetSamplers(0, 1, &b.sampler)
+	SNOW_SAVE_STAGE(VS, saved[0]);
+	SNOW_SAVE_STAGE(HS, saved[1]);
+	SNOW_SAVE_STAGE(DS, saved[2]);
+	SNOW_SAVE_STAGE(PS, saved[3]);
+	SNOW_SAVE_STAGE(CS, saved[4]);
+	winrt::com_ptr<ID3D11VertexShader> prevVS;
+	winrt::com_ptr<ID3D11HullShader> prevHS;
+	winrt::com_ptr<ID3D11DomainShader> prevDS;
+	winrt::com_ptr<ID3D11PixelShader> prevPS;
+	winrt::com_ptr<ID3D11ComputeShader> prevCS;
+	context->VSGetShader(prevVS.put(), nullptr, nullptr);
+	context->HSGetShader(prevHS.put(), nullptr, nullptr);
+	context->DSGetShader(prevDS.put(), nullptr, nullptr);
+	context->PSGetShader(prevPS.put(), nullptr, nullptr);
+	context->CSGetShader(prevCS.put(), nullptr, nullptr);
+	ID3D11UnorderedAccessView* prevCSUAVs[5]{};
+	context->CSGetUnorderedAccessViews(1, 5, prevCSUAVs);
+	winrt::com_ptr<ID3D11InputLayout> prevLayout;
+	context->IAGetInputLayout(prevLayout.put());
+	D3D11_PRIMITIVE_TOPOLOGY prevTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	context->IAGetPrimitiveTopology(&prevTopology);
+	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
+	context->RSGetState(prevRaster.put());
+	D3D11_VIEWPORT prevViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	UINT prevViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	context->RSGetViewports(&prevViewportCount, prevViewports);
+	winrt::com_ptr<ID3D11DepthStencilState> prevDepth;
+	UINT prevStencilRef = 0;
+	context->OMGetDepthStencilState(prevDepth.put(), &prevStencilRef);
+	winrt::com_ptr<ID3D11BlendState> prevBlend;
+	FLOAT prevBlendFactor[4]{};
+	UINT prevSampleMask = 0xFFFFFFFF;
+	context->OMGetBlendState(prevBlend.put(), prevBlendFactor, &prevSampleMask);
+	ID3D11RenderTargetView* prevRTVs[8]{};
+	ID3D11DepthStencilView* prevDSV = nullptr;
+	context->OMGetRenderTargets(8, prevRTVs, &prevDSV);
+
+	if (cb.CompactLook.x > 0.5f)
+		UpdateTerrainWet();
+
+	ID3D11Buffer* cbs[1] = { shellCB->CB() };
+	auto state = globals::state;
+	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
+	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV(cb.CompactLook.x > 0.5f);
+	ID3D11ShaderResourceView* plainSRV = TerrainPlainSRV(cb);
+	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+	ID3D11ShaderResourceView* waterSRVs[2] = { ShellWaterSRV(), waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
+	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
+	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
+	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
+	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
+	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
+	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
+	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
+	ID3D11ShaderResourceView* heightSRV = shellSnowHeightSRV.get();
+	ID3D11ShaderResourceView* bakeSRVs[2] = { shellVertexBake->srv.get(), shellVertexBakeSlope->srv.get() };
+	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
+
+	// DrawShell's bake, on this CB: the prepass hull and domain read it.
+	globals::profiler->BeginPass("SnowDeformation::Ground - Vertex Bake");
+	context->CSSetConstantBuffers(0, 1, cbs);
+	context->CSSetConstantBuffers(4, 3, sharedBuffers);
+	context->CSSetShaderResources(0, 6, shellSRVs);
+	context->CSSetShaderResources(8, 1, &heightSRV);
+	context->CSSetShaderResources(11, 2, objectCapSRVs);
+	context->CSSetShaderResources(13, 1, &fineSRV);
+	context->CSSetShaderResources(14, 1, &bermSRV);
+	context->CSSetShaderResources(15, 1, &exclusionSRV);
+	context->CSSetShaderResources(19, 1, &waterNearSRV);
+	context->CSSetShaderResources(27, 2, waterSRVs);
+	context->CSSetShaderResources(29, 1, &undulationSRV);
+	context->CSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
+	context->CSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
+	context->CSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+	context->CSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+	context->CSSetSamplers(0, 1, &snowSampler);
+	ID3D11UnorderedAccessView* bakeUAVs[3] = { shellVertexBake->uav.get(), shellVertexBakeSlope->uav.get(), shellCastBake->uav.get() };
+	context->CSSetUnorderedAccessViews(1, 3, bakeUAVs, nullptr);
+	context->CSSetShader(bakeCS, nullptr, 0);
+	constexpr UINT bakeGroups = (kShellGridDim + 1 + 7) / 8;
+	context->Dispatch(bakeGroups, bakeGroups, 1);
+	ID3D11UnorderedAccessView* nullBakeUAVs[3] = {};
+	context->CSSetUnorderedAccessViews(1, 3, nullBakeUAVs, nullptr);
+	globals::profiler->EndPass();
+
+	globals::profiler->BeginPass("SnowDeformation::Ground - Shell Depth Prepass");
+	// The private depth starts as the blended scene depth: the terrain's true
+	// depth, where the main buffer still holds Terrain Blending's offset copy.
+	D3D11_VIEWPORT fillViewport = shellDrawViewport;
+	fillViewport.MinDepth = 0.0f;
+	fillViewport.MaxDepth = 1.0f;
+	context->RSSetViewports(1, &fillViewport);
+	context->RSSetState(shellRasterState.get());
+	context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+	context->IASetInputLayout(nullptr);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+	context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
+	context->VSSetShader(fillVS, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(fillPS, nullptr, 0);
+	ID3D11ShaderResourceView* sceneDepthSRV = tb.blendedDepthTexture->srv.get();
+	context->PSSetShaderResources(9, 1, &sceneDepthSRV);
+	context->Draw(3, 0);
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	context->PSSetShaderResources(9, 1, &nullSRV);
+
+	// The prepass: raster depth (negative while pending), the deferred
+	// attributes and the pending inputs, against the private depth.
+	const float rasterClear[4] = {};
+	context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
+	ID3D11RenderTargetView* prepassRTVs[5] = { shellRasterDepth->rtv.get(), shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(), shellEarlyPending->rtv.get() };
+	context->OMSetRenderTargets(5, prepassRTVs, shellTestDepthDSV.get());
+	context->OMSetDepthStencilState(shellDepthState.get(), 0);
+	context->RSSetViewports(1, &shellDrawViewport);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+	context->VSSetShader(tessVS, nullptr, 0);
+	context->VSSetConstantBuffers(0, 1, cbs);
+	context->HSSetShader(tessHS, nullptr, 0);
+	context->HSSetConstantBuffers(0, 1, cbs);
+	context->HSSetShaderResources(0, 6, shellSRVs);
+	context->HSSetShaderResources(9, 1, &bakeSRVs[0]);
+	context->HSSetShaderResources(13, 1, &fineSRV);
+	context->HSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+	context->HSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+	context->DSSetShader(dsLean, nullptr, 0);
+	context->DSSetConstantBuffers(0, 1, cbs);
+	context->DSSetConstantBuffers(4, 3, sharedBuffers);
+	context->DSSetShaderResources(0, 6, shellSRVs);
+	context->DSSetShaderResources(8, 1, &heightSRV);
+	context->DSSetShaderResources(9, 1, &bakeSRVs[0]);
+	context->DSSetShaderResources(11, 2, objectCapSRVs);
+	context->DSSetShaderResources(13, 1, &fineSRV);
+	context->DSSetShaderResources(14, 1, &bermSRV);
+	context->DSSetShaderResources(15, 1, &exclusionSRV);
+	context->DSSetShaderResources(19, 1, &waterNearSRV);
+	context->DSSetShaderResources(23, 1, &bakeSRVs[1]);
+	context->DSSetShaderResources(27, 2, waterSRVs);
+	context->DSSetShaderResources(29, 1, &undulationSRV);
+	context->DSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
+	context->DSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+	context->DSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+	context->DSSetSamplers(0, 1, &snowSampler);
+	context->PSSetShader(psEarly, nullptr, 0);
+	context->PSSetConstantBuffers(0, 1, cbs);
+	context->PSSetConstantBuffers(4, 3, sharedBuffers);
+	context->PSSetShaderResources(0, 9, shellSRVs);
+	context->PSSetShaderResources(11, 2, objectCapSRVs);
+	context->PSSetShaderResources(13, 1, &fineSRV);
+	context->PSSetShaderResources(15, 1, &exclusionSRV);
+	context->PSSetShaderResources(19, 1, &waterNearSRV);
+	context->PSSetShaderResources(27, 2, waterSRVs);
+	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
+	context->PSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
+	context->PSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+	context->PSSetSamplers(0, 1, &snowSampler);
+	uint32_t firstRow = 0, endRow = kShellGridDim;
+	ShellSeamRows(cb, firstRow, endRow);
+	context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
+
+	// The settled pixels into the main depth: the game's opaque draws, the
+	// terrain replay among them, now test against the snow.
+	context->OMSetRenderTargets(0, nullptr, mainDepth.views[0]);
+	context->RSSetViewports(1, &fillViewport);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->VSSetShader(fillVS, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(fillClaim, nullptr, 0);
+	ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
+	context->PSSetShaderResources(9, 1, &rasterSRV);
+	context->Draw(3, 0);
+	context->PSSetShaderResources(9, 1, &nullSRV);
+	globals::profiler->EndPass();
+
+	context->OMSetRenderTargets(8, prevRTVs, prevDSV);
+	SNOW_RESTORE_STAGE(VS, saved[0]);
+	SNOW_RESTORE_STAGE(HS, saved[1]);
+	SNOW_RESTORE_STAGE(DS, saved[2]);
+	SNOW_RESTORE_STAGE(PS, saved[3]);
+	SNOW_RESTORE_STAGE(CS, saved[4]);
+#undef SNOW_SAVE_STAGE
+#undef SNOW_RESTORE_STAGE
+	const UINT keepCounts[5] = { UINT(-1), UINT(-1), UINT(-1), UINT(-1), UINT(-1) };
+	context->CSSetUnorderedAccessViews(1, 5, prevCSUAVs, keepCounts);
+	context->VSSetShader(prevVS.get(), nullptr, 0);
+	context->HSSetShader(prevHS.get(), nullptr, 0);
+	context->DSSetShader(prevDS.get(), nullptr, 0);
+	context->PSSetShader(prevPS.get(), nullptr, 0);
+	context->CSSetShader(prevCS.get(), nullptr, 0);
+	context->IASetInputLayout(prevLayout.get());
+	context->IASetPrimitiveTopology(prevTopology);
+	context->RSSetState(prevRaster.get());
+	if (prevViewportCount)
+		context->RSSetViewports(prevViewportCount, prevViewports);
+	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);
+	context->OMSetBlendState(prevBlend.get(), prevBlendFactor, prevSampleMask);
+	for (auto& b : saved) {
+		for (auto* v : b.srv)
+			if (v)
+				v->Release();
+		for (auto* c : b.cb)
+			if (c)
+				c->Release();
+		if (b.sampler)
+			b.sampler->Release();
+	}
+	for (auto* u : prevCSUAVs)
+		if (u)
+			u->Release();
+	for (auto* r : prevRTVs)
+		if (r)
+			r->Release();
+	if (prevDSV)
+		prevDSV->Release();
+	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET, RE::BSGraphics::ShaderFlags::DIRTY_VIEWPORT,
+		RE::BSGraphics::ShaderFlags::DIRTY_DEPTH_MODE, RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND, RE::BSGraphics::ShaderFlags::DIRTY_RASTER_CULL_MODE,
+		RE::BSGraphics::ShaderFlags::DIRTY_PRIMITIVE_TOPO);
+
+	if (!shellEarlyCB)
+		shellEarlyCB = std::make_unique<ShellCB>();
+	*shellEarlyCB = cb;
+	shellEarlyViewport = shellDrawViewport;
+	shellEarlyFrame = frame;
+	shellEarlyState = EarlyPrepass::Drawing;
+	// Every field the bake read is final here and is next written in the
+	// next Prepass, after the next frame's shadow mask.
+	shellCastBakeValid = true;
+	shellSlopeKey = shellSlopeKeyPending;
+	shellSlopeKeyValid = true;
+}
+
 void SnowDeformation::DrawShell()
 {
 	TickEffectCostProbe();
@@ -1796,7 +2227,7 @@ void SnowDeformation::DrawShell()
 	// Bit 0: a road can write road tops into the skin-depth raster this frame
 	// (the skin march's road taps read nothing else).
 	cbData.ShellFlags.y = (objectRoadGateOff || (settings.RoadHeightfield && capturedRoads > 0)) ? 1 : 0;
-	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : (shellEdgeHeightDebug ? 6u : (shellTrampleDebug ? 7u : 0u))))));
+	cbData.ShellDebugData = ShellDebugDataCode();
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 4);
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
@@ -1813,14 +2244,7 @@ void SnowDeformation::DrawShell()
 	cbData.SeamRampInv = 0.0f;
 	int seamMinX, seamMinY, seamMaxX, seamMaxY;
 	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY)) {
-		// The fade band sits ~29 m OUTSIDE the true boundary, over the
-		// recolored LOD terrain: full-height shell up to the seam, melting
-		// into same-material ground beyond it. Ending the fade AT the seam
-		// left a visible unshelled strip of full terrain just inside it.
-		constexpr float kSeamOverlap = 2048.0f;
-		cbData.SeamBounds = { seamMinX * 4096.0f - kSeamOverlap, seamMinY * 4096.0f - kSeamOverlap,
-			(seamMaxX + 1) * 4096.0f + kSeamOverlap, (seamMaxY + 1) * 4096.0f + kSeamOverlap };
-		cbData.SeamRampInv = 1.0f / 2048.0f;
+		SetShellSeamBounds(cbData, seamMinX, seamMinY, seamMaxX, seamMaxY);
 		// C3 mechanism 3: the square snaps to the player's cell, so every
 		// crossing rewrites the whole far field's edge fade in one frame.
 		const int cellX = (seamMinX + seamMaxX) / 2;
@@ -2084,7 +2508,11 @@ void SnowDeformation::DrawShell()
 		                       kSnowGateUnknown;
 	}
 	shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
-	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+	// S1: the early prepass already put this frame's ground snow into the main
+	// depth, so the shell must shade it even on the frame the gate closes.
+	const bool early = shellEarlyFrame == globals::state->frameCount;
+	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+	const bool shellGround = shellDrawGroundGated || early;
 
 	// Rasterize this frame's captured statics top-down into the object
 	// height windows, then restore the viewport for the screen-space passes.
@@ -2105,6 +2533,7 @@ void SnowDeformation::DrawShell()
 	spanClock.Lap(CpuCensus::kSpanWaterCover);
 	if (cbData.CompactLook.x > 0.5f)
 		UpdateTerrainWet();
+	shellDrawTerrainVersion = shellTerrainVersion;
 	RenderBloodCapture();
 	spanClock.Lap(CpuCensus::kSpanBloodCapture);
 	RenderRuneCapture();
@@ -2116,7 +2545,8 @@ void SnowDeformation::DrawShell()
 	// nearer than its object - a third of a unit on a rock, two thousand on
 	// a mountain at 450 m, in front of the mist meant to wrap it (RenderDoc
 	// pixel history against re-rasterised triangles, 2026-09-04).
-	if (prevViewportCount && mainViewportFrame == globals::state->frameCount && !shellMainViewportRangeDisabled) {
+	const bool mainRange = prevViewportCount && mainViewportFrame == globals::state->frameCount && !shellMainViewportRangeDisabled;
+	if (mainRange) {
 		D3D11_VIEWPORT shellViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 		for (UINT i = 0; i < prevViewportCount; i++) {
 			shellViewports[i] = prevViewports[i];
@@ -2124,6 +2554,19 @@ void SnowDeformation::DrawShell()
 			shellViewports[i].MaxDepth = mainViewportMaxDepth;
 		}
 		context->RSSetViewports(prevViewportCount, shellViewports);
+	}
+	// Next frame's early prepass draws with this viewport.
+	shellDrawViewportFrame = UINT32_MAX;
+	if (prevViewportCount) {
+		D3D11_VIEWPORT used = prevViewports[0];
+		if (mainRange) {
+			used.MinDepth = mainViewportMinDepth;
+			used.MaxDepth = mainViewportMaxDepth;
+		}
+		shellDrawViewport = used;
+		shellDrawViewportFrame = globals::state->frameCount;
+		shellDrawDynRes[0] = dynRes.x;
+		shellDrawDynRes[1] = dynRes.y;
 	}
 
 	// The height pass recentered its window after the shell CB was filled;
@@ -2236,7 +2679,7 @@ void SnowDeformation::DrawShell()
 	const bool keepHidden = shellPrepassExitOff || !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
 	auto* psPrepass = prepassWanted ? GetShellPSPrepass(false, keepHidden) : nullptr;
 	auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
-	auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
+	auto* fillVS = (psPrepassMain || early) ? GetShellFillVS() : nullptr;
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	const bool prepass = fillPS && EnsurePrepassResources(renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV);
 
@@ -2500,7 +2943,17 @@ void SnowDeformation::DrawShell()
 
 	if (!shellGround)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Vertex Bake");
-	if (shellGround && tessellate && bake) {
+	if (early) {
+		// The early prepass baked; the caster reads that bake only while its
+		// placement still holds.
+		ShellCB placed = *shellEarlyCB;
+		RefreshShellGridPlacement(placed);
+		if (std::memcmp(&placed, shellEarlyCB.get(), sizeof(ShellCB)) != 0)
+			shellCastBakeValid = false;
+		if (std::memcmp(&shellDrawViewport, &shellEarlyViewport, sizeof(D3D11_VIEWPORT)) != 0 ||
+			std::memcmp(&cbData.CameraViewProj, &shellEarlyCB->CameraViewProj, sizeof(cbData.CameraViewProj)) != 0)
+			shellEarlyViewMismatches++;
+	} else if (shellGround && tessellate && bake) {
 		globals::profiler->BeginPass("SnowDeformation::Ground - Vertex Bake");
 		context->CSSetConstantBuffers(0, 1, cbs);
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
@@ -2556,11 +3009,13 @@ void SnowDeformation::DrawShell()
 		context->Begin(shellStatsQuery[shellStatsRing][0].get());
 		context->Begin(shellStatsQuery[shellStatsRing][1].get());
 	}
+	bool earlyMarks = false;
 	if (!shellGround) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell");
 	} else {
 		globals::profiler->BeginPass(shellSplitTiming ? "SnowDeformation::Ground - Shell Setup" : "SnowDeformation::Ground - Shell");
-		if (tessellate) {
+		// An early frame finishes in the prepass block whatever the toggles did since.
+		if (tessellate || early) {
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 			context->VSSetShader(tessVS, nullptr, 0);
 			context->HSSetShader(tessHS, nullptr, 0);
@@ -2644,8 +3099,8 @@ void SnowDeformation::DrawShell()
 				// shading pass's hull skips every patch that won nothing.
 				// Deferred shading: no shading geometry, so no visible-patch flags
 				// or lists either. Debug views keep the raster path.
-				const bool deferred = shellDeferredShading && cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0 && !lodHeatmap &&
-				                      EnsureDeferredResources() && GetShellPSPrepassAttr(keepHidden) && GetShellPSDeferred();
+				const bool deferred = (early || (shellDeferredShading && cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0 && !lodHeatmap && GetShellPSPrepassAttr(keepHidden))) &&
+				                      EnsureDeferredResources() && GetShellPSDeferred();
 				shellDeferredThisFrame = deferred;
 				auto* hsVisible = !deferred && shellVisibleCull && EnsureVisiblePatchResources() ? GetShellHSVisible(bake) : nullptr;
 				auto* hsTrust = hsVisible && !shellHullTrustOff ? GetShellHSVisible(bake, true) : nullptr;
@@ -2659,42 +3114,47 @@ void SnowDeformation::DrawShell()
 				if (deferred)
 					psPrepass = GetShellPSPrepassAttr(keepHidden);
 
-				splitRow("SnowDeformation::Ground - Shell Depth Prepass");
-				const float rasterClear[4] = {};
-				context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
-				ID3D11RenderTargetView* prepassRTVs[4] = { shellRasterDepth->rtv.get(), visibleCull ? shellRasterPatch->rtv.get() : nullptr, nullptr, nullptr };
-				if (visibleCull)
-					context->ClearRenderTargetView(prepassRTVs[1], rasterClear);
-				// The attributes are read only where the prepass won, so no clear.
-				if (deferred) {
-					for (int i = 0; i < 3; i++)
-						prepassRTVs[1 + i] = shellDeferredAttr[i]->rtv.get();
-				}
-				context->OMSetRenderTargets(deferred ? 4 : (visibleCull ? 2 : 1), prepassRTVs, dsv);
-				// The prepass PS reads few of the DS outputs; the lean bake DS writes
-				// only those. The shading draw binds tessDS again.
-				auto* dsLean = bake && !shellVertexBakeCheck ? GetShellDSLean(visibleCull) : nullptr;
-				if (dsLean)
-					context->DSSetShader(dsLean, nullptr, 0);
-				else if (visibleCull)
-					context->DSSetShader(dsPrepassPatch, nullptr, 0);
-				const bool prepassLastFrame = visibleCull && shellPrepassLastFrame && shellVisiblePrevValid && shellVisiblePrevSRV;
-				if (prepassLastFrame) {
-					ID3D11ShaderResourceView* prevSRV = shellVisiblePrevSRV.get();
-					context->HSSetShader(hsVisible, nullptr, 0);
-					context->HSSetShaderResources(60, 1, &prevSRV);
-				}
-				context->PSSetShader(psPrepass, nullptr, 0);
-				// The last-frame hull indexes its flags by SV_PrimitiveID, which
-				// restarts at the first patch drawn.
-				uint32_t firstRow = 0, endRow = kShellGridDim;
-				if (!prepassLastFrame)
-					ShellSeamRows(cbData, firstRow, endRow);
-				context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
-				if (prepassLastFrame) {
-					ID3D11ShaderResourceView* nullPrevSRV = nullptr;
-					context->HSSetShaderResources(60, 1, &nullPrevSRV);
-					context->HSSetShader(tessHS, nullptr, 0);
+				// S1: the early prepass drew before the opaque passes; its pixels are
+				// finished below, at the shading split.
+				earlyMarks = early && deferred && shellPSEarlyResolve && shellEarlyPending && shellEarlyMarks;
+				if (!earlyMarks) {
+					splitRow("SnowDeformation::Ground - Shell Depth Prepass");
+					const float rasterClear[4] = {};
+					context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
+					ID3D11RenderTargetView* prepassRTVs[4] = { shellRasterDepth->rtv.get(), visibleCull ? shellRasterPatch->rtv.get() : nullptr, nullptr, nullptr };
+					if (visibleCull)
+						context->ClearRenderTargetView(prepassRTVs[1], rasterClear);
+					// The attributes are read only where the prepass won, so no clear.
+					if (deferred) {
+						for (int i = 0; i < 3; i++)
+							prepassRTVs[1 + i] = shellDeferredAttr[i]->rtv.get();
+					}
+					context->OMSetRenderTargets(deferred ? 4 : (visibleCull ? 2 : 1), prepassRTVs, dsv);
+					// The prepass PS reads few of the DS outputs; the lean bake DS writes
+					// only those. The shading draw binds tessDS again.
+					auto* dsLean = bake && !shellVertexBakeCheck ? GetShellDSLean(visibleCull) : nullptr;
+					if (dsLean)
+						context->DSSetShader(dsLean, nullptr, 0);
+					else if (visibleCull)
+						context->DSSetShader(dsPrepassPatch, nullptr, 0);
+					const bool prepassLastFrame = visibleCull && shellPrepassLastFrame && shellVisiblePrevValid && shellVisiblePrevSRV;
+					if (prepassLastFrame) {
+						ID3D11ShaderResourceView* prevSRV = shellVisiblePrevSRV.get();
+						context->HSSetShader(hsVisible, nullptr, 0);
+						context->HSSetShaderResources(60, 1, &prevSRV);
+					}
+					context->PSSetShader(psPrepass, nullptr, 0);
+					// The last-frame hull indexes its flags by SV_PrimitiveID, which
+					// restarts at the first patch drawn.
+					uint32_t firstRow = 0, endRow = kShellGridDim;
+					if (!prepassLastFrame)
+						ShellSeamRows(cbData, firstRow, endRow);
+					context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
+					if (prepassLastFrame) {
+						ID3D11ShaderResourceView* nullPrevSRV = nullptr;
+						context->HSSetShaderResources(60, 1, &nullPrevSRV);
+						context->HSSetShader(tessHS, nullptr, 0);
+					}
 				}
 
 				// Deferred: the fill is ~0.013 ms of its own plus the prepass's
@@ -2703,34 +3163,36 @@ void SnowDeformation::DrawShell()
 					splitRow("SnowDeformation::Ground - Shell Visible Patches");
 				else if (shellSplitTiming)
 					globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell Visible Patches");
-				if (visibleCull) {
-					const UINT zeros[4] = {};
-					context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
-					ID3D11UnorderedAccessView* visibleUAV = shellVisiblePatchesUAV.get();
-					context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shellTestDepthDSV.get(), 1, 1, &visibleUAV, nullptr);
-					ID3D11ShaderResourceView* patchSRV = shellRasterPatch->srv.get();
-					context->PSSetShaderResources(61, 1, &patchSRV);
-				} else {
-					context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
-				}
-				context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
-				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-				context->VSSetShader(fillVS, nullptr, 0);
-				context->HSSetShader(nullptr, nullptr, 0);
-				context->DSSetShader(nullptr, nullptr, 0);
-				ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
-				context->PSSetShaderResources(9, 1, &rasterSRV);
-				context->PSSetShader(visibleCull ? fillPSVisible : fillPS, nullptr, 0);
-				context->Draw(3, 0);
-				ID3D11ShaderResourceView* nullRasterSRV = nullptr;
-				context->PSSetShaderResources(9, 1, &nullRasterSRV);
-				if (visibleCull) {
-					context->PSSetShaderResources(61, 1, &nullRasterSRV);
-					ID3D11UnorderedAccessView* nullUAV = nullptr;
-					context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 1, 1, &nullUAV, nullptr);
-					if (shellMainCullAll) {
+				if (!earlyMarks) {
+					if (visibleCull) {
 						const UINT zeros[4] = {};
 						context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
+						ID3D11UnorderedAccessView* visibleUAV = shellVisiblePatchesUAV.get();
+						context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shellTestDepthDSV.get(), 1, 1, &visibleUAV, nullptr);
+						ID3D11ShaderResourceView* patchSRV = shellRasterPatch->srv.get();
+						context->PSSetShaderResources(61, 1, &patchSRV);
+					} else {
+						context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+					}
+					context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
+					context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+					context->VSSetShader(fillVS, nullptr, 0);
+					context->HSSetShader(nullptr, nullptr, 0);
+					context->DSSetShader(nullptr, nullptr, 0);
+					ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
+					context->PSSetShaderResources(9, 1, &rasterSRV);
+					context->PSSetShader(visibleCull ? fillPSVisible : fillPS, nullptr, 0);
+					context->Draw(3, 0);
+					ID3D11ShaderResourceView* nullRasterSRV = nullptr;
+					context->PSSetShaderResources(9, 1, &nullRasterSRV);
+					if (visibleCull) {
+						context->PSSetShaderResources(61, 1, &nullRasterSRV);
+						ID3D11UnorderedAccessView* nullUAV = nullptr;
+						context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 1, 1, &nullUAV, nullptr);
+						if (shellMainCullAll) {
+							const UINT zeros[4] = {};
+							context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
+						}
 					}
 				}
 				// Patch split: the visible patches into a flat and a tessellated
@@ -2761,6 +3223,38 @@ void SnowDeformation::DrawShell()
 				}
 
 				splitRow("SnowDeformation::Ground - Shell Shading");
+				if (earlyMarks) {
+					// The pending pixels against this frame's land masks; every winner's
+					// depth into the main buffer under LESS_EQUAL, so one something drew
+					// in front of since the claim loses. The marks fill the private depth.
+					const float marksClear[4] = {};
+					context->ClearRenderTargetView(shellEarlyMarks->rtv.get(), marksClear);
+					ID3D11RenderTargetView* marksRTV = shellEarlyMarks->rtv.get();
+					context->OMSetRenderTargets(1, &marksRTV, dsv);
+					context->OMSetDepthStencilState(shellDepthState.get(), 0);
+					context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+					context->VSSetShader(fillVS, nullptr, 0);
+					context->HSSetShader(nullptr, nullptr, 0);
+					context->DSSetShader(nullptr, nullptr, 0);
+					ID3D11ShaderResourceView* landSRV = landMasksCopySRV.get();
+					context->PSSetShaderResources(10, 1, &landSRV);
+					ID3D11ShaderResourceView* resolveSRVs[2] = { shellRasterDepth->srv.get(), shellEarlyPending->srv.get() };
+					context->PSSetShaderResources(61, 2, resolveSRVs);
+					ID3D11ShaderResourceView* attrDepthSRV = shellDeferredAttr[2]->srv.get();
+					context->PSSetShaderResources(93, 1, &attrDepthSRV);
+					context->PSSetShader(shellPSEarlyResolve, nullptr, 0);
+					context->Draw(3, 0);
+					ID3D11ShaderResourceView* nullResolveSRVs[2] = {};
+					context->PSSetShaderResources(61, 2, nullResolveSRVs);
+					context->PSSetShaderResources(93, 1, nullResolveSRVs);
+					context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+					context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
+					ID3D11ShaderResourceView* marksSRV = shellEarlyMarks->srv.get();
+					context->PSSetShaderResources(9, 1, &marksSRV);
+					context->PSSetShader(fillPS, nullptr, 0);
+					context->Draw(3, 0);
+					context->PSSetShaderResources(9, 1, nullResolveSRVs);
+				}
 				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 				if (deferred) {
 					// One full-screen triangle at z 0: LESS passes wherever the
@@ -3005,7 +3499,7 @@ void SnowDeformation::DrawShell()
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };
 			ID3D11ShaderResourceView* syncSRVs[3] = { mainDepthSRV,
-				rasterMarks ? shellRasterDepth->srv.get() : nullptr,
+				rasterMarks ? (earlyMarks ? shellEarlyMarks->srv.get() : shellRasterDepth->srv.get()) : nullptr,
 				preSnowDepthThisFrame ? preSnowDepthSRV.get() : nullptr };
 			// Outside the rendered rectangle nothing moved the main depth and the raster
 			// marks are clear: the full-target pass returned there. The pre-snow copy

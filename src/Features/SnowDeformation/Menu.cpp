@@ -2351,6 +2351,32 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttDeferred = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_deferred_shading_tooltip"), "The ground snow is shaded in one full-screen pass after its depth prepass, instead of drawing its triangles a second time. Small and sliver triangles no longer make the GPU shade unused pixel lanes, which was a large share of the snow's cost on open snowfields. Near-exact: positions are rebuilt from the prepass's depth, texture filtering uses the prepass's own derivatives, and trampled churn's parallax keeps a constant texture detail level. Debug views keep the old path."));
 			ImGui::TextDisabled("%s", shellDeferredThisFrame ? T(TKEY("shell_deferred_active"), "Deferred pass: drawing") : T(TKEY("shell_deferred_inactive"), "Deferred pass: not drawing"));
+			ImGui::Checkbox(T(TKEY("shell_join_zprepass"), "Join the Game's Depth Prepass (S1)"), &shellJoinZPrepass);
+			if (auto _ttJoin = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_join_zprepass_tooltip"), "The ground snow's depth pass runs before the game draws the world and writes the snow into the game's depth buffer, so the game stops shading the terrain and buried objects under the snow. The saving shows in Game Terrain Draws and in the frame time rather than in the snow's own rows; Shell Depth Prepass now times the pass at the start of the frame. Snow edges and trampled floors still wait for this frame's ground grain, so the terrain is shaded there as before. Look trades: the ground snow's depth sees object snow shapes one frame late, and blood decals under thin snow may no longer show through. Needs Deferred Shell Shading and Terrain Blending."));
+			const char* joinState = T(TKEY("shell_join_off"), "Depth prepass join: off");
+			switch (shellEarlyState) {
+			case EarlyPrepass::Drawing:
+				joinState = T(TKEY("shell_join_drawing"), "Depth prepass join: drawing");
+				break;
+			case EarlyPrepass::NotDrawing:
+				joinState = T(TKEY("shell_join_not_drawing"), "Depth prepass join: not this frame (no ground snow, a moved terrain window or a new render size)");
+				break;
+			case EarlyPrepass::NeedsDeferred:
+				joinState = T(TKEY("shell_join_needs_deferred"), "Depth prepass join: needs Deferred Shell Shading and no debug view");
+				break;
+			case EarlyPrepass::NeedsTerrainBlending:
+				joinState = T(TKEY("shell_join_needs_tb"), "Depth prepass join: needs Terrain Blending");
+				break;
+			case EarlyPrepass::Unavailable:
+				joinState = T(TKEY("shell_join_unavailable"), "Depth prepass join: unavailable (tessellation, vertex bake or depth prepass off, or a shader failed)");
+				break;
+			default:
+				break;
+			}
+			ImGui::TextDisabled("%s", joinState);
+			if (shellEarlyViewMismatches > 0)
+				ImGui::TextDisabled("%s %u", T(TKEY("shell_join_view_mismatch"), "Frames whose view changed under the early pass:"), shellEarlyViewMismatches);
 			ImGui::TreePop();
 		}
 		ImGui::TreePop();

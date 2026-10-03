@@ -932,6 +932,12 @@ float SnowDeformation::ComputeSnowfallIntensity() const
 
 void SnowDeformation::Prepass()
 {
+	PrepassSimulation();
+	DrawShellEarlyPrepass();
+}
+
+void SnowDeformation::PrepassSimulation()
+{
 	// The fields the vertex bake read are rewritten from here on.
 	shellCastBakeValid = false;
 	LoadTraceFramePulse();
@@ -2144,6 +2150,17 @@ void SnowDeformation::ClearShaderCache()
 			attrPS->Release();
 		attrPS = nullptr;
 	}
+	for (auto& earlyPS : shellPSPrepassEarly) {
+		if (earlyPS)
+			earlyPS->Release();
+		earlyPS = nullptr;
+	}
+	if (shellPSEarlyResolve)
+		shellPSEarlyResolve->Release();
+	shellPSEarlyResolve = nullptr;
+	if (shellFillPSClaim)
+		shellFillPSClaim->Release();
+	shellFillPSClaim = nullptr;
 	if (shellPSPrepass)
 		shellPSPrepass->Release();
 	shellPSPrepass = nullptr;

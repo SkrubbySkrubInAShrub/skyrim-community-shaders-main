@@ -2342,6 +2342,12 @@ struct PS_PREPASS_OUTPUT
 	float4 AttrGrid : SV_Target1;
 	float4 AttrGridDeriv : SV_Target2;
 	float4 AttrDepth : SV_Target3;
+#		ifdef SNOW_PREPASS_EARLY
+	// A pending pixel's inputs for the resolve: alpha before the contests,
+	// the edge and floor contests' snow surfaces, and the floor's carve weight
+	// + 2 if the export clamped + 4 if the edge contest runs.
+	float4 Pending : SV_Target4;
+#		endif
 #	endif
 	float DepthLE : SV_DepthLessEqual;
 };
@@ -2384,8 +2390,13 @@ float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ, fl
 	float3 st = SampleTerrain(sceneLocal);
 	float above = (sceneRel.z + ShellCameraPosAdjust.z) - (st.x + max(st.y, 0.0));
 	above = (inWindow && st.x > -50000.0) ? above : 0.0;
+#ifdef SNOW_PREPASS_EARLY
+	// No land masks yet: a clamp a static could cancel is left to the resolve.
+	return above;
+#else
 	bool sceneIsStatic = LandMasksCopy.Load(int3(pixel, 0)).y >= 1.5;
 	return sceneIsStatic ? 1e6 : above;
+#endif
 }
 
 bool ShellFarClampWindow(float shellZ, float sceneZ)
@@ -2529,7 +2540,66 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 }
 #endif
 
-#ifdef SNOW_LANE_CENSUS
+#if defined(SNOW_S1_RESOLVE)
+// S1 resolve (DrawShell, before the deferred pass): finishes the early
+// prepass's pending pixels with what the game's opaque draws left - the
+// edge and floor contests against this frame's land grain, the clamp against
+// a static - and writes every winner's depth into the main buffer under
+// LESS_EQUAL, so a pixel something drew in front of since the claim loses.
+// The marks are DepthSync's and the private fill's.
+Texture2D<float> EarlyRasterDepth : register(t61);
+Texture2D<float4> EarlyPending : register(t62);
+Texture2D<float4> DeferredDepth : register(t93);
+
+struct S1_RESOLVE_OUTPUT
+{
+	float Marks : SV_Target0;
+	float Depth : SV_Depth;
+};
+
+float ShellContestWin(float snowSurf, float hLandRaw)
+{
+	float hLand01 = hLandRaw > 0.002 && hLandRaw < 1.5 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5;
+	float dirtSurf = (0.5 + (hLand01 - 0.5) * 0.5) * 2.0;
+	return smoothstep(-0.25, 0.25, snowSurf - dirtSurf);
+}
+
+S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
+{
+	const int3 px = int3(pos.xy, 0);
+	const float raster = EarlyRasterDepth.Load(px);
+	if (raster == 0.0)
+		discard;
+	float depth = abs(raster);
+	[branch] if (raster < 0.0)
+	{
+		const float4 pending = EarlyPending.Load(px);
+		const uint flags = (uint)(pending.w * 0.5);
+		const float floorCarve = pending.w - 2.0 * (float)flags;
+		const float hLandRaw = LandMasksCopy.Load(px).y;
+		// Without a contest the early pass's cut was final.
+		[branch] if ((flags & 2) != 0 || floorCarve > 0.0)
+		{
+			const float contestFade = 1.0 - smoothstep(1024.0, 2048.0, DeferredDepth.Load(px).x);
+			float alpha = pending.x;
+			if ((flags & 2) != 0)
+				alpha *= lerp(1.0, ShellContestWin(pending.y, hLandRaw), contestFade);
+			if (floorCarve > 0.0 && alpha > 0.001)
+				alpha *= lerp(1.0, ShellContestWin(pending.z, hLandRaw), contestFade * floorCarve);
+			const float screenNoise = Random::InterleavedGradientNoise(pos.xy, SharedData::FrameCount);
+			const float dust = BorderStyle.x > 0.5 ? saturate((alpha - 0.2) * (1.0 / 0.3)) : (alpha >= 0.5 ? 1.0 : 0.0);
+			if (screenNoise * screenNoise >= dust)
+				discard;
+		}
+		if ((flags & 1) != 0 && hLandRaw < 1.5)
+			depth = min(depth, SceneDepth.Load(px) - 1e-5);
+	}
+	S1_RESOLVE_OUTPUT o;
+	o.Marks = abs(raster);
+	o.Depth = depth;
+	return o;
+}
+#elif defined(SNOW_LANE_CENSUS)
 // Lane census (measurement only): the shading draws re-issued with no depth
 // test, so each lane decides itself whether the EQUAL test would pass. Counts
 // [0] live pixels, [4] quads with a live lane (the quads early-Z launches),
@@ -2761,6 +2831,28 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// in, and the slice layer carries the outward side.
 #ifndef SNOW_SHELL_DEFERRED
 	float contestFade = 1.0 - smoothstep(1024.0, 2048.0, shellZ);
+#	ifdef SNOW_PREPASS_EARLY
+	// The land grain is drawn after this pass: the contests' snow sides are
+	// recorded and the resolve runs them. They only lower the alpha, so the
+	// cut below on the uncontested alpha discards nothing they would keep.
+	const bool edgeContest = HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999;
+	float edgeSurf = 0.0;
+	[branch] if (edgeContest)
+		edgeSurf = pixelEffDepth + (SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip) - 0.5) * 2.0;
+	float floorCarve = 0.0;
+	float floorSurf = 0.0;
+	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
+	{
+		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
+		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
+		[branch] if (remaining < 4.0)
+		{
+			floorSurf = remaining + (SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip) - 0.5) * 2.0;
+			floorCarve = smoothstep(0.75, 0.95, pixelCarve);
+		}
+	}
+	const float earlyAlpha = coverageAlpha;
+#	else
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
@@ -2803,6 +2895,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			coverageAlpha *= lerp(1.0, winFloor, contestFade * smoothstep(0.75, 0.95, pixelCarve));
 		}
 	}
+#	endif
 
 	// Hard alpha test + optional outward dust. Survivors write fully
 	// opaque, so no partial alpha reaches the deferred resolve through the
@@ -2857,6 +2950,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	prepassOut.AttrDepth = float4(input.CurrentClip.w, attrZDeriv, pixelRampDepth);
 #	endif
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
+#	ifdef SNOW_PREPASS_EARLY
+	// Pending: a contest to run, or a clamp a static behind would cancel.
+	// Marked by a negative raster depth; the claim fill skips it.
+	const bool clampPending = prepassOut.DepthLE < input.Position.z;
+	prepassOut.Pending = 0.0;
+	[branch] if (edgeContest || floorCarve > 0.0 || clampPending)
+	{
+		prepassOut.RasterDepth = -input.Position.z;
+		prepassOut.Pending = float4(earlyAlpha, edgeSurf, floorSurf, floorCarve + (clampPending ? 2.0 : 0.0) + (edgeContest ? 4.0 : 0.0));
+	}
+#	endif
 	return prepassOut;
 #endif
 #ifndef SNOW_SHELL_DEPTH_PREPASS

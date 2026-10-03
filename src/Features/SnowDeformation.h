@@ -1335,6 +1335,8 @@ public:
 	 * to follow the camera, and dispatches the deformation update compute shader.
 	 */
 	virtual void Prepass() override;
+	/** @brief Prepass's map, simulation and per-frame work; Prepass then runs the early ground prepass (S1). */
+	void PrepassSimulation();
 
 	/** @brief Returns the ring compute shader (rewrites the texels a scroll reassigned: inject or pristine), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationRingCS();
@@ -1867,6 +1869,49 @@ public:
 	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept]. */
 	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
+
+	/** @brief S1, Shell Shader Performance > Join the Game's Depth Prepass (runtime, not serialised): DrawShellEarlyPrepass runs the ground prepass at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the edge and floor contests) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Deferred Shell Shading and Terrain Blending. */
+	bool shellJoinZPrepass = false;
+	enum class EarlyPrepass : uint8_t
+	{
+		Off,
+		Drawing,
+		NotDrawing,
+		NeedsDeferred,
+		NeedsTerrainBlending,
+		Unavailable
+	};
+	EarlyPrepass shellEarlyState = EarlyPrepass::Off;
+	/** @brief Frame the early prepass drew in; DrawShell finishes it only in that frame. */
+	uint32_t shellEarlyFrame = UINT32_MAX;
+	/** @brief The CB the early prepass and its bake drew with; DrawShell checks the bake's placement against it before the caster may read the bake. */
+	std::unique_ptr<ShellCB> shellEarlyCB;
+	D3D11_VIEWPORT shellEarlyViewport{};
+	/** @brief Frames whose shell viewport or camera differed from the ones the early prepass drew with. */
+	uint32_t shellEarlyViewMismatches = 0;
+	/** @brief The last DrawShell's shell viewport and frame, and its ground gate: the next early prepass draws with them. */
+	D3D11_VIEWPORT shellDrawViewport{};
+	uint32_t shellDrawViewportFrame = UINT32_MAX;
+	bool shellDrawGroundGated = false;
+	/** @brief shellTerrainVersion when the last DrawShell rebuilt the water windows and the wet cut, laid on the terrain window's grid: a window Prepass moved since leaves them a cell off. */
+	uint32_t shellDrawTerrainVersion = 0;
+	/** @brief The dynamic-resolution scale the last DrawShell drew with: the early prepass needs this frame's to match. */
+	float shellDrawDynRes[2] = {};
+	/** @brief Pending pixels' resolve inputs (RGBA16F) and the resolve's winner marks (R32F), display-size like shellRasterDepth. */
+	Texture2D* shellEarlyPending = nullptr;
+	Texture2D* shellEarlyMarks = nullptr;
+	bool EnsureEarlyPrepassResources();
+	void DrawShellEarlyPrepass();
+	/** @brief SNOW_PREPASS_EARLY prepass PS [plain, hidden kept]. */
+	ID3D11PixelShader* shellPSPrepassEarly[2] = {};
+	ID3D11PixelShader* GetShellPSPrepassEarly(bool a_keepHidden);
+	ID3D11PixelShader* shellPSEarlyResolve = nullptr;
+	ID3D11PixelShader* GetShellPSEarlyResolve();
+	ID3D11PixelShader* shellFillPSClaim = nullptr;
+	ID3D11PixelShader* GetShellFillPSClaim();
+	/** @brief ShellCB.ShellDebugData from the debug toggles. */
+	uint32_t ShellDebugDataCode() const;
+	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);
 	bool EnsureLaneCensusResources();
 	void ReadLaneCensus(ID3D11DeviceContext* a_context);
 

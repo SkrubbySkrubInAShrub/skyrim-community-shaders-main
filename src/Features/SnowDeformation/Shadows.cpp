@@ -536,8 +536,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 
 	// Last frame's bake stands in for the surface evaluation while nothing it
 	// read has been written since and this frame's placement is the one it
-	// baked. ObjectLiftCap > 1 reads t11/t12, which the grid caster leaves
-	// as it finds them.
+	// baked. With S1 the bake predates DrawShell's object, water and exclusion
+	// maps, as the drawn ground does. ObjectLiftCap > 1 reads t11/t12, which
+	// the grid caster leaves as it finds them.
 	ID3D11VertexShader* casterVS = vs;
 	bool castCheckLive = false;
 	shellCastBakedLast = false;

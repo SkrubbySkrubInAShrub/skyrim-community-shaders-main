@@ -99,6 +99,16 @@ FillPreSnowOut FillPS(float4 pos : SV_Position)
 	o.preSnow = o.depth;
 	return o;
 }
+#elif defined(FILL_CLAIM)
+// S1: the early prepass's settled pixels (positive raster depth) into the
+// main depth before the game's opaque draws; pending pixels are negative.
+float FillPS(float4 pos : SV_Position) : SV_Depth
+{
+	const float d = FillSource.Load(int3(pos.xy, 0));
+	if (d <= 0.0)
+		discard;
+	return d;
+}
 #else
 float FillPS(float4 pos : SV_Position) : SV_Depth
 {
