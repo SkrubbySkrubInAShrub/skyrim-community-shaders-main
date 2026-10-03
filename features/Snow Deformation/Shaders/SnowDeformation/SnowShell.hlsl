@@ -2859,9 +2859,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		gradZ += UndulationGradSampled(worldXYPS) * undScale;
 	}
 
-	// Churn gradient (same field the geometry displaces by).
-	float churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * saturate(pixelDepth / 10.0);
-	float clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
+	// Churn gradient (same field the geometry displaces by). Untouched, carve
+	// and berm are 0 and so are both weights.
+	float churnW = 0.0;
+	float clodW = 0.0;
+	[branch] if (!pixelUntouched)
+	{
+		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * saturate(pixelDepth / 10.0);
+		clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
+	}
 	// Churn by parallax (ShellFlags bit 4): the geometry leaves the churn and
 	// clod heights out, so the ray is marched through them here and the point
 	// it meets is shaded. Depth-buffer work stays on the sheet.
@@ -2923,10 +2929,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// four texels of the same map at the same place, and both sites are
 	// unconditional, so sharing costs nothing and skips four loads.
 	float scorchRaw = 0.0, crustRaw = 0.0;
+	float crustAmount = 0.0;
 	[branch] if (!pixelUntouched)
+	{
 		SampleScorchCrust(gridLocal, scorchRaw, crustRaw);
-	float crustAmount = saturate(crustRaw * SpellShading.y);
-	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
+		crustAmount = saturate(crustRaw * SpellShading.y);
+		bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
+	}
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 #ifdef SNOW_SHELL_DEFERRED
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXYPS);
