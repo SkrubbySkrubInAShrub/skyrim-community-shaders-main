@@ -2323,6 +2323,15 @@ float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float s
 	return depth;
 }
 
+// Out of both windows the export is rasterZ whatever sceneAbove says.
+float ShellExportDepthAt(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve, float3 worldPosRel, float2 pixel)
+{
+	float sceneAbove = 0.0;
+	[branch] if (ShellFarClampWindow(shellZ, sceneZ) || ShellNearClampWindow(shellZ, sceneZ))
+		sceneAbove = ShellSceneAboveSnowLine(worldPosRel, sceneZ, shellZ, pixel);
+	return ShellExportDepth(rasterZ, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, sceneAbove);
+}
+
 // Out of both windows the export is the raster depth; behind the scene (the
 // blended depth is the main depth to within rounding) it fails LESS_EQUAL.
 bool ShellPrepassHidden(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ)
@@ -2761,7 +2770,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	prepassOut.AttrGridDeriv = attrGridDeriv;
 	prepassOut.AttrDepth = float4(input.CurrentClip.w, attrZDeriv, 0.0);
 #	endif
-	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ, input.Position.xy));
+	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 	return prepassOut;
 #endif
 #ifndef SNOW_SHELL_DEPTH_PREPASS
@@ -3702,7 +3711,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ, input.Position.xy));
+	psout.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 #	endif
 
 	return psout;
