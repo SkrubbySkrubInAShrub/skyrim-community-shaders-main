@@ -2512,7 +2512,12 @@ void SnowDeformation::DrawShell()
 					context->HSSetShader(tessHS, nullptr, 0);
 				}
 
-				splitRow("SnowDeformation::Ground - Shell Visible Patches");
+				// Deferred: the fill is ~0.013 ms of its own plus the prepass's
+				// drain, so it stays in the prepass row.
+				if (!deferred)
+					splitRow("SnowDeformation::Ground - Shell Visible Patches");
+				else if (shellSplitTiming)
+					globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell Visible Patches");
 				if (visibleCull) {
 					const UINT zeros[4] = {};
 					context->ClearUnorderedAccessViewUint(shellVisiblePatchesUAV.get(), zeros);
