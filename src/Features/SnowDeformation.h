@@ -138,6 +138,20 @@ public:
 		return span * a_spacing;
 	}
 
+	/** @brief World offset from the grid centre of vertex index a_u (centred) along one axis: SnowGrid.hlsli WarpAxis. */
+	static float ShellWarpAxis(int a_u, float a_spacing = kShellGridSpacing)
+	{
+		float a = float(std::abs(a_u));
+		float off = 0.0f;
+		for (int band = 0; band < kShellWarpBands; ++band) {
+			const float take = std::min(a, kShellWarpBandVerts[band]);
+			off += take * kShellWarpBandMul[band];
+			a -= take;
+		}
+		off += a * kShellWarpBandMul[kShellWarpBands - 1];
+		return (a_u < 0 ? -off : off) * a_spacing;
+	}
+
 	// Terrain data window: 16x16 cells at land-vertex resolution (128 units),
 	// cell-anchored so texels never resample as the camera moves. Sized with
 	// margin so the warped grid never samples past the window even with the
@@ -1674,6 +1688,8 @@ public:
 	bool EnsureShellGridIndexBuffers();
 	void DrawShellGridIndexed(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
 	void DrawShellGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
+	/** @brief Patch rows [a_first, a_end) that can reach the seam square; every patch of a row wholly outside it fails ShellBeyondSeam in the hull. One row of margin; the whole grid without seam data. */
+	static void ShellSeamRows(const ShellCB& a_cb, uint32_t& a_first, uint32_t& a_end);
 	winrt::com_ptr<ID3D11Buffer> shellGridIB[2];
 	/** @brief The caster's subset per parity: quads with a corner inside the castVis kill radius (SnowShell.hlsl); the VS NaNs every vertex past it. */
 	winrt::com_ptr<ID3D11Buffer> shellGridCasterIB[2];

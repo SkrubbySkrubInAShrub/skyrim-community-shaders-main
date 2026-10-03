@@ -560,6 +560,21 @@ void SnowDeformation::DrawShellGrid(ID3D11DeviceContext* a_context, const ShellC
 		DrawShellGridIndexed(a_context, a_cb);
 }
 
+void SnowDeformation::ShellSeamRows(const ShellCB& a_cb, uint32_t& a_first, uint32_t& a_end)
+{
+	a_first = 0;
+	a_end = kShellGridDim;
+	if (a_cb.SeamRampInv <= 0.0f)
+		return;
+	// Vertex row j's world Y (GeomorphVertexXY is a no-op on the aligned bands);
+	// patch row r spans vertex rows r and r + 1.
+	const auto rowY = [&](int a_row) { return a_cb.GridOrigin.y + a_cb.WarpedHalfSpan + ShellWarpAxis(a_row - int(kShellGridDim / 2), a_cb.GridSpacing); };
+	while (a_first < kShellGridDim && rowY(int(a_first) + 2) < a_cb.SeamBounds.y)
+		a_first++;
+	while (a_end > a_first && rowY(int(a_end) - 2) > a_cb.SeamBounds.w)
+		a_end--;
+}
+
 ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
 	if (shellGridNonIndexed) {
@@ -2505,7 +2520,12 @@ void SnowDeformation::DrawShell()
 					context->HSSetShaderResources(60, 1, &prevSRV);
 				}
 				context->PSSetShader(psPrepass, nullptr, 0);
-				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+				// The last-frame hull indexes its flags by SV_PrimitiveID, which
+				// restarts at the first patch drawn.
+				uint32_t firstRow = 0, endRow = kShellGridDim;
+				if (!prepassLastFrame)
+					ShellSeamRows(cbData, firstRow, endRow);
+				context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
 				if (prepassLastFrame) {
 					ID3D11ShaderResourceView* nullPrevSRV = nullptr;
 					context->HSSetShaderResources(60, 1, &nullPrevSRV);
