@@ -3504,6 +3504,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse + runeEmission * Color::PBRLightingScale;
 
+	// The deferred pass never runs with a debug view (DrawShell's deferred gate).
+#ifndef SNOW_SHELL_DEFERRED
 	[branch] if (ShellDebugData == 2)
 	{
 		// Exclusion debug: R = drift field lift (48 units = full red),
@@ -3678,11 +3680,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		else
 			preLit = lerp(float3(0.0, 0.55, 0.6), float3(0.0, 0.0, 1.0), saturate((-d - 2.0) / 62.0));
 	}
+#endif
 
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
 	// blend mask goes to NormalGlossiness.w, exactly as Lighting.hlsl's
 	// deferred tail encodes it for the temporal resolve.
+#ifdef SNOW_SHELL_DEFERRED
+	float alpha = coverageAlpha;
+#else
 	float alpha = ((ShellDebugData != 0 && ShellDebugData < 4) || ShellLODDebug != 0) ? 1.0 : coverageAlpha;
+#endif
 	float stochasticBlend = (screenNoise * screenNoise) < alpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
