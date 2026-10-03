@@ -55,6 +55,8 @@ static float2 gDeferredGridDx;
 static float2 gDeferredGridDy;
 static float gDeferredZDx;
 static float gDeferredZDy;
+// The prepass's coverage ramp (AttrDepth.w).
+static float gDeferredRampDepth;
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -2549,6 +2551,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// boundary and TAA resolves it into a true cross-fade.
 	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
 	// dither agree with the shaped geometry.
+#ifdef SNOW_SHELL_DEFERRED
+	// The prepass computed the ramp from the same GridLocal bits; with the
+	// cut trusted, nothing else of this block reaches the outputs.
+	float pixelRampDepth = gDeferredRampDepth;
+	float pixelWaterCap = 0.0;
+	float3 pixelTerrain = 0.0;
+	float pixelCoverage = 1.0;
+	float psEdgeFade = 1.0;
+	float pixelClassDepth = 0.0;
+#else
 	float pixelWaterCap;
 	float3 pixelTerrain = EndSnowAtWater(SampleTerrainShaped(gridLocal), gridLocal, pixelWaterCap);
 	float pixelCoverage = saturate(pixelTerrain.z);
@@ -2582,6 +2594,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelBare = saturate(1.0 - pixelCoverage);
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
+#endif
 
 	// User-tunable contest fringe (units): how far around the contact point
 	// the height contest operates.
@@ -2768,7 +2781,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	ifdef SNOW_PREPASS_ATTR
 	prepassOut.AttrGrid = float4(input.GridLocal, normalize(input.TerrainNormalAlpha.xyz).xy);
 	prepassOut.AttrGridDeriv = attrGridDeriv;
-	prepassOut.AttrDepth = float4(input.CurrentClip.w, attrZDeriv, 0.0);
+	prepassOut.AttrDepth = float4(input.CurrentClip.w, attrZDeriv, pixelRampDepth);
 #	endif
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 	return prepassOut;
@@ -3744,6 +3757,7 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	gDeferredGridDy = gridDeriv.zw;
 	gDeferredZDx = depth.y;
 	gDeferredZDy = depth.z;
+	gDeferredRampDepth = depth.w;
 
 	// The raster point back from its view depth: rows 0, 1 and 3 of the
 	// jittered view-projection solved for rel (Cramer), the pixel centre
