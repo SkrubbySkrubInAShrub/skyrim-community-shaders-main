@@ -2085,7 +2085,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	// one block each, appended after the per-capture blocks. The window snaps
 	// to its own texel; one cell of slack past the square's half-width reaches
 	// its far edge from anywhere in the camera's cell.
-	const bool farLevel = FarLevelActive();
+	// Its readers (patch, patch caster, road skins) are road draws only.
+	const bool farLevel = roadMaps && FarLevelActive();
 	farHalfExtentLive = 0.0f;
 	std::vector<uint32_t> farRecordIndex(captureCount, ~0u);
 	uint32_t farCount = 0;
