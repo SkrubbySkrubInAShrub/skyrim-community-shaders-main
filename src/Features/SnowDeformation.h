@@ -2938,6 +2938,8 @@ public:
 	Texture2D* heightTop2Raw[2] = { nullptr, nullptr };
 	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
 	Texture2D* objectSkyOpen = nullptr;
+	/** @brief Per 8x8 tile of the layer-1 raw maps, 1 where no texel holds both a top and a bottom: the layer-1 merge writes it (u3), the shelter mask skips tiles whose 5x5 block is all 1 (t4). */
+	Texture2D* heightTileEmpty = nullptr;
 	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside FineRasterHalfExtent(). */
 	Texture2D* heightTopRawFine = nullptr;
 	Texture2D* objectSnowConeFine = nullptr;

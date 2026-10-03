@@ -1763,6 +1763,18 @@ void SnowDeformation::CreateHeightFieldResources()
 	objectSkyOpen = new Texture2D(openDesc, "SnowDeformation::ObjectSkyOpen");
 	objectSkyOpen->CreateSRV(openSrvDesc);
 	objectSkyOpen->CreateUAV(openUavDesc);
+	static_assert(kHeightMapDim % 8 == 0, "HeightMapProcessCS clamps tiles to dims / 8");
+	D3D11_TEXTURE2D_DESC tileDesc = openDesc;
+	tileDesc.Width = kHeightMapDim / 8;
+	tileDesc.Height = kHeightMapDim / 8;
+	tileDesc.Format = DXGI_FORMAT_R8_UINT;
+	D3D11_SHADER_RESOURCE_VIEW_DESC tileSrvDesc = heightSrvDesc;
+	tileSrvDesc.Format = tileDesc.Format;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC tileUavDesc = heightUavDesc;
+	tileUavDesc.Format = tileDesc.Format;
+	heightTileEmpty = new Texture2D(tileDesc, "SnowDeformation::HeightTileEmpty");
+	heightTileEmpty->CreateSRV(tileSrvDesc);
+	heightTileEmpty->CreateUAV(tileUavDesc);
 
 	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
 	// frame). TWO channels, same rationale as the shelter mask above:
@@ -2009,8 +2021,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		heightGhostCB->Update(ghostData);
 	}
 	ID3D11Buffer* ghostCB = heightGhostCB->CB();
-	// Null bottoms = the top-only variant.
-	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom) {
+	// Null bottoms = the top-only variant. a_tiles (bottoms only) takes the
+	// shelter mask's per-tile flags.
+	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom, Texture2D* a_tiles) {
 		if (!a_prevTop || !a_curTop)
 			return;
 		const bool bottoms = a_prevBottom && a_curBottom;
@@ -2018,14 +2031,17 @@ void SnowDeformation::RenderObjectHeightMap()
 			return;
 		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), bottoms ? a_prevBottom->srv.get() : nullptr };
 		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), bottoms ? a_curBottom->uav.get() : nullptr };
+		ID3D11UnorderedAccessView* tileUAV = bottoms && a_tiles ? a_tiles->uav.get() : nullptr;
 		context->CSSetConstantBuffers(0, 1, &processCB);
 		context->CSSetConstantBuffers(2, 1, &ghostCB);
 		context->CSSetShaderResources(0, 2, mergeSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, mergeUAVs, nullptr);
+		context->CSSetUnorderedAccessViews(3, 1, &tileUAV, nullptr);
 		context->CSSetShader(bottoms ? heightScrollCS : heightScrollTopCS, nullptr, 0);
 		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+		context->CSSetUnorderedAccessViews(3, 1, nullCsUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 		ID3D11Buffer* nullMergeCB = nullptr;
 		context->CSSetConstantBuffers(0, 1, &nullMergeCB);
@@ -2260,7 +2276,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
 	globals::profiler->BeginPass("SnowDeformation::Objects - Height Ghost");
-	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent]);
+	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty);
 	globals::profiler->EndPass();
 
 	// Near clipmap level 0: the same captures against a quarter-width window,
@@ -2444,9 +2460,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		// tops only, nothing reads a peeled layer's bottoms.
 		globals::profiler->BeginPass("SnowDeformation::Objects - Peel Ghost");
 		if (heightScrollTopCS)
-			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr);
+			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr, nullptr);
 		else
-			mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch);
+			mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch, nullptr);
 		globals::profiler->EndPass();
 	}
 
@@ -2501,12 +2517,16 @@ void SnowDeformation::RenderObjectHeightMap()
 		// bottoms and stays clear here).
 		ID3D11UnorderedAccessView* combineUAVs[3] = { heightTopFiltered->uav.get(), nullptr, heightBottomFiltered->uav.get() };
 		ID3D11Buffer* exclusionCB = doorsCB->CB();
+		// t4: the layer-1 merge's tile flags (unbound reads 0, which never skips).
+		ID3D11ShaderResourceView* tileSRV = heightTileEmpty ? heightTileEmpty->srv.get() : nullptr;
 		context->CSSetConstantBuffers(1, 1, &exclusionCB);
 		context->CSSetShaderResources(0, 2, combineSRVs);
+		context->CSSetShaderResources(4, 1, &tileSRV);
 		context->CSSetUnorderedAccessViews(0, 3, combineUAVs, nullptr);
 		context->CSSetShader(heightCombineCS, nullptr, 0);
 		context->Dispatch(dispatchDim, dispatchDim, 1);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
+		context->CSSetShaderResources(4, 1, nullCsSRVs);
 		ID3D11UnorderedAccessView* nullCombineUAVs[3] = { nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, 3, nullCombineUAVs, nullptr);
 		ID3D11Buffer* nullExclusionCB = nullptr;

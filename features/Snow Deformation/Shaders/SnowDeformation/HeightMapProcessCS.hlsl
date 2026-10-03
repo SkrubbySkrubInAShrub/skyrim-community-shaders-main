@@ -100,6 +100,12 @@ RWTexture2D<float> OutB : register(u1);
 // discarded melt wherever a door's faint influence tail reached - a ring
 // of full-depth plateau snow around every sheltered door.
 RWTexture2D<float2> OutMask : register(u2);
+// Per 8x8 tile of the layer-1 raw maps, 1 where no texel holds a top above
+// and a bottom below the sentinels: every ShelterTap there returns +0.
+// Written by the bottoms ScrollCS of the layer-1 merge, read by CombineCS
+// (unbound reads 0, which never skips).
+RWTexture2D<uint> TileEmptyOut : register(u3);
+Texture2D<uint> TileEmpty : register(t4);
 
 // World XY of a height-map texel (v axis mirrors world +Y).
 float2 TexelWorldXY(uint2 p, uint2 dims)
@@ -158,13 +164,37 @@ static const bool kScrollBottoms = false;
 static const bool kScrollBottoms = true;
 #endif
 
+uint ScrollTexel(uint2 texel, uint2 dims);
+#ifndef SCROLL_TOP_ONLY
+groupshared uint scrollElevated;
+#endif
+
 [numthreads(8, 8, 1)] void ScrollCS(uint3 dtid
-									: SV_DispatchThreadID) {
+									: SV_DispatchThreadID, uint3 gid
+									: SV_GroupID, uint gi
+									: SV_GroupIndex) {
 	uint2 dims;
 	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
+#ifndef SCROLL_TOP_ONLY
+	if (gi == 0)
+		scrollElevated = 0;
+	GroupMemoryBarrierWithGroupSync();
+	[branch] if (all(dtid.xy < dims))
+		InterlockedOr(scrollElevated, ScrollTexel(dtid.xy, dims));
+	GroupMemoryBarrierWithGroupSync();
+	if (gi == 0)
+		TileEmptyOut[gid.xy] = scrollElevated == 0 ? 1u : 0u;
+#else
+	if (all(dtid.xy < dims))
+		ScrollTexel(dtid.xy, dims);
+#endif
+}
 
+// One texel of the merge; returns 1 where the result floats a structure
+// ShelterTap can see (a top and a bottom inside the sentinels).
+uint ScrollTexel(uint2 texel, uint2 dims)
+{
+	uint3 dtid = uint3(texel, 0);
 	float rasterTop = OutA[dtid.xy];
 	float rasterBottom = kScrollBottoms ? OutB[dtid.xy] : 100000.0;
 	bool haveTop = rasterTop > -50000.0;
@@ -203,6 +233,7 @@ static const bool kScrollBottoms = true;
 	OutA[dtid.xy] = top;
 	if (kScrollBottoms)
 		OutB[dtid.xy] = bottom;
+	return (top > -50000.0 && bottom < 50000.0) ? 1u : 0u;
 }
 
 // How strongly the raster at p reads as a floating structure above the
@@ -255,6 +286,7 @@ float ShelterEnclosure(int2 texel, int2 dims, float terrain)
 
 groupshared uint combineTileCount;
 groupshared uint combineTileList[MAX_EXCLUSIONS];
+groupshared uint combineElevated;
 
 // InA = raw tops, InB = raw bottoms. OutA = base field, OutB = shelter mask.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
@@ -267,9 +299,18 @@ groupshared uint combineTileList[MAX_EXCLUSIONS];
 	// The exclusions that reach this 8x8 tile. Past its reach an exclusion's
 	// influence is exactly zero and the terms combine by max, so the culled
 	// list gives the answer the whole buffer would.
-	if (gi == 0)
+	if (gi == 0) {
 		combineTileCount = 0;
+		combineElevated = 0;
+	}
 	GroupMemoryBarrierWithGroupSync();
+	// The shelter ring reaches 10 texels: tiles -2..+2 of this one, clamped
+	// like ShelterTap's own taps.
+	if (gi < 25) {
+		int2 tile = clamp(int2(gid.xy) + int2(gi % 5u, gi / 5u) - 2, 0, int2(dims / 8u) - 1);
+		if (TileEmpty.Load(int3(tile, 0)) == 0)
+			combineElevated = 1;
+	}
 	{
 		float2 cornerA = TexelWorldXY(gid.xy * 8, dims);
 		float2 cornerB = TexelWorldXY(gid.xy * 8 + 7, dims);
@@ -292,6 +333,13 @@ groupshared uint combineTileList[MAX_EXCLUSIONS];
 
 	if (any(dtid.xy >= dims))
 		return;
+	// Nothing floats within the ring's reach and no exclusion reaches the tile:
+	// every ShelterTap is +0, the enclosure cannot run, melt and suppress are +0.
+	[branch] if (combineElevated == 0 && combineTileCount == 0 && WriteBaseField == 0)
+	{
+		OutMask[dtid.xy] = float2(0.0, 0.0);
+		return;
+	}
 
 	float2 worldXY = TexelWorldXY(dtid.xy, dims);
 	float terrain = SampleTerrainHeight(worldXY);
