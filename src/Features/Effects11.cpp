@@ -486,7 +486,8 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 			sunColorF3 = Desaturation(sunColorF3, settingManager.GetInterpolatedTimeOfDayValue("SunDesaturation", "SKY"));
 			sunColorF3 = ColorFilter(sunColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("SunColorFilter", "SKY"), 0.0f);
 
-			// Scattering takes the sun's hue only; SunIntensity scales its brightness separately
+			// Normalized only when brighter than 1: a dim sun (e.g. at dusk) keeps the scattering dim.
+			// SunIntensity is left out, as it only scales the sun itself.
 			const float sunColorPeak = std::max({ sunColorF3.x, sunColorF3.y, sunColorF3.z, 1.0f });
 			scatteringSunColor = { std::max(sunColorF3.x, 0.0f) / sunColorPeak, std::max(sunColorF3.y, 0.0f) / sunColorPeak, std::max(sunColorF3.z, 0.0f) / sunColorPeak };
 
