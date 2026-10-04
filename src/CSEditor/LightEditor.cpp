@@ -1,5 +1,4 @@
 #include "LightEditor.h"
-#include "../Features/InverseSquareLighting.h"
 #include "../Features/LightLimitFix.h"
 #include "../I18n/I18n.h"
 #include "../Menu.h"
@@ -2070,7 +2069,7 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 		const bool isShadow = ligh && ligh->data.flags.any(RE::TES_LIGHT_FLAGS::kHemiShadow, RE::TES_LIGHT_FLAGS::kOmniShadow);
 		// Match ProcessLight, which runs on the LP-scaled runtime data (fade/size), so the readout tracks the game.
 		const float scale = GetLPRefScale();
-		current.data.radius = InverseSquareLighting::CalculateRadius(
+		current.data.radius = LightLimitFix::CalculateRadius(
 			current.data.fade * scale * 4.f, isShadow,
 			std::clamp(current.data.cutoffOverride, 0.01f, 1.0f),
 			std::clamp(current.data.size * scale, 0.1f, 50.0f));
