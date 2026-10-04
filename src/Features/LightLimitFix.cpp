@@ -452,6 +452,9 @@ float LightLimitFix::GetAttenuation(const float distance, const float radius, co
 float LightLimitFix::BSLight_GetLuminance::thunk(RE::BSLight* bsLight, RE::NiPoint3* targetPosition, RE::NiLight* refLight)
 {
 	auto* niLight = bsLight->light.get();
+	if (!niLight)
+		return func(bsLight, targetPosition, refLight);
+
 	const auto runtimeData = LLFCommon::RuntimeLightDataExt::Get(niLight);
 
 	if (refLight == niLight || runtimeData->flags.any(LightFlags::Disabled))
