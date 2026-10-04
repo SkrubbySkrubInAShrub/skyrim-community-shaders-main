@@ -23,10 +23,16 @@
 //
 // Beside the pigment a tile carries clock blocks: the map's two clocks, so a
 // mark dries and is buried as the map's does.
+//
+// A tile is seeded with the map's blur of every mark, live ones included. A
+// live mark redrawn into it also lands in a coarse raster on the map's own
+// texel grid, and the seeded copy keeps only what those redraws do not account
+// for (COPY_RESIDUE), so a mark loses its own blur and keeps the dead marks
+// around it.
 
 ID3D11ComputeShader* SnowDeformation::GetBloodTileCS(BloodTileShader a_which)
 {
-	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN" };
+	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "COPY_RESIDUE" };
 	if (!bloodTileCS[a_which]) {
 		logger::debug("Compiling BloodTilesCS:{}", defines[a_which]);
 		bloodTileCS[a_which] = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BloodTilesCS.hlsl", { { defines[a_which], "" } }, "cs_5_0"));
@@ -41,9 +47,6 @@ void SnowDeformation::ReleaseBloodTiles()
 			shader->Release();
 		shader = nullptr;
 	}
-	if (bloodCoverPS)
-		bloodCoverPS->Release();
-	bloodCoverPS = nullptr;
 	bloodTilesFailed = false;
 }
 
@@ -65,7 +68,7 @@ bool SnowDeformation::EnsureBloodTileResources()
 	if (bloodTileCB)
 		return true;
 	// fxc-reflected offsets (BloodTilesCS.hlsl; ShellCB in both shells).
-	static_assert(sizeof(BloodTileCB) == 80);
+	static_assert(sizeof(BloodTileCB) == 96);
 	static_assert(offsetof(ShellCB, BloodLook3) == 784);
 	auto* device = globals::d3d::device;
 	bool ok = true;
@@ -132,6 +135,7 @@ bool SnowDeformation::EnsureBloodTileResources()
 	constexpr UINT kRead = D3D11_BIND_SHADER_RESOURCE;
 	constexpr UINT kCompute = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	constexpr UINT kTarget = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+	constexpr UINT kComputeTarget = kCompute | D3D11_BIND_RENDER_TARGET;
 	const uint32_t atlasDim = kBloodTileDim * BloodTilesAcross();
 	const uint32_t blocks = kBloodTileDim / kBloodTileBlock;
 
@@ -155,16 +159,18 @@ bool SnowDeformation::EnsureBloodTileResources()
 	rtv(bloodTileScratchClockRTV, bloodTileScratchClock.get(), DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::BloodTileScratchClock RTV");
 	srv(bloodTileScratchClockSRV, bloodTileScratchClock.get(), DXGI_FORMAT_R32G32_FLOAT, 1, "SnowDeformation::BloodTileScratchClock SRV");
 
-	texture(bloodTileCover, kBloodTileDim, DXGI_FORMAT_R8_UNORM, kTarget, 1, "SnowDeformation::BloodTileCover");
-	rtv(bloodTileCoverRTV, bloodTileCover.get(), DXGI_FORMAT_R8_UNORM, "SnowDeformation::BloodTileCover RTV");
-	srv(bloodTileCoverSRV, bloodTileCover.get(), DXGI_FORMAT_R8_UNORM, 1, "SnowDeformation::BloodTileCover SRV");
-	if (!bloodCoverPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl", "ps_5_0", "PSHADER", "COVER"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodCoverPS)))
-			Util::SetResourceName(bloodCoverPS, "SnowDeformation::BloodCoverPS");
-	}
-	ok = ok && bloodCoverPS != nullptr;
+	const uint32_t snapAtlasDim = kBloodTileSnapDim * BloodTilesAcross();
+	texture(bloodTileSnapshot, snapAtlasDim, DXGI_FORMAT_R8G8B8A8_TYPELESS, kCompute, 1, "SnowDeformation::BloodTileSnapshot");
+	srv(bloodTileSnapshotSRV, bloodTileSnapshot.get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, 1, "SnowDeformation::BloodTileSnapshot SRV");
+	uav(bloodTileSnapshotUAV, bloodTileSnapshot.get(), DXGI_FORMAT_R8G8B8A8_UNORM, 0, "SnowDeformation::BloodTileSnapshot UAV");
+	// Alpha only; RGBA so the map's own pixel shader and blend draw into it.
+	texture(bloodTileRedrawn, snapAtlasDim, DXGI_FORMAT_R8G8B8A8_UNORM, kComputeTarget, 1, "SnowDeformation::BloodTileRedrawn");
+	rtv(bloodTileRedrawnRTV, bloodTileRedrawn.get(), DXGI_FORMAT_R8G8B8A8_UNORM, "SnowDeformation::BloodTileRedrawn RTV");
+	srv(bloodTileRedrawnSRV, bloodTileRedrawn.get(), DXGI_FORMAT_R8G8B8A8_UNORM, 1, "SnowDeformation::BloodTileRedrawn SRV");
+	uav(bloodTileRedrawnUAV, bloodTileRedrawn.get(), DXGI_FORMAT_R8G8B8A8_UNORM, 0, "SnowDeformation::BloodTileRedrawn UAV");
+	texture(bloodTileResidue, kBloodTileSnapDim, DXGI_FORMAT_R16G16B16A16_FLOAT, kCompute, 1, "SnowDeformation::BloodTileResidue");
+	srv(bloodTileResidueSRV, bloodTileResidue.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, 1, "SnowDeformation::BloodTileResidue SRV");
+	uav(bloodTileResidueUAV, bloodTileResidue.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, 0, "SnowDeformation::BloodTileResidue UAV");
 
 	// Copies of what a pass is about to overwrite: a texture is never a
 	// dispatch's input and output.
@@ -302,7 +308,19 @@ int32_t SnowDeformation::AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int
 	tile.lastBurial = bloodBurialClock;
 	tile.draws.clear();
 	tile.discs = false;
-	tile.seeded = true;
+	// The map texels the seed's bilinear taps read, and a ring for COPY_RESIDUE.
+	tile.seedOrigin = windowOrigin;
+	const float coarse = deformWorldSize / float(deformMapDim);
+	const float span = float(kBloodTileDim) * BloodTileTexel();
+	tile.snapValid = true;
+	const float worldMin[2] = { float(a_cellX) * BloodTileCell() - kBloodTileApron, float(a_cellY) * BloodTileCell() - kBloodTileApron };
+	const float origin[2] = { windowOrigin.x, windowOrigin.y };
+	for (int axis = 0; axis < 2; ++axis) {
+		const int32_t first = int32_t(std::floor((worldMin[axis] - origin[axis]) / coarse - 0.5f)) - 1;
+		const int32_t last = int32_t(std::floor((worldMin[axis] + span - origin[axis]) / coarse - 0.5f)) + 2;
+		tile.snapLogical[axis] = first;
+		tile.snapValid = tile.snapValid && last - first < int32_t(kBloodTileSnapDim);
+	}
 	bloodTileIndexDirty = true;
 	return slot;
 }
@@ -316,8 +334,8 @@ void SnowDeformation::FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const
 	a_cb.TileBlock[1] = a_cb.TileTexel[1] / int32_t(kBloodTileBlock);
 	a_cb.TileWorldMin = { float(tile.cellX) * BloodTileCell() - kBloodTileApron, float(tile.cellY) * BloodTileCell() - kBloodTileApron };
 	a_cb.FineTexel = BloodTileTexel();
-	a_cb.padStep = 0;
-	a_cb.WindowOrigin = windowOrigin;
+	a_cb.Explained = 0;
+	a_cb.WindowOrigin = tile.seedOrigin;
 	a_cb.CoarseTexel = deformWorldSize / float(deformMapDim);
 	a_cb.CoarseDim = int32_t(deformMapDim);
 	a_cb.MapOrigin[0] = mapOrigin.x;
@@ -328,6 +346,10 @@ void SnowDeformation::FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const
 	a_cb.MipTexel[1] = a_cb.TileTexel[1];
 	a_cb.MipDim = int32_t(kBloodTileDim);
 	a_cb.padTile = 0;
+	a_cb.SnapTexel[0] = int32_t((a_slot % BloodTilesAcross()) * kBloodTileSnapDim);
+	a_cb.SnapTexel[1] = int32_t((a_slot / BloodTilesAcross()) * kBloodTileSnapDim);
+	a_cb.SnapLogical[0] = tile.snapLogical[0];
+	a_cb.SnapLogical[1] = tile.snapLogical[1];
 }
 
 namespace
@@ -344,9 +366,9 @@ namespace
 	void UnbindCompute(ID3D11DeviceContext* a_context)
 	{
 		ID3D11ShaderResourceView* nullSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
-		ID3D11UnorderedAccessView* nullUAVs[2] = { nullptr, nullptr };
+		ID3D11UnorderedAccessView* nullUAVs[4] = { nullptr, nullptr, nullptr, nullptr };
 		a_context->CSSetShaderResources(0, 4, nullSRVs);
-		a_context->CSSetUnorderedAccessViews(0, 2, nullUAVs, nullptr);
+		a_context->CSSetUnorderedAccessViews(0, 4, nullUAVs, nullptr);
 	}
 }
 
@@ -356,9 +378,9 @@ void SnowDeformation::SeedBloodTile(ID3D11DeviceContext* a_context, uint32_t a_s
 	FillBloodTileCB(cb, a_slot);
 	UploadTileCB(a_context, bloodTileCB.get(), cb);
 	ID3D11ShaderResourceView* srvs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
-	ID3D11UnorderedAccessView* uavs[2] = { bloodTileAtlasUAV[0].get(), bloodTileClockUAV.get() };
+	ID3D11UnorderedAccessView* uavs[4] = { bloodTileAtlasUAV[0].get(), bloodTileClockUAV.get(), bloodTileSnapshotUAV.get(), bloodTileRedrawnUAV.get() };
 	a_context->CSSetShaderResources(0, 2, srvs);
-	a_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+	a_context->CSSetUnorderedAccessViews(0, 4, uavs, nullptr);
 	a_context->CSSetShader(GetBloodTileCS(kBloodTileSeed), nullptr, 0);
 	a_context->Dispatch(kBloodTileDim / 8, kBloodTileDim / 8, 1);
 	UnbindCompute(a_context);
@@ -426,13 +448,21 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 			drawn++;
 		}
 	}
-	// Where the decals' geometry lies, for a tile that began as a copy.
-	context->ClearRenderTargetView(bloodTileCoverRTV.get(), zero);
-	if (tile.seeded && !tile.draws.empty()) {
-		ID3D11RenderTargetView* coverRTV = bloodTileCoverRTV.get();
-		context->OMSetRenderTargets(1, &coverRTV, nullptr);
-		context->PSSetShader(bloodCoverPS, nullptr, 0);
-		DrawBloodList(context, tile.draws, cb, nullptr, 1u, true);
+	// The marks again as the blood map takes them - its texel grid, shader
+	// and MAX blend - into the tile's redrawn raster.
+	const bool explained = tile.snapValid && !tile.draws.empty();
+	if (explained) {
+		BloodCB raster = cb;
+		const float coarse = tileCB.CoarseTexel;
+		raster.WindowOrigin = { tile.seedOrigin.x + float(tile.snapLogical[0]) * coarse, tile.seedOrigin.y + float(tile.snapLogical[1]) * coarse };
+		raster.TexelSize = coarse;
+		raster.MapDim = float(kBloodTileSnapDim);
+		ID3D11RenderTargetView* redrawnRTV = bloodTileRedrawnRTV.get();
+		context->OMSetRenderTargets(1, &redrawnRTV, nullptr);
+		D3D11_VIEWPORT snapViewport{ float(tileCB.SnapTexel[0]), float(tileCB.SnapTexel[1]), float(kBloodTileSnapDim), float(kBloodTileSnapDim), 0.0f, 1.0f };
+		context->RSSetViewports(1, &snapViewport);
+		context->PSSetShader(bloodPS, nullptr, 0);
+		DrawBloodList(context, tile.draws, raster, nullptr, 1u, true);
 	}
 	ID3D11RenderTargetView* nullRTVs[2] = { nullptr, nullptr };
 	context->OMSetRenderTargets(2, nullRTVs, nullptr);
@@ -462,8 +492,19 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 		context->Dispatch(blocks / 8, blocks / 8, 1);
 		UnbindCompute(context);
 	}
+	if (explained) {
+		ID3D11ShaderResourceView* srvs[2] = { bloodTileSnapshotSRV.get(), bloodTileRedrawnSRV.get() };
+		ID3D11UnorderedAccessView* uavs[1] = { bloodTileResidueUAV.get() };
+		context->CSSetShaderResources(0, 2, srvs);
+		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+		context->CSSetShader(GetBloodTileCS(kBloodTileCopyResidue), nullptr, 0);
+		context->Dispatch((kBloodTileSnapDim + 7) / 8, (kBloodTileSnapDim + 7) / 8, 1);
+		UnbindCompute(context);
+		tileCB.Explained = 1;
+		UploadTileCB(context, bloodTileCB.get(), tileCB);
+	}
 	{
-		ID3D11ShaderResourceView* srvs[4] = { bloodTileScratchRawSRV.get(), bloodTilePrevRawSRV.get(), bloodTileClockSRV.get(), bloodTileCoverSRV.get() };
+		ID3D11ShaderResourceView* srvs[4] = { bloodTileScratchRawSRV.get(), bloodTilePrevRawSRV.get(), bloodTileClockSRV.get(), explained ? bloodTileResidueSRV.get() : nullptr };
 		ID3D11UnorderedAccessView* uavs[1] = { bloodTileAtlasUAV[0].get() };
 		context->CSSetShaderResources(0, 4, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
@@ -633,8 +674,8 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		context->CSGetConstantBuffers(0, 1, savedCB.put());
 		ID3D11ShaderResourceView* savedSRVs[4]{};
 		context->CSGetShaderResources(0, 4, savedSRVs);
-		ID3D11UnorderedAccessView* savedUAVs[2]{};
-		context->CSGetUnorderedAccessViews(0, 2, savedUAVs);
+		ID3D11UnorderedAccessView* savedUAVs[4]{};
+		context->CSGetUnorderedAccessViews(0, 4, savedUAVs);
 		winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 		context->RSGetState(savedRaster.put());
 		ID3D11Buffer* tileBuffer = bloodTileCB.get();
@@ -663,7 +704,7 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		ID3D11Buffer* restoreCB = savedCB.get();
 		context->CSSetConstantBuffers(0, 1, &restoreCB);
 		context->CSSetShaderResources(0, 4, savedSRVs);
-		context->CSSetUnorderedAccessViews(0, 2, savedUAVs, nullptr);
+		context->CSSetUnorderedAccessViews(0, 4, savedUAVs, nullptr);
 		for (auto* view : savedSRVs)
 			if (view)
 				view->Release();

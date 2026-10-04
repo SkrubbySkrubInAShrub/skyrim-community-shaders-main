@@ -1122,6 +1122,8 @@ public:
 	int32_t BloodCellOf(float a_world) const { return int32_t(std::floor(a_world / kBloodTileCell)); }
 	int32_t BloodTileKeepCells() const { return kBloodTileKeepCells; }
 	static constexpr uint32_t kBloodTileBlock = 8;
+	/** @brief Blood map texels a side of a tile's snapshot and redrawn raster: the tile's 128 units at the finest map texel (29 m range, 2048 map: 1.98 units) is 65, plus the bilinear pair and a ring. */
+	static constexpr uint32_t kBloodTileSnapDim = 80;
 	struct BloodTile
 	{
 		bool live = false;
@@ -1133,8 +1135,11 @@ public:
 		float lastBurial = 0.0f;
 		std::vector<BloodCapture> draws;
 		bool discs = false;
-		/** @brief The tile began as a copy (the blood map's blobs, or another level's tiles): the merge clears copied texels under every decal drawn into it. */
-		bool seeded = false;
+		/** @brief The deformation window the tile was seeded under, and the map's logical texel its snapshot starts at. */
+		float2 seedOrigin{ 0.0f, 0.0f };
+		int32_t snapLogical[2]{};
+		/** @brief The snapshot spans every map texel the seed read; false only for a map texel finer than kBloodTileSnapDim allows, and then copies are left whole. */
+		bool snapValid = false;
 	};
 	struct BloodFineRequest
 	{
@@ -1148,7 +1153,7 @@ public:
 		int32_t TileBlock[2];
 		float2 TileWorldMin;
 		float FineTexel;
-		int32_t padStep;
+		int32_t Explained;
 		float2 WindowOrigin;
 		float CoarseTexel;
 		int32_t CoarseDim;
@@ -1158,6 +1163,8 @@ public:
 		int32_t MipTexel[2];
 		int32_t MipDim;
 		int32_t padTile;
+		int32_t SnapTexel[2];
+		int32_t SnapLogical[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodTileCB);
 	enum BloodTileShader : uint32_t
@@ -1166,6 +1173,7 @@ public:
 		kBloodTileMergeClock,
 		kBloodTileMergePigment,
 		kBloodTileMipDown,
+		kBloodTileCopyResidue,
 		kBloodTileShaderCount
 	};
 	BloodTile bloodTiles[kBloodMaxTiles];
@@ -1184,10 +1192,18 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	bool bloodPreSkinDepthThisFrame = false;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileCover;
-	winrt::com_ptr<ID3D11RenderTargetView> bloodTileCoverRTV;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileCoverSRV;
-	ID3D11PixelShader* bloodCoverPS = nullptr;
+	/** @brief Per tile, kBloodTileSnapDim a side on the blood map's own texel grid: the map's texels as the tile was seeded (sRGB view), and the highest concentration every mark redrawn into the tile since has deposited there (the map's own shader and blend). */
+	winrt::com_ptr<ID3D11Texture2D> bloodTileSnapshot;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileSnapshotSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileSnapshotUAV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileRedrawn;
+	winrt::com_ptr<ID3D11RenderTargetView> bloodTileRedrawnRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileRedrawnSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileRedrawnUAV;
+	/** @brief One tile's snapshot less what its redrawn marks account for, premultiplied; rebuilt by each merge that redraws a mark. */
+	winrt::com_ptr<ID3D11Texture2D> bloodTileResidue;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileResidueSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileResidueUAV;
 	/** @brief The tile's own mip chain from its mip 0, through a scratch copy per level. Run with every merge: past a few metres the shell reads the mips, not mip 0. */
 	void BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
