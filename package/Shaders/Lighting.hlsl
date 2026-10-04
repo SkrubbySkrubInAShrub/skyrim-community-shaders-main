@@ -793,9 +793,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(SKYLIGHTING)
-#		if defined(RIM_LIGHTING) || defined(SOFT_LIGHTING) || defined(BACK_LIGHTING)
-#			define SKYLIGHTING_SHADOW_VIS
-#		endif
+#		define SKYLIGHTING_SHADOW_VIS
 #	endif
 
 #	include "Common/LightingCommon.hlsli"
@@ -806,9 +804,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	if defined(EYE)
 #		undef WETNESS_EFFECTS
-#		undef SOFT_LIGHTING
-#		undef BACK_LIGHTING
-#		undef RIM_LIGHTING
 #	endif
 
 #	if defined(EXTENDED_MATERIALS) && !defined(LOD) && (defined(PARALLAX) || defined(LANDSCAPE) || defined(ENVMAP) || defined(TRUE_PBR))
@@ -839,10 +834,6 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
-#	if defined(ISL) && defined(LIGHT_LIMIT_FIX)
-#		include "InverseSquareLighting/InverseSquareLighting.hlsli"
-#	endif
-
 #	if defined(TREE_ANIM)
 #		undef WETNESS_EFFECTS
 #	endif
@@ -855,9 +846,72 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "TerrainBlending/TerrainBlending.hlsli"
 #	endif
 
-#	if defined(SSS) && defined(SKIN) && defined(DEFERRED)
-#		undef SOFT_LIGHTING
+#	if defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LODLANDSCAPE)
+static const uint RuntimeLightingFlags = 0;
+#	elif defined(LANDSCAPE)
+static const uint RuntimeLightingFlags = Permutation::LightingFlags::Specular;
+#	else
+static const uint RuntimeLightingFlags = Permutation::LightingFlags::Specular | Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting;
 #	endif
+
+bool HasLightingFlag(uint flag)
+{
+	uint flags = Permutation::PixelShaderDescriptor & RuntimeLightingFlags;
+#	if defined(SPECULAR)
+	flags |= Permutation::LightingFlags::Specular;
+#	endif
+#	if defined(SOFT_LIGHTING)
+	flags |= Permutation::LightingFlags::SoftLighting;
+#	endif
+#	if defined(RIM_LIGHTING)
+	flags |= Permutation::LightingFlags::RimLighting;
+#	endif
+#	if defined(BACK_LIGHTING)
+	flags |= Permutation::LightingFlags::BackLighting;
+#	endif
+	return flags & flag;
+}
+
+bool HasSpecular()
+{
+	return HasLightingFlag(Permutation::LightingFlags::Specular);
+}
+
+bool HasSoftLighting()
+{
+#	if defined(EYE) || (defined(SSS) && defined(SKIN) && defined(DEFERRED))
+	return false;
+#	else
+	return HasLightingFlag(Permutation::LightingFlags::SoftLighting);
+#	endif
+}
+
+bool HasRimLighting()
+{
+#	if defined(EYE)
+	return false;
+#	else
+	return HasLightingFlag(Permutation::LightingFlags::RimLighting);
+#	endif
+}
+
+bool HasBackLighting()
+{
+#	if defined(EYE)
+	return false;
+#	else
+	return HasLightingFlag(Permutation::LightingFlags::BackLighting);
+#	endif
+}
+
+bool UseSkylightingShadowVisibility()
+{
+#	if defined(SKYLIGHTING_SHADOW_VIS)
+	return HasLightingFlag(Permutation::LightingFlags::SoftLighting | Permutation::LightingFlags::RimLighting | Permutation::LightingFlags::BackLighting);
+#	else
+	return false;
+#	endif
+}
 
 #	if defined(SKYLIGHTING)
 #		include "Skylighting/Skylighting.hlsli"
@@ -943,10 +997,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(TRUE_PBR)
 #		if defined(LANDSCAPE)
 	float shininess = dot(input.LandBlendWeights1, LandscapeTexture1to4IsSpecPower) + input.LandBlendWeights2.x * LandscapeTexture5to6IsSpecPower.x + input.LandBlendWeights2.y * LandscapeTexture5to6IsSpecPower.y;
-#		elif defined(SPECULAR)
-	float shininess = SpecularColor.w;
 #		else
-	float shininess = 0.0;
+	float shininess = HasSpecular() ? SpecularColor.w : 0.0;
 #		endif  // defined (LANDSCAPE)
 #	endif
 
@@ -1541,15 +1593,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 sampledHairFlow = 0;
 	bool useHairFlowMap = false;
-#		if defined(BACK_LIGHTING)
-	if (SharedData::hairSpecularSettings.Enabled) {
+	if (HasBackLighting() && SharedData::hairSpecularSettings.Enabled) {
 		uint2 hairFlowDimensions = uint2(0, 0);
 		sampledHairFlow = float3(TexBackLightSampler.Sample(SampBackLightSampler, uv).xy, 0.5f);
 		TexBackLightSampler.GetDimensions(hairFlowDimensions.x, hairFlowDimensions.y);
 		useHairFlowMap = (sampledHairFlow.x > 0.0 || sampledHairFlow.y > 0.0) && hairFlowDimensions.x > 32 && hairFlowDimensions.y > 32;
 		sampledHairFlow = useHairFlowMap ? sampledHairFlow * 2.0f - 1.0f : float3(0.5f, 0.5f, 0.5f);
 	}
-#		endif
 #	endif
 
 #	if defined(LOD_LAND_BLEND)
@@ -1585,18 +1635,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	useSnowSpecular = landSnowMask != 0.0;
 #	endif  // SNOW
 
-#	if defined(BACK_LIGHTING)
-	float4 backLightColor = TexBackLightSampler.Sample(SampBackLightSampler, uv);
+	float4 backLightColor = 0.0;
+	float4 rimSoftLightColor = 0.0;
+#	if !defined(LANDSCAPE)
+	[branch] if (HasBackLighting())
+	{
+		backLightColor = TexBackLightSampler.Sample(SampBackLightSampler, uv);
 #		if defined(CS_HAIR_SHADING)
-	if (useHairFlowMap) {
-		backLightColor = 0.0f;
-	}
+		if (useHairFlowMap) {
+			backLightColor = 0.0f;
+		}
 #		endif
-#	endif  // BACK_LIGHTING
+	}
 
-#	if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING))
-	float4 rimSoftLightColor = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
-#	endif  // RIM_LIGHTING || SOFT_LIGHTING
+	[branch] if (HasRimLighting() || HasSoftLighting())
+	{
+		rimSoftLightColor = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
+	}
+#	endif
 
 	uint numLights = min(7, uint(NumLightNumShadowLight.x));
 	uint numShadowLights = min(4, uint(NumLightNumShadowLight.y));
@@ -1742,9 +1798,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 	}
 
-#			if defined(SPECULAR)
-	useSnowSpecular = useSnowDecalSpecular;
-#			endif  // SPECULAR
+	if (HasSpecular())
+		useSnowSpecular = useSnowDecalSpecular;
 #		endif      // SPARKLE
 
 #	endif  // SNOW
@@ -1762,11 +1817,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(CS_HAIR_SHADING)
 	float3 Bitangent = normalize(float3(input.TBN0.y, input.TBN1.y, input.TBN2.y));
 	float3 hairT = 0;
-#		if defined(BACK_LIGHTING)
 	hairT = useHairFlowMap ? normalize(mul(tbn, sampledHairFlow)) : Bitangent;
-#		else
-	hairT = Bitangent;
-#		endif
 	hairT = Hair::ReorientTangent(hairT, worldNormal);
 
 	if (SharedData::hairSpecularSettings.Enabled) {
@@ -1889,21 +1940,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 #	else
 	material.BaseColor = baseColor.xyz;
-#		if defined(SPECULAR)
-	material.Shininess = shininess;
-	material.Glossiness = glossiness;
-	material.SpecularColor = SpecularColor.xyz;
-#		else
-	material.Shininess = 0;
-	material.Glossiness = 0;
-	material.SpecularColor = 0;
-#		endif
-#		if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING))
+	const bool hasSpecular = HasSpecular();
+	material.Shininess = hasSpecular ? shininess : 0;
+	material.Glossiness = hasSpecular ? glossiness : 0;
+	material.SpecularColor = hasSpecular ? SpecularColor.xyz : 0;
 	material.rimSoftLightColor = rimSoftLightColor.xyz;
-#		endif
-#		if defined(BACK_LIGHTING)
 	material.backLightColor = backLightColor.xyz;
-#		endif
 #	endif  // TRUE_PBR
 
 #	if defined(CS_SKIN_SHADING)
@@ -2042,16 +2084,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
 		,
-		skylightingShadowVisibility
+		skylightingShadowVisibility,
+		UseSkylightingShadowVisibility()
 #			endif
 	);
 #		else
 	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
 									  ,
-									  skylightingShadowVisibility
+									  skylightingShadowVisibility,
+									  UseSkylightingShadowVisibility()
 #			endif
-									  ) :
+										  ) :
 	                              Skylighting::UNIT_SH;
 #		endif
 #	endif
@@ -2201,12 +2245,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirSoftShadow = 1.0;
 	float dirVSMDetailedShadow = 1.0;
 
-#	if defined(VOLUMETRIC_SHADOWS) && !(defined(DEFERRED) && defined(SKYLIGHTING_SHADOW_VIS))
-	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows())
-#		if !defined(SKYLIGHTING_SHADOW_VIS)
-		dirSoftShadow =
+#	if defined(VOLUMETRIC_SHADOWS)
+	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()
+#		if defined(DEFERRED)
+		&& !UseSkylightingShadowVisibility()
 #		endif
-			ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
+	) {
+		const float lightingShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
+		if (!UseSkylightingShadowVisibility())
+			dirSoftShadow = lightingShadow;
+	}
 #	endif
 
 	float dirDetailedShadow = 1.0;
@@ -2215,8 +2263,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir)) {
 		dirDetailedShadow *= shadowColor.x;
 
-#	if !defined(VOLUMETRIC_SHADOWS) && !defined(SKYLIGHTING_SHADOW_VIS)
-		dirSoftShadow = dirDetailedShadow;
+#	if !defined(VOLUMETRIC_SHADOWS)
+		if (!UseSkylightingShadowVisibility())
+			dirSoftShadow = dirDetailedShadow;
 #	endif
 	}
 #	if !defined(DEFERRED)
@@ -2270,7 +2319,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SKYLIGHTING_SHADOW_VIS)
-	dirSoftShadow = skylightingShadowVisibility;
+	if (UseSkylightingShadowVisibility())
+		dirSoftShadow = skylightingShadowVisibility;
 #	endif
 
 	float3 diffuseColor = 0.0.xxx;
@@ -2402,16 +2452,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 		float lightDist = length(lightDirection);
 
-#			if defined(ISL)
-		float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+		float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 		if (intensityMultiplier < 1e-5)
 			continue;
-#			else
-		float intensityFactor = saturate(lightDist / light.radius);
-		if (intensityFactor == 1)
-			continue;
-		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
-#			endif
 
 		const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
@@ -2686,9 +2729,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	indirectLobeWeights.specular *= envMask;
 #	endif
 
-#	if defined(SPECULAR) && !defined(TRUE_PBR)
-	indirectLobeWeights.specular *= MaterialData.yyy;
-	specularColor *= MaterialData.yyy;
+#	if !defined(TRUE_PBR)
+	if (HasSpecular()) {
+		indirectLobeWeights.specular *= MaterialData.yyy;
+		specularColor *= MaterialData.yyy;
+	}
 #	endif
 
 #	if defined(TRUE_PBR)
