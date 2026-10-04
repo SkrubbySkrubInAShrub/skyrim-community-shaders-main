@@ -398,7 +398,12 @@ void ReverseZ::LatchBootState()
 	if (bootLatched)
 		return;
 	bootLatched = true;
-	activeThisBoot = loaded && (bootSettingsLatched ? bootSettings.EnableReverseZ : settings.EnableReverseZ);
+	// A config without this feature's block never calls LoadSettings; the defaults are the boot state then.
+	if (!bootSettingsLatched) {
+		bootSettings = settings;
+		bootSettingsLatched = true;
+	}
+	activeThisBoot = loaded && bootSettings.EnableReverseZ;
 	logger::info("ReverseZ: {}", activeThisBoot ? "enabled" : "disabled");
 }
 
