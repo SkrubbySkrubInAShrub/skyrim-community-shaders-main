@@ -1,6 +1,7 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 cbuffer CullParams : register(b0)
 {
@@ -212,7 +213,7 @@ float WindScalar(float basis, float timer)
             const float4 clipN = mul(FrameBuffer::CameraViewProj, float4(dvNear, 1.0));
             const float nearZ = clipN.z / max(clipN.w, 1e-4);
 
-            float tileMax = 0.0;
+            float tileMax = FrameBuffer::NearPlaneDepth();
 			[unroll] for (int y = 0; y < 3; ++y)
             {
 				[unroll] for (int x = 0; x < 3; ++x)
@@ -220,13 +221,14 @@ float WindScalar(float basis, float timer)
                     if (t0.x + x <= t1.x && t0.y + y <= t1.y)
                     {
                         const int2 t = clamp(t0 + int2(x, y), int2(0, 0), dimL - 1);
-                        tileMax = max(tileMax, HiZ.Load(int3(t, level)));
+                        tileMax = FrameBuffer::FartherDepth(tileMax, HiZ.Load(int3(t, level)));
                     }
                 }
             }
 
             // Cull only when the sphere is behind every sampled tile, allowing for depth error.
-            if (nearZ > tileMax + OcclusionBias)
+            const float occluderDepth = FrameBuffer::FartherDepth(tileMax + OcclusionBias, tileMax - OcclusionBias);
+            if (FrameBuffer::IsNearerDepth(occluderDepth, nearZ))
                 return;
             }
         }
@@ -249,7 +251,7 @@ float WindScalar(float basis, float timer)
     const float edgeFade = saturate((maxDist - dist) / max(maxDist - edgeStart, 1e-4));
 
     const float4 clip = mul(FrameBuffer::CameraViewProj, float4(dv, 1.0));
-    const float distFade = 1.0 - saturate((length(clip.xyz) - AlphaParam1) / AlphaParam2);
+    const float distFade = 1.0 - saturate((length(FrameBuffer::ToStandardClip(clip, FrameBuffer::IsReverseProjection())) - AlphaParam1) / AlphaParam2);
     const float spawnFade = saturate((FadeNow - og.w) * FadeInTimeRcp);
     
     const float fade = distFade * spawnFade * lodFade * edgeFade;

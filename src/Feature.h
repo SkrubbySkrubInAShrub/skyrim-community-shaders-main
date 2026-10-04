@@ -13,6 +13,11 @@
 #	include <Tracy/TracyD3D11.hpp>
 #endif
 
+namespace globals
+{
+	struct FrameBuffer;
+}
+
 struct Feature
 {
 	// For global settings search
@@ -167,6 +172,14 @@ public:
 	/** @brief Allocates GPU resources (textures, buffers) needed by this feature. */
 	virtual void SetupResources() {}
 
+	/**
+	 * @brief Adjusts the engine's newly created render targets in place.
+	 *
+	 * Runs before any feature's SetupResources, so a feature that replaces an engine target's
+	 * views here never leaves another feature holding a released view.
+	 */
+	virtual void OnRenderTargetsCreated() {}
+
 	/** @brief Releases and recreates transient state (e.g. on resolution change). */
 	virtual void Reset() {}
 
@@ -294,6 +307,29 @@ public:
 	virtual void ClearShaderCache() {}
 
 	static const std::vector<Feature*>& GetFeatureList();
+
+	/**
+	 * @brief Opt-in flag checked once, when the constant-buffer fixup feature list is built:
+	 * return true to have the engine's per-frame camera constant buffer visited by
+	 * FixupMappedFrameBuffer() on every upload. Default false keeps the per-frame Map/Unmap
+	 * path free of the call for features that never rewrite camera matrices.
+	 */
+	virtual bool WantsFrameBufferFixup() const { return false; }
+
+	/**
+	 * @brief Called on the CPU-writable mapping of the engine's per-frame camera constant
+	 * buffer (b12) before the data reaches the GPU, for every loaded feature that opted in via
+	 * WantsFrameBufferFixup(). Rewrite the matrices in place.
+	 * @param a_frameBuffer The mapped flat camera buffer.
+	 */
+	virtual void FixupMappedFrameBuffer(globals::FrameBuffer& /*a_frameBuffer*/) {}
+
+	/**
+	 * @brief The loaded features that opted into WantsFrameBufferFixup(), cached once. Callers
+	 * are the per-frame Map/Unmap path, so hold this reference rather than filtering the full
+	 * list per upload.
+	 */
+	static const std::vector<Feature*>& GetFrameBufferFixupFeatures();
 
 	/**
 	 * @brief Finds a loaded feature by its short name.

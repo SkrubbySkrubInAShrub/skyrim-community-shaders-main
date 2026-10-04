@@ -521,6 +521,7 @@ struct BSShaderRenderTargets_Create
 		Util::SetGameSettingValue<std::int32_t>("iNumFocusShadow:Display", iNumFocusShadow, 0);
 		func();
 		globals::ReInit();
+		Feature::ForEachLoadedFeature("OnRenderTargetsCreated", [](Feature* feature) { feature->OnRenderTargetsCreated(); });
 		globals::state->Setup();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;

@@ -24,6 +24,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
+#include "Features/ReverseZ.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
@@ -263,10 +264,24 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::horizonFix,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
-		&globals::features::skin
+		&globals::features::skin,
+		&globals::features::reverseZ
 	};
 
 	return features;
+}
+
+const std::vector<Feature*>& Feature::GetFrameBufferFixupFeatures()
+{
+	static const std::vector<Feature*> fixupFeatures = [] {
+		std::vector<Feature*> v;
+		for (auto* feature : GetFeatureList()) {
+			if (feature->WantsFrameBufferFixup())
+				v.push_back(feature);
+		}
+		return v;
+	}();
+	return fixupFeatures;
 }
 
 Feature* Feature::FindFeatureByShortName(const std::string& shortName)

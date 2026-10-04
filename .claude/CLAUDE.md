@@ -96,6 +96,7 @@ Versioning (enforced by `tools/feature_version_audit.py`):
 -   ImGui: always pair `BeginTable()` / `EndTable()`; use RAII for style changes.
 -   UI components extracted from `Menu` (`src/Menu/*Renderer`) access its private methods via callbacks rather than making them public; UI state lives in `Menu` and is passed to components as parameters.
 -   Doxygen comments on public methods.
+-   Scene depth in shaders goes through the `Common/ReverseZ.hlsli` helpers (convert, compare, reduce, far/near values) so reverse-Z builds stay correct: [Reverse-Z consumers](../docs/development/reverse-z-consumers.md).
 -   Minimize D3D state changes and restore state after modifying it. Respect the split between Skyrim's rendering thread and game logic thread.
 -   Validate `.ini` files and user settings: malformed configs can crash Skyrim.
 -   Features must disable cleanly on shader compilation failure.

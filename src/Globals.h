@@ -40,6 +40,7 @@ struct ExponentialHeightFog;
 struct HDRDisplay;
 struct ScreenshotFeature;
 struct Skin;
+struct ReverseZ;
 
 class State;
 class Deferred;
@@ -132,7 +133,7 @@ namespace globals
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
 		extern Skin skin;
-
+		extern ReverseZ reverseZ;
 	}
 
 	/** @brief GPU constant buffer layout matching Skyrim's per-frame camera data. */

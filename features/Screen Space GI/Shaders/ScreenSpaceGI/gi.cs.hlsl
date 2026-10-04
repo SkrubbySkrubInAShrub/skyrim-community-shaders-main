@@ -342,7 +342,11 @@ void CalculateGI(
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
 	// Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
+#ifdef REVERSE_Z
+	viewspaceZ *= 0.99999;
+#else
 	viewspaceZ *= 0.99920h;  // this is good for FP16 depth buffer
+#endif
 
 	float currAo = 0;
 	float4 currY = 0;

@@ -1,5 +1,6 @@
 #include "Common/FlareOcclusion.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/ReverseZ.hlsli"
 
 // Only the VISIBILITY pass is replaced; the flare sprite pass stays vanilla.
 
@@ -51,8 +52,9 @@ PS_OUTPUT main(PS_INPUT input)
 	{
 		// Off-screen taps count as visible, matching the sun glare
 		float2 sampleUV = light.xy + FlareOcclusion::GetSampleOffset(i);
+		// light.z comes from the engine's standard projection, so compare in standard depth.
 		visibleSamples += FrameBuffer::IsOutsideFrame(sampleUV) ||
-		                  DepthTex.Sample(DepthSampler, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(sampleUV)).x >= light.z;
+		                  FrameBuffer::ToStandardDepth(DepthTex.Sample(DepthSampler, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(sampleUV)).x) >= light.z;
 	}
 	psout.Visibility = FlareOcclusion::GetVisibility(visibleSamples);
 	return psout;

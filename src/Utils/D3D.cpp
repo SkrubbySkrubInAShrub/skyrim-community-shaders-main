@@ -1,6 +1,7 @@
 #include "D3D.h"
 
 #include "Deferred.h"
+#include "Features/ReverseZ.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -187,6 +188,9 @@ namespace Util
 			for (unsigned int i = 0; i < shaderDefines->size(); i++)
 				macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
 		}
+		// Standalone shaders that read scene depth need the active depth convention too.
+		if (globals::features::reverseZ.IsActive())
+			macros.push_back({ "REVERSE_Z", "" });
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))

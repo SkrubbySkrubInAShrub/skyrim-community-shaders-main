@@ -2,6 +2,7 @@
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
@@ -103,9 +104,9 @@ VS_OUTPUT main(VS_INPUT input)
 #	if (defined(RENDER_DEPTH) && defined(RENDER_SHADOWMASK_ANY)) || SHADOWFILTER == 2
 	vsout.PositionCS.xy = input.PositionMS.xy;
 #		if defined(RENDER_SHADOWMASKDPB) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB)
-	vsout.PositionCS.z = ShadowFadeParam.z;
+	vsout.PositionCS.z = FrameBuffer::ToNativeDepth(ShadowFadeParam.z);
 #		else
-	vsout.PositionCS.z = HighDetailRange.x;
+	vsout.PositionCS.z = FrameBuffer::ToNativeDepth(HighDetailRange.x);
 #		endif
 	vsout.PositionCS.w = 1;
 #	elif defined(STENCIL_ABOVE_WATER)
@@ -220,14 +221,15 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 
 #		if defined(RENDER_SHADOWMASK_ANY)
-	vsout.Alpha.x = 1 - pow(saturate(dot(positionCS.xyz, positionCS.xyz) / ShadowFadeParam.x), 8);
+	float3 fadePositionCS = FrameBuffer::ToStandardClip(positionCS);
+	vsout.Alpha.x = 1 - pow(saturate(dot(fadePositionCS, fadePositionCS) / ShadowFadeParam.x), 8);
 
 #			if defined(SKINNED)
 	vsout.PositionMS.xyz = positionWS.xyz;
 #			else
 	vsout.PositionMS.xyz = positionMS.xyz;
 #			endif
-	vsout.PositionMS.w = positionCS.z;
+	vsout.PositionMS.w = FrameBuffer::ToStandardClipZ(positionCS);
 #		endif
 
 #		if (defined(ALPHA_TEST) && defined(VC)) || defined(LOCALMAP_FOGOFWAR)
@@ -241,7 +243,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 10.0;
+	vsout.PositionCS = FrameBuffer::OffsetClipDepth(vsout.PositionCS, 10.0);
 #	endif
 
 	return vsout;
@@ -435,7 +437,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 depthUv = input.PositionCS.xy * VPOSOffset.xy + VPOSOffset.zw;
 	float depth = TexDepthUtilitySampler.Sample(SampDepthSampler, depthUv).x;
 
-	shadowMapDepth = depth;
+	shadowMapDepth = FrameBuffer::ToStandardDepth(depth);
 
 #			if defined(FOCUS_SHADOW)
 	uint3 stencilDimensions;

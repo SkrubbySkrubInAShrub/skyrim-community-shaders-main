@@ -3,6 +3,7 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Permutation.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 
 struct VS_INPUT
@@ -79,7 +80,7 @@ float GetSunGlareVisibility()
 	[unroll] for (uint i = 0; i < FlareOcclusion::SampleCount; i++)
 	{
 		float2 sampleUV = sunUV + FlareOcclusion::GetSampleOffset(i);
-		visibleSamples += FrameBuffer::IsOutsideFrame(sampleUV) || SharedData::GetDepth(sampleUV) >= 1.0;
+		visibleSamples += FrameBuffer::IsOutsideFrame(sampleUV) || FrameBuffer::ToStandardDepth(SharedData::GetDepth(sampleUV)) >= 1.0;
 	}
 	return FlareOcclusion::GetVisibility(visibleSamples);
 }
@@ -146,7 +147,12 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 #	endif      // OCCLUSION MOONMASK HORIZFADE
 
+#	ifdef REVERSE_Z
+	float4 skyPosition = mul(WorldViewProj, inputPosition);
+	vsout.Position = float4(skyPosition.xy, FrameBuffer::FarPlaneClipZ(skyPosition.w), skyPosition.w);
+#	else
 	vsout.Position = mul(WorldViewProj, inputPosition).xyww;
+#	endif
 	vsout.WorldPosition = mul(World, inputPosition);
 	vsout.FogPosition = vsout.WorldPosition.xyz - EyePosition.xyz;
 	vsout.PreviousWorldPosition = mul(PreviousWorld, inputPosition);
@@ -168,6 +174,8 @@ struct PS_OUTPUT
 };
 
 #ifdef PSHADER
+static const float SunOcclusionDepthRatio = 0.99;
+
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampBlendSampler : register(s1);
 SamplerState SampNoiseGradSampler : register(s2);
@@ -355,7 +363,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 	// Keep sun behind scene depth to prevent halo leaks through geometry.
 	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
+#		ifdef REVERSE_Z
+	if (depth > 0.0 && depth < 1.0 && SharedData::GetScreenDepth(depth) < SharedData::GetScreenDepth(input.Position.z) * SunOcclusionDepthRatio)
+#		else
 	if (depth < input.Position.z)
+#		endif
 		psout.Color.w = 0;
 
 #	elif !defined(DITHER) || !defined(TEX)
@@ -364,7 +376,11 @@ PS_OUTPUT main(PS_INPUT input)
 	// and the per-pixel reject made the glare disappear.
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
 		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
+#		ifdef REVERSE_Z
+		if (depth > 0.0 && depth < 1.0 && SharedData::GetScreenDepth(depth) < SharedData::GetScreenDepth(input.Position.z) * SunOcclusionDepthRatio)
+#		else
 		if (depth < input.Position.z)
+#		endif
 			psout.Color.w = 0;
 	}
 #	endif

@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Feature.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
@@ -22,6 +23,7 @@
 #include "Features/PerformanceOverlay.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
+#include "Features/ReverseZ.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
@@ -99,6 +101,7 @@ namespace globals
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};
+		ReverseZ reverseZ{};
 
 		namespace llf
 		{
@@ -262,6 +265,10 @@ namespace globals
 	{
 		using namespace game;
 		auto frameBuffer = (FrameBuffer*)mappedFrameBuffer->pData;
+		// Fix up the mapping itself: it is what the GPU reads, so a fixup applied only to the
+		// cached copy would never reach the shaders.
+		for (auto* feature : Feature::GetFrameBufferFixupFeatures())
+			feature->FixupMappedFrameBuffer(*frameBuffer);
 		frameBufferCached.data = *frameBuffer;
 		mappedFrameBuffer = nullptr;
 	}

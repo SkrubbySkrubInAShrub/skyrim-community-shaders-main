@@ -8,6 +8,7 @@
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
@@ -122,6 +123,7 @@ cbuffer PerGeometry : register(b2)
 cbuffer VS_PerFrame : register(b12)
 {
 	row_major float3x3 ScreenProj : packoffset(c0);
+	row_major float4x4 Proj : packoffset(c4);
 	row_major float4x4 ViewProj : packoffset(c8);
 #	if defined(SKINNED)
 	float3 BonesPivot : packoffset(c40);
@@ -180,10 +182,12 @@ VS_OUTPUT main(VS_INPUT input)
 	float4 viewPos = mul(modelView, inputPosition);
 #	endif  // SKINNED
 
+	const bool reverseProjection = FrameBuffer::IsReverseProjection(Proj);
 	vsout.Position = viewPos;
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
-	vsout.Position.z += min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
+	float lodDepthBias = min(1, 1e-4 * max(0, FrameBuffer::ToStandardClipZ(viewPos, reverseProjection) - 70000)) * 0.5;
+	vsout.Position = FrameBuffer::OffsetClipDepth(vsout.Position, lodDepthBias, reverseProjection);
 #	endif
 
 	float2 uv = input.TexCoord0.xy * TexcoordOffset.zw + TexcoordOffset.xy;
@@ -269,7 +273,7 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif  // VC
 
 	float fogColorParam = min(FogParam.w,
-		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
+		exp2(FogParam.z * log2(saturate(length(FrameBuffer::ToStandardClip(viewPos, reverseProjection)) * FogParam.y - FogParam.x))));
 
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;

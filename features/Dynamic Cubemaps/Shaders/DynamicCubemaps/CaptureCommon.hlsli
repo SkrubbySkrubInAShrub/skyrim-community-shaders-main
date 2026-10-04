@@ -89,7 +89,7 @@ bool SampleCapture(uint3 texel, out float3 position, out float3 color, out float
 #if defined(REFLECTIONS)
 	if (SharedData::GetScreenDepth(depth) <= 16.5)
 #else
-	if (depth == 1.0 || SharedData::GetScreenDepth(depth) <= 16.5)
+	if (depth == FrameBuffer::FarPlaneDepth() || SharedData::GetScreenDepth(depth) <= 16.5)
 #endif
 		return false;
 

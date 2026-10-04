@@ -1,6 +1,7 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/MotionBlur.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
@@ -58,7 +59,7 @@ float4 GetReflectionColor(
 		if (FrameBuffer::IsOutsideFrame(sampleUV))
 			return 0.0;
 
-		float iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
+		float iterationDepth = FrameBuffer::ToStandardDepth(DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x);
 
 		if (saturate((raySample.z - iterationDepth) / SSRParams.y) > 0.0) {
 			float3 binaryMinRaySample = prevRaySample;
@@ -70,7 +71,7 @@ float4 GetReflectionColor(
 				binaryRaySample = lerp(binaryMinRaySample, binaryMaxRaySample, 0.5);
 
 				sampleUV = binaryRaySample.xy;
-				iterationDepth = DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x;
+				iterationDepth = FrameBuffer::ToStandardDepth(DepthTex.SampleLevel(DepthSampler, ConvertRaySample(sampleUV), 0).x);
 
 				// Compute expected depth vs actual depth
 				depthThicknessFactor = 1.0 - saturate(abs(binaryRaySample.z - iterationDepth) / SSRParams.y);
@@ -100,7 +101,7 @@ float4 GetReflectionColor(
 				float3 color = ColorTex.SampleLevel(ColorSampler, ConvertRaySample(finalSampleUV), 0).xyz;
 
 				// Final sample to world-space
-				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, iterationDepth, 1.0);
+				float4 positionWS = float4(float2(finalSampleUV.x, 1.0 - finalSampleUV.y) * 2.0 - 1.0, FrameBuffer::ToNativeDepth(iterationDepth), 1.0);
 				positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
 				positionWS.xyz = positionWS.xyz / positionWS.w;
 				positionWS.w = 1.0;
@@ -147,9 +148,10 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 viewNormal = DefaultNormal;
 
-	float depth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
+	float nativeDepth = DepthTex.SampleLevel(DepthSampler, screenPosition, 0).x;
+	float depth = FrameBuffer::ToStandardDepth(nativeDepth);
 
-	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, depth, 1.0);
+	float4 positionVS = float4(float2(uv.x, 1.0 - uv.y) * 2.0 - 1.0, nativeDepth, 1.0);
 	positionVS = mul(FrameBuffer::CameraProjInverse, positionVS);
 	positionVS.xyz = positionVS.xyz / positionVS.w;
 
@@ -166,6 +168,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 reflectionPosition = float4(viewPosition + reflectionDirection, 1.0);
 	float4 projReflectionPosition = mul(FrameBuffer::CameraProj, reflectionPosition);
 	projReflectionPosition /= projReflectionPosition.w;
+	projReflectionPosition.z = FrameBuffer::ToStandardDepth(projReflectionPosition.z);
 	projReflectionPosition.xy = projReflectionPosition.xy * float2(0.5, -0.5) + float2(0.5, 0.5);
 
 	float3 projPosition = float3(uv, depth);

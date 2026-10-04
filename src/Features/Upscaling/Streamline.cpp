@@ -9,6 +9,7 @@
 #include "../../Hooks.h"
 #include "../../State.h"
 #include "../../Util.h"
+#include "../ReverseZ.h"
 #include "../Upscaling.h"
 #include "DX12SwapChain.h"
 
@@ -345,7 +346,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	slConstants.cameraFwd = { viewMatrix._31, viewMatrix._32, viewMatrix._33 };
 	slConstants.cameraPos = *(sl::float3*)&globals::game::frameBufferCached.GetCameraPosAdjust();
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
-	slConstants.depthInverted = sl::Boolean::eFalse;
+	slConstants.depthInverted = globals::features::reverseZ.IsActive() ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
 	recalculateCameraMatrices(slConstants);
 

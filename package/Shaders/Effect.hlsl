@@ -5,6 +5,7 @@
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/ReverseZ.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #define EFFECT
@@ -95,6 +96,7 @@ struct VS_OUTPUT
 cbuffer VS_PerFrame : register(b12)
 {
 	row_major float4x4 ScreenProj : packoffset(c0);
+	row_major float4x4 Proj : packoffset(c4);
 	row_major float4x4 ViewProj : packoffset(c8);
 #	if defined(SKINNED)
 	float3 BonesPivot : packoffset(c40);
@@ -183,7 +185,12 @@ VS_OUTPUT main(VS_INPUT input)
 		transpose(float3x3(transpose(World)[0], transpose(World)[1], transpose(World)[2]));
 
 #	if defined(SKY_OBJECT)
-	float4x4 viewProj = float4x4(ViewProj[0], ViewProj[1], ViewProj[3], ViewProj[3]);
+#		ifdef REVERSE_Z
+	float4 skyObjectDepthRow = FrameBuffer::IsReverseProjection(Proj) ? 0.0.xxxx : ViewProj[3];
+#		else
+	float4 skyObjectDepthRow = ViewProj[3];
+#		endif
+	float4x4 viewProj = float4x4(ViewProj[0], ViewProj[1], skyObjectDepthRow, ViewProj[3]);
 #	else
 	row_major float4x4 viewProj = ViewProj;
 #	endif
@@ -230,7 +237,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogColorParam = min(FogParam.w,
-		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
+		exp2(FogParam.z * log2(saturate(length(FrameBuffer::ToStandardClip(viewPos, FrameBuffer::IsReverseProjection(Proj))) * FogParam.y - FogParam.x))));
 
 	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
 	vsout.FogParam.w = fogColorParam;
@@ -653,10 +660,21 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	float softMul = 1;
+	// Native depth: GetLightingShadow linearizes it with SharedData::GetScreenDepth.
 	float depth = 1;
+#	ifdef REVERSE_Z
+	if (FrameBuffer::IsReverseProjection())
+		depth = 0;
+#	endif
 #	if defined(SOFT)
 	depth = TexDepthSamplerEffect.Load(int3(input.Position.xy, 0)).x;
-	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - depth) * CameraDataEffect.z + CameraDataEffect.y));
+	// The soft-particle fade linearizes standard depth with the engine's camera constants.
+	float softDepth = depth;
+#		ifdef REVERSE_Z
+	if (FrameBuffer::IsReverseProjection())
+		softDepth = 1 - softDepth;
+#		endif
+	softMul = saturate(-input.TexCoord0.w + LightingInfluence.y / ((1 - softDepth) * CameraDataEffect.z + CameraDataEffect.y));
 #	endif
 
 	float lightingInfluence = LightingInfluence.x;

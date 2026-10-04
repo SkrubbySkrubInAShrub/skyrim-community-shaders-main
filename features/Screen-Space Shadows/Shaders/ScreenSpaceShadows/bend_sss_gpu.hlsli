@@ -115,7 +115,7 @@ struct DispatchParameters
 
 	// TERRAIN_BLENDING ON  -> bound to TerrainBlending::blendedDepthTexture (R32_FLOAT) — must NOT be unorm.
 	// TERRAIN_BLENDING OFF -> bound to game's kPOST_ZPREPASS_COPY (R24_UNORM_X8_TYPELESS) — unorm.
-#if defined(TERRAIN_BLENDING)
+#if defined(TERRAIN_BLENDING) || defined(REVERSE_Z)
 	Texture2D<float> DepthTexture;  // Depth Buffer Texture (rasterized non-linear depth, R32_FLOAT)
 #else
 	Texture2D<unorm float> DepthTexture;  // Depth Buffer Texture (rasterized non-linear depth, R24_UNORM_X8_TYPELESS)
