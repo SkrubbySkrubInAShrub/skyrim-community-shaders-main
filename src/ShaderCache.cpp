@@ -1418,6 +1418,7 @@ namespace SIE
 			ID3DBlob* blob = nullptr;                           ///< A finished blob for identical code.
 			std::optional<Util::CompileDedupe::Ticket> ticket;  ///< Set when this task must compile.
 			std::string source;                                 ///< The preprocessed code the key was built from; empty if preprocessing failed.
+			bool compileFailed = false;                         ///< An identical compile already failed; skip compiling.
 		};
 
 		static SharedCompile AcquireSharedCompile(ShaderClass a_class, const std::wstring& a_path, const std::string& a_pathString,
@@ -1438,6 +1439,9 @@ namespace SIE
 			// Developer Mode keeps #line in the key: stripping it would share debug info with another variant's source lines.
 			const auto keyText = globals::state->IsDeveloperMode() ? result.source : Util::CompileDedupe::StripLineDirectives(result.source);
 			auto acquired = GetCompileDedupe().Acquire(Util::CompileDedupe::MakeKey({ keyText, "main", GetShaderProfile(a_class), a_flags }));
+			result.compileFailed = acquired.compileFailed;
+			if (acquired.compileFailed)
+				return result;
 			if (!acquired.blob) {
 				result.ticket.emplace(std::move(*acquired.ticket));
 				return result;
@@ -1602,7 +1606,8 @@ namespace SIE
 
 			// Compiling the preprocessed snapshot keeps the published bytecode matched to the key if the files change meanwhile.
 			const bool fromSnapshot = !shared.source.empty();
-			const HRESULT compileResult = dedupeHit    ? S_OK :
+			const HRESULT compileResult = shared.compileFailed ? E_FAIL :
+			                              dedupeHit ? S_OK :
 			                              fromSnapshot ? D3DCompile(shared.source.data(), shared.source.size(), pathString.c_str(), nullptr, nullptr, "main",
 															 GetShaderProfile(shaderClass), flags, 0, &shaderBlob, &errorBlob) :
 			                                             D3DCompileFromFile(path.c_str(), defines.data(), &includeHandler, "main",
@@ -1617,6 +1622,8 @@ namespace SIE
 			}
 
 			if (FAILED(compileResult)) {
+				if (dedupeTicket)
+					dedupeTicket->FailCompile();
 				if (errorBlob != nullptr) {
 					logger::error("Failed to compile {} shader {}::{:X}:\n{}",
 						magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor,

@@ -64,7 +64,8 @@ namespace Util::CompileDedupe
 		{
 			Pending,
 			Done,
-			Failed
+			Abandoned,     ///< Owner dropped its ticket unpublished; waiters retry.
+			CompileFailed  ///< The compile itself failed; identical inputs fail the same way.
 		};
 		std::mutex mutex;
 		std::condition_variable ready;
@@ -72,7 +73,7 @@ namespace Util::CompileDedupe
 		std::shared_ptr<const std::vector<char>> blob;
 	};
 
-	/// Owner's claim on a key; dropped unpublished, it fails and waiters retry.
+	/// Owner's claim on a key; dropped unpublished, it is abandoned and waiters retry.
 	class Ticket
 	{
 	public:
@@ -83,10 +84,14 @@ namespace Util::CompileDedupe
 		Ticket(const Ticket&) = delete;
 		Ticket& operator=(const Ticket&) = delete;
 		Ticket& operator=(Ticket&&) = delete;
-		~Ticket() { Fail(); }
+		~Ticket() { Abandon(); }
 
 		void Publish(const void* a_data, size_t a_size);
-		void Fail();
+
+		/// Records a deterministic compile failure, kept so identical tasks fail without recompiling.
+		void FailCompile();
+
+		void Abandon();
 
 	private:
 		Registry* registry;
@@ -94,11 +99,12 @@ namespace Util::CompileDedupe
 		std::shared_ptr<Entry> entry;
 	};
 
-	/// Exactly one of `blob` (reuse it) or `ticket` (compile it).
+	/// Exactly one of `blob` (reuse it), `ticket` (compile it) or `compileFailed` (an identical compile already failed).
 	struct Acquired
 	{
 		std::shared_ptr<const std::vector<char>> blob;
 		std::optional<Ticket> ticket;
+		bool compileFailed = false;
 	};
 
 	class Registry
@@ -108,7 +114,7 @@ namespace Util::CompileDedupe
 		explicit Registry(uint64_t a_maxRetainedBytes = kDefaultMaxRetainedBytes) :
 			maxRetainedBytes(a_maxRetainedBytes) {}
 
-		/// Returns a finished identical blob (waiting if one is in flight), else a ticket to compile with.
+		/// Returns a finished identical blob or recorded failure (waiting if in flight), else a ticket to compile with.
 		Acquired Acquire(const ContentHash::Hash128& a_key)
 		{
 			for (;;) {
@@ -119,14 +125,16 @@ namespace Util::CompileDedupe
 					if (it == map.end()) {
 						entry = std::make_shared<Entry>();
 						map.emplace(a_key, entry);
-						return { nullptr, Ticket(*this, a_key, std::move(entry)) };
+						return { nullptr, Ticket(*this, a_key, std::move(entry)), false };
 					}
 					entry = it->second;
 				}
 				std::unique_lock lock(entry->mutex);
 				entry->ready.wait(lock, [&] { return entry->state != Entry::State::Pending; });
 				if (entry->state == Entry::State::Done)
-					return { entry->blob, std::nullopt };
+					return { entry->blob, std::nullopt, false };
+				if (entry->state == Entry::State::CompileFailed)
+					return { nullptr, std::nullopt, true };
 			}
 		}
 
@@ -198,13 +206,25 @@ namespace Util::CompileDedupe
 		entry.reset();
 	}
 
-	inline void Ticket::Fail()
+	inline void Ticket::FailCompile()
 	{
 		if (!entry)
 			return;
 		{
 			std::scoped_lock lock(entry->mutex);
-			entry->state = Entry::State::Failed;
+			entry->state = Entry::State::CompileFailed;
+		}
+		entry->ready.notify_all();
+		entry.reset();
+	}
+
+	inline void Ticket::Abandon()
+	{
+		if (!entry)
+			return;
+		{
+			std::scoped_lock lock(entry->mutex);
+			entry->state = Entry::State::Abandoned;
 		}
 		entry->ready.notify_all();
 		registry->Forget(key, entry);
