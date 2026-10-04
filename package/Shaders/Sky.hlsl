@@ -426,7 +426,7 @@ PS_OUTPUT main(PS_INPUT input)
 	// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
 	// The sun glare pass (DITHER + TEX) is skipped: it fades by depth coverage in the VS instead,
 	// and the per-pixel reject made the glare disappear.
-	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+	[branch] if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun) && psout.Color.w > 0.0) {
 		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 		if (depth < input.Position.z)
 			psout.Color.w = 0;
