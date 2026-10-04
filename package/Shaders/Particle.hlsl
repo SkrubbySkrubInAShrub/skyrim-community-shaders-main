@@ -214,10 +214,6 @@ struct PS_OUTPUT
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
-#		include "LightLimitFix/InverseSquareLighting.hlsli"
-#	endif
-
 SamplerState SampSourceTexture : register(s0);
 #	if defined(GRAYSCALE_TO_COLOR) || defined(GRAYSCALE_TO_ALPHA)
 SamplerState SampGrayscaleTexture : register(s1);
@@ -374,7 +370,7 @@ if (SharedData::enbSettings.EnableRain) {
 				float3 lightDirection = light.positionWS.xyz - positionWS.xyz;
 				float lightDist = length(lightDirection);
 
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 
 				float3 lightColor = light.color.xyz * intensityMultiplier;
 				propertyColor += lightColor;

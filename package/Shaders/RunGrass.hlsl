@@ -355,10 +355,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
-#		include "LightLimitFix/InverseSquareLighting.hlsli"
-#	endif
-
 #	define SampColorSampler SampBaseSampler
 
 #	if defined(SKYLIGHTING)
@@ -532,7 +528,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				LightLimitFix::Light light = LightLimitFix::lights[LightLimitFix::lightList[lightOffset + i]];
 				float3 lightVector = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightVector);
-				float attenuation = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float attenuation = LightLimitFix::GetAttenuation(lightDist, light);
 				if (attenuation < 1e-5)
 					continue;
 				float3 lightColor = Color::PointLight(light.color.xyz) * attenuation * light.fade;
@@ -786,7 +782,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
 
@@ -960,7 +956,7 @@ PS_OUTPUT main(PS_INPUT input)
 				float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 				float lightDist = length(lightDirection);
 
-				float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+				float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 				if (intensityMultiplier < 1e-5)
 					continue;
 

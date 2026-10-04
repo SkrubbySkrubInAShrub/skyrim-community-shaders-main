@@ -456,10 +456,6 @@ cbuffer PerGeometry : register(b2)
 #		include "LightLimitFix/LightLimitFix.hlsli"
 #	endif
 
-#	if defined(LIGHT_LIMIT_FIX)
-#		include "LightLimitFix/InverseSquareLighting.hlsli"
-#	endif
-
 #	define LinearSampler SampBaseSampler
 
 #	if defined(SKYLIGHTING)
@@ -710,7 +706,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float3 lightDirection = light.positionWS.xyz - input.WorldPosition.xyz;
 			float lightDist = length(lightDirection);
 
-			float intensityMultiplier = InverseSquareLighting::GetAttenuation(lightDist, light);
+			float intensityMultiplier = LightLimitFix::GetAttenuation(lightDist, light);
 
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
