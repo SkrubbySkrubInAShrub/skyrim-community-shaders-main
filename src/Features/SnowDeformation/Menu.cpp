@@ -168,7 +168,7 @@ namespace
 		{ 1024u, 60.0f, 60.0f, 0.0f, 0.0f, 24.0f, false, false, false, false, false, false },
 		{ 2048u, 60.0f, 100.0f, 1.0f, 0.5f, 20.0f, false, false, false, false, false, true },
 		{ 2048u, 90.0f, 250.0f, 1.0f, 0.5f, 16.0f, false, false, false, false, true, true },
-		{ 2048u, 125.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true, true },
+		{ 2048u, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true, true },
 	};
 }
 

@@ -634,10 +634,10 @@ public:
 		/** @brief Deformation map resolution (1024 or 2048, snapped to pow2 - the toroidal mask requires it; 4096 was offered until 2026-09-21 and retired: trenches looked worse at it and it cost 4.71 ms). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
-		float RangeTrenchesM = 125.0f;
+		float RangeTrenchesM = 200.0f;
 		float RangeSkinsM = 750.0f;
 		/** @brief Reach (m) of the object height window - the radius inside which the skin has rim, cornice and shelter data at all. Outside it ObjectConeDepth and PatchTop return their sentinels and the skin is a uniform coat over the whole mesh, which is the coarse look. The window is a fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near clipmap stays a quarter of it, so the near field coarsens by the same factor. */
-		float ObjectRasterReachM = 58.0f;
+		float ObjectRasterReachM = 100.0f;
 		/** @brief Rasterizer depth bias for the object skins, in depth-buffer ULPs toward the camera (D3D11 DepthBias, negated). Replaces the decal viewport cap's accidental ~500-ULP push, which let a skin beat its own mesh at range but stood a peak 2000 units in front of its mist. */
 		float SkinDepthBias = 64.0f;
 		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces. Default 0: the constant term alone settled the contest with no visible cost. */
