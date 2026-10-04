@@ -944,6 +944,9 @@ void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
 
 	static constexpr float bloomSize[4] = { 1024.0f, 1.0f / 1024.0f, 1.0f, 1.0f };
 	effect.SetVectorVariable("BloomSize", bloomSize, sizeof(bloomSize));
+
+	if (&effect != &enbDepthOfField)
+		effect.SetShaderResourceVariable("TextureAperture", enbDepthOfField.GetApertureSRV());
 }
 
 void EffectManager::CopyToTarget(ID3D11Texture2D* a_source, ID3D11ShaderResourceView* a_sourceSRV, ID3D11Texture2D* a_dest, ID3D11RenderTargetView* a_destRTV)

@@ -3,6 +3,7 @@
 #include "../EffectManager.h"
 #include "../SettingManager.h"
 #include "../TextureManager.h"
+#include "State.h"
 
 static constexpr std::array<std::string_view, 3> FocusTechniques = { "Aperture", "ReadFocus", "Focus" };
 
@@ -59,6 +60,9 @@ void ENBDepthOfField::Execute()
 	SetShaderResourceVariable("TexturePrevious", textureApertureRead.srv.get());
 	ExecuteTechnique("Aperture", textureApertureWrite);
 
+	apertureSRV = textureApertureWrite.srv.get();
+	apertureFrame = globals::state->frameCount;
+
 	SetShaderResourceVariable("TextureAperture", textureApertureWrite.srv.get());
 	ExecuteTechnique("ReadFocus", textureReadFocus);
 
@@ -86,8 +90,18 @@ void ENBDepthOfField::UpdateEffectVariables()
 	if (!idsCached) {
 		idApertureTime = settingManager.GetSettingID("ApertureTime", "DEPTHOFFIELD");
 		idFocusingTime = settingManager.GetSettingID("FocusingTime", "DEPTHOFFIELD");
+		idEnableAdaptation = settingManager.GetSettingID("EnableAdaptation", "EFFECT");
 		idsCached = true;
 	}
+
+	// DOF runs before adaptation, so only last frame's result exists yet
+	ID3D11ShaderResourceView* adaptationSRV = nullptr;
+	if (idEnableAdaptation != 0xFFFFFFFF && settingManager.GetValue<bool>(idEnableAdaptation)) {
+		auto& textureManager = TextureManager::GetSingleton();
+		auto* texture = textureManager.FindCommonTexture((textureManager.GetTextureSwap() & 1) ? "TextureAdaptationSwap" : "TextureAdaptation");
+		adaptationSRV = texture ? texture->srv.get() : nullptr;
+	}
+	SetShaderResourceVariable("TextureAdaptation", adaptationSRV);
 
 	const float deltaTime = globals::game::deltaTime ? (*globals::game::deltaTime) : 0.0f;
 	auto blendFactor = [&](uint32_t settingID) {
@@ -100,6 +114,11 @@ void ENBDepthOfField::UpdateEffectVariables()
 	dofParameters.w = blendFactor(idFocusingTime);
 
 	SetVectorVariable("DofParameters", &dofParameters, sizeof(dofParameters));
+}
+
+ID3D11ShaderResourceView* ENBDepthOfField::GetApertureSRV() const
+{
+	return apertureFrame == globals::state->frameCount ? apertureSRV : nullptr;
 }
 
 void ENBDepthOfField::CreateEffectTextures()
