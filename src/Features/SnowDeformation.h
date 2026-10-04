@@ -315,6 +315,11 @@ public:
 		std::vector<Limb> limbs;
 		/** @brief Lowest material alpha found on a skinned body geometry, or -1 until measured. A ghost is drawn see-through, which is the only thing that separates it from the ordinary NPC it otherwise is. */
 		float bodyAlpha = -1.0f;
+		/** @brief Geometry whose alpha bodyAlpha is. */
+		RE::BSFixedString bodyAlphaSource;
+		/** @brief Lowest alpha over every lit skinned geometry, proxies and overlays included, and where it was read. */
+		float anyAlpha = -1.0f;
+		RE::BSFixedString anyAlphaSource;
 		/** @brief Frames until the alpha is measured again. A ghost's shader can arrive after its 3D does, so one early look at an opaque body must not stand for the actor's whole life. */
 		uint16_t alphaRecheck = 0;
 		/** @brief How many times the body alpha has been read. The first reads of a freshly spawned actor cannot be trusted, so they are taken quickly and often before the cadence drops to kBodyAlphaRecheckFrames. */
@@ -3844,6 +3849,8 @@ public:
 	std::unordered_set<const void*> contactSkinMissingLogged;
 	/** @brief Skinned geometries the contact pass refused because the game itself hides them, reported once each. */
 	std::unordered_set<const void*> contactSkinHiddenLogged;
+	/** @brief Actors refused as incorporeal, logged once each with the reading that decided it. */
+	std::unordered_set<uint32_t> incorporealLogged;
 	/** @brief Margin over the layer depth before a part is refused as unreachable: the terrain window's bilinear ground can sit this far off the actor's feet on a slope. */
 	static constexpr float kContactSkipMargin = 16.0f;
 	/** @brief Frames a living actor whose contact draw printed nothing stamps by bones before the mesh route is retried. */
@@ -4709,6 +4716,8 @@ protected:
 	 */
 	bool ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root, StampBones* a_bones,
 		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
+	/** @brief Skinned geometry that is not a body surface: an HDT-SMP collision proxy ('Virtual*', or a material faded to nothing) or a RaceMenu overlay layer. */
+	static bool IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property);
 
 	/**
 	 * @brief Raises one buried effect onto the snow above it, on the GAME thread.
@@ -5298,6 +5307,7 @@ protected:
 		bool nearestValid = false;
 		/** @brief Lowest skinned-body alpha on the nearest actor, so the translucency test can be read against a real ghost rather than guessed at. */
 		float nearestBodyAlpha = 1.0f;
+		std::string nearestBodyAlphaSource;
 		bool nearestGhostFlag = false;
 		bool nearestIncorporeal = false;
 		/** @brief FormID of the nearest non-player actor, latched into skeletonProbeTarget at gather end. */
@@ -5344,6 +5354,7 @@ protected:
 		float dryTravel = 0.0f;
 		bool collisionFallback = false;
 		float bodyAlpha = 1.0f;
+		std::string bodyAlphaSource;
 		uint16_t alphaSettle = 0;
 		float gapToLand = 0.0f;
 		float floatingGap = 0.0f;

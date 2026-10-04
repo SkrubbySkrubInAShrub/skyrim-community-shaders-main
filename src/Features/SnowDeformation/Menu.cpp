@@ -1370,8 +1370,8 @@ void SnowDeformation::DrawSettings()
 						skeletonProbe.feet.size(), skeletonProbe.usableFeet,
 						skeletonProbe.limbs, skeletonProbe.limbsStamped, skeletonProbe.shapes,
 						skeletonProbe.dryTravel, skeletonProbe.collisionFallback ? " [FAILSAFE]" : "");
-					WrapTextF("  body alpha %.2f (reads %u) | above land %.0f | floating gap %.0f",
-						skeletonProbe.bodyAlpha, (uint)skeletonProbe.alphaSettle,
+					WrapTextF("  body alpha %.2f on '%s' (reads %u) | above land %.0f | floating gap %.0f",
+						skeletonProbe.bodyAlpha, skeletonProbe.bodyAlphaSource.c_str(), (uint)skeletonProbe.alphaSettle,
 						skeletonProbe.gapToLand, skeletonProbe.floatingGap);
 					{
 						const char* surface;
@@ -2328,7 +2328,8 @@ void SnowDeformation::DrawSettings()
 						stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
 						stampStats.fallbackActors);
 					WrapTextF("             body alpha %s | marked Ghost %s | verdict %s",
-						stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
+						stampStats.nearestElemental ? "not read" :
+						                              std::format("{:.2f} on '{}'", stampStats.nearestBodyAlpha, stampStats.nearestBodyAlphaSource).c_str(),
 						stampStats.nearestGhostFlag ? "yes" : "no",
 						stampStats.nearestIncorporeal ? "INCORPOREAL" :
 							(stampStats.nearestElemental ? "solid (made of an element)" : "solid"));

@@ -437,6 +437,17 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 	});
 }
 
+bool SnowDeformation::IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property)
+{
+	// HDT-SMP collision shapes ship inside outfit and hair meshes under
+	// 'Virtual*' names; RaceMenu paints its overlays as 'X [Ovl#]' / 'X [SOvl#]'
+	// clones of the body at the overlay's own alpha.
+	if (a_geometry && (NameContains(a_geometry->name, "Virtual") ||
+	                      NameContains(a_geometry->name, "[Ovl") || NameContains(a_geometry->name, "[SOvl")))
+		return true;
+	return a_property && a_property->alpha < 0.01f;
+}
+
 // Weight a shape puts through a crust, from its size. Crust bears a boot and
 // gives under a mammoth, and the shapes a heavy skeleton carries are simply
 // bigger - there is no mass to read off a collision shape, but this tracks it
@@ -478,7 +489,12 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 			stale = true;
 		}
 		if (stale) {
-			float lowest = 1.0f;
+			// Body surfaces only: a collision proxy or an overlay layer carries
+			// its own alpha and says nothing about the actor. With no body
+			// surface read at all (everything faded) the lowest of all decides.
+			float lowest = 1.0f, lowestAny = 1.0f;
+			RE::BSFixedString lowestName, lowestAnyName;
+			bool bodySeen = false;
 			RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				// SKINNED only. Plain alpha blending is no use on its own -
@@ -487,14 +503,33 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 				// at exactly 1.
 				if (!runtime.skinInstance)
 					return RE::BSVisit::BSVisitControl::kContinue;
-				auto& property = runtime.shaderProperty;
-				if (property && property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get())
-					lowest = std::min(lowest, static_cast<RE::BSLightingShaderProperty*>(property.get())->alpha);
+				auto* property = runtime.shaderProperty.get();
+				if (!property || property->GetRTTI() != globals::rtti::BSLightingShaderPropertyRTTI.get())
+					return RE::BSVisit::BSVisitControl::kContinue;
+				const float a = static_cast<RE::BSLightingShaderProperty*>(property)->alpha;
+				if (a < lowestAny) {
+					lowestAny = a;
+					lowestAnyName = a_geometry->name;
+				}
+				if (IsProxyOrOverlayGeometry(a_geometry, property))
+					return RE::BSVisit::BSVisitControl::kContinue;
+				if (!bodySeen || a < lowest) {
+					lowest = std::min(lowest, a);
+					lowestName = a_geometry->name;
+				}
+				bodySeen = true;
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
+			if (!bodySeen) {
+				lowest = lowestAny;
+				lowestName = lowestAnyName;
+			}
 			alpha = lowest;
 			if (a_bones) {
 				a_bones->bodyAlpha = lowest;
+				a_bones->bodyAlphaSource = lowestName;
+				a_bones->anyAlpha = lowestAny;
+				a_bones->anyAlphaSource = lowestAnyName;
 				const bool settling = a_bones->alphaSettle < kBodyAlphaSettleReads;
 				a_bones->alphaRecheck = settling ? kBodyAlphaSettleFrames : kBodyAlphaRecheckFrames;
 				if (settling)
@@ -933,6 +968,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			skeletonProbe.dryTravel = cache.dryTravel;
 			skeletonProbe.collisionFallback = cache.collisionFallback;
 			skeletonProbe.bodyAlpha = cache.bodyAlpha;
+			skeletonProbe.bodyAlphaSource = cache.bodyAlphaSource.c_str() ? cache.bodyAlphaSource.c_str() : "";
 			skeletonProbe.alphaSettle = cache.alphaSettle;
 			skeletonProbe.limbs = (uint)cache.limbs.size();
 			for (const auto& foot : cache.feet) {
@@ -1011,6 +1047,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.nearestDryTravel = cache.dryTravel;
 				stampStats.nearestFormID = formID;
 				stampStats.nearestBodyAlpha = bodyAlpha;
+				stampStats.nearestBodyAlphaSource = bones && bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "";
 				stampStats.nearestGhostFlag = ghostFlag;
 				stampStats.nearestIncorporeal = incorporeal;
 				auto* controller = actor->GetCharController();
@@ -1039,9 +1076,23 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 		if (incorporeal) {
 			stampStats.incorporeal++;
+			if (incorporealLogged.size() < 16 && incorporealLogged.insert(formID).second) {
+				const bool byFlag = ghostFlag && settings.IncorporealMode != 1;
+				logger::info("[SNOW DEFORMATION] '{}' ({:08X}) leaves no trench: {}", actor->GetDisplayFullName(), formID,
+					byFlag ? std::string("marked Ghost on its record") :
+					         std::format("body alpha {:.2f} on '{}'", bodyAlpha,
+							 bones && bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : ""));
+			}
 			if (probing)
 				skeletonProbe.verdict = "gated: incorporeal (translucent/ghost)";
 			return;
+		}
+		if (!isDead && !elemental && bones && bones->anyAlpha >= 0.0f && bones->anyAlpha < kIncorporealAlpha &&
+		    incorporealLogged.size() < 16 && incorporealLogged.insert(formID).second) {
+			logger::info("[SNOW DEFORMATION] '{}' ({:08X}) keeps its trench: '{}' at alpha {:.2f} is a proxy or overlay, body alpha {:.2f} on '{}'",
+				actor->GetDisplayFullName(), formID,
+				bones->anyAlphaSource.c_str() ? bones->anyAlphaSource.c_str() : "", bones->anyAlpha,
+				bodyAlpha, bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "");
 		}
 		// A ghost's see-through look arrives by SCRIPT, frames after its model
 		// loads, and a carve is permanent until the refill buries it - so the

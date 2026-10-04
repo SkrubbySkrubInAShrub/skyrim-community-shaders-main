@@ -4998,11 +4998,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						++(hidden ? tally.hidden : tally.unlit);
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
-					// Physics proxies drawn by nothing: HDT-SMP collision shapes ship
-					// inside outfit meshes under 'Virtual*' names (VirtualGround is a
-					// floor plane at the feet), and a material faded to zero shows none.
-					const char* name = a_geometry->name.c_str();
-					if ((name && _strnicmp(name, "Virtual", 7) == 0) || property->alpha < 0.01f) {
+					// Physics proxies and overlay layers draw no surface of their own.
+					if (IsProxyOrOverlayGeometry(a_geometry, property)) {
 						tally.proxy++;
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
