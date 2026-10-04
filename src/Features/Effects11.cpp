@@ -508,16 +508,18 @@ void Effects11::CheckCommonData()
 		const auto& commonData = effectManager.GetCommonData();
 		settingManager.SetTimeOfDayData(commonData.timeOfDay1, commonData.timeOfDay2);
 		settingManager.SetWeatherBlendFactors(effectManager.currentWeatherID, effectManager.previousWeatherID, commonData.weather[2]);
+
+		pointLighting.curve = settingManager.GetInterpolatedTimeOfDayValue("PointLightingCurve", "ENVIRONMENT");
+		pointLighting.desaturation = settingManager.GetInterpolatedTimeOfDayValue("PointLightingDesaturation", "ENVIRONMENT");
+		pointLighting.intensity = settingManager.GetInterpolatedTimeOfDayValue("PointLightingIntensity", "ENVIRONMENT");
 	}
 }
 
 void Effects11::OverridePointLightColor(float3& a_color)
 {
-	auto& settingManager = SettingManager::GetSingleton();
-
-	a_color = Curve(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingCurve", "ENVIRONMENT"));
-	a_color = Desaturation(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingDesaturation", "ENVIRONMENT"));
-	a_color = Intensity(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingIntensity", "ENVIRONMENT"));
+	a_color = Curve(a_color, pointLighting.curve);
+	a_color = Desaturation(a_color, pointLighting.desaturation);
+	a_color = Intensity(a_color, pointLighting.intensity);
 }
 
 void Effects11::OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmbientColors)
@@ -700,13 +702,13 @@ void Effects11::DrawVolumetricRays()
 	}
 
 	if (!blurHCS) {
-		blurHCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ISVolumetricLightingBlurHCS.hlsl", {}, "cs_5_0"));
+		blurHCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Effects11\\BlurVolumetricRaysCS.hlsl", { { "HORIZONTAL", nullptr } }, "cs_5_0"));
 		if (!blurHCS)
 			return;
 	}
 
 	if (!blurVCS) {
-		blurVCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ISVolumetricLightingBlurVCS.hlsl", {}, "cs_5_0"));
+		blurVCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\Effects11\\BlurVolumetricRaysCS.hlsl", {}, "cs_5_0"));
 		if (!blurVCS)
 			return;
 	}
