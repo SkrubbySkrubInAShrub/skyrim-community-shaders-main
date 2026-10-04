@@ -3271,9 +3271,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
-	// Blood soaks in rather than sitting on top: extinction by the pigment's
-	// hue, then its darkness, so a thin fringe reads pink and a pool near
-	// black-red. Drying turns the hue maroon.
+	// Blood lies on the snow the way the game's decal lies on the ground: its
+	// colour over the albedo by its alpha, from a detail tile where one lies
+	// and from the blood map elsewhere, so a tile's edge does not show. Drying
+	// turns it maroon.
 	float bloodFresh = 0.0;
 	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
 	float4 bloodPaint;
@@ -3282,25 +3283,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 #else
 	SampleBloodTiles(worldXYPS, ddx(worldXYPS), ddy(worldXYPS), blood, bloodFresh, bloodPaint);
 #endif
+	// Under a tile the map's reading is zero, elsewhere the tile's.
+	blood += bloodPaint;
 	[branch] if (blood.a > 0.002)
 	{
-		float3 pigment = Color::LinearToSrgb(blood.rgb);
-		float pigmentMax = max(max(pigment.r, pigment.g), max(pigment.b, 1e-3));
-		float3 hue = pigment / pigmentMax;
-		hue = lerp(hue, hue * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
-		float k = saturate(blood.a * BloodLook.x);
-		kSnowAlbedo *= exp(-3.0 * k * (1.0 - hue)) * lerp(1.0, max(pigmentMax, 0.12), k);
-	}
-	// A blood mark from the detail tiles lies on the snow the same way the
-	// game's decal lies on the ground: its colour over the albedo by its
-	// alpha. Drying turns it maroon.
-	[branch] if (bloodPaint.a > 0.002)
-	{
-		float3 paintRgb = Color::LinearToSrgb(bloodPaint.rgb);
+		float3 paintRgb = Color::LinearToSrgb(blood.rgb);
 		paintRgb = lerp(paintRgb, paintRgb * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
-		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(bloodPaint.a * BloodLook.x));
+		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(blood.a * BloodLook.x));
 	}
-	const float bloodCover = max(blood.a, bloodPaint.a);
+	const float bloodCover = blood.a;
 	// A rune's glyph lies on the snow as the game's decal lies on the ground:
 	// its colour over the albedo by its alpha, its glow added after lighting.
 #ifdef SNOW_SHELL_DEFERRED
