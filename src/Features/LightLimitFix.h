@@ -332,12 +332,12 @@ public:
 	static float CalculateRadius(float intensity, bool shadowCaster, float cutoffOverride, float size);
 
 	/**
-	 * @brief Processes a light's runtime data to populate the LightData struct with inverse-square parameters.
-	 * @param light The output light data struct to populate.
+	 * @brief Builds the LightData for a light from its runtime data, applying inverse-square parameters when flagged.
 	 * @param bsLight The game's BSLight instance.
 	 * @param niLight The underlying NiLight with runtime extension data.
+	 * @return The populated LightData.
 	 */
-	void ProcessLight(LightData& light, RE::BSLight* bsLight, RE::NiLight* niLight) const;
+	LightData ProcessLight(RE::BSLight* bsLight, RE::NiLight* niLight) const;
 
 	/**
 	 * @brief Computes the inverse-square attenuation at a given distance with smooth fade-out.

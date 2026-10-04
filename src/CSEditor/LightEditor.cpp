@@ -425,9 +425,9 @@ void LightEditor::ApplyLighFormData(const RE::TESObjectLIGH* ligh)
 
 	current.data.flags.reset(LightLimitFix::LightFlags::InverseSquare);
 	current.data.flags.reset(LightLimitFix::LightFlags::Linear);
-	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(ISLCommon::TES_LIGHT_FLAGS_EXT::kInverseSquare)))
+	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(LLFCommon::TES_LIGHT_FLAGS_EXT::kInverseSquare)))
 		current.data.flags.set(LightLimitFix::LightFlags::InverseSquare);
-	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(ISLCommon::TES_LIGHT_FLAGS_EXT::kLinear)))
+	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(LLFCommon::TES_LIGHT_FLAGS_EXT::kLinear)))
 		current.data.flags.set(LightLimitFix::LightFlags::Linear);
 
 	const float size = ligh->data.fov >= 50.f ? std::numbers::sqrt2_v<float> : ligh->data.fov;
@@ -602,7 +602,7 @@ void LightEditor::DrawSettings()
 	if (anyItemHovered || !lightsComboOpen) {
 		if (!(thisFrameHovered == comboHoveredLight)) {
 			if (hoverFlashNiLight) {
-				if (auto* rd = ISLCommon::RuntimeLightDataExt::Get(hoverFlashNiLight.get()))
+				if (auto* rd = LLFCommon::RuntimeLightDataExt::Get(hoverFlashNiLight.get()))
 					rd->fade = hoverFlashOriginalFade;
 				hoverFlashNiLight.reset();
 			}
@@ -1753,7 +1753,7 @@ void LightEditor::GatherLights()
 		LightInfo info;
 		RE::TESObjectLIGH* ligh = nullptr;
 
-		const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+		const auto runtimeData = LLFCommon::RuntimeLightDataExt::Get(niLight);
 		const auto refr = niLight->GetUserData();
 		if (refr) {
 			if (refr->IsDisabled())
@@ -1826,7 +1826,7 @@ void LightEditor::GatherLights()
 		// Capture the NiLight for hover-flash on the first frame this light is hovered.
 		if (comboHoveredLight.id != 0 && info == comboHoveredLight && !hoverFlashNiLight) {
 			hoverFlashNiLight.reset(niLight);
-			const auto* rd = ISLCommon::RuntimeLightDataExt::Get(niLight);
+			const auto* rd = LLFCommon::RuntimeLightDataExt::Get(niLight);
 			hoverFlashOriginalFade = (rd && rd->fade > 0.f) ? rd->fade : 1.f;
 		}
 
@@ -1979,7 +1979,7 @@ void LightEditor::ResetOverrides()
 		savedSelection = selected;
 	RestoreOriginal();
 	if (hoverFlashNiLight) {
-		if (auto* rd = ISLCommon::RuntimeLightDataExt::Get(hoverFlashNiLight.get()))
+		if (auto* rd = LLFCommon::RuntimeLightDataExt::Get(hoverFlashNiLight.get()))
 			rd->fade = hoverFlashOriginalFade;
 		hoverFlashNiLight.reset();
 	}
@@ -1996,7 +1996,7 @@ void LightEditor::ApplyShadowDepthBias()
 
 void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH* ligh, RE::NiLight* niLight, RE::BSLight* bsLight)
 {
-	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+	const auto runtimeData = LLFCommon::RuntimeLightDataExt::Get(niLight);
 	auto tesFlags = ligh ? &ligh->data.flags : nullptr;
 
 	// Per-selection initialization: snapshots the light's original state, populates lpInfo,
@@ -2004,7 +2004,7 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 	if (previous != selected) {
 		RestoreOriginal();
 
-		original.tesFlags = tesFlags ? static_cast<ISLCommon::TES_LIGHT_FLAGS_EXT>(tesFlags->underlying()) : static_cast<ISLCommon::TES_LIGHT_FLAGS_EXT>(0);
+		original.tesFlags = tesFlags ? static_cast<LLFCommon::TES_LIGHT_FLAGS_EXT>(tesFlags->underlying()) : static_cast<LLFCommon::TES_LIGHT_FLAGS_EXT>(0);
 		original.data = *runtimeData;
 		// The hover-flash may have blinked fade to 0; snapshotting mid-blink would freeze 0 as the base, so
 		// recover the stashed pre-flash value. Covers non-LP refs; LP lights get this from RefreshLPJsonState.
@@ -2120,7 +2120,7 @@ float LightEditor::GetLPRefScale() const
 	return (lpInfo.isLPLight && activeRefr && !lpFlagSet.contains("IgnoreScale")) ? activeRefr->GetScale() : 1.0f;
 }
 
-bool LightEditor::ApplyOverrides(RE::NiLight* niLight, ISLCommon::RuntimeLightDataExt* runtimeData) const
+bool LightEditor::ApplyOverrides(RE::NiLight* niLight, LLFCommon::RuntimeLightDataExt* runtimeData) const
 {
 	// Hovered (not selected) light: blink its fade so it flashes in the combo list.
 	if (hoverFlashNiLight && niLight == hoverFlashNiLight.get() && niLight != activeNiLight.get()) {
@@ -2165,7 +2165,7 @@ void LightEditor::RestoreOriginal()
 	if (!activeNiLight)
 		return;
 
-	auto* runtimeData = ISLCommon::RuntimeLightDataExt::Get(activeNiLight.get());
+	auto* runtimeData = LLFCommon::RuntimeLightDataExt::Get(activeNiLight.get());
 	*runtimeData = original.data;
 	// original.data is raw for LP bulbs (see RefreshLPJsonState); re-bake the owner-ref scale that Light Placer
 	// applies, symmetric with ApplyOverrides, so deselecting restores the live scaled state rather than the raw one.
@@ -2774,7 +2774,7 @@ void LightEditor::RefreshLPJsonState()
 	ApplyLPFalloffFlags(original.data, lpFlagSet);
 }
 
-void LightEditor::ApplyLPFalloffFlags(ISLCommon::RuntimeLightDataExt& data, const std::set<std::string>& lpFlagSet)
+void LightEditor::ApplyLPFalloffFlags(LLFCommon::RuntimeLightDataExt& data, const std::set<std::string>& lpFlagSet)
 {
 	auto apply = [&](LightLimitFix::LightFlags bit, const char* name) {
 		if (lpFlagSet.contains(name))

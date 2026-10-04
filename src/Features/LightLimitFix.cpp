@@ -1,6 +1,6 @@
 #include "LightLimitFix.h"
 #include "Effects11.h"
-#include "InverseSquareLighting/Common.h"
+#include "LightLimitFix/Common.h"
 #include "CSEditor/EditorWindow.h"
 #include "LinearLighting.h"
 
@@ -251,13 +251,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		if (!niLight)
 			continue;
 
-		auto& runtimeData = niLight->GetLightRuntimeData();
-
-		LightData light{};
-		light.color = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue };
-		light.lightFlags = std::bit_cast<LightFlags>(runtimeData.ambient.red);
-
-		ProcessLight(light, bsLight, niLight);
+		auto light = ProcessLight(bsLight, niLight);
 
 		light.fade *= bsLight->lodDimmer;
 
@@ -387,11 +381,11 @@ RE::NiPointLight* LightLimitFix::CreatePointLight::thunk(RE::TESObjectLIGH* ligh
 
 void LightLimitFix::SetExtLightData(RE::NiLight* niLight, const RE::TESObjectLIGH* ligh)
 {
-	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+	const auto runtimeData = LLFCommon::RuntimeLightDataExt::Get(niLight);
 	runtimeData->flags.set(LightFlags::Initialised);
-	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(ISLCommon::TES_LIGHT_FLAGS_EXT::kInverseSquare)))
+	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(LLFCommon::TES_LIGHT_FLAGS_EXT::kInverseSquare)))
 		runtimeData->flags.set(LightFlags::InverseSquare);
-	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(ISLCommon::TES_LIGHT_FLAGS_EXT::kLinear)))
+	if (ligh->data.flags.any(static_cast<RE::TES_LIGHT_FLAGS>(LLFCommon::TES_LIGHT_FLAGS_EXT::kLinear)))
 		runtimeData->flags.set(LightFlags::Linear);
 	runtimeData->cutoffOverride = std::clamp(ligh->data.fallofExponent, 0.01f, 1.f);
 	runtimeData->lighFormId = ligh->formID;
@@ -399,11 +393,11 @@ void LightLimitFix::SetExtLightData(RE::NiLight* niLight, const RE::TESObjectLIG
 	runtimeData->size = std::clamp(size, 0.01f, 50.0f);
 }
 
-void LightLimitFix::ProcessLight(LightData& light, RE::BSLight* bsLight, RE::NiLight* niLight) const
+LightLimitFix::LightData LightLimitFix::ProcessLight(RE::BSLight* bsLight, RE::NiLight* niLight) const
 {
-	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+	const auto runtimeData = LLFCommon::RuntimeLightDataExt::Get(niLight);
 
-	if (light.lightFlags.none(LightFlags::Initialised)) {
+	if (runtimeData->flags.none(LightFlags::Initialised)) {
 		const auto userData = niLight->GetUserData();
 		logger::debug("[LLF] FormID: 0x{:08X} | Light*: {:p} | Name: {} - light uninitialised", userData ? userData->formID : 0, static_cast<void*>(niLight), niLight->name);
 		runtimeData->flags.set(LightFlags::Initialised);
@@ -412,28 +406,25 @@ void LightLimitFix::ProcessLight(LightData& light, RE::BSLight* bsLight, RE::NiL
 	const auto& editorRef = EditorWindow::GetSingleton()->lightEditor;
 	editorRef.ApplyOverrides(niLight, runtimeData);
 
+	LightData light{};
 	light.lightFlags = runtimeData->flags;
 	light.color = { runtimeData->diffuse.red, runtimeData->diffuse.green, runtimeData->diffuse.blue };
+	light.radius = runtimeData->radius;
+	light.fade = runtimeData->fade;
 
 	const bool isInvSq = light.lightFlags.any(LightFlags::InverseSquare);
 	if (bsLight->pointLight && ((isInvSq && editorRef.disableInvSqLights) || (!isInvSq && editorRef.disableRegularLights)))
 		light.lightFlags.set(LightFlags::Disabled);
 
 	if (bsLight->pointLight && isInvSq) {
-		const float intensity = runtimeData->fade * 4;
-		light.radius = CalculateRadius(intensity, bsLight->IsShadowLight(), runtimeData->cutoffOverride, runtimeData->size);
+		light.fade *= 4;
+		light.radius = CalculateRadius(light.fade, bsLight->IsShadowLight(), runtimeData->cutoffOverride, runtimeData->size);
 		runtimeData->radius = light.radius;
-		light.invRadius = 1.f / light.radius;
-		light.fadeZone = 1.f / (light.radius * std::clamp(FadeZoneBase * light.invRadius, 0.f, 1.f));
+		light.fadeZone = 1.f / (light.radius * std::clamp(FadeZoneBase / light.radius, 0.f, 1.f));
 		light.sizeBias = ScaledUnitsSq * runtimeData->size * runtimeData->size * 0.5f;
-		// light.color *= intensity;
-		light.fade = intensity;
-	} else {
-		light.radius = runtimeData->radius;
-		light.invRadius = 1.f / light.radius;
-		// light.color *= runtimeData->fade;
-		light.fade = runtimeData->fade;
 	}
+	light.invRadius = 1.f / light.radius;
+	return light;
 }
 
 float LightLimitFix::CalculateRadius(const float intensity, const bool shadowCaster, const float cutoffOverride, const float size)
@@ -461,7 +452,7 @@ float LightLimitFix::GetAttenuation(const float distance, const float radius, co
 float LightLimitFix::BSLight_GetLuminance::thunk(RE::BSLight* bsLight, RE::NiPoint3* targetPosition, RE::NiLight* refLight)
 {
 	auto* niLight = bsLight->light.get();
-	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
+	const auto runtimeData = LLFCommon::RuntimeLightDataExt::Get(niLight);
 
 	if (refLight == niLight || runtimeData->flags.any(LightFlags::Disabled))
 		return 0.0f;
@@ -534,13 +525,7 @@ void LightLimitFix::UpdateLights()
 		if (auto bsLight = e.get()) {
 			if (auto niLight = bsLight->light.get()) {
 				if (IsValidLight(bsLight)) {
-					auto& runtimeData = niLight->GetLightRuntimeData();
-
-					LightData light{};
-					light.color = { runtimeData.diffuse.red, runtimeData.diffuse.green, runtimeData.diffuse.blue };
-					light.lightFlags = std::bit_cast<LightFlags>(runtimeData.ambient.red);
-
-					ProcessLight(light, bsLight, niLight);
+					auto light = ProcessLight(bsLight, niLight);
 
 					light.fade *= bsLight->lodDimmer;
 
