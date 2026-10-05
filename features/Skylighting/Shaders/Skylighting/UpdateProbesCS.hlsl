@@ -95,37 +95,54 @@ static const float3 noise3D[32] = {
 
 	// Shadow cascade sampling with bitmask accumulation
 	float4 cellCentreCS = mul(FrameBuffer::CameraViewProj, float4(cellCentreMS, 1));
-	float2 screenUV = (cellCentreCS.xy / cellCentreCS.w) * float2(0.5, -0.5) + 0.5;
-	bool onScreen = cellCentreCS.w > 0 && all(screenUV > 0) && all(screenUV < 1);
+	bool onScreen = false;
+	if (cellCentreCS.w > 0) {
+		float2 screenUV = (cellCentreCS.xy / cellCentreCS.w) * float2(0.5, -0.5) + 0.5;
+		onScreen = all(screenUV > 0) && all(screenUV < 1);
+	}
 
+	// Only a valid projection advances the history. Clamping an out-of-range one would sample the
+	// shadow map border into the history, and the jitter can cross the camera near plane.
+	uint bitIndex = SharedData::FrameCountAlwaysActive % 32;
+	bool advanceShadowHistory = false;
+	float shadowSample = 1.0;
 	if (onScreen) {
-		float shadowSample = 1.0;
 		DirectionalShadowLightData shadowData = DirectionalShadowLights[0];
 
-		uint bitIndex = SharedData::FrameCountAlwaysActive % 32;
 		float3 jitteredMS = cellCentreMS + noise3D[bitIndex] * 128;
+		float4 jitteredCS = mul(FrameBuffer::CameraViewProj, float4(jitteredMS, 1));
 
-		float ndcDepth = FrameBuffer::GetShadowDepth(jitteredMS);
-		float linearDepth = SharedData::GetScreenDepth(ndcDepth);
+		if (jitteredCS.w > 0) {
+			float ndcDepth = jitteredCS.z / jitteredCS.w;
+			float linearDepth = SharedData::GetScreenDepth(ndcDepth);
 
-		if (linearDepth > 0 && linearDepth < shadowData.EndSplitDistances.y) {
-			float3 positionWS = jitteredMS + FrameBuffer::CameraPosAdjust.xyz;
+			if (ndcDepth > 0 && ndcDepth < 1 && linearDepth > 0) {
+				if (linearDepth >= shadowData.EndSplitDistances.y) {
+					// Past the directional shadow range: fully lit
+					advanceShadowHistory = true;
+				} else {
+					float3 positionWS = jitteredMS + FrameBuffer::CameraPosAdjust.xyz;
 
-			uint cascadeIndex = (linearDepth > shadowData.EndSplitDistances.x) ? 1u : 0u;
+					uint cascadeIndex = (linearDepth > shadowData.EndSplitDistances.x) ? 1u : 0u;
 
-			float3 positionLS = mul(shadowData.ShadowProj[cascadeIndex], float4(positionWS, 1)).xyz;
+					float3 positionLS = mul(shadowData.ShadowProj[cascadeIndex], float4(positionWS, 1)).xyz;
 
-			positionLS.xy = saturate(positionLS.xy);
+					if (all(positionLS.xy > 0) && all(positionLS.xy < 1) && positionLS.z > 0 && positionLS.z < 1) {
+						float cascadeShadow = ShadowCascadeMap.SampleCmpLevelZero(comparisonSampler, float3(positionLS.xy, cascadeIndex), positionLS.z);
+						float esramShadow = ESRAMShadow.SampleCmpLevelZero(comparisonSampler, float3(positionLS.xy, cascadeIndex), positionLS.z);
+						shadowSample = min(cascadeShadow, esramShadow);
 
-			float cascadeShadow = ShadowCascadeMap.SampleCmpLevelZero(comparisonSampler, float3(positionLS.xy, cascadeIndex), positionLS.z);
-			float esramShadow = ESRAMShadow.SampleCmpLevelZero(comparisonSampler, float3(positionLS.xy, cascadeIndex), positionLS.z);
-			shadowSample = min(cascadeShadow, esramShadow);
-
-			float fade = saturate(linearDepth / shadowData.EndSplitDistances.y);
-			float fadeFactor = 1.0 - pow(fade * fade, 8);
-			shadowSample = lerp(1.0, shadowSample, fadeFactor);
+						float fade = saturate(linearDepth / shadowData.EndSplitDistances.y);
+						float fadeFactor = 1.0 - pow(fade * fade, 8);
+						shadowSample = lerp(1.0, shadowSample, fadeFactor);
+						advanceShadowHistory = true;
+					}
+				}
+			}
 		}
+	}
 
+	if (advanceShadowHistory) {
 		// Unseeded history starts fully lit to match the cleared visibility of 1.0
 		uint bitmask = isValid ? outShadowBitmask[dtid] : 0xFFFFFFFFu;
 		bitmask &= ~(1u << bitIndex);
