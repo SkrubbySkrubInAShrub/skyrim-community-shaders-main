@@ -514,7 +514,7 @@ namespace SIE
 		/** @brief Where the persistent shader store lives and how much it holds. */
 		struct ContentStoreUsage
 		{
-			std::filesystem::path path;
+			std::string path;  ///< Absolute, UTF-8
 			uint64_t blobs = 0;
 			uint64_t bytes = 0;
 			uint64_t maxBytes = 0;

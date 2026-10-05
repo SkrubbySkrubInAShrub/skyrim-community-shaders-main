@@ -1425,18 +1425,24 @@ namespace SIE
 			return static_cast<uint64_t>(globals::state->contentStoreMaxMB.load(std::memory_order_relaxed)) << 20;
 		}
 
-		/** @brief Size and timestamp of the loaded d3dcompiler, so a compiler update cannot reuse bytecode the old one built. */
+		/**
+		 * @brief Link timestamp, image size and checksum of the loaded d3dcompiler, read from its PE header in memory,
+		 * so a compiler update cannot reuse bytecode the old one built. Empty if the module cannot be identified.
+		 */
 		static const std::string& GetCompilerIdentity()
 		{
-			static const std::string identity = [] {
-				wchar_t path[MAX_PATH]{};
+			static const std::string identity = []() -> std::string {
 				const HMODULE module = GetModuleHandleW(L"d3dcompiler_47.dll");
-				if (!module || !GetModuleFileNameW(module, path, MAX_PATH))
-					return std::string("unknown");
-				std::error_code ec;
-				const auto size = std::filesystem::file_size(path, ec);
-				const auto time = std::filesystem::last_write_time(path, ec).time_since_epoch().count();
-				return std::format("{}:{}", size, time);
+				if (!module)
+					return {};
+				const auto* base = reinterpret_cast<const std::byte*>(module);
+				const auto* dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+				if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE)
+					return {};
+				const auto* ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dosHeader->e_lfanew);
+				if (ntHeaders->Signature != IMAGE_NT_SIGNATURE)
+					return {};
+				return std::format("{:08x}:{:08x}:{:08x}", ntHeaders->FileHeader.TimeDateStamp, ntHeaders->OptionalHeader.SizeOfImage, ntHeaders->OptionalHeader.CheckSum);
 			}();
 			return identity;
 		}
@@ -1454,32 +1460,49 @@ namespace SIE
 			return Util::ContentHash::CombineHashes(a_key, Util::ContentHash::HashString(context));
 		}
 
-		/** @brief The persistent shader store, or null while the setting is off. Opened on first use. */
+		/** @brief Absolute store path as UTF-8, for logs and the menu; `path::string()` throws on characters outside the ANSI code page. */
+		static std::string ContentStoreDisplayPath()
+		{
+			std::error_code ec;
+			const auto absolute = std::filesystem::absolute(ContentStorePath(), ec);
+			return Util::WStringToString((ec ? ContentStorePath() : absolute).wstring());
+		}
+
+		/** @brief The store once it has been opened, whether or not the setting is still on. */
+		static std::atomic<Util::ShaderContentStore::Store*> g_openedContentStore{ nullptr };
+
+		/** @brief The persistent shader store, or null while the setting is off or the compiler cannot be identified. Opened on first use. */
 		static Util::ShaderContentStore::Store* GetContentStore()
 		{
 			if (!globals::state->enableContentStore.load(std::memory_order_relaxed))
 				return nullptr;
+			if (GetCompilerIdentity().empty()) {
+				static std::once_flag warned;
+				std::call_once(warned, [] { logger::warn("Shader content store disabled: could not identify d3dcompiler_47.dll"); });
+				return nullptr;
+			}
 			static Util::ShaderContentStore::Store& store = []() -> Util::ShaderContentStore::Store& {
 				static Util::ShaderContentStore::Store created(ContentStorePath(), ContentStoreMaxBytes());
-				const auto temps = created.RemoveTempFiles();
-				const auto trimmed = created.Trim(ContentStoreMaxBytes());
-				const auto usage = Util::ShaderContentStore::MeasureUsage(ContentStorePath());
-				logger::info("Shader content store: {} blobs, {} MB at {}, trimmed {} entries, removed {} unfinished writes",
-					usage.blobs, usage.bytes >> 20, std::filesystem::absolute(ContentStorePath()).string(), trimmed, temps);
+				// Before any Put, so unfinished writes from an earlier session can be removed in the same walk.
+				Util::ShaderContentStore::Usage usage;
+				const auto trimmed = created.Trim(ContentStoreMaxBytes(), true, &usage);
+				logger::info("Shader content store: {} blobs, {} MB at {}, trimmed {} entries", usage.blobs, usage.bytes >> 20, ContentStoreDisplayPath(), trimmed);
+				g_openedContentStore = &created;
 				return created;
 			}();
+			// The limit can change after the store opened (slider, settings reload).
+			store.SetMaxBytes(ContentStoreMaxBytes());
 			return &store;
 		}
 
-		/** @brief An intact stored blob for this key, or null on a miss or corrupt entry. */
+		/** @brief An intact stored blob for this key, or null on a miss. A corrupt entry is deleted. */
 		static winrt::com_ptr<ID3DBlob> ReadStoredBlob(const Util::ShaderContentStore::Store& a_store, const Util::ContentHash::Hash128& a_key)
 		{
-			const auto stored = a_store.Get(StoreKey(a_key));
-			winrt::com_ptr<ID3DBlob> blob;
-			if (stored.empty() || FAILED(D3DCreateBlob(stored.size(), blob.put())))
-				return nullptr;
-			std::memcpy(blob->GetBufferPointer(), stored.data(), stored.size());
-			return IsIntactDxbc(blob.get()) ? blob : nullptr;
+			const auto storeKey = StoreKey(a_key);
+			auto blob = ReadIntactBlob(a_store.PathFor(storeKey).wstring());
+			if (blob)
+				a_store.Touch(storeKey);
+			return blob;
 		}
 
 		/** @brief What preprocessing a task and joining any identical compile produced. */
@@ -2969,27 +2992,30 @@ namespace SIE
 	void ShaderCache::ClearContentStore()
 	{
 		std::error_code ec;
-		std::filesystem::remove_all(SShaderCache::ContentStorePath(), ec);
+		// Through the opened store, so the delete does not overlap one of its trims.
+		if (auto* store = SShaderCache::g_openedContentStore.load())
+			store->Clear(ec);
+		else
+			std::filesystem::remove_all(SShaderCache::ContentStorePath(), ec);
 		if (ec)
 			logger::warn("Failed to clear the persistent shader store: {}", ec.message());
 	}
 
 	void ShaderCache::ApplyContentStoreLimit()
 	{
-		if (auto* store = SShaderCache::GetContentStore()) {
-			const auto maxBytes = SShaderCache::ContentStoreMaxBytes();
-			store->SetMaxBytes(maxBytes);
-			store->Trim(maxBytes);
-		}
+		auto* store = SShaderCache::g_openedContentStore.load();
+		if (!store)
+			return;
+		const auto maxBytes = SShaderCache::ContentStoreMaxBytes();
+		store->SetMaxBytes(maxBytes);
+		// Walking and deleting can take a while on a large store; the store outlives the plugin, so detach.
+		std::thread([store, maxBytes] { store->Trim(maxBytes); }).detach();
 	}
 
 	ShaderCache::ContentStoreUsage ShaderCache::GetContentStoreUsage()
 	{
-		const auto& path = SShaderCache::ContentStorePath();
-		const auto usage = Util::ShaderContentStore::MeasureUsage(path);
-		std::error_code ec;
-		auto absolute = std::filesystem::absolute(path, ec);
-		return { ec ? path : absolute, usage.blobs, usage.bytes, SShaderCache::ContentStoreMaxBytes() };
+		const auto usage = Util::ShaderContentStore::MeasureUsage(SShaderCache::ContentStorePath());
+		return { SShaderCache::ContentStoreDisplayPath(), usage.blobs, usage.bytes, SShaderCache::ContentStoreMaxBytes() };
 	}
 
 	bool ShaderCache::IsHideErrors()
