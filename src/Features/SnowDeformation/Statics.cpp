@@ -4922,6 +4922,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		context->VSSetShader(contactSkinVS, nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
+		// Tracks the bound VS across actors: a rigid part leaves contactVS bound for the next actor.
+		bool skinnedVSBound = true;
 		const auto* playerCamera = RE::PlayerCamera::GetSingleton();
 		const bool firstPerson = playerCamera && playerCamera->IsInFirstPerson();
 		for (const auto& actor : contactActors) {
@@ -4939,7 +4941,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				uint hidden = 0, unlit = 0, proxy = 0, above = 0, skinned = 0, dynamic = 0, dynamicUnread = 0;
 			} tally;
 			int geometryIndex = -1;
-			bool skinnedVSBound = true;
 			auto visitGeometry = [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				ScopedTicks _geometryTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactGeometry], cpuCensus.spanCalls[CpuCensus::kSpanContactGeometry]);
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
