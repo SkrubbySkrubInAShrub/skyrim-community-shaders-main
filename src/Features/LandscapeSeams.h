@@ -45,7 +45,10 @@ struct LandscapeSeams : Feature
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 	virtual void PostPostLoad() override;
+	/** @brief Rebuilds loaded quads after a settings change. */
 	virtual void Prepass() override;
+	/** @brief Releases land geometry the engine has dropped. Runs every frame, also outside the world or with the shader cache off. */
+	virtual void Reset() override;
 
 	struct QuadKey
 	{
@@ -87,7 +90,6 @@ struct LandscapeSeams : Feature
 		winrt::com_ptr<ID3D11ShaderResourceView> weights;
 		winrt::com_ptr<ID3D11ShaderResourceView> data;
 		std::array<std::array<RE::NiSourceTexturePtr, TexturesPerExtra>, MaxExtraLayers> extras;
-		bool hasGlint = false;
 	};
 
 	struct Quad
@@ -112,9 +114,13 @@ struct LandscapeSeams : Feature
 		std::array<std::array<uint8_t, GridVertices>, MaxLayers> weights{};
 	};
 
+	/** @brief True while the feature is loaded and enabled, so seam permutations may be drawn. */
 	bool IsRenderable() const { return loaded && settings.Enabled; }
-	bool IsBlended(RE::BSGeometry* a_geometry, bool& a_hasGlint);
+	/** @brief True when this land quad geometry has blend resources and should draw with the seams permutation. */
+	bool IsBlended(RE::BSGeometry* a_geometry);
+	/** @brief Binds the quad's weights, quad data and borrowed textures to t104-t121. Render thread only, before the draw. */
 	void Bind(RE::BSGeometry* a_geometry);
+	/** @brief Reads a newly set up land record's quads and rebuilds them and their neighbours. */
 	void TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land);
 
 private:
@@ -131,4 +137,5 @@ private:
 	std::unordered_map<RE::BSGeometry*, QuadKey> loadedQuads;
 	std::vector<RE::BSGeometry*> retiredGeometry;
 	std::atomic_bool rebuildRequested = false;
+	uint32_t currentWorldSpace = 0;
 };

@@ -27,6 +27,11 @@
 		float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1 - nearBlendToFar)) : 0;
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
+#	if defined(LANDSCAPE_SEAMS)
+		// The height helpers read the borrowed weights from LandscapeSeams; sharpen them like w1/w2 for the march
+		const float4 unsharpenedExtraWeights = LandscapeSeams::ExtraWeights;
+		LandscapeSeams::ExtraWeights = lerp(unsharpenedExtraWeights, smoothstep(0, 1, unsharpenedExtraWeights), blendFactor);
+#	endif
 #	if defined(TRUE_PBR)
 		float scale = TerrainMaxWeightedHeightScaleW(w1, w2, params);
 		float scalercp = rcp(max(scale, 1e-4));
@@ -196,6 +201,9 @@
 			pixelOffset = 0.0;
 		}
 
+#if defined(LANDSCAPE) && defined(LANDSCAPE_SEAMS)
+		LandscapeSeams::ExtraWeights = unsharpenedExtraWeights;
+#endif
 		return resultCoords;
 	}
 

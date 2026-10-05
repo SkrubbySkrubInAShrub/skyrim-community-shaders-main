@@ -148,18 +148,19 @@ void LandscapeSeams::DrawSettings()
 		ImGui::TextWrapped("%s", T(TKEY("enabled_tooltip"), "Blends landscape textures across quad borders. Turning this off restores the vanilla blend immediately."));
 
 	int blendRadius = static_cast<int>(settings.BlendRadius);
-	if (ImGui::SliderInt(T(TKEY("blend_radius"), "Blend Radius"), &blendRadius, 1, static_cast<int>(MaxBlendRadius), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+	if (ImGui::SliderInt(T(TKEY("blend_radius"), "Blend Radius"), &blendRadius, 1, static_cast<int>(MaxBlendRadius), "%d", ImGuiSliderFlags_AlwaysClamp))
 		settings.BlendRadius = static_cast<uint32_t>(blendRadius);
+	// Rebuilding re-heals every loaded quad, so wait until the slider is released.
+	if (ImGui::IsItemDeactivatedAfterEdit())
 		rebuildRequested = true;
-	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", T(TKEY("blend_radius_tooltip"), "How far from a quad border the blend reaches, in landscape vertices (128 game units each)."));
 
 	int extraLayers = static_cast<int>(settings.ExtraLayers);
-	if (ImGui::SliderInt(T(TKEY("extra_layers"), "Extra Texture Layers"), &extraLayers, 0, static_cast<int>(MaxExtraLayers), "%d", ImGuiSliderFlags_AlwaysClamp)) {
+	if (ImGui::SliderInt(T(TKEY("extra_layers"), "Extra Texture Layers"), &extraLayers, 0, static_cast<int>(MaxExtraLayers), "%d", ImGuiSliderFlags_AlwaysClamp))
 		settings.ExtraLayers = static_cast<uint32_t>(extraLayers);
+	if (ImGui::IsItemDeactivatedAfterEdit())
 		rebuildRequested = true;
-	}
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::TextWrapped("%s", T(TKEY("extra_layers_tooltip"), "Textures a quad may borrow from its neighbours on top of its own six. Zero keeps the vanilla limit and only blends textures both quads already share."));
 
@@ -189,6 +190,7 @@ void LandscapeSeams::LoadSettings(json& o_json)
 	settings = o_json;
 	settings.BlendRadius = std::clamp(settings.BlendRadius, 1u, MaxBlendRadius);
 	settings.ExtraLayers = std::min(settings.ExtraLayers, MaxExtraLayers);
+	rebuildRequested = true;
 }
 
 void LandscapeSeams::SaveSettings(json& o_json)
@@ -202,7 +204,7 @@ void LandscapeSeams::RestoreDefaultSettings()
 	rebuildRequested = true;
 }
 
-bool LandscapeSeams::IsBlended(RE::BSGeometry* a_geometry, bool& a_hasGlint)
+bool LandscapeSeams::IsBlended(RE::BSGeometry* a_geometry)
 {
 	if (!settings.Enabled)
 		return false;
@@ -212,10 +214,7 @@ bool LandscapeSeams::IsBlended(RE::BSGeometry* a_geometry, bool& a_hasGlint)
 	if (loadedIt == loadedQuads.end())
 		return false;
 	const auto quadIt = quads.find(loadedIt->second);
-	if (quadIt == quads.end() || !quadIt->second.resources)
-		return false;
-	a_hasGlint = quadIt->second.resources->hasGlint;
-	return true;
+	return quadIt != quads.end() && quadIt->second.resources;
 }
 
 void LandscapeSeams::Bind(RE::BSGeometry* a_geometry)
@@ -412,6 +411,9 @@ void LandscapeSeams::Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_ou
 		if (entry.slot >= 0) {
 			layerOf[i] = entry.slot;
 		} else if (fieldMax[i] >= MinLayerWeight && entry.texture->textureSet != nullptr) {
+			// The vanilla terrain shader would read a PBR base color as an sRGB diffuse.
+			if (!a_out.pbr && globals::features::truePBR.IsPBRTextureSet(Util::GetSeasonalSwap(entry.texture->textureSet)))
+				continue;
 			candidates[candidateCount++] = static_cast<int>(i);
 		}
 	}
@@ -480,10 +482,8 @@ std::shared_ptr<LandscapeSeams::Resources> LandscapeSeams::CreateResources(const
 				data.Flags |= FlagPbr << extra;
 				if (layer[3] != nullptr && layer[3] != defaults.defaultTextureBlack)
 					data.Flags |= FlagDisplacement << extra;
-				if (pbrData->glintParameters.enabled) {
+				if (pbrData->glintParameters.enabled)
 					data.Flags |= FlagGlint << extra;
-					resources->hasGlint = true;
-				}
 				data.PBRParams[extra] = { pbrData->roughnessScale, pbrData->displacementScale, pbrData->specularLevel, 0.0f };
 				data.GlintParams[extra] = {
 					pbrData->glintParameters.screenSpaceScale,
@@ -702,6 +702,14 @@ void LandscapeSeams::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 	{
 		const std::unique_lock lock(mutex);
 
+		// Unloaded quads stay cached so new neighbours can still blend against their borders.
+		// Drop the unloaded ones of other worldspaces so the cache holds at most one worldspace.
+		const uint32_t worldSpaceID = worldSpace->GetFormID();
+		if (worldSpaceID != currentWorldSpace) {
+			currentWorldSpace = worldSpaceID;
+			std::erase_if(quads, [&](const auto& a_entry) { return a_entry.first.worldSpace != worldSpaceID && a_entry.second.geometry == nullptr; });
+		}
+
 		for (auto& entry : loadedNow) {
 			auto& quad = quads[entry.key];
 			if (quad.geometry != nullptr) {
@@ -782,10 +790,13 @@ void LandscapeSeams::Sweep()
 
 void LandscapeSeams::Prepass()
 {
-	Sweep();
-
 	if (rebuildRequested.exchange(false))
 		RebuildAll();
+}
+
+void LandscapeSeams::Reset()
+{
+	Sweep();
 }
 
 struct LandscapeSeams::Hooks
@@ -810,8 +821,7 @@ struct LandscapeSeams::Hooks
 			if (renderPasses == nullptr || !a_property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
 				return renderPasses;
 
-			bool hasGlint = false;
-			const bool blended = globals::features::landscapeSeams.IsBlended(a_geometry, hasGlint);
+			const bool blended = globals::features::landscapeSeams.IsBlended(a_geometry);
 
 			for (auto* pass = renderPasses->head; pass != nullptr; pass = pass->next) {
 				if (pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
@@ -822,13 +832,12 @@ struct LandscapeSeams::Hooks
 				if (type != SIE::ShaderCache::LightingShaderTechniques::MTLand && type != SIE::ShaderCache::LightingShaderTechniques::MTLandLODBlend)
 					continue;
 
-				if (blended) {
+				// Only the seams bit is added: BeginTechnique's fallback clears just this bit, so it must
+				// leave the quad's own permutation. Borrowed glint layers glint only on quads that already use GLINT.
+				if (blended)
 					technique |= SeamsFlag;
-					if (hasGlint && (technique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0)
-						technique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::AnisoLighting);
-				} else {
+				else
 					technique &= ~SeamsFlag;
-				}
 				pass->passEnum = technique + LightingTechniqueStart;
 			}
 
