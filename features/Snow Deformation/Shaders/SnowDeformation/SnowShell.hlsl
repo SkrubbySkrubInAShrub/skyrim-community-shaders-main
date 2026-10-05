@@ -2538,6 +2538,31 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 	}
 	return 1.0 - occl;
 }
+
+// Detail grain from the diffuse's luminance, for snow sets without a normal map.
+float3 ShellLuminanceBump(float3 normalWS, float2 worldXY, float bumpFade)
+{
+	const float kBumpTile = 64.0;
+	const float kBumpHeight = 0.55;
+	float2 texDims;
+	SnowDiffuse.GetDimensions(texDims.x, texDims.y);
+	float e = 1.5 / texDims.x;
+	float2 detailUV = worldXY / kBumpTile;
+	const float3 kLum = float3(0.30, 0.45, 0.25);
+#ifdef SNOW_SHELL_DEFERRED
+	const float2 detailDx = gDeferredGridDx / kBumpTile;
+	const float2 detailDy = gDeferredGridDy / kBumpTile;
+	float h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
+	float hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
+	float hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
+#else
+	float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
+	float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
+	float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
+#endif
+	float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
+	return normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
+}
 #endif
 
 #if defined(SNOW_S1_RESOLVE)
@@ -3206,6 +3231,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
 	}
+#ifndef SNOW_LUMBUMP_OVER_NORMAL
+	else if (HasSnowTexture != 0 && bumpFade > 0.001)
+		normalWS = ShellLuminanceBump(normalWS, worldXYPS, bumpFade);
+#endif
 
 	// Frost crystal, laid on top of the flattened powder grain rather than
 	// instead of it: the flattening is what reads as frozen over, this puts the
@@ -3222,29 +3251,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		normalWS = normalize(normalWS +
 							 (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
 	}
+#ifdef SNOW_LUMBUMP_OVER_NORMAL
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
-	{
-		const float kBumpTile = 64.0;
-		const float kBumpHeight = 0.55;
-		float2 texDims;
-		SnowDiffuse.GetDimensions(texDims.x, texDims.y);
-		float e = 1.5 / texDims.x;
-		float2 detailUV = worldXYPS / kBumpTile;
-		const float3 kLum = float3(0.30, 0.45, 0.25);
-#ifdef SNOW_SHELL_DEFERRED
-		const float2 detailDx = gDeferredGridDx / kBumpTile;
-		const float2 detailDy = gDeferredGridDy / kBumpTile;
-		float h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
-		float hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
-		float hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
-#else
-		float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
-		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
-		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
+		normalWS = ShellLuminanceBump(normalWS, worldXYPS, bumpFade);
 #endif
-		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
-		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
-	}
 
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 

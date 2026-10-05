@@ -2155,7 +2155,7 @@ public:
 	bool shellMarchBicubicRestored = false;
 	bool shellMarchBicubicCompiledPS = false;
 	bool shellMarchBicubicCompiledPSNoDepth = false;
-	/** @brief Measurement A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 2 serial SSS re-march loads, 4 no untouched-tile skip. Rekeys the no-export PS. */
+	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 2 serial SSS re-march loads, 4 no untouched-tile skip, 8 the luminance grain over the normal map (Debugging Options checkbox too). Rekeys the no-export and deferred PSs. */
 	uint32_t shellPSLegacyBits = 0;
 	uint32_t shellPSLegacyBitsCompiled = 0;
 

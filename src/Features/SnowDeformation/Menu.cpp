@@ -2378,6 +2378,11 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextDisabled("%s", joinState);
 			if (shellEarlyViewMismatches > 0)
 				ImGui::TextDisabled("%s %u", T(TKEY("shell_join_view_mismatch"), "Frames whose view changed under the early pass:"), shellEarlyViewMismatches);
+			bool oldGrain = (shellPSLegacyBits & 8u) != 0;
+			if (ImGui::Checkbox(T(TKEY("shell_old_detail_grain"), "Old Ground Detail Grain"), &oldGrain))
+				shellPSLegacyBits = oldGrain ? (shellPSLegacyBits | 8u) : (shellPSLegacyBits & ~8u);
+			if (auto _ttGrain = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_old_detail_grain_tooltip"), "The ground snow's old detail grain: the grain drawn from the snow texture's brightness on top of the snow set's normal map, and none under frost on sets without one. Off is the recipe object snow uses: that grain only where the snow set has no normal map, with frost on top of it. Recompiles the ground snow's shader."));
 			ImGui::TreePop();
 		}
 		ImGui::TreePop();

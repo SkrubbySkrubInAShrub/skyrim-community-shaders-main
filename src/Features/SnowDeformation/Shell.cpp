@@ -1287,6 +1287,8 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 			defines.emplace_back("SNOW_REMARCH_SERIAL", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
+		if (shellPSLegacyBits & 8)
+			defines.emplace_back("SNOW_LUMBUMP_OVER_NORMAL", "");
 		shellMarchBicubicCompiledPSNoDepth = shellMarchBicubicRestored;
 		shellPSLegacyBitsCompiled = shellPSLegacyBits;
 		shellPSNoDepth = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
@@ -1355,6 +1357,8 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 			defines.emplace_back("SNOW_REMARCH_SERIAL", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
+		if (shellPSLegacyBits & 8)
+			defines.emplace_back("SNOW_LUMBUMP_OVER_NORMAL", "");
 		shellPSDeferredLegacyBits = shellPSLegacyBits;
 		shellPSDeferred = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
