@@ -848,6 +848,9 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	return reflectionColor;
 }
 
+// Effects 11 water: depth over which the surface reaches full opacity at the shore
+static const float ShoreFadeDepth = 12.0;
+
 float GetScreenDepthWater(float2 screenPosition)
 {
 	float depth = DepthTex.Load(float3(screenPosition, 0)).x;
@@ -1209,12 +1212,25 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
 
-	if (SharedData::enbSettings.EnableWater)
+	// Reflection and sun weights. Vanilla fades both with refractionMul, which only reaches 1 once
+	// the water is deep enough to fog, so shallow water lost its reflections.
+	float surfaceMul = diffuseOutput.refractionMul;
+	float sunMul = depthControl.w;
+	bool shoreFadedSurface = false;
+
+	if (SharedData::enbSettings.EnableWater) {
 		sunColor *= SharedData::enbSettings.WaterSunSpecularMultiplier;
+#					if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
+		// distanceMul.w is the water depth below the surface over FogParam.z, saturated
+		surfaceMul = saturate(distanceMul.w * FogParam.z / max(min(ShoreFadeDepth, FogParam.z), 1e-4));
+		sunMul = max(sunMul, surfaceMul);
+		shoreFadedSurface = true;
+#					endif
+	}
 
 #					if defined(VC)
-	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);
-	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+	float specularFraction = lerp(1, fresnel * surfaceMul, distanceBlendFactor);
+	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * sunMul;
 
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;
@@ -1265,7 +1281,15 @@ PS_OUTPUT main(PS_INPUT input)
 
 #					else
 	float specularFraction = lerp(1, fresnel, distanceBlendFactor);
+	float waterOpacity = diffuseOutput.refractionMul;
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+	if (shoreFadedSurface) {
+		// Reflection takes its share first; the rest splits between the water color and the see-through refraction.
+		// Divided by the opacity because the composite below lerps from the refraction by it.
+		float reflectionWeight = specularFraction * surfaceMul;
+		waterOpacity = lerp(diffuseOutput.refractionMul, 1.0, reflectionWeight);
+		finalColorPreFog = (diffuseOutput.refractionDiffuseColor * (diffuseOutput.refractionMul * (1.0 - reflectionWeight)) + specularColor * reflectionWeight + sunColor * sunMul) / max(waterOpacity, 1e-4);
+	}
 
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;
@@ -1321,7 +1345,7 @@ PS_OUTPUT main(PS_INPUT input)
 #						endif
 	refractionColor = lerp(refractionColor, fogColor, Color::FogAlpha(fogFactor));
 
-	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
+	float3 finalColor = lerp(refractionColor, finalColorPreFog, waterOpacity);
 #						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
 	// DEBUG MODE: Override water color with debug visualization
 	float3 debugColor = WetnessEffects::GetDebugWetnessColorStandard(waterData.rippleInfo, 2.0, 3.0);
