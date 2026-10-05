@@ -818,6 +818,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/PBR.hlsli"
 #	endif
 
+#	if defined(LANDSCAPE) && defined(LANDSCAPE_SEAMS)
+#		include "LandscapeSeams/LandscapeSeams.hlsli"
+#	endif
+
 #	if defined(EMAT)
 #		include "ExtendedMaterials/ExtendedMaterials.hlsli"
 #	endif
@@ -990,9 +994,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	endif  // defined (SKINNED) || !defined (MODELSPACENORMALS)
 
+#	if defined(LANDSCAPE) && defined(LANDSCAPE_SEAMS)
+	LandscapeSeams::Load(input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy, input.LandBlendWeights1, input.LandBlendWeights2);
+#	endif
+
 #	if !defined(TRUE_PBR)
 #		if defined(LANDSCAPE)
 	float shininess = dot(input.LandBlendWeights1, LandscapeTexture1to4IsSpecPower) + input.LandBlendWeights2.x * LandscapeTexture5to6IsSpecPower.x + input.LandBlendWeights2.y * LandscapeTexture5to6IsSpecPower.y;
+#			if defined(LANDSCAPE_SEAMS)
+	shininess += dot(LandscapeSeams::ExtraWeights, LandscapeSeams::Data.SpecPower);
+#			endif
 #		else
 	float shininess = HasSpecular() ? SpecularColor.w : 0.0;
 #		endif  // defined (LANDSCAPE)
@@ -1080,6 +1091,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LANDSCAPE)
 #			if defined(TRUE_PBR)
 #				define LANDSCAPE_PARALLAX_ENABLED (SharedData::extendedMaterialSettings.EnableParallax)
+#			elif defined(LANDSCAPE_SEAMS)
+#				define LANDSCAPE_PARALLAX_ENABLED                                 \
+					(SharedData::extendedMaterialSettings.EnableTerrainParallax || \
+						(SharedData::extendedMaterialSettings.EnableParallax && (((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::THLandHasDisplacement) != 0) || LandscapeSeams::HasAnyFlag(LandscapeSeams::AnyParallaxMask))))
 #			else
 #				define LANDSCAPE_PARALLAX_ENABLED                                 \
 					(SharedData::extendedMaterialSettings.EnableTerrainParallax || \
@@ -1110,7 +1125,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(EMAT)
 #		if defined(LANDSCAPE)
-	DisplacementParams displacementParams[6];
+	DisplacementParams displacementParams[TERRAIN_LAYER_COUNT];
 	displacementParams[0].DisplacementScale = 1.f;
 	displacementParams[0].DisplacementOffset = 0.f;
 	displacementParams[0].HeightScale = 1;
@@ -1296,6 +1311,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// Normalise blend weights
 	float totalWeight = input.LandBlendWeights1.x + input.LandBlendWeights1.y + input.LandBlendWeights1.z +
 	                    input.LandBlendWeights1.w + input.LandBlendWeights2.x + input.LandBlendWeights2.y;
+#		if defined(LANDSCAPE_SEAMS)
+	totalWeight += dot(LandscapeSeams::ExtraWeights, 1.0);
+	if (totalWeight > 0.0)
+		LandscapeSeams::ExtraWeights /= totalWeight;
+#		endif
 	if (totalWeight > 0.0) {
 		input.LandBlendWeights1 /= totalWeight;
 		input.LandBlendWeights2.xy /= totalWeight;
@@ -1323,6 +1343,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		displacementParams[3] = displacementParams[0];
 		displacementParams[4] = displacementParams[0];
 		displacementParams[5] = displacementParams[0];
+#			if defined(LANDSCAPE_SEAMS)
+		displacementParams[6] = displacementParams[0];
+		displacementParams[7] = displacementParams[0];
+		displacementParams[8] = displacementParams[0];
+		displacementParams[9] = displacementParams[0];
+#			endif
 #			if defined(TRUE_PBR)
 		displacementParams[0].HeightScale *= PBRParams1.y;
 		displacementParams[1].HeightScale *= LandscapeTexture2PBRParams.y;
@@ -1330,10 +1356,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		displacementParams[3].HeightScale *= LandscapeTexture4PBRParams.y;
 		displacementParams[4].HeightScale *= LandscapeTexture5PBRParams.y;
 		displacementParams[5].HeightScale *= LandscapeTexture6PBRParams.y;
+#				if defined(LANDSCAPE_SEAMS)
+		displacementParams[6].HeightScale *= LandscapeSeams::Data.PBRParams[0].y;
+		displacementParams[7].HeightScale *= LandscapeSeams::Data.PBRParams[1].y;
+		displacementParams[8].HeightScale *= LandscapeSeams::Data.PBRParams[2].y;
+		displacementParams[9].HeightScale *= LandscapeSeams::Data.PBRParams[3].y;
+#				endif
 #			endif
 
-		float weights[6];
-		weights[0] = weights[1] = weights[2] = weights[3] = weights[4] = weights[5] = 0.0;
+		float weights[TERRAIN_LAYER_COUNT] = TERRAIN_LAYER_ZEROS;
 
 		const bool doTerrainPom = ExtendedMaterials::TerrainHasAnyDisplacement() &&
 		                          ExtendedMaterials::TerrainMaxWeightedHeightScale(input, displacementParams) > 0.01;
@@ -1354,6 +1385,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			input.LandBlendWeights1.w = weights[3];
 			input.LandBlendWeights2.x = weights[4];
 			input.LandBlendWeights2.y = weights[5];
+#			if defined(LANDSCAPE_SEAMS)
+			LandscapeSeams::ExtraWeights = float4(weights[6], weights[7], weights[8], weights[9]);
+#			endif
 		}
 		hasTerrainParallaxShadow =
 			viewPosition.z < ExtendedMaterials::ParallaxCheapDistance &&
@@ -1427,6 +1461,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	LIGHTING_LANDSCAPE_BLEND_ONE_LAYER(3, TexLandColor4Sampler, SampLandColor4Sampler, TexLandNormal4Sampler, SampLandNormal4Sampler, input.LandBlendWeights1.w, LandscapeTexture1to4IsSnow.w)
 	LIGHTING_LANDSCAPE_BLEND_ONE_LAYER(4, TexLandColor5Sampler, SampLandColor5Sampler, TexLandNormal5Sampler, SampLandNormal5Sampler, input.LandBlendWeights2.x, LandscapeTexture5to6IsSnow.x)
 	LIGHTING_LANDSCAPE_BLEND_ONE_LAYER(5, TexLandColor6Sampler, SampLandColor6Sampler, TexLandNormal6Sampler, SampLandNormal6Sampler, input.LandBlendWeights2.y, LandscapeTexture5to6IsSnow.y)
+#		endif
+#		if defined(LANDSCAPE_SEAMS)
+	LANDSCAPE_SEAMS_BLEND_EXTRAS
 #		endif
 #		undef SampleTerrain
 

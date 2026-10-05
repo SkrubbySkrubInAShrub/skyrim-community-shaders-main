@@ -2,10 +2,10 @@
 #define EXTENDED_MATERIALS_PARALLAX_CORE_HLSLI
 
 #if defined(LANDSCAPE)
-	float2 GetParallaxCoords(PS_INPUT input, float distance, float2 coords, float mipLevels[6], float maxTexDim, float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[6],
+	float2 GetParallaxCoords(PS_INPUT input, float distance, float2 coords, float mipLevels[6], float maxTexDim, float3 viewDir, float3x3 tbn, float noise, DisplacementParams params[TERRAIN_LAYER_COUNT],
 		StochasticOffsets sharedOffset,
 		out float pixelOffset,
-		out float weights[6])
+		out float weights[TERRAIN_LAYER_COUNT])
 #else
 	float2 GetParallaxCoords(float distance, float2 coords, float mipLevel, float3 viewDir, float3x3 tbn, float noise, Texture2D<float4> tex, SamplerState texSampler, uint channel, DisplacementParams params, bool applyMeshTV, StochasticOffsets meshOffset, out float pixelOffset)
 #endif
@@ -28,7 +28,7 @@
 		float4 w1 = lerp(input.LandBlendWeights1, smoothstep(0, 1, input.LandBlendWeights1), blendFactor);
 		float2 w2 = lerp(input.LandBlendWeights2.xy, smoothstep(0, 1, input.LandBlendWeights2.xy), blendFactor);
 #	if defined(TRUE_PBR)
-		float scale = max(params[0].HeightScale * w1.x, max(params[1].HeightScale * w1.y, max(params[2].HeightScale * w1.z, max(params[3].HeightScale * w1.w, max(params[4].HeightScale * w2.x, params[5].HeightScale * w2.y)))));
+		float scale = TerrainMaxWeightedHeightScaleW(w1, w2, params);
 		float scalercp = rcp(max(scale, 1e-4));
 		float maxHeight = 0.1 * scale;
 #	else
@@ -186,6 +186,12 @@
 			weights[3] = input.LandBlendWeights1.w;
 			weights[4] = input.LandBlendWeights2.x;
 			weights[5] = input.LandBlendWeights2.y;
+#	if defined(LANDSCAPE_SEAMS)
+			weights[6] = LandscapeSeams::ExtraWeights.x;
+			weights[7] = LandscapeSeams::ExtraWeights.y;
+			weights[8] = LandscapeSeams::ExtraWeights.z;
+			weights[9] = LandscapeSeams::ExtraWeights.w;
+#	endif
 #endif
 			pixelOffset = 0.0;
 		}

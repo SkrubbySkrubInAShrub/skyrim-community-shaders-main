@@ -901,7 +901,8 @@ void State::ModifyShaderLookup(const RE::BSShader& a_shader, uint& a_vertexDescr
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::AnisoLighting |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::BaseObjectIsSnow |
 										(uint32_t)SIE::ShaderCache::LightingShaderFlags::Snow |
-										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr);
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::TruePbr |
+										(uint32_t)SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
 				a_pixelDescriptor &= ~((uint32_t)SIE::ShaderCache::LightingShaderFlags::AmbientSpecular |
 									   (uint32_t)SIE::ShaderCache::LightingShaderFlags::ShadowDir |
