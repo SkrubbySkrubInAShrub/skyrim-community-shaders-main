@@ -449,10 +449,24 @@ public:
 		int IncorporealMode = 1;
 		/** @brief Let shouts plough the snow in front of the shouter. Off, a shout still marks through whatever projectile it throws, which is why the breaths already made a mark or two before this existed. */
 		bool EnableShoutCones = true;
-		/** @brief Total spread of a shout's cone, in degrees. The records author no width - only a reach - so this is the one number about a shout's shape that has to be taste. */
-		float ShoutConeSpread = 25.0f;
-		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
-		float ShoutConeLength = 1.0f;
+		/** @brief Multiplier on the reach the shout's own projectile authors: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. The mark fades and breaks up before it ends, so this is where the last streaks stop. */
+		float ShoutMarkReach = 0.6f;
+		/** @brief Widest full width of a shout's mark, as a fraction of its reach. The records author no width - only a reach - so this is taste. */
+		float ShoutMarkWidth = 0.45f;
+		/** @brief Where along the reach the mark is widest, as a fraction of it. */
+		float ShoutMarkWaist = 0.38f;
+		/** @brief Outline exponent: 1 straight-sided, 2 an oval, higher blunter. */
+		float ShoutMarkRoundness = 1.4f;
+		/** @brief Fraction of the reach held at full depth before the mark fades. */
+		float ShoutMarkFadeStart = 0.2f;
+		/** @brief Depth at the far end, as a fraction of the depth at the mouth. */
+		float ShoutMarkFarDepth = 0.25f;
+		/** @brief How broken up a shove's mark is: 0 a smooth scoop, 1 uneven streaks near the mouth thinning to dashes with distance. Shoves only; a breath's mark stays smooth. */
+		float ShoutChurn = 1.0f;
+		/** @brief Width of a churn streak, world units. */
+		float ShoutStreakSize = 24.0f;
+		/** @brief Length of a churn streak as a multiple of its width, along the shout. */
+		float ShoutStreakLength = 3.0f;
 		/**
 		 * @brief DDS the frost pattern is drawn from, relative to Data.
 		 *
@@ -830,6 +844,8 @@ public:
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
 		float4 StampEnds[kMaxStamps];
+		/** @brief Cone stamps only: x final reach from the apex, y widest half-width, z churn seed. Zero for every other stamp. */
+		float4 StampCones[kMaxStamps];
 
 
 		float2 ContactCenter;
@@ -850,9 +866,13 @@ public:
 		float HasRoadRaster;
 		/** @brief Snow Resistance's trampled fade: xy = TrampleBracket(), z = TrampledResistFade (0 while the extent bake is not live), w spare. Mirror in DeformationUpdateCS.hlsl. */
 		float4 TrampleResist;
+		/** @brief Shout mark outline and depth along the reach: x ShoutMarkWaist, y ShoutMarkRoundness, z ShoutMarkFadeStart, w ShoutMarkFarDepth. */
+		float4 ShoutShape;
+		/** @brief Shout mark churn: x ShoutChurn, y ShoutStreakSize, z ShoutStreakLength, w spare. */
+		float4 ShoutChurn;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
-	static_assert(offsetof(PerFrame, ContactCenter) == 8336, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, ContactCenter) == 12432, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
 
 	Settings settings;
 
@@ -4669,6 +4689,9 @@ protected:
 		bool bowl = false;
 		/** @brief Read the pair of points as a WEDGE instead of a capsule: previous is the apex, position the far centre, radius the half-width there. Only shouts set it - a row of discs cannot stand in for a cone, because every stamp holds full depth across only the inner tenth of its radius and so reads as a row of craters. */
 		bool cone = false;
+		/** @brief Cone only: final reach from the apex, and the churn seed. */
+		float coneLength = 0.0f;
+		float coneSeed = 0.0f;
 	};
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
@@ -4939,6 +4962,8 @@ protected:
 		float coneLength = 0.0f;
 		/** @brief Cone only: units per second the front travels, off the shout's own projectile. A shout is a thing that GOES somewhere - it does not appear along its whole length at once. */
 		float coneSpeed = 0.0f;
+		/** @brief Cone only: offsets the churn pattern, so two shouts from one spot do not share streaks. */
+		float coneSeed = 0.0f;
 	};
 	std::vector<ActiveBlast> activeBlasts;
 
@@ -4979,9 +5004,8 @@ protected:
 	/**
 	 * @brief A shout, queued by the cast sink for the gather to lay down.
 	 *
-	 * A cone is not a capsule, so a shout cannot be one stamp. Laid down as a
-	 * row of discs of growing radius along its axis instead, which needs no new
-	 * stamp mode, shader change or constant-buffer field.
+	 * Opened as one cone stamp whose front runs out from the mouth at the
+	 * shout's own speed.
 	 */
 	struct QueuedCone
 	{

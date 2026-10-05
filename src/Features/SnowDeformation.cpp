@@ -71,8 +71,15 @@
 	X(CorpseElementalMarks) \
 	X(CorpseEffectSeconds) \
 	X(EnableShoutCones) \
-	X(ShoutConeSpread) \
-	X(ShoutConeLength) \
+	X(ShoutMarkReach) \
+	X(ShoutMarkWidth) \
+	X(ShoutMarkWaist) \
+	X(ShoutMarkRoundness) \
+	X(ShoutMarkFadeStart) \
+	X(ShoutMarkFarDepth) \
+	X(ShoutChurn) \
+	X(ShoutStreakSize) \
+	X(ShoutStreakLength) \
 	X(ForceCarveDepth) \
 	X(DashGougeScale) \
 	X(ForceTrackWidth) \
@@ -1094,6 +1101,10 @@ void SnowDeformation::PrepassSimulation()
 	// was cut with until firmer traffic re-cuts it.
 	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f * std::lerp(1.0f, 0.3f, GetSnowSoftness()), 0.0f, 0.98f);
 	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
+	perFrameData.ShoutShape = { std::clamp(settings.ShoutMarkWaist, 0.05f, 0.95f), std::clamp(settings.ShoutMarkRoundness, 1.0f, 4.0f),
+		std::clamp(settings.ShoutMarkFadeStart, 0.0f, 0.98f), std::clamp(settings.ShoutMarkFarDepth, 0.0f, 1.0f) };
+	perFrameData.ShoutChurn = { std::clamp(settings.ShoutChurn, 0.0f, 1.0f), std::max(settings.ShoutStreakSize, 4.0f),
+		std::max(settings.ShoutStreakLength, 1.0f), 0.0f };
 
 	float deltaTime = *globals::game::deltaTime;
 	// Taken here rather than beside the trench work below because the refill is
@@ -1427,6 +1438,7 @@ void SnowDeformation::PrepassSimulation()
 			mix(&perFrameData.StampCount, sizeof(perFrameData.StampCount));
 			mix(perFrameData.Stamps, perFrameData.StampCount * sizeof(perFrameData.Stamps[0]));
 			mix(perFrameData.StampEnds, perFrameData.StampCount * sizeof(perFrameData.StampEnds[0]));
+			mix(perFrameData.StampCones, perFrameData.StampCount * sizeof(perFrameData.StampCones[0]));
 			cpuCensus.stampHashStable = h == cpuCensus.stampHash ? cpuCensus.stampHashStable + 1 : 0;
 			cpuCensus.stampHash = h;
 			cpuCensus.stampHashRing[cpuCensus.stampHashHead] = h;

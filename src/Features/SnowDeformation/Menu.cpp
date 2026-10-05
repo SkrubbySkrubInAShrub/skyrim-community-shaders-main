@@ -995,24 +995,52 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_force"), "Force (Shouts)"));
 		if (auto _ttForce = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("spell_cat_force_tooltip"), "Force is the one school that moves snow without changing it. Everything else removes it, burns it or freezes it; a shove pushes it aside, so it is also the only one that piles a ridge at the far lip - and that ridge is what makes Unrelenting Force read as pushed rather than deleted."));
+			ImGui::Text("%s", T(TKEY("spell_cat_force_tooltip"), "Force is the one school that moves snow without changing it. Everything else removes it, burns it or freezes it; a shove throws it forward and aside, deepest at the mouth and breaking up into streaks that thin out with distance, and piles what it moved along the rim. That is what makes Unrelenting Force read as pushed rather than deleted."));
 		ImGui::Checkbox(T(TKEY("shout_cones"), "Shouts Plough The Snow"), &settings.EnableShoutCones);
 		if (auto _ttShout = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shout_cones_tooltip"), "Lets a shout work the whole wedge of ground in front of the shouter rather than only the spot its projectile happens to strike. Each shout takes its reach from its own record, so a dragon's breath carries ten times a Greybeard's without anything being named. Off, shouts still mark through whatever they throw."));
+			ImGui::Text("%s", T(TKEY("shout_cones_tooltip"), "Lets a shout work the whole oval of ground in front of the shouter rather than only the spot its projectile happens to strike. Each shout takes its reach from its own record, so a dragon's breath carries ten times a Greybeard's without anything being named. Off, shouts still mark through whatever they throw."));
 
-		ImGui::SliderFloat(T(TKEY("shout_spread"), "Shout Cone Spread"), &settings.ShoutConeSpread, 5.0f, 150.0f, "%.0f deg");
-		if (auto _ttSpread = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shout_spread_tooltip"), "How wide the wedge opens. The records author a shout's REACH but never its width, so this is the one thing about a shout's shape that has to be taste rather than a reading."));
+		ImGui::SliderFloat(T(TKEY("shout_reach"), "Shout Mark Reach"), &settings.ShoutMarkReach, 0.1f, 2.0f, "%.2fx");
+		if (auto _ttReach = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_reach_tooltip"), "Multiplier on the reach each shout's own projectile authors - about 1000 units for Unrelenting Force, 1200 for the breaths, ten times that for a dragon. The far part of the mark fades and breaks up on its own, so this sets where the last streaks end, not where the solid scoop does. Aiming upward shortens it; aiming at the sky throws it away, since the snow layer cannot hold a mark in the air."));
+
+		ImGui::SliderFloat(T(TKEY("shout_width"), "Shout Mark Width"), &settings.ShoutMarkWidth, 0.1f, 1.5f, "%.2f of reach");
+		if (auto _ttWidth = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_width_tooltip"), "How wide the mark is at its widest, as a fraction of its reach. The records author a shout's REACH but never its width, so this is the one thing about its shape that has to be taste rather than a reading."));
 
 		ImGui::SliderFloat(T(TKEY("force_carve_depth"), "Force Carve Depth"), &settings.ForceCarveDepth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttForceDepth = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("force_carve_depth_tooltip"), "How deep a full-strength shove ploughs, as a fraction of the layer. Each shout scales down from here by the impact force its own record carries, so a dragon's shout bites harder than a breath's shove without either being named."));
+			ImGui::Text("%s", T(TKEY("force_carve_depth_tooltip"), "How deep a full-strength shove ploughs at the mouth, as a fraction of the layer; the mark gets shallower from there. Each shout scales down from here by the impact force its own record carries, so a dragon's shout bites harder than a breath's shove without either being named."));
+
+		ImGui::SliderFloat(T(TKEY("shout_fade_start"), "Shout Mark Fade Start"), &settings.ShoutMarkFadeStart, 0.0f, 1.0f, "%.2f of reach");
+		if (auto _ttFade = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_fade_start_tooltip"), "How far along the mark the snow is thrown to full depth before it starts getting shallower. 0 fades from the mouth; 1 holds full depth to the end."));
+
+		ImGui::SliderFloat(T(TKEY("shout_churn"), "Shout Churn"), &settings.ShoutChurn, 0.0f, 1.0f, "%.2f");
+		if (auto _ttChurn = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_churn_tooltip"), "How broken up a shove's mark is. 0 is a smooth scoop. At 1 the snow near the mouth is thrown in uneven streaks, and further out only the strongest streaks land, so the mark thins into dashes before it ends. Shoves only - a breath's mark stays smooth."));
 
 		ImGui::PushID("spell_cat_force");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("shout_length"), "Shout Cone Reach"), &settings.ShoutConeLength, 0.1f, 3.0f, "%.2fx");
-			if (auto _ttLen = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shout_length_tooltip"), "Multiplier on the reach each shout's own projectile authors. At 1.0 you get exactly what the game says - about 1000 units for Unrelenting Force, 1200 for the breaths, and far more for a dragon. Aiming upward shortens it; aiming at the sky throws it away, since the snow layer cannot hold a mark in the air."));
+			ImGui::SliderFloat(T(TKEY("shout_waist"), "Shout Mark Widest Point"), &settings.ShoutMarkWaist, 0.1f, 0.9f, "%.2f of reach");
+			if (auto _ttWaist = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shout_waist_tooltip"), "Where along the reach the mark is widest. Low values swell it just ahead of the mouth and taper the rest; high values open it slowly and round off the far end."));
+
+			ImGui::SliderFloat(T(TKEY("shout_roundness"), "Shout Mark Roundness"), &settings.ShoutMarkRoundness, 1.0f, 3.0f, "%.2f");
+			if (auto _ttRound = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shout_roundness_tooltip"), "The outline's curve. 1 is straight-sided - a kite from the mouth to the widest point and on to the end; 2 is an oval; higher squares the sides off."));
+
+			ImGui::SliderFloat(T(TKEY("shout_far_depth"), "Shout Mark Far Depth"), &settings.ShoutMarkFarDepth, 0.0f, 1.0f, "%.2f");
+			if (auto _ttFar = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shout_far_depth_tooltip"), "Depth the mark fades to at its far end, against the depth at the mouth. What lands out there is the odd streak; this is how deep it goes."));
+
+			ImGui::SliderFloat(T(TKEY("shout_streak_size"), "Shout Streak Size"), &settings.ShoutStreakSize, 8.0f, 80.0f, "%.0f");
+			if (auto _ttStreak = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shout_streak_size_tooltip"), "Width of the streaks the churn breaks a shove's mark into, in world units. Below a couple of map texels they blur together."));
+
+			ImGui::SliderFloat(T(TKEY("shout_streak_length"), "Shout Streak Length"), &settings.ShoutStreakLength, 1.0f, 8.0f, "%.1fx");
+			if (auto _ttStreakLen = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shout_streak_length_tooltip"), "How much longer than wide each streak is, along the direction of the shout. 1 is blotches; higher draws them out into the lines snow thrown forward leaves."));
 
 			ImGui::SliderFloat(T(TKEY("force_track"), "Travelling Shove Track"), &settings.ForceTrackWidth, 10.0f, 300.0f, "%.0f");
 			if (auto _ttTrack = Util::HoverTooltipWrapper())

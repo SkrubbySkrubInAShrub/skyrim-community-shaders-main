@@ -142,11 +142,7 @@ static constexpr float kBlastRampSeconds = 0.09f;
 // with is whatever struck it moments before it fell - not something from a
 // fight two rooms back.
 static constexpr float kElementalMemory = 6.0f;
-// Discs laid along a shout's axis. Enough that their overlap reads as one
-// continuous wedge rather than a row of circles, few enough that a shout
-// cannot swallow the stamp pool on its own.
-static constexpr int kShoutConeDiscs = 10;
-// How far in front of the shouter the wedge begins, in world units. A shout
+// How far in front of the shouter the mark begins, in world units. A shout
 // comes out of a MOUTH, so the ground the shouter is standing on is not in it -
 // roughly a body's width plus half a metre at Skyrim's scale, where a metre is
 // about 70 units. Without this the cone opened from between their feet.
@@ -934,7 +930,7 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	// ranges differ by ten times across them, from a dragon's 10000 down to
 	// Dismay's 768, which no single constant could have covered.
 	float range = projectile && projectile->data.range > 1.0f ? projectile->data.range : kShoutDefaultRange;
-	range = std::clamp(range * std::max(settings.ShoutConeLength, 0.0f), 0.0f, kShoutRangeMax);
+	range = std::clamp(range * std::max(settings.ShoutMarkReach, 0.0f), 0.0f, kShoutRangeMax);
 
 	// Impact force says how hard a shout SHOVES, so it scales a shove and
 	// nothing else. Reading it as a depth for the breaths was wrong and showed
@@ -1639,35 +1635,32 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	if (activeBlasts.size() >= kMaxSpellEmitters)
 		return;
 
-	// ONE wedge. It was ten discs along the axis, and that could never work:
-	// a stamp holds full depth across only the inner tenth of its radius and
-	// tapers over all the rest, so overlapping discs read as a row of craters
-	// with shallow gaps rather than as a widening mouth. The shape has to be
-	// the shape.
-	const float halfSpread = std::clamp(settings.ShoutConeSpread, 1.0f, 170.0f) * 0.5f;
-	const float farHalfWidth = std::max(a_cone.length * std::tan(halfSpread * 0.0174532925f), 8.0f);
-
 	// Not named 'far': that is a legacy Windows macro and expands to nothing,
 	// which turns the declaration below into a syntax error a long way from here.
 	const RE::NiPoint3 tip = a_cone.position + a_cone.direction * a_cone.length;
 	// The apex stands off in front of the shouter, so the snow they are
-	// standing in is left alone and the wedge opens from the mouth outward.
+	// standing in is left alone and the mark opens from the mouth outward.
 	const float standoff = std::min(kShoutMouthOffset, a_cone.length * 0.5f);
 	const RE::NiPoint3 apex = a_cone.position + a_cone.direction * standoff;
-	// Measured at the middle of the wedge rather than at either end: the apex
+	const float travel = std::max(a_cone.length - standoff, 1.0f);
+	// One stamp: the shader shapes the oval, its depth fade and its churn
+	// from the reach and the widest half-width. A row of discs reads as
+	// craters, since a stamp holds full depth across only the inner tenth of
+	// its radius.
+	const float halfWidth = std::max(travel * std::clamp(settings.ShoutMarkWidth, 0.05f, 2.0f) * 0.5f, 8.0f);
+	// Measured at the middle of the mark rather than at either end: the apex
 	// is beside the shouter, and the far end may be over a cliff.
 	const RE::NiPoint3 mid = a_cone.position + a_cone.direction * (a_cone.length * 0.5f);
 	float groundZ = mid.z;
 	a_tes->GetLandHeight(mid, groundZ);
 	float strength = 0.0f;
 	float reachOut = 0.0f;
-	if (!GroundMark(mid.z - groundZ, farHalfWidth, strength, reachOut))
+	if (!GroundMark(mid.z - groundZ, halfWidth, strength, reachOut))
 		return;
 	strength *= a_cone.strength;
 	if (strength < kMinSpellStrength)
 		return;
 
-	const float travel = std::max(a_cone.length - standoff, 1.0f);
 	const float speed = std::max(a_cone.speed, 1.0f);
 
 	ActiveBlast opened{};
@@ -1677,7 +1670,8 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	opened.coneDir = { a_cone.direction.x, a_cone.direction.y };
 	opened.coneLength = travel;
 	opened.coneSpeed = speed;
-	opened.radius = farHalfWidth;
+	opened.coneSeed = static_cast<float>(spellStats.shouts % 97u) * 7.31f;
+	opened.radius = halfWidth;
 	opened.strength = strength;
 	opened.rate = kExplosionRate;
 	// Held for as long as the front takes to run out, and then a moment more.
@@ -2397,9 +2391,8 @@ void SnowDeformation::GatherSpellEmitters()
 				emitter.cone = it->cone;
 				emitter.radius = it->radius;
 				if (it->cone) {
-					// The angle is what stays fixed as the front advances, so
-					// the half-width grows with the reach rather than standing
-					// at its final size over a stub of a wedge.
+					// Where the front is this frame; the shader shapes the mark
+					// against the final reach and reveals it up to here.
 					// Measured from the age this frame ENDS at, so the first
 					// frame lays a sliver rather than nothing.
 					const float extent = std::clamp(
@@ -2407,7 +2400,8 @@ void SnowDeformation::GatherSpellEmitters()
 						0.0f, 1.0f);
 					emitter.position = { it->apex.x + it->coneDir.x * it->coneLength * extent,
 						it->apex.y + it->coneDir.y * it->coneLength * extent };
-					emitter.radius = it->radius * extent;
+					emitter.coneLength = it->coneLength;
+					emitter.coneSeed = it->coneSeed;
 				}
 				emitter.strength = it->strength * ramp;
 				emitter.rate = it->rate;

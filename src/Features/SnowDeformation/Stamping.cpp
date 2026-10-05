@@ -673,6 +673,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// Refs the stamp budget cut short; their anchors carry to the next frame.
 	std::unordered_set<uint32_t> budgetCutRefs;
 	stampStats = {};
+	for (auto& cone : perFrameData.StampCones)
+		cone = { 0.0f, 0.0f, 0.0f, 0.0f };
 
 	// The map is 2048 whatever the Trenches range, so past ~100 m a texel
 	// outgrows the minimum print and a min-size stamp can fall entirely
@@ -1911,6 +1913,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stamp.w = (pits && !emitter.cone) ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
 		                                    std::max(emitter.radius, 4.0f);
 		perFrameData.Stamps[stampCount] = stamp;
+		if (emitter.cone)
+			perFrameData.StampCones[stampCount] = { emitter.coneLength, stamp.w, emitter.coneSeed, 0.0f };
 		// Pits carry their ring fraction where a melt carries its rate: an
 		// instantaneous mark has no rate to give, and a cloak needs to say it
 		// pocks a ring at its reach rather than a bowl at its feet.

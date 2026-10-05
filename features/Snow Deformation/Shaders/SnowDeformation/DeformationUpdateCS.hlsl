@@ -36,9 +36,12 @@
 //   PIT   (2) - instantaneous like CARVE, and scorches. Scorched snow is
 //               displaced snow and keeps its berm; melted snow has none.
 //   CRUST (3) - sustained, approaching a target at a rate. Moves no snow.
-// Adding STAMP_MODE_CONE reinterprets the same three fields as a wedge: apex
-// at the segment start, axis to its end, radius = the half-width at the far
-// end. Shouts only. A row of discs cannot stand in for it - each stamp holds
+// Adding STAMP_MODE_CONE reinterprets the same three fields as a shout mark:
+// apex at the segment start, axis to the front's current position, radius =
+// the widest half-width. StampCones[i] carries the final reach, so the
+// outline (ShoutShape) and the depth fade are shaped against where the mark
+// ENDS, never against how far the front has got; the front only reveals.
+// Shouts only. A row of discs cannot stand in for it - each stamp holds
 // full depth across the inner tenth of its radius, so they read as craters.
 //
 // Melted ground refills SLOWER rather than carrying extra depth: depth is
@@ -73,14 +76,17 @@
 // own number rather than the melt bowl's, because that one is a FIRE knob and
 // a cyclone's gouge has no business changing shape when fire is retuned.
 #define CARVE_BOWL_FLOOR 0.0
-// A cone's width is a fixed SLOPE from its apex, never a fraction of how far it
-// has got so far. That distinction is the whole of why it can grow: both the
-// stamp's radius and its axis scale together as the front advances, so the
-// slope between them is constant and ground once covered never changes shape
-// again. Anything here that keyed off the CURRENT length instead - a mouth
-// width, a fade over the last stretch - reached back and re-shaped snow the
-// front had already passed, which is what made the near berms crawl outward
-// as the shout ran on.
+// A shout mark's outline, depth fade and churn are functions of the texel's
+// place against the FINAL reach (StampCones[i].x), so ground the front has
+// passed never changes shape again. The one term that reads the front's
+// current position is the lead-in below, and it only ever rises toward the
+// final value - carve is max-blended, so that is safe. Anything keyed to the
+// current length that could fall later reaches back and re-shapes snow the
+// front has already passed (the old wedge's mouth width did exactly that).
+// Fraction of the reach the front fades in over: the reveal is a soft edge
+// running just ahead of the front, not a wall sliding along the snow, and
+// it sits past the far end once the front is there.
+#define CONE_FRONT_LEAD 0.1
 
 // Upwind supply sample distance for wind-biased refill, in texels.
 #define DRIFT_FETCH_TEXELS 3.0
@@ -240,7 +246,9 @@ cbuffer PerFrame : register(b0)
 
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
-
+	// Cone stamps only: x final reach from the apex, y widest half-width, z
+	// churn seed (per shout). Zero for every other stamp.
+	float4 StampCones[MAX_STAMPS];
 
 	// Rasterized prop contact (SnowContactCapture.hlsl): the field's world
 	// centre, half-extent and texel dim (0 = no field this frame), and the
@@ -264,6 +272,14 @@ cbuffer PerFrame : register(b0)
 	// Snow Resistance's trampled fade: xy the extent bracket, z the amount
 	// (0 = off), w spare.
 	float4 TrampleResist;
+	// Shout mark outline and depth along the reach: x waist (fraction of the
+	// reach where it is widest), y roundness (superellipse exponent, 1 =
+	// pointed, 2 = oval), z fraction of the reach held at full depth, w depth
+	// left at the far end.
+	float4 ShoutShape;
+	// Shout mark churn (shoves only): x amount 0-1, y streak size across
+	// (units), z streak length as a multiple of y, w spare.
+	float4 ShoutChurn;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -945,24 +961,49 @@ bool StampTexel(uint2 phys)
 			// at the rim. Everything below shapes its falloff from this, so a
 			// cone and a capsule share every profile they have.
 			float edgeCoord = dist / max(radius, 1e-3);
+			// Cone only: depth scale along the reach (fade and reveal) for
+			// every mark, and the churn on top of it for a shove.
+			float coneSoft = 1.0;
+			float coneCarve = 1.0;
 			[branch] if (isCone)
 			{
 				float axisLen = sqrt(segLenSq);
 				float2 axis = axisLen > 1e-3 ? seg / axisLen : float2(1.0, 0.0);
 				float2 rel = worldPos - p0;
 				float along = dot(rel, axis);
-				// Perpendicular offset, via the 2D cross product.
-				float perp = abs(rel.x * axis.y - rel.y * axis.x);
-				float axisT = along / max(axisLen, 1e-3);
-				// One slope, straight from the apex. radius and axisLen scale
-				// together while the front travels, so this is the same wedge
-				// at every extension - only longer.
-				float halfWidth = max(radius * axisT, 1e-3);
-				edgeCoord = perp / halfWidth;
-				// Behind the apex, or past the front, is outside the shape.
-				// The far end is a clean edge on purpose: it is where the
-				// shockwave got to, not somewhere it faded away.
-				edgeCoord = (along < 0.0 || along > axisLen) ? 1e6 : edgeCoord;
+				// Signed perpendicular offset, via the 2D cross product.
+				float perp = rel.x * axis.y - rel.y * axis.x;
+				float4 cone = StampCones[i];
+				float reach = max(cone.x, axisLen);
+				float u = along / reach;
+				// Outline: two half-superellipses meeting at the waist. t runs
+				// 0 at the waist to 1 at either end.
+				float waist = clamp(ShoutShape.x, 0.05, 0.95);
+				float t = u < waist ? (waist - u) / waist : (u - waist) / (1.0 - waist);
+				float m = max(ShoutShape.y, 1.0);
+				float env = pow(max(1.0 - pow(saturate(t), m), 0.0), 1.0 / m);
+				float halfWidth = max(cone.y * env, 1e-3);
+				// Churn: value noise in the shout's own frame, stretched along
+				// the axis so the breakup reads as streaks thrown forward.
+				float churn = saturate(ShoutChurn.x);
+				float2 np = float2(along / max(ShoutChurn.y * ShoutChurn.z, 1.0), perp / max(ShoutChurn.y, 1.0)) + cone.z;
+				float n = 0.7 * StampNoise(np) + 0.3 * StampNoise(np * 2.9 + 17.3);
+				edgeCoord = abs(perp) / halfWidth / (1.0 + (n - 0.5) * 0.6 * churn);
+				// Behind the apex, or past the end, is outside the shape.
+				edgeCoord = (along < 0.0 || u > 1.0) ? 1e6 : edgeCoord;
+				// Deepest at the mouth, fading to ShoutShape.w at the end;
+				// revealed by the front as it travels.
+				float fade = lerp(1.0, saturate(ShoutShape.w), smoothstep(saturate(ShoutShape.z), 1.0, u));
+				float lead = reach * CONE_FRONT_LEAD;
+				float front = axisLen * (1.0 + CONE_FRONT_LEAD);
+				float reveal = 1.0 - smoothstep(front - lead, front, along);
+				coneSoft = fade * reveal;
+				// Coverage thins with distance: near the mouth nearly every
+				// texel is thrown, at the end only the strongest streaks.
+				float band = max(0.2 * churn, 1e-3);
+				float thr = 0.9 * churn * u;
+				float cover = smoothstep(thr - band, thr + band, n);
+				coneCarve = coneSoft * cover * lerp(1.0, n, 0.35 * churn);
 			}
 
 			[branch] if (mode < 0.5)
@@ -974,7 +1015,7 @@ bool StampTexel(uint2 phys)
 				// takes the melt bowl's floor instead, which begins falling away
 				// almost at the centre - so the cross-section curves the whole
 				// way rather than standing walls up around a flat floor.
-				float falloff = 1.0 - smoothstep(isBowl ? CARVE_BOWL_FLOOR : StampFalloffStart, 1.0, edgeDist);
+				float falloff = (1.0 - smoothstep(isBowl ? CARVE_BOWL_FLOOR : StampFalloffStart, 1.0, edgeDist)) * coneCarve;
 
 				// Crusted snow bears weight. A print on it is shallow rather
 				// than absent, and something heavy enough breaks through and
@@ -1005,7 +1046,7 @@ bool StampTexel(uint2 phys)
 					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
 					glazeWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
 				}
-				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(glazeWobble, 1e-3));
+				float falloff = (1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(glazeWobble, 1e-3))) * coneSoft;
 				crustTarget = max(crustTarget, Stamps[i].z * falloff);
 				crustRate += Stamps[i].z * StampEnds[i].w * falloff;
 			}
@@ -1058,7 +1099,7 @@ bool StampTexel(uint2 phys)
 				// CARVE's model, not melt's: the throw is instantaneous, so it
 				// is max-blended to an instant depth. Accumulating instead
 				// would let a standing lightning cloak bore a shaft.
-				float pitDepth = Stamps[i].z * shape;
+				float pitDepth = Stamps[i].z * shape * coneSoft;
 				carve = max(carve, pitDepth);
 				scorch = max(scorch, pitDepth);
 			}
@@ -1076,7 +1117,7 @@ bool StampTexel(uint2 phys)
 					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
 					meltWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
 				}
-				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(meltWobble, 1e-3));
+				float falloff = (1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(meltWobble, 1e-3))) * coneSoft;
 				// Depth this texel melts TO, and how fast it gets there. The
 				// rate carries the same falloff, so the whole basin reaches
 				// its profile together and the bowl is visible from the first
