@@ -2423,10 +2423,10 @@ public:
 	ankerl::unordered_dense::set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
-	/** @brief Per-frame projected-snow classification counters (render thread writes, Prepass publishes, menu debug section reads). */
-	std::atomic<uint32_t> statProjMatched{ 0 };
-	std::atomic<uint32_t> statProjNoProjection{ 0 };
-	std::atomic<uint32_t> statProjVetoed{ 0 };
+	/** @brief Per-frame projected-snow classification counters (render thread writes, Prepass publishes, menu debug section reads). Plain: every access is on the render thread. */
+	uint32_t statProjMatched = 0;
+	uint32_t statProjNoProjection = 0;
+	uint32_t statProjVetoed = 0;
 	uint32_t statProjMatchedPrev = 0;
 	uint32_t statProjNoProjectionPrev = 0;
 	uint32_t statProjVetoedPrev = 0;
@@ -3733,7 +3733,8 @@ public:
 	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
 	static constexpr uint32_t kStaticsRecordMax = 8192;
 	bool EnsureStaticsRecordCB();
-	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count);
+	/** @brief a_needed (optional, one byte per record): records left out are not copied; it must cover every record a draw binds. */
+	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count, const uint8_t* a_needed = nullptr);
 	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, bool a_tessStages, uint32_t& a_parity);
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
 	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */

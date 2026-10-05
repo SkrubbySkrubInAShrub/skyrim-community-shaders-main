@@ -998,9 +998,9 @@ void SnowDeformation::PrepassSimulation()
 
 	// Publish last frame's projected-snow classification counters for the
 	// menu debug readout, then reset for this frame's opaque pass.
-	statProjMatchedPrev = statProjMatched.exchange(0, std::memory_order_relaxed);
-	statProjNoProjectionPrev = statProjNoProjection.exchange(0, std::memory_order_relaxed);
-	statProjVetoedPrev = statProjVetoed.exchange(0, std::memory_order_relaxed);
+	statProjMatchedPrev = std::exchange(statProjMatched, 0u);
+	statProjNoProjectionPrev = std::exchange(statProjNoProjection, 0u);
+	statProjVetoedPrev = std::exchange(statProjVetoed, 0u);
 
 	UpdateActiveWorldspace();
 

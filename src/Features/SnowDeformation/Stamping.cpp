@@ -188,9 +188,15 @@ static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
 	if (!hay)
 		return false;
 	const size_t needleLen = strlen(a_needle);
-	for (const char* p = hay; *p; ++p)
+	// Outside the Turkish dotted/dotless i, every locale folds a byte onto the needle's first only from its other ASCII case.
+	const bool prefilter = needleLen && a_needle[0] != 'i' && a_needle[0] != 'I';
+	const char firstFolded = (char)(a_needle[0] | 0x20);
+	for (const char* p = hay; *p; ++p) {
+		if (prefilter && (char)(*p | 0x20) != firstFolded)
+			continue;
 		if (_strnicmp(p, a_needle, needleLen) == 0)
 			return true;
+	}
 	return false;
 }
 

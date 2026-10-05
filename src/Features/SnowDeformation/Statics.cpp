@@ -148,9 +148,22 @@ struct GeometryNameFacts
 	bool lodVetoLogged = false;
 };
 
+// One multiply; std::hash of a pointer is FNV-1a over all eight bytes. The hooks probe on every draw.
+struct SD_PointerHash
+{
+	size_t operator()(const void* a_pointer) const noexcept
+	{
+		const uint64_t h = (uint64_t)(uintptr_t)a_pointer * 0x9E3779B97F4A7C15ull;
+		return (size_t)(h ^ (h >> 32));
+	}
+};
+
+// File scope: a function-local static pays the thread-safe init check on every call.
+static std::unordered_map<const char*, GeometryNameFacts, SD_PointerHash> sNameFactsCache;
+
 static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 {
-	static std::unordered_map<const char*, GeometryNameFacts> cache;
+	auto& cache = sNameFactsCache;
 	static GeometryNameFacts empty;
 	// Same one-entry memo as RecordOf: the hook asks 2-3 times per draw.
 	static const void* lastGeometry = nullptr;
@@ -580,9 +593,11 @@ struct GeometryRecord
 	uint32_t depthVersion = 0;
 };
 
+static std::unordered_map<const void*, GeometryRecord, SD_PointerHash> sGeometryRecordCache;
+
 static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
 {
-	static std::unordered_map<const void*, GeometryRecord> cache;
+	auto& cache = sGeometryRecordCache;
 	static const void* lastGeometry = nullptr;
 	static GeometryRecord* lastRecord = nullptr;
 	const char* name = a_geometry->name.c_str();
@@ -717,15 +732,15 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			!NameFactsOf(a_pass->geometry).engineDecal)
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowObjectBarePass);
 		if (!passProjected || treeAnim) {
-			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
+			statProjNoProjection++;
 		} else if (rec.mato == MatoClass::kNotSnow) {
-			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
+			statProjVetoed++;
 		} else if (NameFactsOf(a_pass->geometry).engineDecal) {
 			// A runtime decal inherits its target's projected technique; it is a mark on the snow, not snow.
 			// By the engine's own geometry name, never kDynamicDecal: DynDOLOD's passthru LOD batches carry that flag.
-			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
+			statProjVetoed++;
 		} else {
-			statProjMatched.fetch_add(1, std::memory_order_relaxed);
+			statProjMatched++;
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 			bindSnowSet = true;
 		}
@@ -1844,7 +1859,7 @@ bool SnowDeformation::EnsureStaticsRecordCB()
 	return true;
 }
 
-bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count)
+bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count, const uint8_t* a_needed)
 {
 	if (staticsRecordDisabled || a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
 		return false;
@@ -1855,7 +1870,8 @@ bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t 
 			return false;
 		auto* dst = static_cast<uint8_t*>(mapped.pData);
 		for (uint32_t r = 0; r < a_count; r++)
-			memcpy(dst + size_t(r) * kStaticsRecordStride, &a_records[r], sizeof(StaticsCB));
+			if (!a_needed || a_needed[r])
+				memcpy(dst + size_t(r) * kStaticsRecordStride, &a_records[r], sizeof(StaticsCB));
 		context->Unmap(staticsRecordCB[i].get(), 0);
 	}
 	return true;
@@ -2122,6 +2138,20 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 	const uint32_t farRecordBase = captureCount * recordBlocks;
 	std::vector<StaticsCB> captureRecords(size_t(farRecordBase) + farCount);
+	// A capture wholly outside a window rasterizes to nothing there; the list
+	// reaches the object-snow range, far past the raster windows.
+	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
+		const auto& wb = a_geometry->worldBound;
+		return std::abs(wb.center.x - heightWindowCenter.x) > a_halfExtent + wb.radius ||
+		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
+	};
+	// The records a draw below binds: the loops' own tests. The volume binds every coarse record; far records are all kept.
+	std::vector<uint8_t> recordNeeded(captureRecords.size(), 0);
+	// Read once: a volume the mask did not cover takes the per-draw update path.
+	const bool volumeRecords = settings.VolumeSnow;
+	if (volumeRecords)
+		std::fill_n(recordNeeded.begin(), captureCount, uint8_t(1));
+	std::fill(recordNeeded.begin() + farRecordBase, recordNeeded.end(), uint8_t(1));
 	// The largest depth the skin-depth raster can hold this frame: only road
 	// records write one (SnowHeightCapture), MAX-blended from a zero clear.
 	float maxSeedDepth = 0.0f;
@@ -2154,6 +2184,12 @@ void SnowDeformation::RenderObjectHeightMap()
 			continue;
 		if (uint32_t(descKey & 0xF) == 0)
 			continue;
+
+		const bool inWindow = !outsideWindow(geometry, halfExtent);
+		recordNeeded[ci] |= uint8_t(inWindow);
+		recordNeeded[size_t(captureCount) + ci] = uint8_t(inWindow);
+		if (fineLevel)
+			recordNeeded[size_t(captureCount) * 2 + ci] = uint8_t(!outsideWindow(geometry, FineRasterHalfExtent()));
 
 		const auto& rot = cap.world.rotate;
 		const float scale = cap.world.scale;
@@ -2211,15 +2247,15 @@ void SnowDeformation::RenderObjectHeightMap()
 			farBlock.HeightHalfExtent = farHalfExtentLive;
 		}
 	}
-	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), uint32_t(captureRecords.size()));
+	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), uint32_t(captureRecords.size()), recordNeeded.data());
 	uint32_t captureParity = 0;
-
-	// A capture wholly outside a window rasterizes to nothing there; the list
-	// reaches the object-snow range, far past the raster windows.
-	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
-		const auto& wb = a_geometry->worldBound;
-		return std::abs(wb.center.x - heightWindowCenter.x) > a_halfExtent + wb.radius ||
-		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
+	// The top/bottom and top-only PSs read no b1: the raster loops bind the VS alone and the PS takes the last record after them.
+	uint32_t lastRasterRecord = ~0u;
+	uint32_t lastRasterParity = 0;
+	auto bindRasterRecord = [&](uint32_t a_index) {
+		lastRasterRecord = a_index;
+		lastRasterParity = captureParity;
+		BindStaticsRecord(a_index, false, false, captureParity);
 	};
 
 	globals::profiler->BeginPass("SnowDeformation::Objects - Height Map");
@@ -2262,7 +2298,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 		binds.Smooth(context, captureSmoothSRVs[ci].get());
 		if (captureRecordsLive)
-			BindStaticsRecord(ci, true, false, captureParity);
+			bindRasterRecord(ci);
 		else
 			staticsCB->Update(captureRecords[ci]);
 
@@ -2326,7 +2362,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			fineBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
 			fineBinds.Smooth(context, captureSmoothSRVs[ci].get());
 			if (captureRecordsLive)
-				BindStaticsRecord(captureCount * 2 + ci, true, false, captureParity);
+				bindRasterRecord(captureCount * 2 + ci);
 			else
 				staticsCB->Update(captureRecords[size_t(captureCount) * 2 + ci]);
 			context->DrawIndexed(indexCount, 0, 0);
@@ -2380,7 +2416,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			farBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
 			farBinds.Smooth(context, captureSmoothSRVs[ci].get());
 			if (captureRecordsLive)
-				BindStaticsRecord(farRecordBase + farRecordIndex[ci], true, false, captureParity);
+				bindRasterRecord(farRecordBase + farRecordIndex[ci]);
 			else
 				staticsCB->Update(captureRecords[size_t(farRecordBase) + farRecordIndex[ci]]);
 			context->DrawIndexed(indexCount, 0, 0);
@@ -2389,6 +2425,15 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->OMSetRenderTargets(3, nullRTVs, nullptr);
 	} else {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Map Roads");
+	}
+	if (lastRasterRecord != ~0u) {
+		// Unbind first: the runtime filters a rebind of the same buffer at a new offset.
+		ID3D11Buffer* none = nullptr;
+		context->PSSetConstantBuffers(1, 1, &none);
+		ID3D11Buffer* buffer = staticsRecordCB[lastRasterParity & 1].get();
+		const UINT first = lastRasterRecord * (kStaticsRecordStride / 16);
+		const UINT count = kStaticsRecordStride / 16;
+		staticsContext1->PSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 	}
 
 	// The layer-2 PEEL: re-rasterize the captures against the finished
@@ -2488,7 +2533,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (settings.VolumeSnow && skyWanted && !skyOpenCurrent && heightTopRaw[previous])
 		bakeSkyOpen(heightTopRaw[previous]);
 
-	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive, captureParity);
+	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive && volumeRecords, captureParity);
 
 	ID3D11Buffer* nullVB = nullptr;
 	UINT zero = 0;
@@ -3869,6 +3914,19 @@ void SnowDeformation::DrawCapturedStatics()
 		SD_DrawBinds binds;
 		for (const auto& d : skinDraws) {
 			const auto& cap = *d.cap;
+			const uint32_t recordIndex = drawIndex++;
+			// Depth export only where the carve can fire: SnowStaticsShell's
+			// carveObject is LegacySkin, i.e. cap.road. Everything else writes
+			// back the rasterised depth, so dropping the export leaves the same
+			// number in the buffer and hands early-Z rejection back to the whole
+			// pass. The debug spike forces the no-depth path on every draw, roads
+			// included. The prepass twins mirror the same split so the private
+			// depth holds exactly what the shipping shaders would have written.
+			// Depth fight view: every skin through the prepass, roads too.
+			const bool needsDepth = !staticsEarlyZSpike && staticsDebugView != 9 && cap.road;
+			// Skipped before any state: each drawn skin sets all it reads.
+			if (a_prepass && needsDepth)
+				continue;
 			if (d.decalDepth != boundDecal) {
 				boundDecal = d.decalDepth;
 				context->RSSetState(GetSkinRasterState(boundDecal));
@@ -3887,7 +3945,6 @@ void SnowDeformation::DrawCapturedStatics()
 
 			// Smoothed normals (built once per unique mesh): pillow inflation
 			// for flat split-normal surfaces; planks, roofs, pole caps.
-			const uint32_t recordIndex = drawIndex++;
 			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex].get();
 			binds.Smooth(context, skinSmoothSRV);
 			const bool wantTess = tessellateSkins && !d.s4Shell;
@@ -3900,17 +3957,6 @@ void SnowDeformation::DrawCapturedStatics()
 				cpuCensus.skinLoopCBUpdates++;
 			}
 
-			// Depth export only where the carve can fire: SnowStaticsShell's
-			// carveObject is LegacySkin, i.e. cap.road. Everything else writes
-			// back the rasterised depth, so dropping the export leaves the same
-			// number in the buffer and hands early-Z rejection back to the whole
-			// pass. The debug spike forces the no-depth path on every draw, roads
-			// included. The prepass twins mirror the same split so the private
-			// depth holds exactly what the shipping shaders would have written.
-			// Depth fight view: every skin through the prepass, roads too.
-			const bool needsDepth = !staticsEarlyZSpike && staticsDebugView != 9 && cap.road;
-			if (a_prepass && needsDepth)
-				continue;
 			ID3D11PixelShader* wantPS = a_prepass ? prepassPS :
 			                                        ((!needsDepth && staticsPSNoDepth) ? staticsPSNoDepth : staticsPS);
 			if (wantPS != boundStaticsPS) {
