@@ -58,10 +58,11 @@ void ENBDepthOfField::Execute()
 	}
 
 	SetShaderResourceVariable("TexturePrevious", textureApertureRead.srv.get());
-	ExecuteTechnique("Aperture", textureApertureWrite);
-
-	apertureSRV = textureApertureWrite.srv.get();
-	apertureFrame = globals::state->frameCount;
+	// Publish the aperture only when the pass wrote it; an effect without a valid Aperture technique leaves it unwritten
+	if (ExecuteTechnique("Aperture", textureApertureWrite)) {
+		apertureSRV = textureApertureWrite.srv.get();
+		apertureFrame = globals::state->frameCount;
+	}
 
 	SetShaderResourceVariable("TextureAperture", textureApertureWrite.srv.get());
 	ExecuteTechnique("ReadFocus", textureReadFocus);
