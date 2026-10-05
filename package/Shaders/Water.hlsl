@@ -1212,15 +1212,15 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 sunColor = GetSunColor(normal, viewDirection, input.WPosition.xyz) * surfaceShadow;
 
-	// Reflection and sun weights. Vanilla fades both with refractionMul, which only reaches 1 once
-	// the water is deep enough to fog, so shallow water lost its reflections.
+	// Reflection and sun weights. On refracting water vanilla fades both with refractionMul, which only
+	// reaches 1 once the water is deep enough to fog, so shallow water lost its reflections.
 	float surfaceMul = diffuseOutput.refractionMul;
 	float sunMul = depthControl.w;
 	bool shoreFadedSurface = false;
 
 	if (SharedData::enbSettings.EnableWater) {
 		sunColor *= SharedData::enbSettings.WaterSunSpecularMultiplier;
-#					if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
+#					if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH) && defined(REFRACTIONS)
 		// distanceMul.w is the water depth below the surface over FogParam.z, saturated
 		surfaceMul = saturate(distanceMul.w * FogParam.z / max(min(ShoreFadeDepth, FogParam.z), 1e-4));
 		sunMul = max(sunMul, surfaceMul);
@@ -1282,13 +1282,17 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 	float specularFraction = lerp(1, fresnel, distanceBlendFactor);
 	float waterOpacity = diffuseOutput.refractionMul;
-	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+	float3 finalColorPreFog;
 	if (shoreFadedSurface) {
 		// Reflection takes its share first; the rest splits between the water color and the see-through refraction.
-		// Divided by the opacity because the composite below lerps from the refraction by it.
+		// The sun is a reflection too, so it fades in with the surface instead of rimming see-through water.
+		// Divided by the opacity because the composite below lerps from the refraction by it; the floor keeps that
+		// continuous and moves at most 0.1% of the weight off the refraction.
 		float reflectionWeight = specularFraction * surfaceMul;
-		waterOpacity = lerp(diffuseOutput.refractionMul, 1.0, reflectionWeight);
-		finalColorPreFog = (diffuseOutput.refractionDiffuseColor * (diffuseOutput.refractionMul * (1.0 - reflectionWeight)) + specularColor * reflectionWeight + sunColor * sunMul) / max(waterOpacity, 1e-4);
+		waterOpacity = max(lerp(diffuseOutput.refractionMul, 1.0, reflectionWeight), 1e-3);
+		finalColorPreFog = (diffuseOutput.refractionDiffuseColor * (diffuseOutput.refractionMul * (1.0 - reflectionWeight)) + specularColor * reflectionWeight + sunColor * (sunMul * surfaceMul)) / waterOpacity;
+	} else {
+		finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 	}
 
 #						if !defined(UNIFIED_WATER)
