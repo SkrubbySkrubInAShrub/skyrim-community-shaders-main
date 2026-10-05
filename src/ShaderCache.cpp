@@ -12,6 +12,7 @@
 #include "Deferred.h"
 #include "State.h"
 #include "Utils/CompileDedupe.h"
+#include "Utils/ShaderContentStore.h"
 
 #include "Features/DynamicCubemaps.h"
 
@@ -1412,13 +1413,84 @@ namespace SIE
 			return registry;
 		}
 
+		/** @brief Directory of the persistent shader store inside the disk cache. */
+		static const std::filesystem::path& ContentStorePath()
+		{
+			static const std::filesystem::path path = std::filesystem::path(L"Data/ShaderCache") / Util::ShaderContentStore::kDirName;
+			return path;
+		}
+
+		static uint64_t ContentStoreMaxBytes()
+		{
+			return static_cast<uint64_t>(globals::state->contentStoreMaxMB.load(std::memory_order_relaxed)) << 20;
+		}
+
+		/** @brief Size and timestamp of the loaded d3dcompiler, so a compiler update cannot reuse bytecode the old one built. */
+		static const std::string& GetCompilerIdentity()
+		{
+			static const std::string identity = [] {
+				wchar_t path[MAX_PATH]{};
+				const HMODULE module = GetModuleHandleW(L"d3dcompiler_47.dll");
+				if (!module || !GetModuleFileNameW(module, path, MAX_PATH))
+					return std::string("unknown");
+				std::error_code ec;
+				const auto size = std::filesystem::file_size(path, ec);
+				const auto time = std::filesystem::last_write_time(path, ec).time_since_epoch().count();
+				return std::format("{}:{}", size, time);
+			}();
+			return identity;
+		}
+
+		/**
+		 * @brief Store key for a dedupe key.
+		 * The dedupe key only has to be unique within a session; stored blobs outlive the session, so the key
+		 * also covers the compiler, Developer Mode (unstripped debug blobs) and a schema version.
+		 * Bump the schema when how a blob is produced changes (strip flags, post-processing).
+		 */
+		static Util::ContentHash::Hash128 StoreKey(const Util::ContentHash::Hash128& a_key)
+		{
+			static constexpr std::string_view kSchema = "store-v1";
+			const auto context = std::format("{}|{}|{}", kSchema, GetCompilerIdentity(), globals::state->IsDeveloperMode() ? "dev" : "release");
+			return Util::ContentHash::CombineHashes(a_key, Util::ContentHash::HashString(context));
+		}
+
+		/** @brief The persistent shader store, or null while the setting is off. Opened on first use. */
+		static Util::ShaderContentStore::Store* GetContentStore()
+		{
+			if (!globals::state->enableContentStore.load(std::memory_order_relaxed))
+				return nullptr;
+			static Util::ShaderContentStore::Store& store = []() -> Util::ShaderContentStore::Store& {
+				static Util::ShaderContentStore::Store created(ContentStorePath(), ContentStoreMaxBytes());
+				const auto temps = created.RemoveTempFiles();
+				const auto trimmed = created.Trim(ContentStoreMaxBytes());
+				const auto usage = Util::ShaderContentStore::MeasureUsage(ContentStorePath());
+				logger::info("Shader content store: {} blobs, {} MB at {}, trimmed {} entries, removed {} unfinished writes",
+					usage.blobs, usage.bytes >> 20, std::filesystem::absolute(ContentStorePath()).string(), trimmed, temps);
+				return created;
+			}();
+			return &store;
+		}
+
+		/** @brief An intact stored blob for this key, or null on a miss or corrupt entry. */
+		static winrt::com_ptr<ID3DBlob> ReadStoredBlob(const Util::ShaderContentStore::Store& a_store, const Util::ContentHash::Hash128& a_key)
+		{
+			const auto stored = a_store.Get(StoreKey(a_key));
+			winrt::com_ptr<ID3DBlob> blob;
+			if (stored.empty() || FAILED(D3DCreateBlob(stored.size(), blob.put())))
+				return nullptr;
+			std::memcpy(blob->GetBufferPointer(), stored.data(), stored.size());
+			return IsIntactDxbc(blob.get()) ? blob : nullptr;
+		}
+
 		/** @brief What preprocessing a task and joining any identical compile produced. */
 		struct SharedCompile
 		{
 			ID3DBlob* blob = nullptr;                           ///< A finished blob for identical code.
 			std::optional<Util::CompileDedupe::Ticket> ticket;  ///< Set when this task must compile.
+			std::optional<Util::ContentHash::Hash128> key;      ///< The dedupe key; set when preprocessing succeeded.
 			std::string source;                                 ///< The preprocessed code the key was built from; empty if preprocessing failed.
 			bool compileFailed = false;                         ///< An identical compile already failed; skip compiling.
+			bool fromStore = false;                             ///< `blob` came from the persistent shader store.
 		};
 
 		static SharedCompile AcquireSharedCompile(ShaderClass a_class, const std::wstring& a_path, const std::string& a_pathString,
@@ -1438,11 +1510,21 @@ namespace SIE
 				result.source.pop_back();
 			// Developer Mode keeps #line in the key: stripping it would share debug info with another variant's source lines.
 			const auto keyText = globals::state->IsDeveloperMode() ? result.source : Util::CompileDedupe::StripLineDirectives(result.source);
-			auto acquired = GetCompileDedupe().Acquire(Util::CompileDedupe::MakeKey({ keyText, "main", GetShaderProfile(a_class), a_flags }));
+			result.key = Util::CompileDedupe::MakeKey({ keyText, "main", GetShaderProfile(a_class), a_flags });
+			auto acquired = GetCompileDedupe().Acquire(*result.key);
 			result.compileFailed = acquired.compileFailed;
 			if (acquired.compileFailed)
 				return result;
 			if (!acquired.blob) {
+				// This task owns the compile; a stored blob from an earlier session saves it, and reaches identical tasks waiting on the ticket.
+				if (const auto* store = GetContentStore()) {
+					if (auto stored = ReadStoredBlob(*store, *result.key)) {
+						acquired.ticket->Publish(stored->GetBufferPointer(), stored->GetBufferSize());
+						result.blob = stored.detach();
+						result.fromStore = true;
+						return result;
+					}
+				}
 				result.ticket.emplace(std::move(*acquired.ticket));
 				return result;
 			}
@@ -1601,7 +1683,9 @@ namespace SIE
 			shaderBlob = shared.blob;
 			auto& dedupeTicket = shared.ticket;
 			const bool dedupeHit = shaderBlob != nullptr;
-			if (dedupeHit)
+			if (shared.fromStore)
+				cache.IncContentStoreHitTasks();
+			else if (dedupeHit)
 				cache.IncContentDedupeTasks();
 
 			// Compiling the preprocessed snapshot keeps the published bytecode matched to the key if the files change meanwhile.
@@ -1681,6 +1765,12 @@ namespace SIE
 
 			if (dedupeTicket)
 				dedupeTicket->Publish(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
+
+			// Only a blob compiled from the keyed snapshot matches its key; a reused blob is already stored or shared.
+			if (!dedupeHit && fromSnapshot && shared.key) {
+				if (const auto* store = GetContentStore())
+					store->Put(StoreKey(*shared.key), shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
+			}
 
 			// save shader to disk
 			if (useDiskCache) {
@@ -2547,12 +2637,19 @@ namespace SIE
 		compilationSet.conditionVariable.notify_one();
 	}
 
-	void ShaderCache::DeleteDiskCache()
+	void ShaderCache::DeleteDiskCache(bool a_keepContentStore)
 	{
 		std::scoped_lock lock{ compilationSet.compilationMutex };
 		try {
-			std::filesystem::remove_all(L"Data/ShaderCache");
-			logger::info("Deleted disk cache");
+			if (!a_keepContentStore) {
+				std::filesystem::remove_all(L"Data/ShaderCache");
+			} else if (std::filesystem::exists(L"Data/ShaderCache")) {
+				for (const auto& entry : std::filesystem::directory_iterator(L"Data/ShaderCache")) {
+					if (entry.path().filename().wstring() != Util::ShaderContentStore::kDirName)
+						std::filesystem::remove_all(entry.path());
+				}
+			}
+			logger::info("Deleted disk cache{}", a_keepContentStore ? " (kept the persistent shader store)" : "");
 		} catch (std::filesystem::filesystem_error const& ex) {
 			logger::error("Failed to delete disk cache: {}", ex.what());
 		}
@@ -2586,7 +2683,8 @@ namespace SIE
 		if (valid) {
 			logger::info("Using disk cache");
 		} else {
-			DeleteDiskCache();
+			// Stored blobs are keyed by their own inputs, so they stay valid across plugin and feature changes.
+			DeleteDiskCache(true);
 		}
 	}
 
@@ -2858,6 +2956,40 @@ namespace SIE
 	void ShaderCache::IncContentDedupeTasks()
 	{
 		compilationSet.contentDedupeTasks++;
+	}
+	uint64_t ShaderCache::GetContentStoreHitTasks()
+	{
+		return compilationSet.contentStoreHitTasks;
+	}
+	void ShaderCache::IncContentStoreHitTasks()
+	{
+		compilationSet.contentStoreHitTasks++;
+	}
+
+	void ShaderCache::ClearContentStore()
+	{
+		std::error_code ec;
+		std::filesystem::remove_all(SShaderCache::ContentStorePath(), ec);
+		if (ec)
+			logger::warn("Failed to clear the persistent shader store: {}", ec.message());
+	}
+
+	void ShaderCache::ApplyContentStoreLimit()
+	{
+		if (auto* store = SShaderCache::GetContentStore()) {
+			const auto maxBytes = SShaderCache::ContentStoreMaxBytes();
+			store->SetMaxBytes(maxBytes);
+			store->Trim(maxBytes);
+		}
+	}
+
+	ShaderCache::ContentStoreUsage ShaderCache::GetContentStoreUsage()
+	{
+		const auto& path = SShaderCache::ContentStorePath();
+		const auto usage = Util::ShaderContentStore::MeasureUsage(path);
+		std::error_code ec;
+		auto absolute = std::filesystem::absolute(path, ec);
+		return { ec ? path : absolute, usage.blobs, usage.bytes, SShaderCache::ContentStoreMaxBytes() };
 	}
 
 	bool ShaderCache::IsHideErrors()
@@ -3503,8 +3635,8 @@ namespace SIE
 		if (shouldLogCompletion) {
 			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
 			auto& compileDedupe = SShaderCache::GetCompileDedupe();
-			logger::debug("Compile dedupe: {} compiles shared, {} MiB retained, {} blobs over the retention cap",
-				contentDedupeTasks.load(), compileDedupe.RetainedBytes() >> 20, compileDedupe.DroppedBlobs());
+			logger::debug("Compile dedupe: {} compiles shared, {} restored from the persistent store, {} MiB retained, {} blobs over the retention cap",
+				contentDedupeTasks.load(), contentStoreHitTasks.load(), compileDedupe.RetainedBytes() >> 20, compileDedupe.DroppedBlobs());
 			compileDedupe.Clear();
 
 #ifdef DEVBENCH_BRIDGE_ENABLED
@@ -3541,6 +3673,7 @@ namespace SIE
 		diskHitTasks = 0;
 		diskHitPriorityWeight = 0;
 		contentDedupeTasks = 0;
+		contentStoreHitTasks = 0;
 		SShaderCache::GetCompileDedupe().Clear();
 		compilationPhaseStarted = false;
 		compilationPhaseStart = { 0 };
@@ -3749,7 +3882,7 @@ namespace SIE
 				// Feature shaders are not dependency-tracked, so any edit may fix a failed compile.
 				Util::ClearShaderCompileFailures();
 				if (clearCache) {
-					cache->DeleteDiskCache();
+					cache->DeleteDiskCache(true);
 					cache->Clear();
 				}
 				queue.clear();
