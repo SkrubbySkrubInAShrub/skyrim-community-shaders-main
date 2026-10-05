@@ -3,6 +3,7 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 #include "Features/SnowDeformation.h"
+#include "Features/SnowDeformation/TrenchSimd.h"
 
 #include "Globals.h"
 #include "Utils/D3D.h"
@@ -482,12 +483,7 @@ bool SnowDeformation::DecayTrenchTile(TrenchTile& a_tile)
 		return true;
 	a_tile.clock += (float)drop / 255.0f;
 
-	bool alive = false;
-	for (auto& texel : a_tile.depth) {
-		texel = (uint8_t)std::max(0, (int)texel - drop);
-		alive = alive || texel != 0;
-	}
-	return alive;
+	return TrenchSimd::DecayBytes(a_tile.depth.data(), a_tile.depth.size(), drop);
 }
 
 void SnowDeformation::SweepTrenchStore()
@@ -567,22 +563,7 @@ void SnowDeformation::SweepTrenchStore()
 		const auto& bytes = it->second.depth;
 		size_t nonZero = 0;
 		size_t pairs = 0;
-		size_t run = 0;
-		uint8_t previous = bytes[0];
-		for (size_t b = 0; b < bytes.size(); b++) {
-			if (bytes[b] != 0)
-				nonZero++;
-			if (bytes[b] == previous) {
-				run++;
-			} else {
-				// A run longer than 255 splits across pairs; the count field
-				// is one byte.
-				pairs += (run + 254) / 255;
-				previous = bytes[b];
-				run = 1;
-			}
-		}
-		pairs += (run + 254) / 255;
+		TrenchSimd::CountRuns(bytes.data(), bytes.size(), nonZero, pairs);
 
 		const uint32_t encoded = (uint32_t)(pairs * kTrenchRLEPairBytes);
 		// A tile the encoder would make bigger is kept raw, so a pathological
@@ -782,14 +763,63 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	// epsilon to half leaves no half value on the wrong side.
 	static const DirectX::PackedVector::HALF kEpsilonHalf = DirectX::PackedVector::XMConvertFloatToHalf(kTrenchStoreEpsilon);
 
+	// The tile a store texel lands in, brought up to date, or created inside the keep radius; null when refused.
+	auto tileFor = [&](const TrenchTileKey& a_key) -> TrenchTile* {
+		// The MISS is cached too, not just the hit. Most of the map
+		// is untrodden, and a cache that only remembers tiles that
+		// exist does a fresh hash lookup for every texel of empty
+		// ground - which the rolling mirror now walks tens of
+		// thousands of times a frame.
+		if (a_key != cachedKey) {
+			auto it = trenchTiles.find(a_key);
+			cachedKey = a_key;
+			cachedTile = it == trenchTiles.end() ? nullptr : &it->second;
+			if (cachedTile) {
+				// Brought up to date before fresh texels mix in, or
+				// the batch's new depths would sit beside stale ones
+				// under a single clock and decay twice.
+				DecayTrenchTile(*cachedTile);
+				// Written to, so it is recent ground whatever the
+				// LRU thought a moment ago.
+				cachedTile->lastTouch = gameClock.lastHours;
+			}
+		}
+		if (!cachedTile) {
+			// Nor does ground the cap has already pushed out of
+			// reach. Creating it would only hand the next eviction
+			// the same tile back, and the store would thrash
+			// instead of settling on the near field.
+			if (trenchKeepRadiusSq < std::numeric_limits<float>::max()) {
+				const float dx = ((float)a_key.x + 0.5f) * kTrenchTileWorld - centreX;
+				const float dy = ((float)a_key.y + 0.5f) * kTrenchTileWorld - centreY;
+				if (dx * dx + dy * dy >= trenchKeepRadiusSq)
+					return nullptr;
+			}
+			TrenchTile fresh;
+			fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
+			fresh.clock = trenchDecayClock;
+			fresh.lastTouch = gameClock.lastHours;
+			// Re-seated after the insert, which may have rehashed.
+			cachedTile = &trenchTiles.emplace(a_key, std::move(fresh)).first->second;
+			trenchAccumAdded++;
+		}
+		return cachedTile;
+	};
+
 	for (int row = 0; row < a_meta.h; row++) {
 		const auto* src = reinterpret_cast<const DirectX::PackedVector::HALF*>(
 			static_cast<const uint8_t*>(a_mapped.pData) + (size_t)row * a_mapped.RowPitch);
 		const float worldY = a_meta.origin.y + ((float)(a_meta.y0 + row) + 0.5f) * a_meta.texel;
 		const int gy0 = (int)std::floor((worldY - half) / storeTexel);
 		const int gy1 = (int)std::floor((worldY + half - 0.001f) / storeTexel);
+		const int ky0 = FloorDiv(gy0, kTrenchTileDim);
+		const int ky1 = FloorDiv(gy1, kTrenchTileDim);
 
 		for (int col = 0; col < a_meta.w; col++) {
+			if (!(col & 7) && col + 8 <= a_meta.w && !TrenchSimd::AnyAtLeast8(src + (size_t)col * 4, kEpsilonHalf)) {
+				col += 7;
+				continue;
+			}
 			// DISPLACED depth, not total - the shell's own definition
 			// (SampleDisplacedFast in SnowShell.hlsl), reused verbatim.
 			//
@@ -825,54 +855,35 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			// cover several store texels or share one. Splat across every
 			// texel it covers; where several map texels share one, the last
 			// wins, which costs sub-texel detail and nothing else.
+			const int kx0 = FloorDiv(gx0, kTrenchTileDim);
+			if (gx1 >= gx0 && gy1 >= gy0 && ky0 == ky1 && kx0 == FloorDiv(gx1, kTrenchTileDim)) {
+				// One tile under the whole splat: one lookup, then plain byte raises.
+				const TrenchTileKey key{ a_meta.worldspace, kx0, ky0 };
+				TrenchTile* tile = tileFor(key);
+				if (!tile)
+					continue;
+				const int lx0 = gx0 - key.x * kTrenchTileDim;
+				const int lx1 = gx1 - key.x * kTrenchTileDim;
+				uint64_t raised = 0;
+				for (int gy = gy0; gy <= gy1; gy++) {
+					uint8_t* line = tile->depth.data() + (size_t)(gy - key.y * kTrenchTileDim) * kTrenchTileDim;
+					for (int lx = lx0; lx <= lx1; lx++) {
+						raised += quantised > line[lx];
+						line[lx] = std::max(line[lx], quantised);
+					}
+				}
+				cpuCensus.storeRaises[cpuCensus.trenchStorePath] += raised;
+				continue;
+			}
 			for (int gy = gy0; gy <= gy1; gy++) {
 				for (int gx = gx0; gx <= gx1; gx++) {
 					const TrenchTileKey key{ a_meta.worldspace, FloorDiv(gx, kTrenchTileDim), FloorDiv(gy, kTrenchTileDim) };
-					// The MISS is cached too, not just the hit. Most of the map
-					// is untrodden, and a cache that only remembers tiles that
-					// exist does a fresh hash lookup for every texel of empty
-					// ground - which the rolling mirror now walks tens of
-					// thousands of times a frame.
-					if (key != cachedKey) {
-						auto it = trenchTiles.find(key);
-						cachedKey = key;
-						cachedTile = it == trenchTiles.end() ? nullptr : &it->second;
-						if (cachedTile) {
-							// Brought up to date before fresh texels mix in, or
-							// the batch's new depths would sit beside stale ones
-							// under a single clock and decay twice.
-							DecayTrenchTile(*cachedTile);
-							// Written to, so it is recent ground whatever the
-							// LRU thought a moment ago.
-							cachedTile->lastTouch = gameClock.lastHours;
-						}
-					}
-					if (!cachedTile) {
-						// Untrodden ground never allocates: this is what keeps
-						// the store sparse, and most of the world is.
-						if (quantised == 0)
-							continue;
-						// Nor does ground the cap has already pushed out of
-						// reach. Creating it would only hand the next eviction
-						// the same tile back, and the store would thrash
-						// instead of settling on the near field.
-						if (trenchKeepRadiusSq < std::numeric_limits<float>::max()) {
-							const float dx = ((float)key.x + 0.5f) * kTrenchTileWorld - centreX;
-							const float dy = ((float)key.y + 0.5f) * kTrenchTileWorld - centreY;
-							if (dx * dx + dy * dy >= trenchKeepRadiusSq)
-								continue;
-						}
-						TrenchTile fresh;
-						fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
-						fresh.clock = trenchDecayClock;
-						fresh.lastTouch = gameClock.lastHours;
-						// Re-seated after the insert, which may have rehashed.
-						cachedTile = &trenchTiles.emplace(key, std::move(fresh)).first->second;
-						trenchAccumAdded++;
-					}
+					TrenchTile* tile = tileFor(key);
+					if (!tile)
+						continue;
 					const int lx = gx - key.x * kTrenchTileDim;
 					const int ly = gy - key.y * kTrenchTileDim;
-					uint8_t& stored = cachedTile->depth[(size_t)ly * kTrenchTileDim + lx];
+					uint8_t& stored = tile->depth[(size_t)ly * kTrenchTileDim + lx];
 					if (quantised > stored)
 						cpuCensus.storeRaises[cpuCensus.trenchStorePath]++;
 					// RAISE ONLY. The map may teach the store what has been dug;
