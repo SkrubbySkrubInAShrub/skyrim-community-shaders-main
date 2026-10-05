@@ -2,6 +2,7 @@
 #include "CSEditor.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "State.h"
 
 #define I18N_KEY_PREFIX "feature.wetness_effects."
 
@@ -927,8 +928,11 @@ WetnessEffects::PerFrame WetnessEffects::GetCommonBufferData() const
 		}
 	}
 
+	// The feature buffer is rebuilt several times per frame (see Deferred), so latch the clock to the frame
 	static size_t rainTimer = 0;  // size_t for precision
-	if (!globals::game::ui->GameIsPaused())
+	const std::uint32_t currentFrame = globals::state ? globals::state->frameCount : 0u;
+	const bool paused = globals::game::ui && globals::game::ui->GameIsPaused();
+	if (rainTimerFrame.TryAdvance(currentFrame, !paused))
 		rainTimer += (size_t)(RE::GetSecondsSinceLastFrame() * 1000);  // BSTimer::delta is always 0 for some reason
 	data.Time = rainTimer / 1000.f;
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/FrameLatch.h"
 
 /** @brief Adds dynamic weather-driven wetness, puddle formation, shore wetness, and raindrop effects. */
 struct WetnessEffects : Feature
@@ -109,7 +110,10 @@ public:
 	static constexpr ClimatePreset defaultPreset = ClimatePreset::NordicStandard;
 	ClimatePreset climatePreset = defaultPreset;
 
-	/** @brief Builds the per-frame constant buffer data including weather state and settings. */
+	/**
+	 * @brief Builds the per-frame constant buffer data including weather state and settings.
+	 * The rain animation clock advances at most once per rendered frame, however often this is called.
+	 */
 	PerFrame GetCommonBufferData() const;
 
 	/** @brief Updates wetness state and binds the per-frame constant buffer. */
@@ -175,6 +179,7 @@ public:
 private:
 	void DrawWeatherAnalysis() const;
 
+	mutable Util::FrameLatch rainTimerFrame;
 	bool splashesOfStormsLoaded = false;
 
 	// Weather wetness calculation result for debug display
