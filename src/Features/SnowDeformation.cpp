@@ -141,14 +141,11 @@
 	X(BermClods) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
-	X(ShellSSSRemarch) \
 	X(ShellHorizonMarch) \
 	X(SnowGlints) \
 	X(SnowScreenSpaceShadows) \
 	X(SnowCastsShadows) \
 	X(ObjectSnowNearDetail) \
-	X(ShellSSSRemarchThickness) \
-	X(ShellSSSRemarchCasterCap) \
 	X(ShellBareGroundCull) \
 	X(CameraAboveSnow) \
 	X(BloodOnSnow) \

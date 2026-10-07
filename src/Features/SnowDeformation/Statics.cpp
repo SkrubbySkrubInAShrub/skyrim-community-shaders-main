@@ -3424,11 +3424,11 @@ void SnowDeformation::DrawCapturedStatics()
 	                                             heightTopRaw[heightCurrent]->srv.get() :
 	                                             nullptr;
 	context->PSSetShaderResources(11, 1, &objectTopSRV);
-	// Scene depth copy (PS t3): the SSS hug gate and the shell-surface
-	// re-march, both ported from the terrain shell, read it. Same helper and
-	// same slot the shell binds - a COPY (Terrain Blending's blended depth
-	// when that feature owns it, else kPOST_ZPREPASS_COPY), never the bound
-	// DSV, so sampling it while this pass writes depth is legal.
+	// Scene depth copy (PS t3): the SSS hug gate, ported from the terrain
+	// shell, reads it. Same helper and same slot the shell binds - a COPY
+	// (Terrain Blending's blended depth when that feature owns it, else
+	// kPOST_ZPREPASS_COPY), never the bound DSV, so sampling it while this
+	// pass writes depth is legal.
 	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
 	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
 	// Skin-depth raster (PS t12): the road skin runs the patch's own

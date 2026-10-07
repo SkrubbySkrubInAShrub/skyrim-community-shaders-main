@@ -169,8 +169,7 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
-	// x spare (compaction matte retired); y = shell-surface SSS re-march
-	// enable, zw = its DR scale (landscape shell only).
+	// Unread by the skins (x = the landscape shell's water cut).
 	float4 CompactLook;
 	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
 	float4 RimStyle;
@@ -2605,51 +2604,6 @@ Texture2DArray<uint> DbgVoxHeightUnder : register(t54);
 Texture2D<float2> DbgShelter : register(t49);
 Texture2D<float> DbgSky : register(t51);
 
-// SHELL-SURFACE SSS RE-MARCH, ported verbatim from SnowShell.hlsl (Josef
-// 2026-09-01: both shells must run the same shadow configuration). The only
-// change is SampleTerrainStatics for SampleTerrain - the same window, the same
-// bilinear, this shader's own accessor.
-//
-// The precomputed SSS mask describes only the BURIED surface: it is marched on
-// pre-shell depth, so no gate can make it mean anything about the snow on top.
-// This marches the same depth buffer from the SKIN surface and admits an
-// occluder only if it stands above the snow line at its own footprint.
-float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow, float casterCap)
-{
-	const float kOccluderThickness = 48.0;
-	static const float kRemarchStep[8] = { 6.0, 13.0, 23.0, 38.0, 60.0, 92.0, 140.0, 210.0 };
-	float occl = 0.0;
-	[unroll] for (uint i = 0; i < 8; i++)
-	{
-		float3 sampleRel = relPos + L * (kRemarchStep[i] * (0.7 + 0.6 * noise));
-		float4 clip = mul(CameraViewProjUnjittered, float4(sampleRel, 1.0));
-		[branch] if (clip.w > 1.0)
-		{
-			float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
-			[branch] if (all(uv > 0.0) && all(uv < 1.0))
-			{
-				int2 px = int2(uv * dynRes * SharedData::BufferDim.xy);
-				float occZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
-				[branch] if (occZ < clip.w - 1.0 && (!thicknessWindow || occZ > clip.w - kOccluderThickness))
-				{
-					float3 occRel = sampleRel * (occZ / max(clip.w, 1e-3));
-					float2 occLocal = occRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
-					float3 st = SampleTerrainStatics(occLocal);
-					float snowTop = st.x + max(st.y, 0.0);
-					float occH = occRel.z + ShellCameraPosAdjust.z - snowTop;
-					// The candidates fall with i: the first hit is the maximum.
-					[branch] if (occH > 2.0 && occH < casterCap)
-					{
-						occl = max(occl, 1.0 - float(i) * 0.045);
-						break;
-					}
-				}
-			}
-		}
-	}
-	return 1.0 - occl;
-}
-
 // THE skin material and lighting, factored out of the skin's main: taps,
 // two-plane projection, parallax, normal map, frost/crust, RMAOS, cascades +
 // heightfield march + screen-space shadows, sun PBR, point lights,
@@ -3269,20 +3223,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 
-	// Shell-surface re-march: the near-field counterpart to the mask above,
-	// same gate, same hand-off band, so the two never double.
-	[branch] if (gameShadowMask.x < 0.0 && CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
-		SnowShadow::GetSssHandoff(input.CurrentClip.w) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
-	{
-		// Packed: integer part = mode (1 march, 2 march + thickness),
-		// fraction * 1000 = the caster height cap in units.
-		float remarchCap = frac(CompactLook.y) * 1000.0;
-		float remarch = SkinRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
-		// Off past the caster band: at range the flank coat is most of a
-		// rock's screen area and the re-march darkened whole objects.
-		remarch = lerp(remarch, 1.0, smoothstep(2800.0, 4900.0, input.pixelDist));
-		sunShadow *= lerp(remarch, 1.0, SnowShadow::GetSssHandoff(input.CurrentClip.w));
-	}
 	// Parallax self-shadow on the snow grain, same term and constants as the
 	// terrain shell so object snow and ground snow shadow identically across
 	// the seam where they meet. Object snow needs it in both projections:

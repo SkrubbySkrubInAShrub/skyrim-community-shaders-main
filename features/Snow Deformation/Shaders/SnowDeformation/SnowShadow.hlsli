@@ -171,7 +171,7 @@ namespace SnowShadow
 		return result;
 	}
 
-	// SSS handoff, shared by both shells and the re-march crossfade. The
+	// SSS handoff, shared by both shells. The
 	// exact complement of GetCascadeShadow's distance fade above
 	// (1 - pow(fade^2, 8) at :117), so the mask reaches full strength
 	// precisely as the cascades fade to nothing - at the user's own shadow

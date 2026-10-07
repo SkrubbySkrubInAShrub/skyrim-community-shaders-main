@@ -613,9 +613,7 @@ public:
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
-		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. BOTH SHELLS run it (SkinRemarchSSS in SnowStaticsShell.hlsl is the same function on the same gate), so turning it on no longer makes the two shade differently across their seam. */
-		bool ShellSSSRemarch = true;
-		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades, the SSS mask and the re-march shade the snow. A/B for dark blotches on open snow at a low sun. */
+		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades and the SSS mask shade the snow. A/B for dark blotches on open snow at a low sun. */
 		bool ShellHorizonMarch = true;
 		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */
 		bool SnowGlints = true;
@@ -625,10 +623,6 @@ public:
 		bool SnowCastsShadows = true;
 		/** @brief "Object Snow Near Detail": the object height raster's near level (1 unit a texel over FineRasterHalfExtent) and its cone chain. Off = the skin reads the coarse level everywhere. A quality-preset lever. */
 		bool ObjectSnowNearDetail = true;
-		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
-		bool ShellSSSRemarchThickness = true;
-		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 15 accepts short grass only; 200 accepts everything. */
-		float ShellSSSRemarchCasterCap = 15.0f;
 		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
 		bool ShellBareGroundCull = true;
 		/** @brief The third-person camera is pulled in along its own line when the game places it under the landscape shell (Havok has no snow to collide with). */
@@ -1681,7 +1675,7 @@ public:
 		float4 CrustLook2;
 		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = trench floor as a fraction of the local uncarved depth (TrenchFloorFraction); zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12). One constant serves both shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yzw spare. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -1951,8 +1945,6 @@ public:
 	ID3D11PixelShader* shellPSEarlyResolve = nullptr;
 	ID3D11PixelShader* GetShellPSEarlyResolve();
 
-	/** @brief Runtime A/B, default off: Screen-Space Shadows march the early prepass's snow, and the ground shell applies the mask as Lighting does. */
-	bool shellSssSeesSnow = false;
 	/** @brief Frame SyncSssDepth ran in: RestoreSssDepth and DrawShell's ScreenSpaceShadowsActive = 2 key on it. */
 	uint32_t shellSssSyncFrame = UINT32_MAX;
 	/** @brief The early prepass's rect, shared by the sync and the restore. */
@@ -2198,7 +2190,7 @@ public:
 	bool shellMarchBicubicRestored = false;
 	bool shellMarchBicubicCompiledPS = false;
 	bool shellMarchBicubicCompiledPSNoDepth = false;
-	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 2 serial SSS re-march loads, 4 no untouched-tile skip, 8 the luminance grain over the normal map (Debugging Options checkbox too). Rekeys the no-export and deferred PSs. */
+	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip, 8 the luminance grain over the normal map (Debugging Options checkbox too). Rekeys the no-export and deferred PSs. */
 	uint32_t shellPSLegacyBits = 0;
 	uint32_t shellPSLegacyBitsCompiled = 0;
 
@@ -3983,14 +3975,16 @@ public:
 	};
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchors;
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchorsNext;
-	/** @brief Measurement, runtime-only: bitmask zeroing shell PS feature flags before the ShellCB upload (bit 0 parallax, 1 normal map, 2 RMAOS, 3 crisp shadows, 4 screen-space shadows, 5 SSS remarch, 6 glints, 7 point lights, 8 skylighting, 9 albedo texture). The statics shell shares the CB, so it sees the kills too. */
+	/** @brief Measurement, runtime-only: bitmask zeroing shell PS feature flags before the ShellCB upload (bit 0 parallax, 1 normal map, 2 RMAOS, 3 crisp shadows, 4 screen-space shadows, 5 unused, 6 glints, 7 point lights, 8 skylighting, 9 albedo texture). The statics shell shares the CB, so it sees the kills too. */
 	uint32_t shellKillMask = 0;
 	/** @brief The effect-cost probe: turns each shellKillMask effect off in turn and reads how far the snow GPU rows drop. Started from Debugging Options > Landscape Shell or DevBench; ticks once per DrawShell. */
 	struct EffectCostProbe
 	{
-		static constexpr uint32_t kEffects = 10;
+		static constexpr uint32_t kEffects = 9;
 		static constexpr const char* kNames[kEffects] = { "Parallax", "Normal map", "Roughness / AO maps", "Crisp shadows", "Screen-space shadows",
-			"Light scattering re-march", "Glints", "Point lights", "Skylighting", "Snow albedo texture" };
+			"Glints", "Point lights", "Skylighting", "Snow albedo texture" };
+		/** @brief shellKillMask bit per effect. */
+		static constexpr uint32_t kKillBits[kEffects] = { 0, 1, 2, 3, 4, 6, 7, 8, 9 };
 		bool running = false;
 		bool done = false;
 		uint32_t step = 0;  // even = everything on, odd = effect step / 2 off

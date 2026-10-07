@@ -157,7 +157,6 @@ namespace
 		float parallaxDepth;
 		float parallaxShadow;
 		float skinTessCapPx;
-		bool scatteringRemarch;
 		bool sparkle;
 		bool contactShadows;
 		bool selfShadowing;
@@ -165,10 +164,10 @@ namespace
 		bool castsShadows;
 	};
 	constexpr QualityPreset kQualityPresets[4] = {
-		{ 1024u, 60.0f, 60.0f, 0.0f, 0.0f, 24.0f, false, false, false, false, false, false },
-		{ 2048u, 60.0f, 100.0f, 1.0f, 0.5f, 20.0f, false, false, false, false, false, true },
-		{ 2048u, 90.0f, 250.0f, 1.0f, 0.5f, 16.0f, false, false, false, false, true, true },
-		{ 2048u, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true, true },
+		{ 1024u, 60.0f, 60.0f, 0.0f, 0.0f, 24.0f, false, false, false, false, false },
+		{ 2048u, 60.0f, 100.0f, 1.0f, 0.5f, 20.0f, false, false, false, false, true },
+		{ 2048u, 90.0f, 250.0f, 1.0f, 0.5f, 16.0f, false, false, false, true, true },
+		{ 2048u, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
 	};
 }
 
@@ -189,7 +188,6 @@ void SnowDeformation::ApplyQualityPreset(int a_preset)
 	settings.ParallaxShadowStrength = p.parallaxShadow;
 	settings.SkinTessCapPx = p.skinTessCapPx;
 	settings.VolumeSnow = false;
-	settings.ShellSSSRemarch = p.scatteringRemarch;
 	settings.SnowGlints = p.sparkle;
 	settings.SnowScreenSpaceShadows = p.contactShadows;
 	settings.ShellHorizonMarch = p.selfShadowing;
@@ -203,7 +201,7 @@ int SnowDeformation::MatchingQualityPreset() const
 		const auto& p = kQualityPresets[i];
 		if (settings.DeformMapResolution == p.mapDim && settings.RangeTrenchesM == p.trenchesM && settings.RangeSkinsM == p.skinsM &&
 			settings.Tessellation && settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
-			settings.SkinTessCapPx == p.skinTessCapPx && !settings.VolumeSnow && settings.ShellSSSRemarch == p.scatteringRemarch &&
+			settings.SkinTessCapPx == p.skinTessCapPx && !settings.VolumeSnow &&
 			settings.SnowGlints == p.sparkle && settings.SnowScreenSpaceShadows == p.contactShadows && settings.ShellHorizonMarch == p.selfShadowing &&
 			settings.ObjectSnowNearDetail == p.nearDetail && settings.SnowCastsShadows == p.castsShadows)
 			return i;
@@ -224,7 +222,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. Ultra is the default: nothing is taken away. High turns off the shading extras you mostly see in close-up shots (Re-march Shadows on the Shell, Snow Sparkle, Snow Contact Shadows) and Snow Self-Shadowing, and shortens Trenches to 90 m. Medium also turns off Object Snow Near Detail, with Trenches at 60 m and Object Snow at 100 m. Low also turns off Snow Casts Shadows and parallax, with Object Snow at 60 m and a 1024 Deformation Map. Every preset also sets the Object Snow Tessellation Cap, turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. Ultra is the default: nothing is taken away. High turns off the shading extras you mostly see in close-up shots (Snow Sparkle, Snow Contact Shadows) and Snow Self-Shadowing, and shortens Trenches to 90 m. Medium also turns off Object Snow Near Detail, with Trenches at 60 m and Object Snow at 100 m. Low also turns off Snow Casts Shadows and parallax, with Object Snow at 60 m and a 1024 Deformation Map. Every preset also sets the Object Snow Tessellation Cap, turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[4] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High"), T(TKEY("preset_ultra"), "Ultra") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < 4; i++) {
@@ -287,18 +285,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);
 			if (auto _ttHm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow's own bumps, drifts, berms and the objects under it shade the snow behind them through a short march along the sun over the snow height field, on both the ground shell and object snow. Turn it off to check whether dark patches on open snow at a low sun come from this march rather than from the game's shadows."));
-			ImGui::Checkbox(T(TKEY("sss_remarch"), "Re-march Shadows on the Shell"), &settings.ShellSSSRemarch);
-			if (auto _ttRemarch = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_tooltip"), "Screen-Space Shadows are normally marched on the ground BENEATH the snow, so the shell can only use them at distance or they print buried objects through the snow. This re-marches them from the snow surface and accepts only casters standing above the snow line - which brings back near-field grass and contact shadows, including from actors, without the prints. Costs 8 depth taps per lit shell pixel. A/B this against it being off."));
-
-			ImGui::Checkbox(T(TKEY("sss_remarch_thickness"), "Streak Fix (Occluder Thickness)"), &settings.ShellSSSRemarchThickness);
-			if (auto _ttThick = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_thickness_tooltip"), "The Bend SSS thin-shell rule applied to the re-march: an occluder only shadows ray samples within 48 units of itself, instead of everything behind it on screen - which is what painted a character's silhouette as a long streak across the snow. Grass and other thin casters are unaffected; the trade is slightly lighter shadow directly behind very thick objects. Only does anything with the re-march on."));
-
-			ImGui::SliderFloat(T(TKEY("sss_remarch_cap"), "Caster Height Cap"), &settings.ShellSSSRemarchCasterCap, 10.0f, 200.0f, "%.0f units");
-			if (auto _ttCap = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 15 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
-
 			ImGui::SliderFloat(T(TKEY("shelter_max_height"), "Shelter Max Height"), &settings.ShelterMaxHeight, 100.0f, 1000.0f, "%.0f units");
 			if (auto _ttShelterMax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shelter_max_height_tooltip"), "Snow under a roof, bridge or archway thins out, because the structure keeps the snowfall off. A structure whose underside is higher above the ground than this no longer counts: a wide archway with plenty of air under it is as open as the sky, and the snow beneath it keeps its full depth. Fades out over the next 100 units. 70 units is about a metre."));
@@ -2406,16 +2392,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextDisabled("%s", joinState);
 			if (shellEarlyViewMismatches > 0)
 				ImGui::TextDisabled("%s %u", T(TKEY("shell_join_view_mismatch"), "Frames whose view changed under the early pass:"), shellEarlyViewMismatches);
-			ImGui::Checkbox(T(TKEY("shell_sss_sees_snow"), "Screen-Space Shadows See the Snow (E6b)"), &shellSssSeesSnow);
-			if (auto _ttSss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_sss_sees_snow_tooltip"), "Community Shaders' Screen-Space Shadows march a depth that includes the ground snow, and the snow applies their result the way the rest of the world does. Grass, rocks, actors and trench walls cast contact shadows onto the snow near and far, buried objects stop printing shadows through it, and objects standing in the snow take contact shadows from the snow around them. The snow's own distance gates and Re-march Shadows on the Shell are skipped while it is active. Costs two small passes at the start of the frame (Shadow Depth Sync and Shadow Depth Restore). Needs Join the Game's Depth Prepass (S1), Snow Contact Shadows and Screen-Space Shadows."));
-			const char* sssState = T(TKEY("shell_sss_off"), "Shadow depth sync: off");
 			// The menu draws after Present has advanced the frame counter.
-			if (shellSssSeesSnow && shellSssSyncFrame != UINT32_MAX && globals::state->frameCount - shellSssSyncFrame <= 1u)
-				sssState = T(TKEY("shell_sss_drawing"), "Shadow depth sync: drawing");
-			else if (shellSssSeesSnow)
-				sssState = T(TKEY("shell_sss_not_drawing"), "Shadow depth sync: not this frame (needs the depth prepass join drawing, Snow Contact Shadows, and Screen-Space Shadows in an exterior)");
-			ImGui::TextDisabled("%s", sssState);
+			const bool sssSynced = shellSssSyncFrame != UINT32_MAX && globals::state->frameCount - shellSssSyncFrame <= 1u;
+			ImGui::TextDisabled("%s", sssSynced ? T(TKEY("shell_sss_drawing"), "Shadow depth sync: drawing") :
+			                                       T(TKEY("shell_sss_not_drawing"), "Shadow depth sync: not this frame (needs the depth prepass join drawing, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));
 			bool oldGrain = (shellPSLegacyBits & 8u) != 0;
 			if (ImGui::Checkbox(T(TKEY("shell_old_detail_grain"), "Old Ground Detail Grain"), &oldGrain))
 				shellPSLegacyBits = oldGrain ? (shellPSLegacyBits | 8u) : (shellPSLegacyBits & ~8u);

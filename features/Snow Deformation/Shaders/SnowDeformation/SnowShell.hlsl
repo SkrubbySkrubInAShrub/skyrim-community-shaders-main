@@ -196,11 +196,7 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set).
 	float4 BorderStyle;
-	// x = water cut (1 = the sheet ends at the drawn waterline); y = shell-surface SSS
-	// re-march, packed: integer part 0 off / 1 on / 2 on + thickness
-	// streak fix, fraction * 1000 = caster height cap in units; zw =
-	// dynamic-resolution scale for its screen-space taps (FrameBuffer b12
-	// is unbound in this pass).
+	// x = water cut (1 = the sheet ends at the drawn waterline); yzw spare.
 	float4 CompactLook;
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
@@ -2447,17 +2443,6 @@ bool ShellPrepassQuadHidden(float rasterZ, float rawSceneDepth, float shellZ, fl
 }
 
 
-// SHELL-SURFACE SSS RE-MARCH (opt-in, CompactLook.y).
-//
-// The precomputed SSS mask describes only the BURIED ground - it is marched on
-// pre-shell depth, so no gate can make it mean anything about the snow surface.
-// This marches the same depth buffer from the SHELL surface and admits an
-// occluder only if it stands above the snow line at its own footprint: grass
-// poking through shadows the snow, a buried plank cannot, and it covers actors
-// too, since it tests geometry height rather than capture.
-//
-// The shell pass does not bind FrameBuffer b12, so the DR scale rides
-// CompactLook.zw from the CPU.
 #if defined(PSHADER)
 // LLF cluster lookup coordinates for a camera-relative position.
 void ShellClusterCoords(float3 relPos, out float viewZ, out float2 clusterUV)
@@ -2465,78 +2450,6 @@ void ShellClusterCoords(float3 relPos, out float viewZ, out float2 clusterUV)
 	viewZ = mul(CameraView, float4(relPos, 1.0)).z;
 	float4 clip = mul(CameraViewProj, float4(relPos, 1.0));
 	clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-}
-
-float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow, float casterCap)
-{
-	// Bend SSS's anti-streak device (SurfaceThickness): an occluder shadows
-	// only samples within a bounded depth window, never everything behind it.
-	// Unbounded, a character between camera and ray point paints their
-	// silhouette as a streak across the snow. 48 units is Bend's
-	// 0.5%-of-remaining-depth default at Skyrim ranges; thin casters are
-	// unaffected, and the trade is mild under-shadowing behind thick objects.
-	const float kOccluderThickness = 48.0;
-	// Contact range: grass and rails are short casters, so the steps stay
-	// tight and grow geometrically rather than reaching for distance.
-	static const float kRemarchStep[8] = { 6.0, 13.0, 23.0, 38.0, 60.0, 92.0, 140.0, 210.0 };
-#ifndef SNOW_REMARCH_SERIAL
-	// All eight depth loads up front, so they overlap instead of each waiting
-	// on the branch before it. Steps the tests below reject never read theirs.
-	float rawStepDepth[8];
-	[unroll] for (uint j = 0; j < 8; j++)
-	{
-		float3 sampleRel = relPos + L * (kRemarchStep[j] * (0.7 + 0.6 * noise));
-		float4 clip = mul(CameraViewProjUnjittered, float4(sampleRel, 1.0));
-		float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
-		rawStepDepth[j] = SceneDepth.Load(int3(int2(uv * dynRes * SharedData::BufferDim.xy), 0));
-	}
-#endif
-	float occl = 0.0;
-	[unroll] for (uint i = 0; i < 8; i++)
-	{
-		float3 sampleRel = relPos + L * (kRemarchStep[i] * (0.7 + 0.6 * noise));
-		float4 clip = mul(CameraViewProjUnjittered, float4(sampleRel, 1.0));
-		[branch] if (clip.w > 1.0)
-		{
-			float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
-			[branch] if (all(uv > 0.0) && all(uv < 1.0))
-			{
-#ifdef SNOW_REMARCH_SERIAL
-				int2 px = int2(uv * dynRes * SharedData::BufferDim.xy);
-				float occZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
-#else
-				float occZ = SharedData::GetScreenDepth(rawStepDepth[i]);
-#endif
-				// Something stands between this step and the camera - and,
-				// with the streak fix on, within the thin-shell window of
-				// the ray point rather than anywhere in front of it.
-				[branch] if (occZ < clip.w - 1.0 && (!thicknessWindow || occZ > clip.w - kOccluderThickness))
-				{
-					// ...and the SAME view ray puts it here in world space
-					// (the depth-ratio reconstruction already used for the
-					// contact fade), so ask the snow field how high the
-					// surface is under it.
-					float3 occRel = sampleRel * (occZ / max(clip.w, 1e-3));
-					float2 occLocal = occRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
-					float3 st = SampleTerrain(occLocal);
-					float snowTop = st.x + max(st.y, 0.0);
-					// A band, not a floor. Lower bound (+2 slack) stops
-					// coincident surfaces self-shadowing; upper bound (the
-					// caster height cap) drops anything already casting
-					// through the cascades, whose re-march copy is a doubled
-					// soft bleed. Grass lives under ~40 units.
-					float occH = occRel.z + ShellCameraPosAdjust.z - snowTop;
-					// The candidates fall with i: the first hit is the maximum.
-					[branch] if (occH > 2.0 && occH < casterCap)
-					{
-						occl = max(occl, 1.0 - float(i) * 0.045);
-						break;
-					}
-				}
-			}
-		}
-	}
-	return 1.0 - occl;
 }
 
 // Detail grain from the diffuse's luminance, for snow sets without a normal map.
@@ -3536,16 +3449,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 sssDebug = float3(0.0, 0.0, 0.0);
 
 	// 2: this frame's mask was marched on the snow surface; applied as
-	// Lighting.hlsl applies it, without the gates or the re-march below.
+	// Lighting.hlsl applies it, without the gates below.
 	const bool sssSeesSnow = ScreenSpaceShadowsActive > 1.5;
 	[branch] if (sssSeesSnow && !SharedData::InInterior && dot(normalWS, L) >= 0.0)
 		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 
-	// Screen-Space Shadows carry distant LOD tree shadows beyond the cascades,
-	// but the texture is marched on prepass depth (the ground UNDER the shell),
-	// so applying it near paints buried objects through the snow. Cascades own
-	// the near field; SSS blends in only beyond them, where it is the only
-	// source and the shell hugs the ground the march ran on.
+	// A mask that did not see the snow was marched on the ground UNDER the
+	// shell, so applying it near paints buried objects through the snow.
+	// Cascades own the near field; SSS blends in only beyond them, where it
+	// carries the distant LOD tree shadows and the shell hugs the ground the
+	// march ran on.
 	// A zero handoff leaves sunShadow exactly as it is; view 4 still wants the gate.
 	[branch] if (!sssSeesSnow && ScreenSpaceShadowsActive > 0.5 && (SnowShadow::GetSssHandoff(shellZ) > 0.0 || ShellDebugData == 4))
 	{
@@ -3613,20 +3526,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
 		sssDebug.x = 1.0 - sssMask;
 		sssDebug.y = sssBlend;
-	}
-
-	// Shell-surface re-march (opt-in): the near-field counterpart to the
-	// mask above. Runs where the band leaves off, so the two never double.
-	[branch] if (!sssSeesSnow && CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
-		SnowShadow::GetSssHandoff(shellZ) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
-	{
-		// Packed: integer part = mode (1 march, 2 march + thickness),
-		// fraction * 1000 = the caster height cap in units.
-		float remarchCap = frac(CompactLook.y) * 1000.0;
-		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
-		// Faded out across the band the precomputed mask fades in over, so
-		// the handover is continuous.
-		sunShadow *= lerp(remarch, 1.0, SnowShadow::GetSssHandoff(shellZ));
 	}
 
 	// Parallax self-shadow on the snow's own grain: EM's

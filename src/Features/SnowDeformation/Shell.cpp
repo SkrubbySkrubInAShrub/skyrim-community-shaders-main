@@ -1283,8 +1283,6 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 			defines.emplace_back("SNOW_MARCH_BICUBIC", "");
 		if (shellPSLegacyBits & 1)
 			defines.emplace_back("SNOW_TEETH_UNGATED", "");
-		if (shellPSLegacyBits & 2)
-			defines.emplace_back("SNOW_REMARCH_SERIAL", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
 		if (shellPSLegacyBits & 8)
@@ -1353,8 +1351,6 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
 		if (shellPSLegacyBits & 1)
 			defines.emplace_back("SNOW_TEETH_UNGATED", "");
-		if (shellPSLegacyBits & 2)
-			defines.emplace_back("SNOW_REMARCH_SERIAL", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
 		if (shellPSLegacyBits & 8)
@@ -1875,7 +1871,7 @@ void SnowDeformation::TickEffectCostProbe()
 	p.frame = 0;
 	p.samples.clear();
 	if (p.step < 2 * EffectCostProbe::kEffects) {
-		shellKillMask = p.step % 2 ? 1u << (p.step / 2) : 0u;
+		shellKillMask = p.step % 2 ? 1u << EffectCostProbe::kKillBits[p.step / 2] : 0u;
 	} else {
 		shellKillMask = p.savedMask;
 		p.running = false;
@@ -1967,8 +1963,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
-	const auto& dynRes = fb.GetDynamicResolutionParams1();
-	cb.CompactLook = { cb.CompactLook.x, cb.CompactLook.y, dynRes.x, dynRes.y };
 	cb.TessScreen = { std::max(shellTessTargetPx, 0.0f), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
 	shellSlopeKeyPending = MakeShellSlopeKey(cb);
 	cb.ShellFlags.y = (cb.ShellFlags.y & ~2) | ((shellSlopeKeyValid && shellSlopeKeyPending == shellSlopeKey) ? 2 : 0);
@@ -2231,7 +2225,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 
 void SnowDeformation::SyncSssDepth()
 {
-	if (!shellSssSeesSnow)
+	if (!settings.EnableSnowDeformation || !globals::state->inWorld)
 		return;
 	const uint32_t frame = globals::state->frameCount;
 	auto& ss = globals::features::screenSpaceShadows;
@@ -2474,17 +2468,9 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
 		std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f),
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
-	// x compaction matte; y the shell-surface SSS re-march toggle; zw its
-	// dynamic-resolution scale - the shell pass does not bind FrameBuffer
-	// b12, so the screen-space taps cannot call
-	// GetDynamicResolutionAdjustedScreenPosition and take the scale here.
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	// y packs mode + caster cap: integer part 0/1/2, fraction = cap/1000
-	// (cap clamped below 1000 so the integer part stays the mode).
-	const float remarchMode = settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f;
-	const float remarchCap = std::clamp(settings.ShellSSSRemarchCasterCap, 10.0f, 999.0f);
-	// x = the water cut (runtime A/B in Debugging Options).
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
+	// x = the water cut (runtime A/B in Debugging Options); yzw spare.
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.
@@ -2576,8 +2562,6 @@ void SnowDeformation::DrawShell()
 			cbData.CrispShadows = 0.0f;
 		if (kill & (1u << 4))
 			cbData.ScreenSpaceShadowsActive = 0.0f;
-		if (kill & (1u << 5))
-			cbData.CompactLook.y = 0.0f;
 		if (kill & (1u << 6))
 			cbData.EnableGlints = 0.0f;
 		if (kill & (1u << 7))
