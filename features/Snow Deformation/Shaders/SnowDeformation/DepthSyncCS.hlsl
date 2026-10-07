@@ -62,6 +62,36 @@ RWTexture2D<float> PreSnowDepthOut : register(u2);
 	PreSnowDepthOut[p] = MainDepth[p];
 }
 
+// S1's raster depth (settled and pending) into the 32-bit blended depth for
+// Screen-Space Shadows' march; SssRestoreCS puts the saved values back.
+RWTexture2D<float> SavedDepth : register(u1);
+
+[numthreads(8, 8, 1)] void SssSyncCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	ShellRasterDepth.GetDimensions(dims.x, dims.y);
+	const uint2 p = dtid.xy + SyncOrigin;
+	if (any(dtid.xy >= SyncExtent) || any(p >= dims))
+		return;
+	const float raster = ShellRasterDepth[p];
+	if (raster == 0.0)
+		return;
+	const float blended = BlendedDepth[p];
+	SavedDepth[p] = blended;
+	BlendedDepth[p] = min(blended, abs(raster));
+}
+
+[numthreads(8, 8, 1)] void SssRestoreCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	ShellRasterDepth.GetDimensions(dims.x, dims.y);
+	const uint2 p = dtid.xy + SyncOrigin;
+	if (any(dtid.xy >= SyncExtent) || any(p >= dims))
+		return;
+	if (ShellRasterDepth[p] != 0.0)
+		BlendedDepth[p] = SavedDepth[p];
+}
+
 // Shell prepass fill: turns the prepass's raster-depth colour target into
 // the shading pass's private depth buffer (fullscreen triangle, depth
 // ALWAYS + write). Pixels the prepass did not win hold the clear value 0,

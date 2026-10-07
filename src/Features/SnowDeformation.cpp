@@ -941,6 +941,12 @@ void SnowDeformation::Prepass()
 {
 	PrepassSimulation();
 	DrawShellEarlyPrepass();
+	SyncSssDepth();
+}
+
+void SnowDeformation::PostPrepass()
+{
+	RestoreSssDepth();
 }
 
 void SnowDeformation::PrepassSimulation()
@@ -2275,6 +2281,12 @@ void SnowDeformation::ClearShaderCache()
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
+	if (sssSyncCS)
+		sssSyncCS->Release();
+	sssSyncCS = nullptr;
+	if (sssRestoreCS)
+		sssRestoreCS->Release();
+	sssRestoreCS = nullptr;
 	if (preSnowCopyCS)
 		preSnowCopyCS->Release();
 	preSnowCopyCS = nullptr;

@@ -20,9 +20,9 @@
 
 #ifdef PSHADER
 // Shadows: terrain/cloud via GetWorldShadow, actors via the raw cascade atlas
-// copies (SnowShadow.hlsli), falling back to the shared VSM. Not the
-// screen-space mask - it holds the terrain behind the shell along the view
-// ray, so its shadows slide with the camera.
+// copies (SnowShadow.hlsli), falling back to the shared VSM. The screen-space
+// mask applies near only when it was marched on the snow (ScreenSpaceShadowsActive
+// 2); otherwise it holds the terrain behind the shell along the view ray.
 #	define TERRAIN_SHADOWS
 #	define CLOUD_SHADOWS
 #	define VOLUMETRIC_SHADOWS
@@ -3535,13 +3535,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// off or inactive - itself a diagnostic.
 	float3 sssDebug = float3(0.0, 0.0, 0.0);
 
+	// 2: this frame's mask was marched on the snow surface; applied as
+	// Lighting.hlsl applies it, without the gates or the re-march below.
+	const bool sssSeesSnow = ScreenSpaceShadowsActive > 1.5;
+	[branch] if (sssSeesSnow && !SharedData::InInterior && dot(normalWS, L) >= 0.0)
+		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
+
 	// Screen-Space Shadows carry distant LOD tree shadows beyond the cascades,
 	// but the texture is marched on prepass depth (the ground UNDER the shell),
 	// so applying it near paints buried objects through the snow. Cascades own
 	// the near field; SSS blends in only beyond them, where it is the only
 	// source and the shell hugs the ground the march ran on.
 	// A zero handoff leaves sunShadow exactly as it is; view 4 still wants the gate.
-	[branch] if (ScreenSpaceShadowsActive > 0.5 && (SnowShadow::GetSssHandoff(shellZ) > 0.0 || ShellDebugData == 4))
+	[branch] if (!sssSeesSnow && ScreenSpaceShadowsActive > 0.5 && (SnowShadow::GetSssHandoff(shellZ) > 0.0 || ShellDebugData == 4))
 	{
 		// Depth agreement is the gate: trust the mask only where the shell hugs
 		// the surface the march saw. Measured VERTICALLY, not along the view
@@ -3611,7 +3617,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Shell-surface re-march (opt-in): the near-field counterpart to the
 	// mask above. Runs where the band leaves off, so the two never double.
-	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
+	[branch] if (!sssSeesSnow && CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
 		SnowShadow::GetSssHandoff(shellZ) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Packed: integer part = mode (1 march, 2 march + thickness),

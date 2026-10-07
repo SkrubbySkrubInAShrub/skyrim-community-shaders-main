@@ -1378,6 +1378,8 @@ public:
 	virtual void Prepass() override;
 	/** @brief Prepass's map, simulation and per-frame work; Prepass then runs the early ground prepass (S1). */
 	void PrepassSimulation();
+	/** @brief Puts back the blended depth SyncSssDepth changed; runs after Screen-Space Shadows' PostPrepass march (feature order). */
+	virtual void PostPrepass() override;
 
 	/** @brief Returns the ring compute shader (rewrites the texels a scroll reassigned: inject or pristine), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationRingCS();
@@ -1948,6 +1950,25 @@ public:
 	ID3D11PixelShader* GetShellPSPrepassEarly(bool a_keepHidden);
 	ID3D11PixelShader* shellPSEarlyResolve = nullptr;
 	ID3D11PixelShader* GetShellPSEarlyResolve();
+
+	/** @brief Runtime A/B, default off: Screen-Space Shadows march the early prepass's snow, and the ground shell applies the mask as Lighting does. */
+	bool shellSssSeesSnow = false;
+	/** @brief Frame SyncSssDepth ran in: RestoreSssDepth and DrawShell's ScreenSpaceShadowsActive = 2 key on it. */
+	uint32_t shellSssSyncFrame = UINT32_MAX;
+	/** @brief The early prepass's rect, shared by the sync and the restore. */
+	D3D11_BOX shellSssRect{};
+	/** @brief Early-prepass frames: S1's raster depth into Terrain Blending's 32-bit blended depth, the replaced values into shellEarlyMarks. */
+	void SyncSssDepth();
+	/** @brief Writes shellEarlyMarks back over the pixels SyncSssDepth changed. */
+	void RestoreSssDepth();
+	/** @brief a_cs over shellSssRect with t1 the raster depth, u0 the blended depth, u1 the marks; CS t1, u0-u1, b2 and the shader go back as found. */
+	void DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_pass);
+	ID3D11ComputeShader* sssSyncCS = nullptr;
+	ID3D11ComputeShader* sssRestoreCS = nullptr;
+	/** @brief DepthSyncCS's SssSyncCS entry, compiled on first use. */
+	ID3D11ComputeShader* GetSssSyncCS();
+	/** @brief DepthSyncCS's SssRestoreCS entry, compiled on first use. */
+	ID3D11ComputeShader* GetSssRestoreCS();
 	ID3D11PixelShader* shellFillPSClaim = nullptr;
 	ID3D11PixelShader* GetShellFillPSClaim();
 	/** @brief ShellCB.ShellDebugData from the debug toggles. */
@@ -2051,6 +2072,8 @@ public:
 		uint32_t Extent[2];
 	};
 	ConstantBuffer* depthSyncRectCB = nullptr;
+	/** @brief depthSyncRectCB, created on first use. */
+	ConstantBuffer* DepthSyncRectBuffer();
 	ID3D11ComputeShader* GetPreSnowCopyCS();
 	ID3D11ComputeShader* preSnowCopyCS = nullptr;
 	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target when screenRectsOff or no viewport. */

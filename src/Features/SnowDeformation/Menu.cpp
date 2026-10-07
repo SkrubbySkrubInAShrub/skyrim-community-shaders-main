@@ -2406,6 +2406,16 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextDisabled("%s", joinState);
 			if (shellEarlyViewMismatches > 0)
 				ImGui::TextDisabled("%s %u", T(TKEY("shell_join_view_mismatch"), "Frames whose view changed under the early pass:"), shellEarlyViewMismatches);
+			ImGui::Checkbox(T(TKEY("shell_sss_sees_snow"), "Screen-Space Shadows See the Snow (E6b)"), &shellSssSeesSnow);
+			if (auto _ttSss = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_sss_sees_snow_tooltip"), "Community Shaders' Screen-Space Shadows march a depth that includes the ground snow, and the snow applies their result the way the rest of the world does. Grass, rocks, actors and trench walls cast contact shadows onto the snow near and far, buried objects stop printing shadows through it, and objects standing in the snow take contact shadows from the snow around them. The snow's own distance gates and Re-march Shadows on the Shell are skipped while it is active. Costs two small passes at the start of the frame (Shadow Depth Sync and Shadow Depth Restore). Needs Join the Game's Depth Prepass (S1), Snow Contact Shadows and Screen-Space Shadows."));
+			const char* sssState = T(TKEY("shell_sss_off"), "Shadow depth sync: off");
+			// The menu draws after Present has advanced the frame counter.
+			if (shellSssSeesSnow && shellSssSyncFrame != UINT32_MAX && globals::state->frameCount - shellSssSyncFrame <= 1u)
+				sssState = T(TKEY("shell_sss_drawing"), "Shadow depth sync: drawing");
+			else if (shellSssSeesSnow)
+				sssState = T(TKEY("shell_sss_not_drawing"), "Shadow depth sync: not this frame (needs the depth prepass join drawing, Snow Contact Shadows, and Screen-Space Shadows in an exterior)");
+			ImGui::TextDisabled("%s", sssState);
 			bool oldGrain = (shellPSLegacyBits & 8u) != 0;
 			if (ImGui::Checkbox(T(TKEY("shell_old_detail_grain"), "Old Ground Detail Grain"), &oldGrain))
 				shellPSLegacyBits = oldGrain ? (shellPSLegacyBits | 8u) : (shellPSLegacyBits & ~8u);
