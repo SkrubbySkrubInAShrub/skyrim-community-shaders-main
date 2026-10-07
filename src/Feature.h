@@ -181,6 +181,9 @@ public:
 	/** @brief Per-frame work executed before the main rendering pass. */
 	virtual void Prepass() {}
 
+	/** @brief Per-frame work executed after every feature's Prepass, before the main rendering pass; sees the depth features wrote in Prepass. */
+	virtual void PostPrepass() {}
+
 	/** @brief Per-frame work executed before Prepass, earliest per-frame hook. */
 	virtual void EarlyPrepass() {}
 
