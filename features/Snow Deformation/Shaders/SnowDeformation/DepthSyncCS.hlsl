@@ -92,6 +92,42 @@ RWTexture2D<float> SavedDepth : register(u1);
 		BlendedDepth[p] = SavedDepth[p];
 }
 
+// Object snow: the skins' private depth (MainDepth here) where the skins or
+// the ground shell drew, into the 32-bit blended depth for a second march;
+// SkinSssRestoreCS puts the saved values back before the skins shade.
+bool SkinSssPixel(uint2 p, out float a_depth)
+{
+	a_depth = MainDepth[p];
+	return ShellRasterDepth[p] > 0.0 || a_depth < PreSnowDepth[p];
+}
+
+[numthreads(8, 8, 1)] void SkinSssSyncCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	MainDepth.GetDimensions(dims.x, dims.y);
+	const uint2 p = dtid.xy + SyncOrigin;
+	if (any(dtid.xy >= SyncExtent) || any(p >= dims))
+		return;
+	float depth;
+	if (!SkinSssPixel(p, depth))
+		return;
+	const float blended = BlendedDepth[p];
+	SavedDepth[p] = blended;
+	BlendedDepth[p] = min(blended, depth);
+}
+
+[numthreads(8, 8, 1)] void SkinSssRestoreCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	MainDepth.GetDimensions(dims.x, dims.y);
+	const uint2 p = dtid.xy + SyncOrigin;
+	if (any(dtid.xy >= SyncExtent) || any(p >= dims))
+		return;
+	float depth;
+	if (SkinSssPixel(p, depth))
+		BlendedDepth[p] = SavedDepth[p];
+}
+
 // Shell prepass fill: turns the prepass's raster-depth colour target into
 // the shading pass's private depth buffer (fullscreen triangle, depth
 // ALWAYS + write). Pixels the prepass did not win hold the clear value 0,

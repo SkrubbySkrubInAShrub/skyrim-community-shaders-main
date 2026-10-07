@@ -239,6 +239,8 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetPreSnowCopyCS(); },
 		[&] { GetSssSyncCS(); },
 		[&] { GetSssRestoreCS(); },
+		[&] { GetSkinSssSyncCS(); },
+		[&] { GetSkinSssRestoreCS(); },
 		[&] { GetHiZBuildCS(); },
 		[&] { GetSkinCullCS(); },
 		[&] { GetClusterCullCS(); },

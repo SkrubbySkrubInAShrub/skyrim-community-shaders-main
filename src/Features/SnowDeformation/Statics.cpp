@@ -3883,6 +3883,12 @@ void SnowDeformation::DrawCapturedStatics()
 	// LESS_EQUAL + write.
 	// Every skin's block, filled once for both loops; the view taken here is
 	// the one bound, so HasSmoothedNormals and the view never disagree.
+	// Decided before the records: SkinSssSeen tells each skin which mask it reads.
+	const bool skinSssMarch = prepass && !skinDraws.empty() && (fillPreSnow || preSnowDepthThisFrame) && SkinSssMarchReady();
+	if (!skinSssMarch && skinSssSeesSnow) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Shadow Depth Sync");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Shadow Depth Restore");
+	}
 	std::vector<StaticsCB> skinRecords(skinDraws.size());
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinSmoothSRVs(skinDraws.size());
 	for (size_t si = 0; si < skinDraws.size(); si++) {
@@ -3890,6 +3896,7 @@ void SnowDeformation::DrawCapturedStatics()
 		skinSmoothSRVs[si] = d.smoothSRV;
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, skinRecords[si]);
+		skinRecords[si].SkinSssSeen = skinSssMarch ? 1.0f : 0.0f;
 		// Debug views only. Stable per object: the submission order moves
 		// with the camera.
 		skinRecords[si].DebugSkinId = 0.0f;
@@ -4032,6 +4039,10 @@ void SnowDeformation::DrawCapturedStatics()
 		drawSkins(true);
 		ID3D11ShaderResourceView* nullPreSkinSRV = nullptr;
 		context->PSSetShaderResources(43, 1, &nullPreSkinSRV);
+		if (skinSssMarch) {
+			statsRow("SnowDeformation::Objects - Shadow Depth Sync");
+			MarchSkinSss(shellTestDepthSRV.get(), sceneDepthSRV, vpCount ? &vps[0] : nullptr);
+		}
 		statsRow("SnowDeformation::Objects - Shading");
 
 		if (staticsDebugView == 9) {

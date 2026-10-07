@@ -283,7 +283,9 @@ cbuffer StaticCB : register(b1)
 	// surfaces within this z-band of a layer's top belong to that layer's
 	// plane. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float PeelTol;
-	float padOverhead;
+	// > 0.5: this frame's screen-space shadow mask was marched with the
+	// object snow in the depth. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
+	float SkinSssSeen;
 	float padMeldSk;
 
 	// Far road level (t40): the road-only top raster over the loaded-cell
@@ -3189,11 +3191,16 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		dbgMarch.x = 1.0 - marchFactor;
 		dbgMarchRan = 1.0;
 	}
+	// A mask marched with the object snow in the depth applies as
+	// Lighting.hlsl applies it, without the gates below.
+	const bool sssSeesSkin = SkinSssSeen > 0.5;
+	[branch] if (ScreenSpaceShadowsActive > 0.5 && sssSeesSkin && !SharedData::InInterior && dot(normalWS, L) >= 0.0)
+		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 	// Screen-Space Shadows: same long-range term bare ground multiplies in,
 	// distance-blended past the cascades like the landscape shell (the SSS
 	// march ran on the PREPASS depth; near, it belongs to the surface
 	// UNDER the skin, and the crisp cascades already cover the skin).
-	[branch] if (ScreenSpaceShadowsActive > 0.5)
+	[branch] if (ScreenSpaceShadowsActive > 0.5 && !sssSeesSkin)
 	{
 		// THE TERRAIN SHELL'S GATES, not a bare distance hand-off. The mask was
 		// marched on PRE-shell depth, so it describes the surface UNDER the

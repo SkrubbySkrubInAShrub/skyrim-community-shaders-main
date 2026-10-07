@@ -2396,6 +2396,13 @@ void SnowDeformation::DrawSettings()
 			const bool sssSynced = shellSssSyncFrame != UINT32_MAX && globals::state->frameCount - shellSssSyncFrame <= 1u;
 			ImGui::TextDisabled("%s", sssSynced ? T(TKEY("shell_sss_drawing"), "Shadow depth sync: drawing") :
 			                                       T(TKEY("shell_sss_not_drawing"), "Shadow depth sync: not this frame (needs the depth prepass join drawing, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));
+			ImGui::Checkbox(T(TKEY("skin_sss_sees_snow"), "Screen-Space Shadows See Object Snow"), &skinSssSeesSnow);
+			if (auto _ttSkinSss = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("skin_sss_sees_snow_tooltip"), "Community Shaders' Screen-Space Shadows run a second time after the object snow's depth pass, with the object snow and the ground snow in the depth, and object snow applies the result the way the rest of the world does. Grass, rocks, actors and the snow's own rims cast contact shadows onto object snow near and far, and the object under the snow stops printing its shadows through it. Costs a second Screen-Space Shadows pass on frames with object snow on screen (it adds to the Screen-Space Shadows Ray March row) and two small passes (Objects - Shadow Depth Sync and Restore). Needs Snow Contact Shadows and Screen-Space Shadows."));
+			if (skinSssSeesSnow) {
+				const bool skinSssMarched = skinSssMarchFrame != UINT32_MAX && globals::state->frameCount - skinSssMarchFrame <= 1u;
+				ImGui::TextDisabled("%s", skinSssMarched ? T(TKEY("skin_sss_drawing"), "Object snow shadow march: drawing") : T(TKEY("skin_sss_not_drawing"), "Object snow shadow march: not this frame (needs object snow on screen with its depth prepass, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));
+			}
 			bool oldGrain = (shellPSLegacyBits & 8u) != 0;
 			if (ImGui::Checkbox(T(TKEY("shell_old_detail_grain"), "Old Ground Detail Grain"), &oldGrain))
 				shellPSLegacyBits = oldGrain ? (shellPSLegacyBits | 8u) : (shellPSLegacyBits & ~8u);

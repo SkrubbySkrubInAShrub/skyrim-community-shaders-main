@@ -1697,6 +1697,24 @@ ID3D11ComputeShader* SnowDeformation::GetSssRestoreCS()
 	return sssRestoreCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetSkinSssSyncCS()
+{
+	if (!skinSssSyncCS) {
+		logger::debug("Compiling DepthSyncCS SkinSssSyncCS");
+		skinSssSyncCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "SkinSssSyncCS"));
+	}
+	return skinSssSyncCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetSkinSssRestoreCS()
+{
+	if (!skinSssRestoreCS) {
+		logger::debug("Compiling DepthSyncCS SkinSssRestoreCS");
+		skinSssRestoreCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "SkinSssRestoreCS"));
+	}
+	return skinSssRestoreCS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetSeamShieldCS()
 {
 	if (!seamShieldCS) {
@@ -2308,6 +2326,77 @@ void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_
 			u->Release();
 	if (prevCB)
 		prevCB->Release();
+}
+
+bool SnowDeformation::SkinSssMarchReady()
+{
+	if (!skinSssSeesSnow)
+		return false;
+	auto& ss = globals::features::screenSpaceShadows;
+	auto& tb = globals::features::terrainBlending;
+	auto* blended = tb.blendedDepthTexture;
+	auto sky = globals::game::sky;
+	if (!settings.SnowScreenSpaceShadows || !ss.loaded || !ss.screenSpaceShadowsTexture || !ss.screenSpaceShadowsTexture->srv || !ss.bendSettings.Enable ||
+		!sky || sky->mode.get() != RE::Sky::Mode::kFull || !tb.loaded || !tb.settings.Enabled || !blended || !blended->uav || !preSnowDepthSRV)
+		return false;
+	if (skinSssSaved && (skinSssSaved->desc.Width != blended->desc.Width || skinSssSaved->desc.Height != blended->desc.Height)) {
+		delete skinSssSaved;
+		skinSssSaved = nullptr;
+	}
+	if (!skinSssSaved) {
+		D3D11_TEXTURE2D_DESC desc = blended->desc;
+		desc.Format = DXGI_FORMAT_R32_FLOAT;
+		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		skinSssSaved = new Texture2D(desc, "SnowDeformation::SkinSssSaved");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = DXGI_FORMAT_R32_FLOAT,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		skinSssSaved->CreateUAV(uavDesc);
+	}
+	return skinSssSaved->uav && GetSkinSssSyncCS() && GetSkinSssRestoreCS() && DepthSyncRectBuffer();
+}
+
+void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3D11ShaderResourceView* a_sceneDepthSRV, const D3D11_VIEWPORT* a_viewport)
+{
+	auto context = globals::d3d::context;
+	auto& ss = globals::features::screenSpaceShadows;
+	auto& tb = globals::features::terrainBlending;
+	const auto& blendedDesc = tb.blendedDepthTexture->desc;
+	const D3D11_BOX rect = ScreenRectBox(a_viewport, blendedDesc.Width, blendedDesc.Height, 0);
+	DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
+	depthSyncRectCB->Update(rectData);
+	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
+	ID3D11ShaderResourceView* srvs[3] = { a_skinDepthSRV, shellGroundMarksSRV, preSnowDepthSRV.get() };
+	ID3D11UnorderedAccessView* uavs[2] = { tb.blendedDepthTexture->uav.get(), skinSssSaved->uav.get() };
+	const auto dispatch = [&](ID3D11ComputeShader* a_cs) {
+		context->CSSetConstantBuffers(2, 1, &rectCB);
+		context->CSSetShaderResources(0, 3, srvs);
+		context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+		context->CSSetShader(a_cs, nullptr, 0);
+		context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
+		ID3D11ShaderResourceView* nullSRVs[3] = {};
+		ID3D11UnorderedAccessView* nullUAVs[2] = {};
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetShaderResources(0, 3, nullSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, nullUAVs, nullptr);
+		context->CSSetConstantBuffers(2, 1, &nullCB);
+		context->CSSetShader(nullptr, nullptr, 0);
+	};
+	// The skins' private depth is the bound DSV; its SRV is read here.
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	dispatch(GetSkinSssSyncCS());
+	// The march times its own row; profiler passes do not nest.
+	globals::profiler->EndPass();
+	ss.DrawShadows();
+	globals::profiler->BeginPass("SnowDeformation::Objects - Shadow Depth Restore");
+	dispatch(GetSkinSssRestoreCS());
+	// The UAV writes unbound the blended depth (PS t3) and the mask (PS t45).
+	ID3D11ShaderResourceView* maskSRV = ss.screenSpaceShadowsTexture->srv.get();
+	context->PSSetShaderResources(3, 1, &a_sceneDepthSRV);
+	context->PSSetShaderResources(45, 1, &maskSRV);
+	skinSssMarchFrame = globals::state->frameCount;
 }
 
 void SnowDeformation::DrawShell()
@@ -3485,6 +3574,8 @@ void SnowDeformation::DrawShell()
 		context->Begin(staticsStatsQuery[shellStatsRing][0].get());
 		context->Begin(staticsStatsQuery[shellStatsRing][1].get());
 	}
+	const bool rasterMarks = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
+	shellGroundMarksSRV = rasterMarks ? (earlyMarks ? shellEarlyMarks->srv.get() : shellRasterDepth->srv.get()) : nullptr;
 	DrawCapturedStatics();
 	spanClock.Lap(CpuCensus::kSpanStatics);
 	if (shellStats) {
@@ -3603,7 +3694,6 @@ void SnowDeformation::DrawShell()
 	// on the module's own pixels only: the shell prepass's mark, or a depth
 	// the snow passes moved nearer than the pre-snow copy (skins, patch).
 	auto& tb = globals::features::terrainBlending;
-	const bool rasterMarks = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
 	const bool syncable = rasterMarks || preSnowDepthThisFrame;
 	if (!syncable)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Sync");
@@ -3612,7 +3702,7 @@ void SnowDeformation::DrawShell()
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };
 			ID3D11ShaderResourceView* syncSRVs[3] = { mainDepthSRV,
-				rasterMarks ? (earlyMarks ? shellEarlyMarks->srv.get() : shellRasterDepth->srv.get()) : nullptr,
+				shellGroundMarksSRV,
 				preSnowDepthThisFrame ? preSnowDepthSRV.get() : nullptr };
 			// Outside the rendered rectangle nothing moved the main depth and the raster
 			// marks are clear: the full-target pass returned there. The pre-snow copy

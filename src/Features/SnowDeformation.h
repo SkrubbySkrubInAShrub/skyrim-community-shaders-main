@@ -1961,6 +1961,25 @@ public:
 	ID3D11ComputeShader* GetSssSyncCS();
 	/** @brief DepthSyncCS's SssRestoreCS entry, compiled on first use. */
 	ID3D11ComputeShader* GetSssRestoreCS();
+
+	/** @brief Runtime A/B, default off: after the skins' depth prepass, Screen-Space Shadows march again with the object snow and the ground snow in the depth (MarchSkinSss), and the skins apply that mask as Lighting does (StaticsCB::SkinSssSeen). */
+	bool skinSssSeesSnow = false;
+	/** @brief Frame MarchSkinSss ran in (menu and DevBench status). */
+	uint32_t skinSssMarchFrame = UINT32_MAX;
+	/** @brief DrawShell's ground marks as DepthSync reads them (the early marks or the raster depth; null when the ground drew no prepass), set before DrawCapturedStatics. */
+	ID3D11ShaderResourceView* shellGroundMarksSRV = nullptr;
+	/** @brief The blended depth MarchSkinSss replaced, until its restore (R32F, the blended depth's size). */
+	Texture2D* skinSssSaved = nullptr;
+	/** @brief The conditions under which ScreenSpaceShadows::PostPrepass marches, plus this pass's resources and shaders. */
+	bool SkinSssMarchReady();
+	/** @brief Skin and ground-snow pixels (a_skinDepthSRV, the skins' private depth, against the pre-snow copy and shellGroundMarksSRV) into the 32-bit blended depth over a_viewport's rect, ScreenSpaceShadows::DrawShadows, the blended depth back; rebinds PS t3 (a_sceneDepthSRV) and t45 for the skin shading. */
+	void MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3D11ShaderResourceView* a_sceneDepthSRV, const D3D11_VIEWPORT* a_viewport);
+	ID3D11ComputeShader* skinSssSyncCS = nullptr;
+	ID3D11ComputeShader* skinSssRestoreCS = nullptr;
+	/** @brief DepthSyncCS's SkinSssSyncCS entry, compiled on first use. */
+	ID3D11ComputeShader* GetSkinSssSyncCS();
+	/** @brief DepthSyncCS's SkinSssRestoreCS entry, compiled on first use. */
+	ID3D11ComputeShader* GetSkinSssRestoreCS();
 	ID3D11PixelShader* shellFillPSClaim = nullptr;
 	ID3D11PixelShader* GetShellFillPSClaim();
 	/** @brief ShellCB.ShellDebugData from the debug toggles. */
@@ -2667,7 +2686,8 @@ public:
 		float padShellMinNz;
 		/** @brief kPeelTol (the retired Plane Merge Height, fixed at its default) - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
-		float padOverhead;
+		/** @brief > 0.5: this frame's Screen-Space Shadows mask was marched again with the object snow in the depth (MarchSkinSss); the skin applies it as Lighting does. Took the padOverhead slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float SkinSssSeen;
 		float padMeldSk;
 
 		/** @brief Far road level: window centre (snapped to its texel), half-extent in world units (0 = off), and the one class depth roads carry there (Settings::RoadMeshesDepth). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
