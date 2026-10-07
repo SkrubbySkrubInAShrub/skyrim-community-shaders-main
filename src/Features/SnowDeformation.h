@@ -450,23 +450,23 @@ public:
 		/** @brief Let shouts plough the snow in front of the shouter. Off, a shout still marks through whatever projectile it throws, which is why the breaths already made a mark or two before this existed. */
 		bool EnableShoutCones = true;
 		/** @brief Multiplier on the reach the shout's own projectile authors: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. The mark fades and breaks up before it ends, so this is where the last streaks stop. */
-		float ShoutMarkReach = 0.6f;
+		float ShoutMarkReach = 0.1f;
 		/** @brief Widest full width of a shout's mark, as a fraction of its reach. The records author no width - only a reach - so this is taste. */
-		float ShoutMarkWidth = 0.45f;
+		float ShoutMarkWidth = 0.35f;
 		/** @brief Where along the reach the mark is widest, as a fraction of it. */
-		float ShoutMarkWaist = 0.38f;
+		float ShoutMarkWaist = 0.5f;
 		/** @brief Outline exponent: 1 straight-sided, 2 an oval, higher blunter. */
-		float ShoutMarkRoundness = 1.4f;
+		float ShoutMarkRoundness = 1.5f;
 		/** @brief Fraction of the reach held at full depth before the mark fades. */
-		float ShoutMarkFadeStart = 0.2f;
+		float ShoutMarkFadeStart = 0.25f;
 		/** @brief Depth at the far end, as a fraction of the depth at the mouth. */
 		float ShoutMarkFarDepth = 0.25f;
 		/** @brief How broken up a shove's mark is: 0 a smooth scoop, 1 uneven streaks near the mouth thinning to dashes with distance. Shoves only; a breath's mark stays smooth. */
 		float ShoutChurn = 1.0f;
 		/** @brief Width of a churn streak, world units. */
-		float ShoutStreakSize = 24.0f;
+		float ShoutStreakSize = 8.0f;
 		/** @brief Length of a churn streak as a multiple of its width, along the shout. */
-		float ShoutStreakLength = 3.0f;
+		float ShoutStreakLength = 1.0f;
 		/**
 		 * @brief DDS the frost pattern is drawn from, relative to Data.
 		 *
@@ -503,9 +503,9 @@ public:
 		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
 		float ForceTrackWidth = 80.0f;
 		/** @brief Width of the furrow a dash shout ploughs, against the dasher's own size. A dragon hurling itself forward cuts a wider one than a man. */
-		float DashGougeScale = 1.0f;
+		float DashGougeScale = 0.5f;
 		/** @brief Depth a full-strength shove carves, as a fraction of the layer. Force is the only school that DISPLACES snow rather than changing it, so it is also the only one that raises a berm at the far lip - which is what makes Unrelenting Force read as pushed rather than deleted. */
-		float ForceCarveDepth = 1.0f;
+		float ForceCarveDepth = 0.5f;
 		/** @brief Let a body that is still burning, crackling or frozen over go on marking the snow beneath it. The element comes from the last one that struck the actor before it died, so it needs no reading of the corpse itself. */
 		bool CorpseElementalMarks = true;
 		/** @brief Seconds a body goes on marking after it dies. Mods that keep a corpse visibly alight or frozen (Frozen Electrocuted Combusted and its like) run far longer than vanilla, so this is taste rather than physics. */
