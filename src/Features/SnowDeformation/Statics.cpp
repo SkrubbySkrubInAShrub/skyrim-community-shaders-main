@@ -1388,7 +1388,6 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// Global gate here, not a per-draw class: the patch is one draw and
 	// reads the road bit per texel from the raster's G channel.
 	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
-	a_scb.PatchScreenTess = patchScreenTess ? 1.0f : 0.0f;
 }
 
 uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const
@@ -4179,7 +4178,6 @@ void SnowDeformation::DrawCapturedStatics()
 			PatchCullCB cullData{};
 			if (!patchFrustumCullOff && lastShellCBData)
 				FillPatchCullLines(*lastShellCBData, cullData);
-			cullData.InsideMax = patchInsideMaxRestored ? 1u : 0u;
 			patchCullCB->Update(cullData);
 			ID3D11Buffer* cullCB = patchCullCB->CB();
 			context->HSSetConstantBuffers(11, 1, &cullCB);

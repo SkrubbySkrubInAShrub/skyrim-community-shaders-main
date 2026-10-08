@@ -296,10 +296,7 @@ cbuffer StaticCB : register(b1)
 	// > 0.5: this frame's screen-space shadow mask was marched with the
 	// object snow in the depth. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float SkinSssSeen;
-	// > 0.5 on the patch draws: tessellation capped by TessScreen, churn and
-	// clods by parallax (with ShellFlags.x bit 16). Mirror in
-	// SnowHeightCapture.hlsl / SnowDeformation.h.
-	float PatchScreenTess;
+	float padMeldSk;
 
 	// Far road level (t40): the road-only top raster over the loaded-cell
 	// square, with its own window. FarHalfExtent 0 = off. Roads write one
@@ -337,7 +334,7 @@ cbuffer StaticCB : register(b1)
 // The patch leaves churn and clods out of its geometry; its PS marches them.
 bool PatchChurnParallax()
 {
-	return PatchScreenTess > 0.5 && (ShellFlags.x & 16) != 0;
+	return (ShellFlags.x & 16) != 0;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1673,9 +1670,7 @@ cbuffer PatchCullCB : register(b11)
 {
 	float4 PatchCullLines[6];  // xy normal, z offset: inside where dot(xy, p) + z >= 0
 	uint PatchCullLineCount;
-	// 1 = both inside factors the largest edge (A/B).
-	uint PatchInsideMax;
-	uint2 patchCullPad;
+	uint3 patchCullPad;
 }
 
 bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
@@ -1761,7 +1756,7 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 	}
 	// The caps project each corner at the top it stands on, or the terrain
 	// where it stands on nothing.
-	const bool screenCap = PatchScreenTess > 0.5 && TessScreen.x > 0.0;
+	const bool screenCap = TessScreen.x > 0.0;
 	[branch] if (screenCap)
 	{
 		[unroll] for (uint c = 0; c < 4; c++)
@@ -1776,15 +1771,8 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 	f.Edge[3] = PatchEdgeTessFactor(patch[3].WorldXY, patch[2].WorldXY, cornerZ[3], cornerZ[2], screenCap);
 	// u runs along edges 1 and 3, v along 0 and 2: the short side of a long
 	// band quad keeps its own factor instead of the long side's.
-	float insideU = max(f.Edge[1], f.Edge[3]);
-	float insideV = max(f.Edge[0], f.Edge[2]);
-	[flatten] if (PatchInsideMax != 0)
-	{
-		insideU = max(insideU, insideV);
-		insideV = insideU;
-	}
-	f.Inside[0] = insideU;
-	f.Inside[1] = insideV;
+	f.Inside[0] = max(f.Edge[1], f.Edge[3]);
+	f.Inside[1] = max(f.Edge[0], f.Edge[2]);
 	return f;
 }
 

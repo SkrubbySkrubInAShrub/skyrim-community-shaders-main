@@ -58,7 +58,7 @@ cbuffer StaticCB : register(b1)
 	// SnowStaticsShell.hlsl / SnowDeformation.h.
 	float PeelTol;
 	float SkinSssSeen;
-	float PatchScreenTess;  // layout sync with SnowStaticsShell; unused here
+	float padMeldSk;       // layout sync with SnowStaticsShell
 
 	float FarWindowCenterX;  // layout sync with SnowStaticsShell; unused here
 	float FarWindowCenterY;  // layout sync with SnowStaticsShell; unused here
