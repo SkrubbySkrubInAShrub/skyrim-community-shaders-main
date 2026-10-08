@@ -164,7 +164,9 @@ void WeatherManager::UpdateFeatures()
 				} else {
 					// In transition or has override - interpolate
 					globalRegistry->UpdateFeatureFromWeathers(featureName, currWeatherSettings, nextWeatherSettings, currentWeathers.lerpFactor);
-					featuresWithAppliedOverride.insert(featureName);
+					// A paused feature keeps its values, so there is no override to undo later
+					if (!globalRegistry->IsFeaturePaused(featureName))
+						featuresWithAppliedOverride.insert(featureName);
 					if (transitionEnding) {
 						globalRegistry->EndFeatureTransition(featureName);
 					}

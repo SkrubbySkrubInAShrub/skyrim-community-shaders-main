@@ -477,7 +477,11 @@ void SceneSettingsManager::ApplySettingToFeature(const SettingEntry& entry)
 		feature->LoadSettings(settings);
 	} catch (const std::exception& e) {
 		logger::warn("[SceneSettings] Failed to apply setting '{}' to feature '{}': {}", entry.settingKey, entry.featureShortName, e.what());
-		feature->LoadSettings(previous);
+		try {
+			feature->LoadSettings(previous);
+		} catch (const std::exception& rollbackError) {
+			logger::error("[SceneSettings] Rollback failed for feature '{}': {}", entry.featureShortName, rollbackError.what());
+		}
 		return;
 	}
 
