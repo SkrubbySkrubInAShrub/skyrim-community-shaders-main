@@ -1,6 +1,7 @@
 #include "Globals.h"
 
 #include "Deferred.h"
+#include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
@@ -16,7 +17,6 @@
 #include "Features/IBL.h"
 #include "Features/InteriorSun.h"
 #include "Features/LODBlending.h"
-#include "Features/LandscapeSeams.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
@@ -38,7 +38,6 @@
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
-#include "Features/CSEditor.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
@@ -98,7 +97,6 @@ namespace globals
 		ExponentialHeightFog exponentialHeightFog{};
 		TruePBR truePBR{};
 		Skin skin{};
-		LandscapeSeams landscapeSeams{};
 
 		namespace llf
 		{

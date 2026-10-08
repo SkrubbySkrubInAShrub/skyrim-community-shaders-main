@@ -1,27 +1,21 @@
 #pragma once
 
+#include "EngineFix.h"
+
 #include <array>
-#include <atomic>
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 
-struct LandscapeSeams : Feature
+/** @brief Blends landscape textures across quad borders and lifts the six textures per quad limit. */
+struct LandscapeSeamsFix : EngineFix
 {
-	virtual inline std::string GetName() override { return "Landscape Seams"; }
-	virtual std::string GetDisplayName() override { return T("feature.landscape_seams.name", "Landscape Seam Blending"); }
-	virtual inline std::string GetShortName() override { return "LandscapeSeams"; }
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kLandscapeAndTextures; }
+	std::string GetName() override { return "Landscape Seams Fix"; }
 
-	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
-	{
-		return { T("feature.landscape_seams.description", "Removes the hard lines where landscape textures stop at quad borders, by blending each quad's textures into its neighbours and lifting the six textures per quad limit."),
-			{ T("feature.landscape_seams.key_feature_1", "Blends landscape textures across quad and cell borders"),
-				T("feature.landscape_seams.key_feature_2", "Up to four extra texture layers per quad, ten in total"),
-				T("feature.landscape_seams.key_feature_3", "Works with True PBR, Terrain Helper and terrain parallax"),
-				T("feature.landscape_seams.key_feature_4", "No plugin edits, untouched quads render exactly as before") } };
-	}
+	void Install() override;
+
+	static LandscapeSeamsFix& GetInstance();
 
 	static constexpr uint32_t GridSize = 17;
 	static constexpr uint32_t GridVertices = GridSize * GridSize;
@@ -33,22 +27,7 @@ struct LandscapeSeams : Feature
 	static constexpr uint32_t FirstPSTexture = 104;
 	static constexpr uint32_t NumPSTextures = 2 + MaxExtraLayers * TexturesPerExtra;
 
-	struct Settings
-	{
-		bool Enabled = true;
-		uint32_t BlendRadius = 3;
-		uint32_t ExtraLayers = MaxExtraLayers;
-	} settings;
-
-	virtual void DrawSettings() override;
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
-	virtual void RestoreDefaultSettings() override;
-	virtual void PostPostLoad() override;
-	/** @brief Rebuilds loaded quads after a settings change. */
-	virtual void Prepass() override;
-	/** @brief Releases land geometry the engine has dropped. Runs every frame, also outside the world or with the shader cache off. */
-	virtual void Reset() override;
+	static constexpr uint32_t BlendRadius = 3;
 
 	struct QuadKey
 	{
@@ -114,8 +93,8 @@ struct LandscapeSeams : Feature
 		std::array<std::array<uint8_t, GridVertices>, MaxLayers> weights{};
 	};
 
-	/** @brief True while the feature is loaded and enabled, so seam permutations may be drawn. */
-	bool IsRenderable() const { return loaded && settings.Enabled; }
+	/** @brief Releases land geometry the engine has dropped. Runs every frame, also outside the world or with the shader cache off. */
+	void Reset();
 	/** @brief True when this land quad geometry has blend resources and should draw with the seams permutation. */
 	bool IsBlended(RE::BSGeometry* a_geometry);
 	/** @brief Binds the quad's weights, quad data and borrowed textures to t104-t121. Render thread only, before the draw. */
@@ -129,13 +108,10 @@ private:
 	void Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_out) const;
 	std::shared_ptr<Resources> CreateResources(const Healed& a_healed) const;
 	void Rebuild(const std::vector<QuadKey>& a_keys);
-	void RebuildAll();
-	void Sweep();
 
 	std::shared_mutex mutex;
 	std::unordered_map<QuadKey, Quad, QuadKeyHash> quads;
 	std::unordered_map<RE::BSGeometry*, QuadKey> loadedQuads;
 	std::vector<RE::BSGeometry*> retiredGeometry;
-	std::atomic_bool rebuildRequested = false;
 	uint32_t currentWorldSpace = 0;
 };

@@ -819,7 +819,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #	endif
 
 #	if defined(LANDSCAPE) && defined(LANDSCAPE_SEAMS)
-#		include "LandscapeSeams/LandscapeSeams.hlsli"
+#		include "Common/LandscapeSeams.hlsli"
 #	endif
 
 #	if defined(EMAT)

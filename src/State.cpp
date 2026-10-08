@@ -5,6 +5,7 @@
 #include <pystring/pystring.h>
 
 #include "Deferred.h"
+#include "EngineFixes/LandscapeSeamsFix.h"
 #include "FeatureIssues.h"
 #include "Features/CSEditor.h"
 #include "Features/CloudShadows.h"
@@ -245,6 +246,7 @@ void State::Reset()
 	globals::profiler->EndFrame();
 
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
+	LandscapeSeamsFix::GetInstance().Reset();
 
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).

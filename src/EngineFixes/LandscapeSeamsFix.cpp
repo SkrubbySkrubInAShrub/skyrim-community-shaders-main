@@ -1,22 +1,12 @@
-#include "LandscapeSeams.h"
+#include "LandscapeSeamsFix.h"
 
 #include "Features/TerrainHelper.h"
 #include "Globals.h"
-#include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
-#include "Utils/UI.h"
-
-#define I18N_KEY_PREFIX "feature.landscape_seams."
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LandscapeSeams::Settings,
-	Enabled,
-	BlendRadius,
-	ExtraLayers)
 
 namespace
 {
@@ -29,11 +19,10 @@ namespace
 	constexpr uint32_t FlagParallax = 1u << 12;
 	constexpr uint32_t FlagValid = 1u << 31;
 
-	constexpr int GridMax = static_cast<int>(LandscapeSeams::GridSize) - 1;
+	constexpr int GridMax = static_cast<int>(LandscapeSeamsFix::GridSize) - 1;
 	constexpr float QuadSize = 2048.0f;
 	constexpr float MinDelta = 6.0f / 255.0f;
 	constexpr float MinLayerWeight = 4.0f / 255.0f;
-	constexpr uint32_t MaxBlendRadius = 8;
 	constexpr size_t MaxFieldTextures = 56;
 
 	constexpr auto DiffuseTexture = static_cast<RE::BSTextureSet::Texture>(0);
@@ -60,7 +49,7 @@ namespace
 
 	constexpr int VertexIndex(int a_x, int a_y)
 	{
-		return a_y * static_cast<int>(LandscapeSeams::GridSize) + a_x;
+		return a_y * static_cast<int>(LandscapeSeamsFix::GridSize) + a_x;
 	}
 
 	RE::BSGeometry* GetQuadGeometry(RE::TESObjectLAND* a_land, uint32_t a_quad)
@@ -81,25 +70,25 @@ namespace
 		return lightingProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting);
 	}
 
-	void ReadQuad(RE::TESObjectLAND* a_land, uint32_t a_quad, LandscapeSeams::Quad& a_out)
+	void ReadQuad(RE::TESObjectLAND* a_land, uint32_t a_quad, LandscapeSeamsFix::Quad& a_out)
 	{
 		const auto& data = *a_land->loadedData;
 
 		auto* base = data.defQuadTextures[a_quad];
 		a_out.slots[0] = base != nullptr ? base : GetDefaultLandTexture();
-		for (uint32_t layer = 0; layer + 1 < LandscapeSeams::EngineLayers; ++layer) {
+		for (uint32_t layer = 0; layer + 1 < LandscapeSeamsFix::EngineLayers; ++layer) {
 			a_out.slots[layer + 1] = data.quadTextures[a_quad][layer];
 		}
 
-		a_out.grid = std::make_unique<LandscapeSeams::WeightGrid>();
+		a_out.grid = std::make_unique<LandscapeSeamsFix::WeightGrid>();
 		auto& grid = *a_out.grid;
-		for (uint32_t vertex = 0; vertex < LandscapeSeams::GridVertices; ++vertex) {
+		for (uint32_t vertex = 0; vertex < LandscapeSeamsFix::GridVertices; ++vertex) {
 			int total = 0;
-			for (uint32_t layer = 0; layer < LandscapeSeams::EngineLayers; ++layer) {
+			for (uint32_t layer = 0; layer < LandscapeSeamsFix::EngineLayers; ++layer) {
 				total += static_cast<uint8_t>(data.percents[a_quad][vertex][layer]);
 			}
 			grid[0][vertex] = static_cast<uint8_t>(std::clamp(255 - total, 0, 255));
-			for (uint32_t layer = 0; layer + 1 < LandscapeSeams::EngineLayers; ++layer) {
+			for (uint32_t layer = 0; layer + 1 < LandscapeSeamsFix::EngineLayers; ++layer) {
 				grid[layer + 1][vertex] = a_out.slots[layer + 1] != nullptr ? static_cast<uint8_t>(data.percents[a_quad][vertex][layer]) : uint8_t{ 0 };
 			}
 		}
@@ -108,7 +97,7 @@ namespace
 			for (int x = 0; x <= GridMax; ++x) {
 				if (x != 0 && x != GridMax && y != 0 && y != GridMax)
 					continue;
-				for (uint32_t layer = 0; layer < LandscapeSeams::EngineLayers; ++layer) {
+				for (uint32_t layer = 0; layer < LandscapeSeamsFix::EngineLayers; ++layer) {
 					a_out.border[layer][PerimeterIndex(x, y)] = grid[layer][VertexIndex(x, y)];
 				}
 			}
@@ -119,7 +108,7 @@ namespace
 	{
 		RE::TESLandTexture* texture = nullptr;
 		int slot = -1;
-		std::array<float, LandscapeSeams::PerimeterVertices> delta{};
+		std::array<float, LandscapeSeamsFix::PerimeterVertices> delta{};
 	};
 
 	struct FieldTextures
@@ -141,74 +130,8 @@ namespace
 	};
 }
 
-void LandscapeSeams::DrawSettings()
+bool LandscapeSeamsFix::IsBlended(RE::BSGeometry* a_geometry)
 {
-	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("%s", T(TKEY("enabled_tooltip"), "Blends landscape textures across quad borders. Turning this off restores the vanilla blend immediately."));
-
-	int blendRadius = static_cast<int>(settings.BlendRadius);
-	if (ImGui::SliderInt(T(TKEY("blend_radius"), "Blend Radius"), &blendRadius, 1, static_cast<int>(MaxBlendRadius), "%d", ImGuiSliderFlags_AlwaysClamp))
-		settings.BlendRadius = static_cast<uint32_t>(blendRadius);
-	// Rebuilding re-heals every loaded quad, so wait until the slider is released.
-	if (ImGui::IsItemDeactivatedAfterEdit())
-		rebuildRequested = true;
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("%s", T(TKEY("blend_radius_tooltip"), "How far from a quad border the blend reaches, in landscape vertices (128 game units each)."));
-
-	int extraLayers = static_cast<int>(settings.ExtraLayers);
-	if (ImGui::SliderInt(T(TKEY("extra_layers"), "Extra Texture Layers"), &extraLayers, 0, static_cast<int>(MaxExtraLayers), "%d", ImGuiSliderFlags_AlwaysClamp))
-		settings.ExtraLayers = static_cast<uint32_t>(extraLayers);
-	if (ImGui::IsItemDeactivatedAfterEdit())
-		rebuildRequested = true;
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::TextWrapped("%s", T(TKEY("extra_layers_tooltip"), "Textures a quad may borrow from its neighbours on top of its own six. Zero keeps the vanilla limit and only blends textures both quads already share."));
-
-	uint32_t loadedCount = 0;
-	uint32_t blendedCount = 0;
-	uint32_t extraCount = 0;
-	{
-		const std::shared_lock lock(mutex);
-		loadedCount = static_cast<uint32_t>(loadedQuads.size());
-		for (const auto& entry : loadedQuads) {
-			if (const auto it = quads.find(entry.second); it != quads.end() && it->second.resources) {
-				++blendedCount;
-				if (it->second.resources->extras[0][0] != nullptr)
-					++extraCount;
-			}
-		}
-	}
-	ImGui::Text("%s: %u", T(TKEY("loaded_quads"), "Loaded quads"), loadedCount);
-	ImGui::Text("%s: %u", T(TKEY("blended_quads"), "Blended quads"), blendedCount);
-	ImGui::Text("%s: %u", T(TKEY("extra_layer_quads"), "Quads using extra layers"), extraCount);
-}
-
-#undef I18N_KEY_PREFIX
-
-void LandscapeSeams::LoadSettings(json& o_json)
-{
-	settings = o_json;
-	settings.BlendRadius = std::clamp(settings.BlendRadius, 1u, MaxBlendRadius);
-	settings.ExtraLayers = std::min(settings.ExtraLayers, MaxExtraLayers);
-	rebuildRequested = true;
-}
-
-void LandscapeSeams::SaveSettings(json& o_json)
-{
-	o_json = settings;
-}
-
-void LandscapeSeams::RestoreDefaultSettings()
-{
-	settings = {};
-	rebuildRequested = true;
-}
-
-bool LandscapeSeams::IsBlended(RE::BSGeometry* a_geometry)
-{
-	if (!settings.Enabled)
-		return false;
-
 	const std::shared_lock lock(mutex);
 	const auto loadedIt = loadedQuads.find(a_geometry);
 	if (loadedIt == loadedQuads.end())
@@ -217,7 +140,7 @@ bool LandscapeSeams::IsBlended(RE::BSGeometry* a_geometry)
 	return quadIt != quads.end() && quadIt->second.resources;
 }
 
-void LandscapeSeams::Bind(RE::BSGeometry* a_geometry)
+void LandscapeSeamsFix::Bind(RE::BSGeometry* a_geometry)
 {
 	std::shared_ptr<Resources> resources;
 	{
@@ -244,7 +167,7 @@ void LandscapeSeams::Bind(RE::BSGeometry* a_geometry)
 	globals::d3d::context->PSSetShaderResources(FirstPSTexture, NumPSTextures, views.data());
 }
 
-void LandscapeSeams::Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_out) const
+void LandscapeSeamsFix::Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_out) const
 {
 	a_out.active = false;
 	a_out.extraCount = 0;
@@ -350,10 +273,9 @@ void LandscapeSeams::Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_ou
 	if (maxDelta < MinDelta)
 		return;
 
-	const float radius = static_cast<float>(std::clamp(settings.BlendRadius, 1u, MaxBlendRadius));
 	std::array<float, GridSize> falloff{};
 	for (int distance = 0; distance <= GridMax; ++distance) {
-		const float t = std::min(1.0f, static_cast<float>(distance) / radius);
+		const float t = std::min(1.0f, static_cast<float>(distance) / static_cast<float>(BlendRadius));
 		falloff[distance] = 1.0f - t * t * (3.0f - 2.0f * t);
 	}
 
@@ -419,8 +341,7 @@ void LandscapeSeams::Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_ou
 	}
 	std::sort(candidates.begin(), candidates.begin() + candidateCount, [&](int a_left, int a_right) { return fieldSum[a_left] > fieldSum[a_right]; });
 
-	const uint32_t allowedExtras = std::min(settings.ExtraLayers, MaxExtraLayers);
-	for (size_t i = 0; i < candidateCount && a_out.extraCount < allowedExtras; ++i) {
+	for (size_t i = 0; i < candidateCount && a_out.extraCount < MaxExtraLayers; ++i) {
 		layerOf[candidates[i]] = static_cast<int>(EngineLayers + a_out.extraCount);
 		a_out.extras[a_out.extraCount++] = textures.entries[candidates[i]].texture;
 	}
@@ -448,7 +369,7 @@ void LandscapeSeams::Heal(const QuadKey& a_key, const Quad& a_quad, Healed& a_ou
 	a_out.active = true;
 }
 
-std::shared_ptr<LandscapeSeams::Resources> LandscapeSeams::CreateResources(const Healed& a_healed) const
+std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources(const Healed& a_healed) const
 {
 	auto resources = std::make_shared<Resources>();
 	const auto& defaults = globals::game::graphicsState->GetRuntimeData();
@@ -561,7 +482,7 @@ std::shared_ptr<LandscapeSeams::Resources> LandscapeSeams::CreateResources(const
 	winrt::com_ptr<ID3D11Texture2D> texture;
 	if (FAILED(device->CreateTexture2D(&textureDesc, textureData.data(), texture.put())))
 		return nullptr;
-	Util::SetResourceName(texture.get(), "LandscapeSeams::Weights");
+	Util::SetResourceName(texture.get(), "LandscapeSeamsFix::Weights");
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC textureViewDesc{};
 	textureViewDesc.Format = textureDesc.Format;
@@ -570,7 +491,7 @@ std::shared_ptr<LandscapeSeams::Resources> LandscapeSeams::CreateResources(const
 	textureViewDesc.Texture2DArray.ArraySize = sliceCount;
 	if (FAILED(device->CreateShaderResourceView(texture.get(), &textureViewDesc, resources->weights.put())))
 		return nullptr;
-	Util::SetResourceName(resources->weights.get(), "LandscapeSeams::Weights SRV");
+	Util::SetResourceName(resources->weights.get(), "LandscapeSeamsFix::Weights SRV");
 
 	D3D11_BUFFER_DESC bufferDesc{};
 	bufferDesc.ByteWidth = sizeof(QuadData);
@@ -585,7 +506,7 @@ std::shared_ptr<LandscapeSeams::Resources> LandscapeSeams::CreateResources(const
 	winrt::com_ptr<ID3D11Buffer> buffer;
 	if (FAILED(device->CreateBuffer(&bufferDesc, &bufferData, buffer.put())))
 		return nullptr;
-	Util::SetResourceName(buffer.get(), "LandscapeSeams::QuadData");
+	Util::SetResourceName(buffer.get(), "LandscapeSeamsFix::QuadData");
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC bufferViewDesc{};
 	bufferViewDesc.Format = DXGI_FORMAT_UNKNOWN;
@@ -593,12 +514,12 @@ std::shared_ptr<LandscapeSeams::Resources> LandscapeSeams::CreateResources(const
 	bufferViewDesc.Buffer.NumElements = 1;
 	if (FAILED(device->CreateShaderResourceView(buffer.get(), &bufferViewDesc, resources->data.put())))
 		return nullptr;
-	Util::SetResourceName(resources->data.get(), "LandscapeSeams::QuadData SRV");
+	Util::SetResourceName(resources->data.get(), "LandscapeSeamsFix::QuadData SRV");
 
 	return resources;
 }
 
-void LandscapeSeams::Rebuild(const std::vector<QuadKey>& a_keys)
+void LandscapeSeamsFix::Rebuild(const std::vector<QuadKey>& a_keys)
 {
 	std::vector<Healed> pending;
 	pending.reserve(a_keys.size());
@@ -642,20 +563,7 @@ void LandscapeSeams::Rebuild(const std::vector<QuadKey>& a_keys)
 	}
 }
 
-void LandscapeSeams::RebuildAll()
-{
-	std::vector<QuadKey> keys;
-	{
-		const std::shared_lock lock(mutex);
-		keys.reserve(loadedQuads.size());
-		for (const auto& entry : loadedQuads) {
-			keys.push_back(entry.second);
-		}
-	}
-	Rebuild(keys);
-}
-
-void LandscapeSeams::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
+void LandscapeSeamsFix::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 {
 	if (a_land == nullptr || a_land->loadedData == nullptr || a_land->parentCell == nullptr)
 		return;
@@ -746,7 +654,7 @@ void LandscapeSeams::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 	Rebuild(keys);
 }
 
-void LandscapeSeams::Sweep()
+void LandscapeSeamsFix::Reset()
 {
 	std::vector<RE::BSGeometry*> released;
 	std::vector<std::shared_ptr<Resources>> releasedResources;
@@ -788,18 +696,7 @@ void LandscapeSeams::Sweep()
 	}
 }
 
-void LandscapeSeams::Prepass()
-{
-	if (rebuildRequested.exchange(false))
-		RebuildAll();
-}
-
-void LandscapeSeams::Reset()
-{
-	Sweep();
-}
-
-struct LandscapeSeams::Hooks
+struct LandscapeSeamsFix::Hooks
 {
 	struct TESObjectLAND_SetupMaterial
 	{
@@ -807,7 +704,7 @@ struct LandscapeSeams::Hooks
 		{
 			const bool result = func(a_land);
 			if (result)
-				globals::features::landscapeSeams.TESObjectLAND_SetupMaterial(a_land);
+				GetInstance().TESObjectLAND_SetupMaterial(a_land);
 			return result;
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -821,7 +718,7 @@ struct LandscapeSeams::Hooks
 			if (renderPasses == nullptr || !a_property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape))
 				return renderPasses;
 
-			const bool blended = globals::features::landscapeSeams.IsBlended(a_geometry);
+			const bool blended = GetInstance().IsBlended(a_geometry);
 
 			for (auto* pass = renderPasses->head; pass != nullptr; pass = pass->next) {
 				if (pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
@@ -851,7 +748,7 @@ struct LandscapeSeams::Hooks
 		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_renderFlags)
 		{
 			if (a_pass != nullptr && ((a_pass->passEnum - LightingTechniqueStart) & SeamsFlag) != 0)
-				globals::features::landscapeSeams.Bind(a_pass->geometry);
+				GetInstance().Bind(a_pass->geometry);
 			func(a_shader, a_pass, a_renderFlags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -865,15 +762,18 @@ struct LandscapeSeams::Hooks
 	}
 };
 
-void LandscapeSeams::PostPostLoad()
+LandscapeSeamsFix& LandscapeSeamsFix::GetInstance()
+{
+	static LandscapeSeamsFix instance;
+	return instance;
+}
+
+void LandscapeSeamsFix::Install()
 {
 	if (!globals::features::truePBR.loaded) {
-		loaded = false;
-		failedLoadedMessage = "True PBR is not loaded, landscape seam blending is disabled.";
-		logger::warn("[Landscape Seams] {}", failedLoadedMessage);
+		logger::warn("[Landscape Seams] True PBR is not loaded, landscape seam blending is disabled.");
 		return;
 	}
 
 	Hooks::Install();
-	logger::info("[Landscape Seams] Installed hooks");
 }
