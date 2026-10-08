@@ -1542,6 +1542,13 @@ void LightLimitFix::EnsureLocalShadowResources(ID3D11Texture2D* a_engineShadowMa
 	localShadowEngineMipLevels = std::max(engineDesc.MipLevels, 1u);
 	localShadowEngineSlices = engineDesc.ArraySize;
 
+	// Without LocalShadowCopyCS a downsampled cache can never be filled, so don't hold its memory
+	if (!localShadowDirectCopy && (!localShadowCopyCS || !localShadowCopyCB)) {
+		if (localShadowCache)
+			ReleaseLocalShadowResources();
+		return;
+	}
+
 	const uint32_t renderFrame = globals::state->frameCount;
 	const bool retryDue = !localShadowCache && renderFrame - localShadowAllocFailedFrame >= LOCAL_SHADOW_ALLOC_RETRY_FRAMES;
 	if (!retryDue && requestedSlots == localShadowRequestedSlots && cacheResolution == localShadowCacheResolution && engineResolution == localShadowEngineResolution && cacheFormat == localShadowCacheFormat)
