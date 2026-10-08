@@ -6,7 +6,9 @@
 #include <format>
 #include <imgui_stdlib.h>
 
+#include "CSEditor/EditorWindow.h"
 #include "EditorWidgets.h"
+#include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/EffectManager.h"
 #include "Features/Effects11/PresetManager.h"
@@ -353,6 +355,26 @@ void Effects11Editor::Toggle()
 		Open(globals::menu->IsEnabled);
 }
 
+void Effects11Editor::OpenCSEditor()
+{
+	CSEditor::OpenEditorWindow();
+	if (!EditorWindow::GetSingleton()->open)
+		return;
+	const bool toMenu = returnToMenu;
+	Close(false);
+	resumeAfterCSEditor = true;
+	resumeReturnToMenu = toMenu;
+}
+
+void Effects11Editor::ResumeAfterCSEditor()
+{
+	if (!resumeAfterCSEditor || EditorWindow::GetSingleton()->open)
+		return;
+	resumeAfterCSEditor = false;
+	if (!globals::menu->IsEnabled && EditorWindow::CanBeOpen())
+		Open(resumeReturnToMenu);
+}
+
 bool Effects11Editor::ShouldHandleEscapeKey()
 {
 	if (suppressNextEscape) {
@@ -473,14 +495,26 @@ void Effects11Editor::DrawToolbar()
 	}
 
 	// Shader panel toggle, right-aligned on the same line
+	const char* csEditorLabel = T(TKEY("open_cs_editor"), "Open CS Editor");
 	const char* panelLabel = showShaderPanel ? T(TKEY("hide_shader_panel"), "Hide Shader Parameters") : T(TKEY("show_shader_panel"), "Show Shader Parameters");
-	const float panelWidth = ImGui::CalcTextSize(panelLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+	const auto& style = ImGui::GetStyle();
+	const float csEditorWidth = ImGui::CalcTextSize(csEditorLabel).x + style.FramePadding.x * 2.0f;
+	const float panelWidth = ImGui::CalcTextSize(panelLabel).x + style.FramePadding.x * 2.0f;
+	const float buttonsWidth = csEditorWidth + style.ItemSpacing.x + panelWidth;
 	ImGui::SameLine();
 	const float avail = ImGui::GetContentRegionAvail().x;
-	if (avail >= panelWidth)
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - panelWidth);
+	if (avail >= buttonsWidth)
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonsWidth);
 	else
 		ImGui::NewLine();
+	{
+		auto _ = Util::DisableGuard(!EditorWindow::CanBeOpen());
+		if (ImGui::Button(std::format("{}###csEditor", csEditorLabel).c_str()))
+			OpenCSEditor();
+	}
+	Util::AddTooltip(T(TKEY("open_cs_editor_tip"), "Switch to the CS Editor to change weather and time of day.\nThis editor comes back when you close it."), ImGuiHoveredFlags_AllowWhenDisabled);
+
+	ImGui::SameLine();
 	if (ImGui::Button(std::format("{}###shaderPanel", panelLabel).c_str()))
 		showShaderPanel = !showShaderPanel;
 	Util::AddTooltip(T(TKEY("shader_panel_tip"), "Show or hide the panel with the .fx shader parameters."));

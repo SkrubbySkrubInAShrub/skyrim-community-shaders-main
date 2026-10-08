@@ -152,6 +152,7 @@ void OverlayRenderer::RenderOverlay(
 	float currentFontSize)
 {
 	processInputEventQueue();
+	Effects11Editor::GetSingleton().ResumeAfterCSEditor();
 
 	// ImGui only takes game input while a CS window owns it. Otherwise status overlays
 	// (compile progress, performance overlay) would react to gameplay clicks and keys, and

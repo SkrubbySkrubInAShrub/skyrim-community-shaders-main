@@ -650,6 +650,8 @@
     "feature.effects11.editor.now_label": "In effect now:",
     "feature.effects11.editor.off": "Off",
     "feature.effects11.editor.on": "On",
+    "feature.effects11.editor.open_cs_editor": "Open CS Editor",
+    "feature.effects11.editor.open_cs_editor_tip": "Switch to the CS Editor to change weather and time of day.\nThis editor comes back when you close it.",
     "feature.effects11.editor.open_editor": "Open Effects 11 Editor",
     "feature.effects11.editor.paste": "Paste",
     "feature.effects11.editor.per_weather": "Per-weather values",
