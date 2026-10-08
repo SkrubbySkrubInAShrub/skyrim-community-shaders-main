@@ -95,9 +95,10 @@ void ENBDepthOfField::UpdateEffectVariables()
 		idsCached = true;
 	}
 
-	// DOF runs before adaptation, so only last frame's result exists yet
+	// DOF runs before adaptation, so only last frame's result exists yet; a failed
+	// enbadaptation.fx never writes it
 	ID3D11ShaderResourceView* adaptationSRV = nullptr;
-	if (idEnableAdaptation != 0xFFFFFFFF && settingManager.GetValue<bool>(idEnableAdaptation)) {
+	if (idEnableAdaptation != 0xFFFFFFFF && settingManager.GetValue<bool>(idEnableAdaptation) && EffectManager::GetSingleton().enbAdaptation.IsCompiled()) {
 		auto& textureManager = TextureManager::GetSingleton();
 		auto* texture = textureManager.FindCommonTexture((textureManager.GetTextureSwap() & 1) ? "TextureAdaptationSwap" : "TextureAdaptation");
 		adaptationSRV = texture ? texture->srv.get() : nullptr;
