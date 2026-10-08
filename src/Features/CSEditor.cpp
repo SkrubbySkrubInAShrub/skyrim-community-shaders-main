@@ -750,7 +750,7 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		if (EditorWindow::AreWeatherLockHooksInstalled()) {
-			ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
+			ImGui::Text("%s", isLocked ? T(TKEY("unlock_weather_tooltip"), "Unlock weather to allow natural changes") : T(TKEY("lock_weather_tooltip"), "Lock current weather to prevent changes"));
 		} else {
 			// MaintainWeatherLock still re-applies the lock every frame without the call-site
 			// redirects, so the lock works but weather can visibly flash before correcting.

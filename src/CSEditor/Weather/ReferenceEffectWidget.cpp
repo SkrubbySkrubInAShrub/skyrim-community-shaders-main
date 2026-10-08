@@ -68,7 +68,7 @@ void ReferenceEffectWidget::DrawWidget()
 					changed = true;
 			}
 
-			if (changed && editorWindow->settings.autoApplyChanges) {
+			if (changed && editorWindow->settings.autoApplyChanges && !RequiresManualApply()) {
 				editorWindow->PushUndoState(this);
 				ApplyChanges();
 			}
@@ -120,7 +120,8 @@ void ReferenceEffectWidget::LoadSettings()
 		settings = vanillaSettings;
 	}
 
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	ApplyChanges();
 }
 
@@ -135,14 +136,26 @@ void ReferenceEffectWidget::LoadFromGameSettings()
 	settings.inheritRotation = referenceEffect->data.flags.any(RE::BGSReferenceEffect::Flag::kInheritRotation);
 }
 
+void ReferenceEffectWidget::WriteSettingsJson(json& out) const
+{
+	out["artObject"] = settings.artObject ? std::format("{:08X}", settings.artObject->GetFormID()) : "00000000";
+	out["effectShader"] = settings.effectShader ? std::format("{:08X}", settings.effectShader->GetFormID()) : "00000000";
+	out["faceTarget"] = settings.faceTarget;
+	out["attachToCamera"] = settings.attachToCamera;
+	out["inheritRotation"] = settings.inheritRotation;
+}
+
 void ReferenceEffectWidget::SaveSettings()
 {
-	js["artObject"] = settings.artObject ? std::format("{:08X}", settings.artObject->GetFormID()) : "00000000";
-	js["effectShader"] = settings.effectShader ? std::format("{:08X}", settings.effectShader->GetFormID()) : "00000000";
-	js["faceTarget"] = settings.faceTarget;
-	js["attachToCamera"] = settings.attachToCamera;
-	js["inheritRotation"] = settings.inheritRotation;
+	WriteSettingsJson(js);
 	originalSettings = settings;
+}
+
+json ReferenceEffectWidget::CaptureUndoSnapshot() const
+{
+	json snapshot;
+	WriteSettingsJson(snapshot);
+	return snapshot;
 }
 
 void ReferenceEffectWidget::ApplyChanges()
@@ -161,7 +174,8 @@ void ReferenceEffectWidget::ApplyChanges()
 	if (settings.inheritRotation)
 		referenceEffect->data.flags.set(RE::BGSReferenceEffect::Flag::kInheritRotation);
 
-	Widget::ForceCurrentWeatherReinit();
+	if (auto* sky = globals::game::sky; sky && sky->currentWeather && sky->currentWeather->referenceEffect == referenceEffect)
+		Widget::ForceCurrentWeatherReinit();
 }
 
 void ReferenceEffectWidget::RevertChanges()

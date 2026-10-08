@@ -37,6 +37,8 @@ public:
 	/** @brief Serializes current lens flare settings to the JSON blob. */
 	void SaveSettings() override;
 
+	json CaptureUndoSnapshot() const override;
+
 	/** @brief Writes the current settings into the game's BGSLensFlare form. */
 	void ApplyChanges() override;
 
@@ -53,6 +55,7 @@ public:
 
 private:
 	void LoadFromGameSettings();
+	void WriteSettingsJson(json& out) const;
 
 	struct Settings
 	{

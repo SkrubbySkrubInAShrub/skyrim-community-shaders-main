@@ -308,7 +308,8 @@ void LightingTemplateWidget::LoadSettings()
 	} else {
 		settings = vanillaSettings;
 	}
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	ApplyChanges();
 }
 
@@ -316,6 +317,11 @@ void LightingTemplateWidget::SaveSettings()
 {
 	js = settings;
 	originalSettings = settings;
+}
+
+json LightingTemplateWidget::CaptureUndoSnapshot() const
+{
+	return json(settings);
 }
 
 bool LightingTemplateWidget::HasUnsavedChanges() const

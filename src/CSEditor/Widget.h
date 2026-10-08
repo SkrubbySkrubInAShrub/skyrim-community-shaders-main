@@ -223,6 +223,17 @@ public:
 	/** @brief Save widget-specific settings to the internal JSON object. Must be implemented by subclasses. */
 	virtual void SaveSettings() = 0;
 
+	/** @brief Returns the live settings as JSON for the undo stack; defaults to the last saved JSON. */
+	virtual json CaptureUndoSnapshot() const { return js; }
+
+	/**
+	 * @brief Loads an undo snapshot into the live settings.
+	 *
+	 * The saved JSON and the widget's saved baseline are kept, so the widget still reports
+	 * unsaved changes and Revert returns to the saved state.
+	 */
+	void RestoreUndoSnapshot(const json& a_snapshot);
+
 	/** @brief Apply the current widget settings to the live game form. Must be implemented by subclasses. */
 	virtual void ApplyChanges() = 0;
 
@@ -417,6 +428,9 @@ public:
 	json js = json();
 
 protected:
+	/** @brief Set while RestoreUndoSnapshot runs LoadSettings; LoadSettings must then keep its saved baseline. */
+	bool restoringUndoSnapshot = false;
+
 	mutable std::string cachedEditorID;
 	mutable std::string cachedSaveKey;
 	mutable bool isFallbackEditorID = false;

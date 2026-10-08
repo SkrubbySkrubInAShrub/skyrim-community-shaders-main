@@ -170,7 +170,8 @@ void ImageSpaceWidget::LoadSettings()
 		logger::error("Failed to load ImageSpace settings for {}: {}", GetEditorID(), e.what());
 		settings = vanillaSettings;
 	}
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	ApplyChanges();
 }
 
@@ -178,6 +179,13 @@ void ImageSpaceWidget::SaveSettings()
 {
 	js["Settings"] = settings;
 	originalSettings = settings;
+}
+
+json ImageSpaceWidget::CaptureUndoSnapshot() const
+{
+	json snapshot;
+	snapshot["Settings"] = settings;
+	return snapshot;
 }
 
 void ImageSpaceWidget::SetImageSpaceValues()

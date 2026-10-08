@@ -59,7 +59,8 @@ void LensFlareWidget::LoadSettings()
 	} else {
 		settings = vanillaSettings;
 	}
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	ApplyChanges();
 }
 
@@ -71,11 +72,23 @@ void LensFlareWidget::LoadFromGameSettings()
 	settings.colorInfluence = lensFlare->colorInfluence;
 }
 
+void LensFlareWidget::WriteSettingsJson(json& out) const
+{
+	out["fadeDistRadiusScale"] = settings.fadeDistRadiusScale;
+	out["colorInfluence"] = settings.colorInfluence;
+}
+
 void LensFlareWidget::SaveSettings()
 {
-	js["fadeDistRadiusScale"] = settings.fadeDistRadiusScale;
-	js["colorInfluence"] = settings.colorInfluence;
+	WriteSettingsJson(js);
 	originalSettings = settings;
+}
+
+json LensFlareWidget::CaptureUndoSnapshot() const
+{
+	json snapshot;
+	WriteSettingsJson(snapshot);
+	return snapshot;
 }
 
 void LensFlareWidget::ApplyChanges()

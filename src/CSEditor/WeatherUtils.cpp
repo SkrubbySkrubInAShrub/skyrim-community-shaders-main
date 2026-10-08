@@ -470,6 +470,7 @@ namespace WeatherUtils
 		const double debounceDelay = 2.0;
 		double currentTime = ImGui::GetTime();
 		const auto displayLabel = BuildLocalizedControlLabel(label);
+		const int previousValue = property;
 
 		bool changed = DrawWithWidgetHighlight(g_currentWidget, label, [&]() {
 			return ImGui::SliderInt(displayLabel.c_str(), &property, -127, 127);
@@ -481,7 +482,10 @@ namespace WeatherUtils
 		// Push undo state when slider becomes active
 		if (s_int8Tracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
 			if (g_currentWidget) {
+				const int editedValue = property;
+				property = previousValue;
 				EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
+				property = editedValue;
 			}
 		}
 
@@ -515,7 +519,9 @@ namespace WeatherUtils
 		                                std::format("{}{}{}", static_cast<const void*>(effectiveWidget), kScopeSep, hid) :
 		                                hid;
 		const auto displayLabel = BuildLocalizedControlLabel(l);
-		bool isActive = ImGui::IsPopupOpen(displayLabel.c_str(), ImGuiPopupFlags_AnyPopupId);
+		ImGui::PushID(displayLabel.c_str());
+		const bool isActive = ImGui::IsPopupOpen("picker");
+		ImGui::PopID();
 		bool wasActive = wasPickerOpen[cacheId];
 
 		// Cache the original color and push undo state when picker is first activated
@@ -593,6 +599,7 @@ namespace WeatherUtils
 		if (w && !w->MatchesSearch(hid))
 			return false;
 
+		const float previousValue = property;
 		bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
 			return ImGui::SliderFloat(displayLabel.c_str(), &property, min, max, format);
 		});
@@ -605,7 +612,10 @@ namespace WeatherUtils
 		// Push undo state when slider becomes active
 		if (s_floatTracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
 			if (w) {
+				const float editedValue = property;
+				property = previousValue;
 				EditorWindow::GetSingleton()->PushUndoState(w);
+				property = editedValue;
 			}
 		}
 
@@ -881,7 +891,7 @@ namespace TOD
 				ImGui::SetCursorPosX(centerOffset);
 
 			std::string id = std::string("##") + label + std::to_string(i);
-			std::string scopedId = ScopedKey(id);
+			std::string scopedId = ScopedKey(std::format("{}#{:08X}", id, ImGui::GetID(id.c_str())));
 			ImVec4 color = ImVec4(colors[i].x, colors[i].y, colors[i].z, 1.0f);
 
 			static std::map<std::string, float3> colorCache;
@@ -1141,7 +1151,7 @@ namespace TOD
 			}
 
 			std::string id = std::string("##") + label + std::to_string(i);
-			std::string scopedId = ScopedKey(id);
+			std::string scopedId = ScopedKey(std::format("{}#{:08X}", id, ImGui::GetID(id.c_str())));
 			ImVec4 color = ImVec4(colors[i].x, colors[i].y, colors[i].z, 1.0f);
 
 			static std::map<std::string, float3> colorCache;
@@ -1258,8 +1268,9 @@ namespace TOD
 				ImGui::SameLine();
 			ImGui::PushID(i);
 
-			std::string itemId = ScopedKey(std::string(label) + "_" + std::to_string(i));
+			std::string itemId = ScopedKey(std::format("{}_{}#{:08X}", label, i, ImGui::GetID("##value")));
 
+			const float previousValue = values[i];
 			ImGui::SetNextItemWidth(columnWidth);
 			if (ImGui::SliderFloat("##value", &values[i], minValue, maxValue, format)) {
 				changed = true;
@@ -1269,7 +1280,10 @@ namespace TOD
 			bool isNowActive = ImGui::IsItemActive();
 			if (s_todFloatTracker.UpdateActiveState(itemId, isNowActive, currentTime, debounceDelay)) {
 				if (g_currentWidget) {
+					const float editedValue = values[i];
+					values[i] = previousValue;
 					EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
+					values[i] = editedValue;
 				}
 			}
 

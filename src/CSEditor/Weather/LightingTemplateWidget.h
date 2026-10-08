@@ -83,6 +83,8 @@ public:
 	/** @brief Serializes current lighting template settings to the JSON blob. */
 	void SaveSettings() override;
 
+	json CaptureUndoSnapshot() const override;
+
 	/** @brief Returns true if the current settings differ from the last saved state. */
 	bool HasUnsavedChanges() const override;
 

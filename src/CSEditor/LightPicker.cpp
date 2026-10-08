@@ -44,7 +44,9 @@ void LightPicker::PopulateFromRef(PickedMesh& out, RE::TESObjectREFR* refr, RE::
 std::string LightPicker::FormatFormEntry(RE::FormID formId, std::string_view ownerPlugin)
 {
 	constexpr RE::FormID kRelativeFormIdMask = 0x00FFFFFF;  // strips the load-order mod index
-	return fmt::format("0x{:X}~{}", formId & kRelativeFormIdMask, ownerPlugin);
+	constexpr RE::FormID kLightRelativeFormIdMask = 0x00000FFF;
+	const bool isLightPluginForm = (formId >> 24) == 0xFE;
+	return fmt::format("0x{:X}~{}", formId & (isLightPluginForm ? kLightRelativeFormIdMask : kRelativeFormIdMask), ownerPlugin);
 }
 
 std::string LightPicker::FormatRefFormEntry(RE::TESObjectREFR* refr)

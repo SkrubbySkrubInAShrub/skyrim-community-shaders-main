@@ -51,7 +51,7 @@ private:
 
 		bool operator==(const LightInfo& other) const noexcept
 		{
-			return id == other.id && index == other.index;
+			return id == other.id && index == other.index && ptr == other.ptr;
 		}
 	};
 

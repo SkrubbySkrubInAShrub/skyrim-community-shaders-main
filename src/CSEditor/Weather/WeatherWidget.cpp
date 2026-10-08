@@ -22,6 +22,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Cloud, cloudLayerSpeedY, cloud
 
 namespace
 {
+	bool IsOverrideEnabled(const json& a_featureSettings)
+	{
+		if (!a_featureSettings.is_object())
+			return false;
+		const auto it = a_featureSettings.find("__enabled");
+		return it != a_featureSettings.end() && it->is_boolean() && it->get<bool>();
+	}
+
 	namespace WeatherTab
 	{
 		constexpr const char* kBasic = "Basic";
@@ -422,8 +430,22 @@ void WeatherWidget::LoadSettings()
 	bool hadErrors = false;
 	if (!js.empty()) {
 		try {
+			json patched = js;
+			if (patched.is_object()) {
+				patched.emplace("featureSettings", json::object());
+				if (auto clouds = patched.find("clouds"); clouds != patched.end() && clouds->is_array()) {
+					for (size_t i = 0; i < clouds->size() && i < TESWeather::kTotalLayers; i++) {
+						auto& cloud = (*clouds)[i];
+						if (!cloud.is_object())
+							continue;
+						cloud.emplace("enabled", vanillaSettings.clouds[i].enabled);
+						cloud.emplace("texturePath", vanillaSettings.clouds[i].texturePath);
+					}
+				}
+			}
+
 			// Attempt to load settings from JSON
-			settings = js;
+			settings = patched;
 
 			// Validate that critical fields were loaded correctly
 			if (js.contains("weatherProperties") && settings.weatherProperties.empty() && !js["weatherProperties"].empty()) {
@@ -474,9 +496,7 @@ void WeatherWidget::LoadSettings()
 			settings.referenceEffect = loadRef("referenceEffectRef", editorWindow->referenceEffectWidgets, vanillaSettings.referenceEffect);
 
 		} catch (const nlohmann::json::exception& e) {
-			logger::error("Weather {}: Failed to deserialize settings from JSON: {}", GetEditorID(), e.what());
-			// Fallback to vanilla/game values on exception
-			settings = vanillaSettings;
+			logger::warn("Weather {}: Failed to deserialize settings from JSON, keeping previous settings: {}", GetEditorID(), e.what());
 			EditorWindow::GetSingleton()->ShowNotification(
 				std::format("Some values failed to load for {}", GetEditorID()),
 				Util::Colors::GetError(),
@@ -490,9 +510,30 @@ void WeatherWidget::LoadSettings()
 	if (!js.empty()) {
 		LoadFeatureSettings();
 	}
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	pendingReinit = true;
 	ApplyChanges();
+}
+
+json WeatherWidget::SerializeSettings() const
+{
+	json result = settings;
+
+	// Record form references (serialized as widget EditorIDs for load-order independence)
+	auto* editorWindow = EditorWindow::GetSingleton();
+	for (size_t i = 0; i < ColorTimes::kTotal; i++) {
+		result[std::format("imageSpaceRef_{}", i)] = WeatherUtils::FindEditorIDByForm(settings.imageSpaceRefs[i], editorWindow->imageSpaceWidgets);
+		result[std::format("volumetricLightingRef_{}", i)] = WeatherUtils::FindEditorIDByForm(settings.volumetricLightingRefs[i], editorWindow->volumetricLightingWidgets);
+	}
+	result["precipitationDataRef"] = WeatherUtils::FindEditorIDByForm(settings.precipitationData, editorWindow->precipitationWidgets);
+	result["referenceEffectRef"] = WeatherUtils::FindEditorIDByForm(settings.referenceEffect, editorWindow->referenceEffectWidgets);
+	return result;
+}
+
+json WeatherWidget::CaptureUndoSnapshot() const
+{
+	return SerializeSettings();
 }
 
 void WeatherWidget::SaveSettings()
@@ -500,16 +541,7 @@ void WeatherWidget::SaveSettings()
 	SaveFeatureSettings();
 
 	try {
-		js = settings;
-
-		// Record form references (serialized as widget EditorIDs for load-order independence)
-		auto* editorWindow = EditorWindow::GetSingleton();
-		for (size_t i = 0; i < ColorTimes::kTotal; i++) {
-			js[std::format("imageSpaceRef_{}", i)] = WeatherUtils::FindEditorIDByForm(settings.imageSpaceRefs[i], editorWindow->imageSpaceWidgets);
-			js[std::format("volumetricLightingRef_{}", i)] = WeatherUtils::FindEditorIDByForm(settings.volumetricLightingRefs[i], editorWindow->volumetricLightingWidgets);
-		}
-		js["precipitationDataRef"] = WeatherUtils::FindEditorIDByForm(settings.precipitationData, editorWindow->precipitationWidgets);
-		js["referenceEffectRef"] = WeatherUtils::FindEditorIDByForm(settings.referenceEffect, editorWindow->referenceEffectWidgets);
+		js = SerializeSettings();
 
 		if (js.is_null()) {
 			logger::error("Weather {}: Serialization produced null JSON!", GetEditorID());
@@ -653,7 +685,7 @@ void WeatherWidget::SetWeatherValues()
 		json emptyWeather;
 
 		for (const auto& [featureName, featureSettings] : settings.featureSettings) {
-			if (!featureSettings.value("__enabled", false) || !globalRegistry->HasWeatherSupport(featureName)) {
+			if (!IsOverrideEnabled(featureSettings) || !globalRegistry->HasWeatherSupport(featureName)) {
 				continue;
 			}
 
@@ -1130,6 +1162,7 @@ void WeatherWidget::DrawCloudSettings()
 			ImGui::BeginGroup();
 
 			if (ImGui::Checkbox(std::format("{}##{}", T(TKEY("enable"), "Enable"), layer).c_str(), &layerEnabled)) {
+				editorWindow->PushUndoState(this);
 				settings.clouds[i].enabled = layerEnabled;
 				enableChanged = true;
 				changed = true;
@@ -1220,11 +1253,9 @@ void WeatherWidget::DrawCloudSettings()
 	}
 	if (enableChanged) {
 		// Apply enable/disable immediately for instant feedback, regardless of autoApplyChanges.
-		editorWindow->PushUndoState(this);
 		pendingReinit = true;
 		ApplyChanges();
 	} else if (changed && editorWindow->settings.autoApplyChanges) {
-		editorWindow->PushUndoState(this);
 		ApplyChanges();
 	}
 }
@@ -1745,7 +1776,7 @@ void WeatherWidget::RevertChanges()
 		auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
 
 		for (const auto& [featureName, featureSettings] : settings.featureSettings) {
-			if (!featureSettings.value("__enabled", false) || !globalRegistry->HasWeatherSupport(featureName)) {
+			if (!IsOverrideEnabled(featureSettings) || !globalRegistry->HasWeatherSupport(featureName)) {
 				continue;
 			}
 
@@ -1835,7 +1866,7 @@ void WeatherWidget::DrawFeatureSettings()
 
 		if (ImGui::TreeNodeEx(std::format("{}##{}", displayName, featureName).c_str(), ImGuiTreeNodeFlags_SpanAvailWidth)) {
 			// Check if weather-specific overrides are enabled (using special key)
-			bool overridesEnabled = featureJsonView ? featureJsonView->value("__enabled", false) : false;
+			bool overridesEnabled = featureJsonView ? IsOverrideEnabled(*featureJsonView) : false;
 
 			// Weather-specific override toggle
 			ImGui::PushStyleColor(ImGuiCol_Button, overridesEnabled ? WidgetUI::kOverrideEnabledButton : Util::Colors::GetDisabled());
@@ -1858,6 +1889,7 @@ void WeatherWidget::DrawFeatureSettings()
 			}
 
 			if (toggleClicked) {
+				EditorWindow::GetSingleton()->PushUndoState(this);
 				auto& featureJson = getFeatureJson();
 				if (overridesEnabled) {
 					// Disable overrides - mark as disabled but keep the settings
@@ -1885,7 +1917,6 @@ void WeatherWidget::DrawFeatureSettings()
 						}
 					}
 				}
-				EditorWindow::GetSingleton()->PushUndoState(this);
 				if (EditorWindow::GetSingleton()->settings.autoApplyChanges) {
 					ApplyChanges();
 				}
@@ -1926,104 +1957,112 @@ void WeatherWidget::DrawFeatureSettings()
 						currentValue = *it;
 					}
 
-					// Try to detect variable type and render appropriate control
-					// Check if it's a bool variable first
-					if (auto* boolVar = dynamic_cast<WeatherVariables::WeatherVariable<bool>*>(var.get())) {
-						bool value = currentValue.get<bool>();
+					try {
+						// Try to detect variable type and render appropriate control
+						// Check if it's a bool variable first
+						if (auto* boolVar = dynamic_cast<WeatherVariables::WeatherVariable<bool>*>(var.get())) {
+							bool value = currentValue.get<bool>();
 
-						if (ImGui::Checkbox(varDisplayName.c_str(), &value)) {
-							featureJson[varName] = value;
-							modified = true;
-						}
-
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text("%s", tooltip.c_str());
-						}
-
-						// Right-click context menu to reset individual values
-						if (ImGui::BeginPopupContextItem()) {
-							if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
-								featureJson.erase(varName);
+							if (ImGui::Checkbox(varDisplayName.c_str(), &value)) {
+								featureJson[varName] = value;
 								modified = true;
 							}
-							ImGui::EndPopup();
-						}
 
-					} else if (auto* floatVar = dynamic_cast<WeatherVariables::FloatVariable*>(var.get())) {
-						float value = currentValue.get<float>();
-						float minVal = floatVar->GetMin();
-						float maxVal = floatVar->GetMax();
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								ImGui::Text("%s", tooltip.c_str());
+							}
 
-						if (ImGui::SliderFloat(varDisplayName.c_str(), &value, minVal, maxVal, "%.3f")) {
-							featureJson[varName] = value;
-							modified = true;
-						}
+							// Right-click context menu to reset individual values
+							if (ImGui::BeginPopupContextItem()) {
+								if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
+									featureJson.erase(varName);
+									modified = true;
+								}
+								ImGui::EndPopup();
+							}
 
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text("%s", tooltip.c_str());
-						}
+						} else if (auto* floatVar = dynamic_cast<WeatherVariables::FloatVariable*>(var.get())) {
+							float value = currentValue.get<float>();
+							float minVal = floatVar->GetMin();
+							float maxVal = floatVar->GetMax();
 
-						// Right-click context menu to reset individual values
-						if (ImGui::BeginPopupContextItem()) {
-							if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
-								featureJson.erase(varName);
+							if (ImGui::SliderFloat(varDisplayName.c_str(), &value, minVal, maxVal, "%.3f")) {
+								featureJson[varName] = value;
 								modified = true;
 							}
-							ImGui::EndPopup();
-						}
 
-					} else if (auto* float3Var = dynamic_cast<WeatherVariables::Float3Variable*>(var.get())) {
-						// Handle float3 (color) variables
-						float3 value = currentValue.get<float3>();
-						float colorArray[3] = { value.x, value.y, value.z };
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								ImGui::Text("%s", tooltip.c_str());
+							}
 
-						if (ImGui::ColorEdit3(varDisplayName.c_str(), colorArray)) {
-							featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2] };
-							modified = true;
-						}
+							// Right-click context menu to reset individual values
+							if (ImGui::BeginPopupContextItem()) {
+								if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
+									featureJson.erase(varName);
+									modified = true;
+								}
+								ImGui::EndPopup();
+							}
 
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text("%s", tooltip.c_str());
-						}
+						} else if (auto* float3Var = dynamic_cast<WeatherVariables::Float3Variable*>(var.get())) {
+							// Handle float3 (color) variables
+							float3 value = currentValue.get<float3>();
+							float colorArray[3] = { value.x, value.y, value.z };
 
-						if (ImGui::BeginPopupContextItem()) {
-							if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
-								featureJson.erase(varName);
+							if (ImGui::ColorEdit3(varDisplayName.c_str(), colorArray)) {
+								featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2] };
 								modified = true;
 							}
-							ImGui::EndPopup();
-						}
 
-					} else if (auto* float4Var = dynamic_cast<WeatherVariables::Float4Variable*>(var.get())) {
-						// Handle float4 (color with alpha) variables
-						float4 value = currentValue.get<float4>();
-						float colorArray[4] = { value.x, value.y, value.z, value.w };
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								ImGui::Text("%s", tooltip.c_str());
+							}
 
-						if (ImGui::ColorEdit4(varDisplayName.c_str(), colorArray)) {
-							featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2], colorArray[3] };
-							modified = true;
-						}
+							if (ImGui::BeginPopupContextItem()) {
+								if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
+									featureJson.erase(varName);
+									modified = true;
+								}
+								ImGui::EndPopup();
+							}
 
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							ImGui::Text("%s", tooltip.c_str());
-						}
+						} else if (auto* float4Var = dynamic_cast<WeatherVariables::Float4Variable*>(var.get())) {
+							// Handle float4 (color with alpha) variables
+							float4 value = currentValue.get<float4>();
+							float colorArray[4] = { value.x, value.y, value.z, value.w };
 
-						if (ImGui::BeginPopupContextItem()) {
-							if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
-								featureJson.erase(varName);
+							if (ImGui::ColorEdit4(varDisplayName.c_str(), colorArray)) {
+								featureJson[varName] = json{ colorArray[0], colorArray[1], colorArray[2], colorArray[3] };
 								modified = true;
 							}
-							ImGui::EndPopup();
-						}
 
-					} else {
-						// Generic handling for other types
-						ImGui::TextDisabled("%s: %s", varDisplayName.c_str(), currentValue.dump().c_str());
-						if (auto _tt = Util::HoverTooltipWrapper()) {
-							Util::Text::Warning("%s", T(TKEY("unsupported_variable_type"), "Unsupported Variable Type"));
-							ImGui::Text("%s", tooltip.c_str());
-							ImGui::Separator();
-							ImGui::TextWrapped("%s", T(TKEY("unsupported_variable_type_tooltip"), "This variable type doesn't have a custom UI implementation yet. The raw JSON value is shown above."));
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								ImGui::Text("%s", tooltip.c_str());
+							}
+
+							if (ImGui::BeginPopupContextItem()) {
+								if (ImGui::MenuItem(T(TKEY("reset_to_global"), "Reset to Global"))) {
+									featureJson.erase(varName);
+									modified = true;
+								}
+								ImGui::EndPopup();
+							}
+
+						} else {
+							// Generic handling for other types
+							ImGui::TextDisabled("%s: %s", varDisplayName.c_str(), currentValue.dump().c_str());
+							if (auto _tt = Util::HoverTooltipWrapper()) {
+								Util::Text::Warning("%s", T(TKEY("unsupported_variable_type"), "Unsupported Variable Type"));
+								ImGui::Text("%s", tooltip.c_str());
+								ImGui::Separator();
+								ImGui::TextWrapped("%s", T(TKEY("unsupported_variable_type_tooltip"), "This variable type doesn't have a custom UI implementation yet. The raw JSON value is shown above."));
+							}
+						}
+					} catch (const nlohmann::json::exception& e) {
+						if (hasOverride) {
+							logger::warn("Weather {}: invalid override for {}.{}, resetting to global: {}", GetEditorID(), featureName, varName, e.what());
+							featureJson.erase(varName);
+							modified = true;
 						}
 					}
 
@@ -2101,8 +2140,8 @@ std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() con
 	}
 
 	for (int i = 0; i < TESWeather::kTotalLayers; i++) {
-		std::string layerId = std::vformat(T(TKEY("cloud_layer"), "Cloud Layer {}"), std::make_format_args(i));
-		results.push_back({ layerId, WeatherTab::kClouds, layerId });
+		std::string layerName = std::vformat(T(TKEY("cloud_layer"), "Cloud Layer {}"), std::make_format_args(i));
+		results.push_back({ layerName, WeatherTab::kClouds, std::format("Cloud Layer {}", i) });
 	}
 
 	// Records tab: one entry per time-of-day slot for each form-picker section

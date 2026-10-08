@@ -335,21 +335,16 @@ namespace WidgetFactory
 	}
 
 	/**
-	 * @brief Draw all open widgets from a container and track which one has focus.
-	 * @tparam Container    A range of unique_ptr<Widget>.
-	 * @param  widgets          The widget container to iterate.
-	 * @param  lastFocusedWidget Updated to the most recently focused widget.
+	 * @brief Draw all open widgets from a container.
+	 * @tparam Container A range of unique_ptr<Widget>.
+	 * @param  widgets   The widget container to iterate.
 	 */
 	template <typename Container>
-	void DrawOpenWidgets(Container& widgets, Widget*& lastFocusedWidget)
+	void DrawOpenWidgets(Container& widgets)
 	{
 		for (auto& widget : widgets) {
-			if (widget->IsOpen()) {
+			if (widget->IsOpen())
 				widget->DrawWidget();
-				if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-					lastFocusedWidget = widget.get();
-				}
-			}
 		}
 	}
 

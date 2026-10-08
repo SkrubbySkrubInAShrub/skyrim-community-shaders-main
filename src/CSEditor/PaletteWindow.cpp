@@ -11,6 +11,18 @@
 // Forward declaration from EditorWindow.cpp
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled);
 
+namespace
+{
+	template <class Entries>
+	float NextUsageStamp(const Entries& entries)
+	{
+		float latest = 0.0f;
+		for (const auto& entry : entries)
+			latest = std::max(latest, entry.lastUsedTime);
+		return latest + 1.0f;
+	}
+}
+
 void PaletteWindow::Draw()
 {
 	if (!open)
@@ -389,7 +401,7 @@ std::vector<PaletteWindow::ValueEntry*> PaletteWindow::GetMostUsedValues(int cou
 
 void PaletteWindow::TrackColorUsage(const float3& color)
 {
-	float currentTime = static_cast<float>(ImGui::GetTime());
+	const float currentTime = NextUsageStamp(colorEntries);
 
 	// Find existing entry (with small epsilon for float comparison)
 	const float epsilon = 0.001f;
@@ -415,7 +427,7 @@ void PaletteWindow::TrackColorUsage(const float3& color)
 
 void PaletteWindow::TrackValueUsage(const std::string& name, float value)
 {
-	float currentTime = static_cast<float>(ImGui::GetTime());
+	const float currentTime = NextUsageStamp(valueEntries);
 
 	// Find existing entry
 	const float epsilon = 0.001f;

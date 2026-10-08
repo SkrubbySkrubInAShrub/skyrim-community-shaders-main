@@ -125,6 +125,8 @@ public:
 	/** @brief Serializes current weather settings to the JSON blob. */
 	void SaveSettings() override;
 
+	json CaptureUndoSnapshot() const override;
+
 	/** @brief Returns the parent weather widget if one is set, or null. */
 	WeatherWidget* GetParent();
 
@@ -167,6 +169,7 @@ public:
 	void NavigateToFeatureSetting(const std::string& featureName, const std::string& settingName);
 
 private:
+	json SerializeSettings() const;
 	void InitializeInheritFlags();
 	void DrawDALCSettings();
 	void DrawWeatherColorSettings();

@@ -40,6 +40,8 @@ public:
 	/** @brief Serializes current volumetric lighting settings to the JSON blob. */
 	void SaveSettings() override;
 
+	json CaptureUndoSnapshot() const override;
+
 	/** @brief Writes the current settings into the game's BGSVolumetricLighting form. */
 	void ApplyChanges() override;
 
@@ -56,6 +58,7 @@ public:
 
 private:
 	void LoadFromGameSettings();
+	void WriteSettingsJson(json& out) const;
 
 	struct Settings
 	{

@@ -399,7 +399,8 @@ void CellLightingWidget::LoadSettings()
 		settings = vanillaSettings;
 	}
 
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	ApplyChanges();
 }
 
@@ -453,44 +454,56 @@ void CellLightingWidget::LoadFromGameSettings()
 	settings.inheritLightFadeDistances = flags.any(RE::INTERIOR_DATA::Inherit::kLightFadeDistances);
 }
 
+void CellLightingWidget::WriteSettingsJson(json& out) const
+{
+	out["ambient"] = { settings.ambient.x, settings.ambient.y, settings.ambient.z };
+	out["directional"] = { settings.directional.x, settings.directional.y, settings.directional.z };
+	out["fogColorNear"] = { settings.fogColorNear.x, settings.fogColorNear.y, settings.fogColorNear.z };
+	out["fogColorFar"] = { settings.fogColorFar.x, settings.fogColorFar.y, settings.fogColorFar.z };
+	out["fogNear"] = settings.fogNear;
+	out["fogFar"] = settings.fogFar;
+	out["fogPower"] = settings.fogPower;
+	out["fogClamp"] = settings.fogClamp;
+	out["directionalFade"] = settings.directionalFade;
+	out["clipDist"] = settings.clipDist;
+	out["lightFadeStart"] = settings.lightFadeStart;
+	out["lightFadeEnd"] = settings.lightFadeEnd;
+	out["directionalXY"] = settings.directionalXY;
+	out["directionalZ"] = settings.directionalZ;
+
+	out["dalc"]["xPlus"] = { settings.directionalXPlus.x, settings.directionalXPlus.y, settings.directionalXPlus.z };
+	out["dalc"]["xMinus"] = { settings.directionalXMinus.x, settings.directionalXMinus.y, settings.directionalXMinus.z };
+	out["dalc"]["yPlus"] = { settings.directionalYPlus.x, settings.directionalYPlus.y, settings.directionalYPlus.z };
+	out["dalc"]["yMinus"] = { settings.directionalYMinus.x, settings.directionalYMinus.y, settings.directionalYMinus.z };
+	out["dalc"]["zPlus"] = { settings.directionalZPlus.x, settings.directionalZPlus.y, settings.directionalZPlus.z };
+	out["dalc"]["zMinus"] = { settings.directionalZMinus.x, settings.directionalZMinus.y, settings.directionalZMinus.z };
+	out["dalc"]["specular"] = { settings.directionalSpecular.x, settings.directionalSpecular.y, settings.directionalSpecular.z };
+	out["dalc"]["fresnelPower"] = settings.fresnelPower;
+
+	out["inherit"]["ambientColor"] = settings.inheritAmbientColor;
+	out["inherit"]["directionalColor"] = settings.inheritDirectionalColor;
+	out["inherit"]["fogColor"] = settings.inheritFogColor;
+	out["inherit"]["fogNear"] = settings.inheritFogNear;
+	out["inherit"]["fogFar"] = settings.inheritFogFar;
+	out["inherit"]["directionalRotation"] = settings.inheritDirectionalRotation;
+	out["inherit"]["directionalFade"] = settings.inheritDirectionalFade;
+	out["inherit"]["clipDistance"] = settings.inheritClipDistance;
+	out["inherit"]["fogPower"] = settings.inheritFogPower;
+	out["inherit"]["fogMax"] = settings.inheritFogMax;
+	out["inherit"]["lightFadeDistances"] = settings.inheritLightFadeDistances;
+}
+
 void CellLightingWidget::SaveSettings()
 {
-	js["ambient"] = { settings.ambient.x, settings.ambient.y, settings.ambient.z };
-	js["directional"] = { settings.directional.x, settings.directional.y, settings.directional.z };
-	js["fogColorNear"] = { settings.fogColorNear.x, settings.fogColorNear.y, settings.fogColorNear.z };
-	js["fogColorFar"] = { settings.fogColorFar.x, settings.fogColorFar.y, settings.fogColorFar.z };
-	js["fogNear"] = settings.fogNear;
-	js["fogFar"] = settings.fogFar;
-	js["fogPower"] = settings.fogPower;
-	js["fogClamp"] = settings.fogClamp;
-	js["directionalFade"] = settings.directionalFade;
-	js["clipDist"] = settings.clipDist;
-	js["lightFadeStart"] = settings.lightFadeStart;
-	js["lightFadeEnd"] = settings.lightFadeEnd;
-	js["directionalXY"] = settings.directionalXY;
-	js["directionalZ"] = settings.directionalZ;
-
-	js["dalc"]["xPlus"] = { settings.directionalXPlus.x, settings.directionalXPlus.y, settings.directionalXPlus.z };
-	js["dalc"]["xMinus"] = { settings.directionalXMinus.x, settings.directionalXMinus.y, settings.directionalXMinus.z };
-	js["dalc"]["yPlus"] = { settings.directionalYPlus.x, settings.directionalYPlus.y, settings.directionalYPlus.z };
-	js["dalc"]["yMinus"] = { settings.directionalYMinus.x, settings.directionalYMinus.y, settings.directionalYMinus.z };
-	js["dalc"]["zPlus"] = { settings.directionalZPlus.x, settings.directionalZPlus.y, settings.directionalZPlus.z };
-	js["dalc"]["zMinus"] = { settings.directionalZMinus.x, settings.directionalZMinus.y, settings.directionalZMinus.z };
-	js["dalc"]["specular"] = { settings.directionalSpecular.x, settings.directionalSpecular.y, settings.directionalSpecular.z };
-	js["dalc"]["fresnelPower"] = settings.fresnelPower;
-
-	js["inherit"]["ambientColor"] = settings.inheritAmbientColor;
-	js["inherit"]["directionalColor"] = settings.inheritDirectionalColor;
-	js["inherit"]["fogColor"] = settings.inheritFogColor;
-	js["inherit"]["fogNear"] = settings.inheritFogNear;
-	js["inherit"]["fogFar"] = settings.inheritFogFar;
-	js["inherit"]["directionalRotation"] = settings.inheritDirectionalRotation;
-	js["inherit"]["directionalFade"] = settings.inheritDirectionalFade;
-	js["inherit"]["clipDistance"] = settings.inheritClipDistance;
-	js["inherit"]["fogPower"] = settings.inheritFogPower;
-	js["inherit"]["fogMax"] = settings.inheritFogMax;
-	js["inherit"]["lightFadeDistances"] = settings.inheritLightFadeDistances;
+	WriteSettingsJson(js);
 	originalSettings = settings;
+}
+
+json CellLightingWidget::CaptureUndoSnapshot() const
+{
+	json snapshot;
+	WriteSettingsJson(snapshot);
+	return snapshot;
 }
 
 void CellLightingWidget::ApplyChanges()

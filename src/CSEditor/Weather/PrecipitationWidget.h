@@ -45,6 +45,8 @@ public:
 	/** @brief Serializes current precipitation settings to the JSON blob. */
 	void SaveSettings() override;
 
+	json CaptureUndoSnapshot() const override;
+
 	/** @brief Writes the current settings into the game's particle data and reloads the live texture. */
 	void ApplyChanges() override;
 
@@ -61,6 +63,7 @@ public:
 
 private:
 	void LoadFromGameSettings();
+	void WriteSettingsJson(json& out) const;
 
 	// Swaps the live precipitation particle texture (Sky → precip → BSParticleShaderProperty::particleShaderTexture).
 	// Needed because updating BGSShaderParticleGeometryData::particleTexture.textureName alone doesn't reload the GPU texture.

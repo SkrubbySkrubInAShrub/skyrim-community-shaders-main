@@ -144,7 +144,8 @@ void VolumetricLightingWidget::LoadSettings()
 		settings = vanillaSettings;
 	}
 
-	originalSettings = settings;
+	if (!restoringUndoSnapshot)
+		originalSettings = settings;
 	ApplyChanges();
 }
 
@@ -166,21 +167,33 @@ void VolumetricLightingWidget::LoadFromGameSettings()
 	settings.samplingRangeFactor = volumetricLighting->samplingRepartition.rangeFactor;
 }
 
+void VolumetricLightingWidget::WriteSettingsJson(json& out) const
+{
+	out["intensity"] = settings.intensity;
+	out["customColorContribution"] = settings.customColorContribution;
+	out["red"] = settings.red;
+	out["green"] = settings.green;
+	out["blue"] = settings.blue;
+	out["densityContribution"] = settings.densityContribution;
+	out["densitySize"] = settings.densitySize;
+	out["densityWindSpeed"] = settings.densityWindSpeed;
+	out["densityFallingSpeed"] = settings.densityFallingSpeed;
+	out["phaseFunctionContribution"] = settings.phaseFunctionContribution;
+	out["phaseFunctionScattering"] = settings.phaseFunctionScattering;
+	out["samplingRangeFactor"] = settings.samplingRangeFactor;
+}
+
 void VolumetricLightingWidget::SaveSettings()
 {
-	js["intensity"] = settings.intensity;
-	js["customColorContribution"] = settings.customColorContribution;
-	js["red"] = settings.red;
-	js["green"] = settings.green;
-	js["blue"] = settings.blue;
-	js["densityContribution"] = settings.densityContribution;
-	js["densitySize"] = settings.densitySize;
-	js["densityWindSpeed"] = settings.densityWindSpeed;
-	js["densityFallingSpeed"] = settings.densityFallingSpeed;
-	js["phaseFunctionContribution"] = settings.phaseFunctionContribution;
-	js["phaseFunctionScattering"] = settings.phaseFunctionScattering;
-	js["samplingRangeFactor"] = settings.samplingRangeFactor;
+	WriteSettingsJson(js);
 	originalSettings = settings;
+}
+
+json VolumetricLightingWidget::CaptureUndoSnapshot() const
+{
+	json snapshot;
+	WriteSettingsJson(snapshot);
+	return snapshot;
 }
 
 void VolumetricLightingWidget::ApplyChanges()
