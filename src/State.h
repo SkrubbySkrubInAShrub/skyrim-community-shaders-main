@@ -248,7 +248,8 @@ public:
 		SuppressExternalEmittance = 1 << 5,
 		AdditiveLighting = 1 << 6,
 		IsAurora = 1 << 7,
-		IsMoon = 1 << 8
+		IsMoon = 1 << 8,
+		NoSkyScattering = 1 << 9  ///< Cloud layer drawn without Effects11 cloud scattering
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */

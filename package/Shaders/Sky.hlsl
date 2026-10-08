@@ -371,7 +371,8 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 cloudColor = pow(max(Color::Sky(input.Color.xyz) * baseColor.xyz, 0.0), SharedData::enbSettings.CloudsCurve);
 		cloudColor = lerp(cloudColor, dot(cloudColor, 1.0 / 3.0), SharedData::enbSettings.CloudsDesaturation) * SharedData::enbSettings.CloudsIntensity * SharedData::enbSettings.CloudsColorFilter;
 
-		psout.Color.xyz = SkyScattering::ShadeCloud(cloudColor, cloudTextureAlpha, cloudTextureGray, viewDirection, SampBaseSampler) + skyScale * min(SharedData::enbSettings.CloudsIntensity, 1.0);
+		bool cloudScattering = SharedData::enbSettings.EnableCloudsScattering && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::NoSkyScattering);
+		psout.Color.xyz = SkyScattering::ShadeCloud(cloudColor, cloudTextureAlpha, cloudTextureGray, viewDirection, cloudScattering, SampBaseSampler) + skyScale * min(SharedData::enbSettings.CloudsIntensity, 1.0);
 		psout.Color.w = saturate(input.Color.w * baseColor.w * (1.0 + baseColor.w * SharedData::enbSettings.CloudsVertexAlphaBoost));
 	}
 #			endif
