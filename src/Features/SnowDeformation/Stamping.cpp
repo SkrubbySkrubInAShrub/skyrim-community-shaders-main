@@ -495,12 +495,11 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 			stale = true;
 		}
 		if (stale) {
-			// Body surfaces only: a collision proxy or an overlay layer carries
-			// its own alpha and says nothing about the actor. With no body
-			// surface read at all (everything faded) the lowest of all decides.
-			float lowest = 1.0f, lowestAny = 1.0f;
-			RE::BSFixedString lowestName, lowestAnyName;
-			bool bodySeen = false;
+			// Most opaque body surface decides; a ghost fades its whole model.
+			// Proxies and overlays skipped; none left = most opaque of all.
+			float highest = 0.0f, highestAny = 0.0f, lowestAny = 1.0f;
+			RE::BSFixedString highestName, highestAnyName, lowestAnyName;
+			bool bodySeen = false, anySeen = false;
 			RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				// SKINNED only. Plain alpha blending is no use on its own -
@@ -513,28 +512,33 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 				if (!property || property->GetRTTI() != globals::rtti::BSLightingShaderPropertyRTTI.get())
 					return RE::BSVisit::BSVisitControl::kContinue;
 				const float a = static_cast<RE::BSLightingShaderProperty*>(property)->alpha;
-				if (a < lowestAny) {
+				if (!anySeen || a < lowestAny) {
 					lowestAny = a;
 					lowestAnyName = a_geometry->name;
 				}
+				if (!anySeen || a > highestAny) {
+					highestAny = a;
+					highestAnyName = a_geometry->name;
+				}
+				anySeen = true;
 				if (IsProxyOrOverlayGeometry(a_geometry, property))
 					return RE::BSVisit::BSVisitControl::kContinue;
-				if (!bodySeen || a < lowest) {
-					lowest = std::min(lowest, a);
-					lowestName = a_geometry->name;
+				if (!bodySeen || a > highest) {
+					highest = a;
+					highestName = a_geometry->name;
 				}
 				bodySeen = true;
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
 			if (!bodySeen) {
-				lowest = lowestAny;
-				lowestName = lowestAnyName;
+				highest = anySeen ? highestAny : 1.0f;
+				highestName = highestAnyName;
 			}
-			alpha = lowest;
+			alpha = highest;
 			if (a_bones) {
-				a_bones->bodyAlpha = lowest;
-				a_bones->bodyAlphaSource = lowestName;
-				a_bones->anyAlpha = lowestAny;
+				a_bones->bodyAlpha = highest;
+				a_bones->bodyAlphaSource = highestName;
+				a_bones->anyAlpha = anySeen ? lowestAny : 1.0f;
 				a_bones->anyAlphaSource = lowestAnyName;
 				const bool settling = a_bones->alphaSettle < kBodyAlphaSettleReads;
 				a_bones->alphaRecheck = settling ? kBodyAlphaSettleFrames : kBodyAlphaRecheckFrames;
@@ -1088,16 +1092,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				const bool byFlag = ghostFlag && settings.IncorporealMode != 1;
 				logger::info("[SNOW DEFORMATION] '{}' ({:08X}) leaves no trench: {}", actor->GetDisplayFullName(), formID,
 					byFlag ? std::string("marked Ghost on its record") :
-					         std::format("body alpha {:.2f} on '{}'", bodyAlpha,
-							 bones && bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : ""));
+					         std::format("most opaque body surface '{}' at alpha {:.2f}",
+							 bones && bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "", bodyAlpha));
 			}
 			if (probing)
 				skeletonProbe.verdict = "gated: incorporeal (translucent/ghost)";
 			return;
 		}
 		if (!isDead && !elemental && bones && bones->anyAlpha >= 0.0f && bones->anyAlpha < kIncorporealAlpha &&
-		    incorporealLogged.size() < 16 && incorporealLogged.insert(formID).second) {
-			logger::info("[SNOW DEFORMATION] '{}' ({:08X}) keeps its trench: '{}' at alpha {:.2f} is a proxy or overlay, body alpha {:.2f} on '{}'",
+		    seeThroughKeptLogged.size() < 16 && seeThroughKeptLogged.insert(formID).second) {
+			logger::info("[SNOW DEFORMATION] '{}' ({:08X}) keeps its trench: see-through '{}' at alpha {:.2f}, most opaque body surface {:.2f} on '{}'",
 				actor->GetDisplayFullName(), formID,
 				bones->anyAlphaSource.c_str() ? bones->anyAlphaSource.c_str() : "", bones->anyAlpha,
 				bodyAlpha, bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "");

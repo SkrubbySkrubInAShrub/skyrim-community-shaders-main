@@ -313,7 +313,7 @@ public:
 			float restLength = -1.0f;
 		};
 		std::vector<Limb> limbs;
-		/** @brief Lowest material alpha found on a skinned body geometry, or -1 until measured. A ghost is drawn see-through, which is the only thing that separates it from the ordinary NPC it otherwise is. */
+		/** @brief Material alpha of the most opaque skinned body geometry, or -1 until measured. A ghost is drawn see-through all over. */
 		float bodyAlpha = -1.0f;
 		/** @brief Geometry whose alpha bodyAlpha is. */
 		RE::BSFixedString bodyAlphaSource;
@@ -3923,6 +3923,8 @@ public:
 	std::unordered_set<const void*> contactSkinHiddenLogged;
 	/** @brief Actors refused as incorporeal, logged once each with the reading that decided it. */
 	std::unordered_set<uint32_t> incorporealLogged;
+	/** @brief Actors that keep their trench despite a see-through piece, logged once each. */
+	std::unordered_set<uint32_t> seeThroughKeptLogged;
 	/** @brief Margin over the layer depth before a part is refused as unreachable: the terrain window's bilinear ground can sit this far off the actor's feet on a slope. */
 	static constexpr float kContactSkipMargin = 16.0f;
 	/** @brief Frames a living actor whose contact draw printed nothing stamps by bones before the mesh route is retried. */
