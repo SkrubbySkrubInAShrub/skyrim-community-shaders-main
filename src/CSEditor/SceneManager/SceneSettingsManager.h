@@ -1069,6 +1069,9 @@ private:
 
 	/// Feature settings as they were before the scene layer, so baselines cost one SaveSettings each.
 	std::map<std::string, json> featureBaseSnapshots;
+	/// The document each apply mutates in place, so a per-frame transition costs no SaveSettings
+	/// and no full copy of the feature's settings.
+	std::map<std::string, json> featureApplyDocuments;
 	std::set<std::string> appliedFeatureNames;
 	mutable std::set<std::string> configuredFeatureNamesCache;
 	mutable std::uint64_t configuredFeatureNamesRevision = std::numeric_limits<std::uint64_t>::max();

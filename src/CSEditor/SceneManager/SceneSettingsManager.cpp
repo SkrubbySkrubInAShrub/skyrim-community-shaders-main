@@ -72,10 +72,16 @@ bool SceneSettingsManager::ApplyCatalogSceneSettings(
 		return true;
 
 	const auto featureShortName = feature.GetShortName();
-	json settingsDocument;
-	if (!TrySaveFeatureSettings(feature, "snapshot settings", settingsDocument))
-		return false;
+	auto documentIt = featureApplyDocuments.find(featureShortName);
+	if (documentIt == featureApplyDocuments.end()) {
+		json settingsDocument;
+		if (!TrySaveFeatureSettings(feature, "snapshot settings", settingsDocument))
+			return false;
+		documentIt = featureApplyDocuments.emplace(featureShortName, std::move(settingsDocument)).first;
+	}
+	auto& settingsDocument = documentIt->second;
 
+	// Resolved up front: the document outlives this call, so a rejected update must not have touched it.
 	std::vector<const SceneSettingsCatalog::SettingMetadata*> catalogSettings;
 	std::vector<json*> targetValues;
 	catalogSettings.reserve(updates.size());
@@ -117,6 +123,7 @@ bool SceneSettingsManager::ApplyCatalogSceneSettings(
 			*targetValues[index] = std::move(originalValues[index]);
 		feature.LoadSettings(settingsDocument);
 	} catch (...) {
+		featureApplyDocuments.erase(featureShortName);
 		logger::error("[SceneSettings] Failed to restore {} after an apply error", featureShortName);
 	}
 	return false;
@@ -156,6 +163,7 @@ void SceneSettingsManager::VerifyPendingApplies()
 			if (failures[featureShortName].Record(verification.signature, std::chrono::steady_clock::now()))
 				logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
 					featureShortName);
+			featureApplyDocuments.erase(featureShortName);
 			// Record what the feature reports instead of dropping the address: the scene layer still owes it
 			// the baseline, and the mismatch against the resolved value drives the retry.
 			for (size_t index = 0; index < verification.updates.size(); ++index) {
