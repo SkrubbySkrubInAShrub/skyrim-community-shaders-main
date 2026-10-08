@@ -1658,7 +1658,7 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 	}
 }
 
-bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y, float a_radius)
+bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 {
 	// The cell and the loaded square hold for the frame's captures.
 	if (groundSnowFrame != globals::state->frameCount) {
@@ -1708,32 +1708,7 @@ bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y, float a_radius)
 	auto [it, inserted] = groundSnowCellCache.try_emplace(key, uint8_t(kSnowGateUnknown));
 	if (inserted)
 		it->second = (uint8_t)CellRangeSnowVerdict(minX, minY, maxX, maxY);
-	if (it->second != kSnowGateSnowy || coatReachUnits <= 0.0f)
-		return it->second != kSnowGateBare;
-	// The block holds snow somewhere; the object's own bound must come
-	// within coatReachUnits of a snowy or still-baking cell.
-	const float reach = coatReachUnits + std::max(a_radius, 0.0f);
-	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
-	const std::shared_lock snowLock(shellSnowyCellMutex);
-	const std::shared_lock cellLock(shellCellMutex);
-	for (int cy = minY; cy <= maxY; ++cy) {
-		const float ny = std::clamp(a_y, cy * kCellSize, (cy + 1) * kCellSize) - a_y;
-		for (int cx = minX; cx <= maxX; ++cx) {
-			const float nx = std::clamp(a_x, cx * kCellSize, (cx + 1) * kCellSize) - a_x;
-			if (nx * nx + ny * ny > reach * reach)
-				continue;
-			const uint64_t cellKey = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
-			if (shellSnowyCells.contains(cellKey))
-				return true;
-			auto baked = shellCells.find(cellKey);
-			if (baked != shellCells.end() && baked->second.worldspaceID == worldspace)
-				continue;
-			if (auto ft = shellFillerCells.find(cellKey); ft != shellFillerCells.end() && ft->second == worldspace)
-				continue;
-			return true;
-		}
-	}
-	return false;
+	return it->second != kSnowGateBare;
 }
 
 // Fine-layer readback probe (see the header). Blocking maps: one shot, on

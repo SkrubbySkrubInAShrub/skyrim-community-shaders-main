@@ -1115,9 +1115,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 
 	// Object snow needs snow-capable ground near it, unless the object IS
-	// the snow (ice family, drifts). A still-baking cell counts as snow.
-	if (!fadeExempt && !fullCoat && !GroundNearHasSnow(translate.x, translate.y, rangeBound.radius)) {
-		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no snow ground within coat reach");
+	// the snow (ice family, drifts) or carries projected snow, which takes
+	// the drape wherever it stands. Two cells of reach clipped to the
+	// loaded square; a still-baking cell counts as snow.
+	if (!fadeExempt && !fullCoat && !(flags.any(Flag::kProjectedUV) && !projectedGroundGate) && !GroundNearHasSnow(translate.x, translate.y)) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no snow ground within two loaded cells");
 		return;
 	}
 

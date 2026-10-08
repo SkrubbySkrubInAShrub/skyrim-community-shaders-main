@@ -4136,10 +4136,10 @@ protected:
 	uint32_t captureCullBail = 1;
 	/** @brief A/B, runtime-only: keep every capture whatever the view. */
 	bool captureViewCullOff = false;
-	/** @brief Whether ground near a world XY can carry snow (snowy or still baking): the two-cell block, clipped to the loaded square, then coatReachUnits past the object's bound radius. An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
-	bool GroundNearHasSnow(float a_x, float a_y, float a_radius);
-	/** @brief Object coat reach: a snowy block coats an object only when its bound comes within this many units of a snowy or still-baking cell. 0 = the whole two-cell block (A/B, runtime-only). */
-	float coatReachUnits = 1024.0f;
+	/** @brief Whether ground within two cells of a world XY, clipped to the loaded square, can carry snow (snowy or still baking). An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
+	bool GroundNearHasSnow(float a_x, float a_y);
+	/** @brief A/B, runtime-only: projected-snow draws face the ground gate again (they are coated wherever they stand by default). */
+	bool projectedGroundGate = false;
 	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
 	uint32_t groundSnowCellCacheVersion = 0;
 	/** @brief Per-frame inputs of GroundNearHasSnow (interior flag, loaded square), taken once per frame. */
