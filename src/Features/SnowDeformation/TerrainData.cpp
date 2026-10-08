@@ -1487,6 +1487,61 @@ uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_max
 	return kSnowGateBare;
 }
 
+uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, const ShellCB& a_cb)
+{
+	const uint32_t verdict = CellRangeSnowVerdict(a_minX, a_minY, a_maxX, a_maxY);
+	if (verdict != kSnowGateSnowy || shellViewGateOff)
+		return verdict;
+	// Inside where row . (p - cam, 1) >= 0 (left, right, bottom, top, front).
+	const auto& m = a_cb.CameraViewProj;
+	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
+	std::array<double, 4> planes[5];
+	const int rows[5] = { 0, 0, 1, 1, 3 };
+	const double signs[5] = { 1.0, -1.0, 1.0, -1.0, 0.0 };
+	for (int i = 0; i < 5; i++) {
+		for (int c = 0; c < 4; c++)
+			planes[i][c] = double(m.m[3][c]) + signs[i] * (rows[i] < 3 ? double(m.m[rows[i]][c]) : 0.0);
+		planes[i][3] -= planes[i][0] * cam[0] + planes[i][1] * cam[1] + planes[i][2] * cam[2];
+	}
+	const uint32_t stamp = snowDepthVersion.load(std::memory_order_acquire);
+	if (viewGateCellZVersion != stamp) {
+		viewGateCellZ.clear();
+		viewGateCellZVersion = stamp;
+	}
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	const std::shared_lock snowLock(shellSnowyCellMutex);
+	const std::shared_lock cellLock(shellCellMutex);
+	for (int cy = a_minY; cy <= a_maxY; ++cy) {
+		for (int cx = a_minX; cx <= a_maxX; ++cx) {
+			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			if (!shellSnowyCells.contains(key))
+				continue;
+			auto [z, inserted] = viewGateCellZ.try_emplace(key, std::pair{ -1e9f, 1e9f });
+			if (inserted) {
+				auto it = shellCells.find(key);
+				if (it == shellCells.end() || it->second.worldspaceID != worldspace)
+					return kSnowGateSnowy;
+				const auto [lo, hi] = std::minmax_element(it->second.height.begin(), it->second.height.end());
+				z->second = { *lo - kViewGateMarginZ, *hi + kViewGateMarginZ };
+			}
+			const double box[2][3] = { { cx * kCellSize, cy * kCellSize, z->second.first },
+				{ (cx + 1) * kCellSize, (cy + 1) * kCellSize, z->second.second } };
+			bool inside = true;
+			for (const auto& p : planes) {
+				const double d = p[0] * box[p[0] >= 0.0][0] + p[1] * box[p[1] >= 0.0][1] + p[2] * box[p[2] >= 0.0][2] + p[3];
+				if (d < 0.0) {
+					inside = false;
+					break;
+				}
+			}
+			if (inside)
+				return kSnowGateSnowy;
+		}
+	}
+	return kSnowGateBare;
+}
+
 bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 {
 	// The cell and the loaded square hold for the frame's captures.

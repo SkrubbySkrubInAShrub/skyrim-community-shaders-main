@@ -2718,7 +2718,8 @@ void SnowDeformation::DrawShell()
 	context->RSGetViewports(&prevViewportCount, prevViewports);
 
 	// Only the loaded square is asked: the shell ends at its seam, and land
-	// past it never loads, so a test over the whole span never settles. A
+	// past it never loads, so a test over the whole span never settles.
+	// Snowy cells outside the frustum count as bare. A
 	// loaded cell still baking opens the gate at once; bare must hold for
 	// kShellGateBareFrames before the grid draw and its dependents (bake,
 	// stats, depth sync) are skipped. The CB upload above stays - the
@@ -2731,7 +2732,7 @@ void SnowDeformation::DrawShell()
 	} else {
 		int sqMinX, sqMinY, sqMaxX, sqMaxY;
 		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
-		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
+		                       ViewSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY, cbData) :
 		                       kSnowGateUnknown;
 	}
 	shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;

@@ -4115,6 +4115,14 @@ protected:
 	bool LoadedCellSquare(int& a_minX, int& a_minY, int& a_maxX, int& a_maxY) const;
 	/** @brief Three-way verdict over an inclusive cell range, by WindowHasSnow's rules: snowy if any cell carries positive depth, unknown if any cell has never been looked at, else bare (an empty range is bare). Implemented in TerrainData.cpp. */
 	uint32_t CellRangeSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY) const;
+	/** @brief CellRangeSnowVerdict narrowed to the view: a snowy range answers bare when no snowy cell's box (land height range plus kViewGateMarginZ) meets the camera frustum. Unknown stays unknown. Implemented in TerrainData.cpp. */
+	uint32_t ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, const ShellCB& a_cb);
+	static constexpr float kViewGateMarginZ = 256.0f;
+	/** @brief Land height range per snowy cell for ViewSnowVerdict, dropped when snowDepthVersion moves. */
+	std::unordered_map<uint64_t, std::pair<float, float>> viewGateCellZ;
+	uint32_t viewGateCellZVersion = UINT32_MAX;
+	/** @brief A/B, runtime-only: the shell gate asks the whole loaded square again instead of the view. */
+	bool shellViewGateOff = false;
 	/** @brief Whether ground within two cells of a world XY, clipped to the loaded square, can carry snow (snowy or still baking). An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
 	bool GroundNearHasSnow(float a_x, float a_y);
 	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
@@ -4135,9 +4143,9 @@ protected:
 	bool CasterDiscMayCast() const;
 	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
 	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
-	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square), for the debug menu. */
+	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square narrowed to the view), for the debug menu. */
 	mutable uint32_t shellSnowVerdict = kSnowGateUnknown;
-	/** @brief Consecutive frames the loaded square has read bare. The grid draw, its bake and the depth sync are skipped once this reaches kShellGateBareFrames; a snowy or still-baking cell resets it, so the surface returns the frame snow enters the square. */
+	/** @brief Consecutive frames the loaded square has read bare. The grid draw, its bake and the depth sync are skipped once this reaches kShellGateBareFrames; a snowy cell in view or a still-baking cell resets it, so the surface returns the frame snow enters the view. */
 	uint32_t shellGateBareFrames = 0;
 	static constexpr uint32_t kShellGateBareFrames = 30;
 	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */

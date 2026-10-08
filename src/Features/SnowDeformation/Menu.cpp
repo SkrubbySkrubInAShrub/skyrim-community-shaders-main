@@ -2277,7 +2277,7 @@ void SnowDeformation::DrawSettings()
 					"suspended (all ground in reach known bare)"
 				};
 				WrapTextF("Snow presence gate (loaded square): %s, bare for %u/%u frames%s", kSnowGateNames[std::min(deformSnowVerdict, 2u)], deformGateBareFrames, kShellGateBareFrames, deformSuspended ? " - SUSPENDED" : "");
-				WrapTextF("Shell gate (loaded square): %s, bare for %u/%u frames", kSnowGateNames[std::min(shellSnowVerdict, 2u)], shellGateBareFrames, kShellGateBareFrames);
+				WrapTextF("Shell gate (snow in view): %s, bare for %u/%u frames", kSnowGateNames[std::min(shellSnowVerdict, 2u)], shellGateBareFrames, kShellGateBareFrames);
 			}
 
 
