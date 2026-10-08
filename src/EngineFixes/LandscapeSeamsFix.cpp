@@ -3,7 +3,6 @@
 #include "Features/TerrainHelper.h"
 #include "Globals.h"
 #include "ShaderCache.h"
-#include "State.h"
 #include "TruePBR.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
