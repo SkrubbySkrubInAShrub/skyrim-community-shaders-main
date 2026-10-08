@@ -66,6 +66,8 @@ public:
 	virtual void PostPostLoad() override;
 	/** @brief Checks for conflicting ESP files after game data is loaded. */
 	virtual void DataLoaded() override;
+	/** @brief Requests immediate celestial synchronization after loading an existing save. */
+	virtual void GameLoaded() override;
 
 	struct Sky_Update
 	{
@@ -73,6 +75,21 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	enum class Caster : uint8_t
+	{
+		Sun,
+		Masser,
+		Secunda,
+		None
+	};
+
+	/**
+	 * @brief Gets the world-space direction towards a sun or moon, preferring the one Sky Sync computed this frame.
+	 * @param sky The sky whose root rotation maps Sky Sync's directions into world space.
+	 * @param caster The celestial body to query; must not be Caster::None.
+	 * @return The unit direction, or straight up (0,0,1) if none is available.
+	 */
+	RE::NiPoint3 GetCelestialDirection(const RE::Sky* sky, Caster caster) const;
 
 private:
 	enum class CellFlagExt : uint16_t
@@ -86,14 +103,6 @@ private:
 		Masser,
 		Secunda,
 		Count
-	};
-
-	enum class Caster : uint8_t
-	{
-		Sun,
-		Masser,
-		Secunda,
-		None
 	};
 
 	enum class SunPath : uint8_t
@@ -115,13 +124,14 @@ private:
 		Caster target = Caster::Sun;
 		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
+		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
 		float vlIntensityFactor = 1.0f;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		void LockSunElevation(RE::NiPoint3 dirs[]);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
@@ -144,14 +154,18 @@ private:
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
+	inline static RE::Setting* gSunAlphaTransTime = nullptr;
 
-	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
+	bool currentCellInterior = false;
+	RE::TESWorldSpace* currentCellWorldspace = nullptr;
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float lastGameHour = -1.0f;
+	bool immediateTransitionReady = false;
 
 	float4 colors[3] = {};
+	RE::NiPoint3 rawDirections[3] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
 	bool sunSetting = false;
 	bool sunRising = false;
@@ -160,13 +174,18 @@ private:
 
 	void DisableOnConflict(std::string_view conflictName);
 
-	void Update(const RE::Sky* sky);
+	void PreparePendingTransitions();
+
+	bool Update(const RE::Sky* sky);
 
 	void SetSunAngle();
 
 	void SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell);
 
 	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
+
+	/** @brief Zeroes the sun disc and glare alpha outside vanilla's sun fade window, whose exclusive bounds leave them opaque at the exact end hours. */
+	static void HideSunOutsideFadeWindow(const RE::Sky* sky);
 
 	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
 

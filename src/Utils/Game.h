@@ -2,8 +2,33 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace Util
 {
+	/** @brief Forces weather and refreshes its cloud passes and sky model. */
+	void ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override);
+
+	/** @brief Pending celestial synchronization requests consumed by the sky update hook. */
+	struct CelestialTransitionRequest
+	{
+		bool timeJump = false;
+		bool gameLoad = false;
+	};
+
+	/** @brief Sets whether a sky update hook can synchronize celestial transitions. */
+	void SetCelestialTransitionHandlerAvailable(bool a_available);
+	/** @brief Requests celestial synchronization after an abrupt game-time change. */
+	void RequestTimeJumpTransition();
+	/** @brief Requests celestial synchronization after loading an existing save. */
+	void RequestGameLoadTransition();
+	/** @brief Consumes pending celestial synchronization requests. */
+	[[nodiscard]] CelestialTransitionRequest ConsumeCelestialTransitionRequest();
+	/** @brief Marks a celestial transition ready for dependent rendering updates. */
+	void CompleteCelestialTransition();
+	/** @brief Returns the latest completed celestial-transition generation. */
+	[[nodiscard]] std::uint32_t GetCompletedCelestialTransitionGeneration();
+
 	float4 TryGetWaterData(float offsetX, float offsetY);
 	float4 GetCameraData();
 	bool GetTemporal();
@@ -55,8 +80,12 @@ namespace Util
 		{
 			if (!std::isfinite(degrees))
 				return 0.0f;
-			while (degrees < 0.0f) degrees += 360.0f;
-			while (degrees >= 360.0f) degrees -= 360.0f;
+			degrees = std::fmod(degrees, 360.0f);
+			if (degrees < 0.0f)
+				degrees += 360.0f;
+			// A tiny negative value plus 360.0f rounds to exactly 360.0f.
+			if (degrees >= 360.0f)
+				degrees -= 360.0f;
 			return degrees;
 		}
 
@@ -64,8 +93,11 @@ namespace Util
 		{
 			if (!std::isfinite(degrees))
 				return 0.0f;
-			while (degrees > 180.0f) degrees -= 360.0f;
-			while (degrees < -180.0f) degrees += 360.0f;
+			degrees = std::fmod(degrees, 360.0f);
+			if (degrees > 180.0f)
+				degrees -= 360.0f;
+			if (degrees < -180.0f)
+				degrees += 360.0f;
 			return degrees;
 		}
 

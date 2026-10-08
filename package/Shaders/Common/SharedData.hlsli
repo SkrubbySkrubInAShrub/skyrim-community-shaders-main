@@ -44,7 +44,9 @@ namespace SharedData
 
 		float BasicGrassBrightness;
 		float ComplexGrassThreshold;
-		float2 pad0;
+		// Only read by the GRASS_OPTIMIZATIONS permutation, for grass drawn with an LOD mesh.
+		float MidLODBrightness;
+		float FarLODBrightness;
 	};
 
 	struct CPMSettings
@@ -72,6 +74,8 @@ namespace SharedData
 		float3 Scale;
 		float2 ZRange;
 		float2 Offset;
+		float ZBlur;
+		float3 pad0;
 	};
 
 	struct LightLimitFixSettings
@@ -185,7 +189,8 @@ namespace SharedData
 	struct TerrainVariationSettings
 	{
 		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
-		uint3 pad;
+		uint enableMeshSupport;          ///< 1 = apply variation to landscape-textured meshes.
+		uint2 pad;
 	};
 
 	struct IBLSettings
@@ -271,6 +276,9 @@ namespace SharedData
 		uint UseProceduralGradientWeights;
 		float ProceduralGradientWeightCurve;
 
+		float LightSpriteCurve;
+		float3 pad1;
+
 		float ParticleIntensity;
 		float ParticleLightingInfluence;
 		float ParticleAmbientInfluence;
@@ -298,8 +306,12 @@ namespace SharedData
 		float fogHeight;
 		float fogHeightFalloff;
 		float fogDensity;
+		float fogHeight2;
+		float fogHeightFalloff2;
+		float fogDensity2;
 		float directionalInscatteringMultiplier;
 		float directionalInscatteringAnisotropy;
+		uint useSkyIBL;
 		float4 inscatteringTint;
 		float cubemapMipLevel;
 		float sunlightAttenuationAmount;
@@ -325,14 +337,23 @@ namespace SharedData
 		uint volumetricHistoryMissSampleCount;
 		float volumetricSampleJitterMultiplier;
 		float volumetricUpsampleJitterMultiplier;
+		float volumetricNearGridDistance;
+		uint volumetricFarGridPixelSize;
+		uint volumetricFarGridSizeZ;
 		float volumetricLocalLightScatteringIntensity;
-		float2 pad0;
+		float volumetricFogNoiseScale;
+		float volumetricFogNoiseThreshold;
+		float pad3;
+		float3 volumetricFogNoiseVelocity;
+		float pad0;
 	};
 
 	struct TruePBRSettings
 	{
 		float VertexAOStrength;
-		uint3 pad;
+		uint EnableMicroShadows;
+		float MicroShadowStrength;
+		uint pad;
 	};
 
 	struct SkinData
@@ -344,6 +365,12 @@ namespace SharedData
 		float4 fuzzParams;
 		float4 physicalParams;
 		float4 wetParams;
+	};
+
+	struct HorizonFixSettings
+	{
+		float farWaterDistance;
+		float3 pad;
 	};
 
 	struct SnowDeformationSettings
@@ -422,6 +449,7 @@ namespace SharedData
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
+		HorizonFixSettings horizonFixSettings;
 		SnowDeformationSettings snowDeformationSettings;
 	};
 

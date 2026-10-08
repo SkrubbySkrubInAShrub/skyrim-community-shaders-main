@@ -10,6 +10,7 @@
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
 #include "State.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "Weather/LightingTemplateWidget.h"
 #include "WeatherUtils.h"
@@ -1872,7 +1873,7 @@ namespace
 	void ReapplyLock(RE::Sky* sky, RE::TESWeather* weather)
 	{
 		if (sky && weather)
-			sky->ForceWeather(weather, true);
+			Util::ForceWeather(sky, weather, true);
 	}
 
 	void SetWeatherThunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate)
@@ -1897,7 +1898,7 @@ namespace
 		if (auto* locked = GetActiveLock())
 			ReapplyLock(sky, locked);
 		else
-			sky->ForceWeather(weather, isOverride);
+			Util::ForceWeather(sky, weather, isOverride);
 	}
 
 	/** @brief Scans the game's executable segment for direct call/jump references to a function. */
@@ -2162,7 +2163,25 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	auto calendar = GetCalendar();
 	if (!calendar || !calendar->gameHour)
 		return false;
-	ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	// Backward clock edits otherwise look like a midnight wrap and expire the weather override.
+	if (auto* sky = globals::game::sky; changed && sky && GetActiveLock())
+		sky->lastWeatherUpdate = calendar->gameHour->value;
+	if (ImGui::IsItemActivated())
+		gameHourScrubRefreshIssued = false;
+
+	if (changed && ImGui::IsItemActive()) {
+		const double currentTime = ImGui::GetTime();
+		if (!gameHourScrubRefreshIssued || currentTime - lastGameHourScrubRefreshTime >= kGameHourScrubRefreshIntervalSeconds) {
+			Util::RequestTimeJumpTransition();
+			lastGameHourScrubRefreshTime = currentTime;
+			gameHourScrubRefreshIssued = true;
+		}
+	}
+
+	// Always refresh on release so the final value is reflected even if the throttle swallowed it.
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		Util::RequestTimeJumpTransition();
 	return true;
 }
 

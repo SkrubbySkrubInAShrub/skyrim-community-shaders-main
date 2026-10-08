@@ -153,6 +153,8 @@ public:
 
 	/** @brief Translates raw Skyrim input events into the internal key event queue */
 	void ProcessInputEvents(RE::InputEvent* const* a_events);
+	/** Records the raw DirectInput mouse-wheel delta before Skyrim reduces it to pseudo-buttons. */
+	void RecordDirectInputWheelDelta(std::int32_t delta);
 	/** @brief Returns true if the menu should consume all input (menu open or capturing hotkey) */
 	bool ShouldSwallowInput();
 	/** @brief Returns true if the free camera preview is in flying mode */
@@ -175,6 +177,7 @@ public:
 	bool settingCSEditorToggleKey = false;  // CS Editor toggle key
 	bool settingScreenshotKey = false;           // Screenshot capture key
 	bool settingEffects11ToggleKey = false;      // Effects 11 toggle key
+	bool settingEffects11EditorKey = false;      // Effects 11 editor key
 
 	// Font caching (made public for ThemeManager and OverlayRenderer access)
 	// Marked mutable because they're cache fields that may be updated from const methods
@@ -466,6 +469,7 @@ public:
 		std::vector<InputCombo> CSEditorToggleKey = { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_END) };  // CS Editor toggle key
 		std::vector<InputCombo> ScreenshotKey = { InputCombo::Keyboard(VK_SNAPSHOT) };                                    // Screenshot capture key
 		std::vector<InputCombo> Effects11ToggleKey = { InputCombo::Keyboard(VK_SHIFT), InputCombo::Keyboard(VK_MULTIPLY) };  // Effects 11 toggle key
+		std::vector<InputCombo> Effects11EditorKey = { InputCombo::Keyboard(VK_CONTROL), InputCombo::Keyboard(VK_END) };     // Effects 11 editor key
 		bool EnableShaderBlocking = false;                                                  // Enable shader blocking hotkeys for debugging
 		bool FirstTimeSetupCompleted = false;                                               // Track if first-time setup has been completed
 		bool SkipClearCacheConfirmation = false;                                            // Skip confirmation dialog when clearing shader cache
@@ -559,6 +563,7 @@ private:
 	// Input event handling
 	std::vector<KeyEvent> _keyEventQueue;
 	mutable std::shared_mutex _inputEventMutex;
+	std::atomic<int64_t> _directInputWheelDelta = 0;
 
 	// Keys whose key-down already fired a combo hotkey. Their matching key-up is
 	// suppressed so a shared single-key binding (e.g. End) doesn't also fire once

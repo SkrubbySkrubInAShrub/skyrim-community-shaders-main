@@ -26,8 +26,6 @@
 // in the deferred pass.
 #include "LightLimitFix/LightLimitFix.hlsli"
 
-#include "InverseSquareLighting/InverseSquareLighting.hlsli"
-
 namespace SnowLights
 {
 	// Lights listed for the pixel's cluster; 0 outside the cluster volume.
@@ -72,7 +70,7 @@ namespace SnowLights
 
 			float3 lightDirection = light.positionWS.xyz - worldPos;
 			float lightDist = length(lightDirection);
-			float attenuation = InverseSquareLighting::GetAttenuation(lightDist, light);
+			float attenuation = LightLimitFix::GetAttenuation(lightDist, light);
 			if (attenuation < 1e-5)
 				continue;
 

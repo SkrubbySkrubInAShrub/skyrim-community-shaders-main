@@ -220,7 +220,6 @@ def get_feature_ini_metadata(feature_dir_or_ini_path):
             'description': section_items.get('nexusdescription') or section_items.get('nexus_description') or section_items.get('description'),
             'artifact_pattern': section_items.get('nexusartifactpattern') or section_items.get('nexus_artifact_pattern') or section_items.get('artifact_pattern'),
             'short_name': section_items.get('shortname') or section_items.get('short_name') or section_items.get('nexusshortname') or section_items.get('nexus_short_name'),
-            'file_group_id': section_items.get('nexusfilegroupid') or section_items.get('nexus_file_group_id'),
         }
         metadata.update({k: v for k, v in section_metadata.items() if v is not None and v != ""})
         key_features = section_items.get('nexuskeyfeatures') or section_items.get('nexus_key_features') or section_items.get('key_features') or section_items.get('keyfeatures')
@@ -841,7 +840,7 @@ def analyze_features(FEATURES_DIR, feature_meta_map, base_ref, only_changed=Fals
         commit_link = ""
         if bump_commit:
             author_str = f" ({bump_author})" if bump_author else ""
-            commit_link = f"[link](https://github.com/doodlum/skyrim-community-shaders/commit/{bump_commit}){author_str}"
+            commit_link = f"[link](https://github.com/community-shaders/skyrim-community-shaders/commit/{bump_commit}){author_str}"
 
         def bold(val):
             return f"**{val}**" if is_attention and val != '' and val != '-' else val
@@ -932,7 +931,7 @@ def format_new_features_table(new_features, feature_meta_map, get_commit_author,
             nexus_link = f"[Nexus]({meta['mod_link']})" if meta and meta['mod_link'] else ("**Missing metadata**" if not meta else "")
             author = get_commit_author(commit) if commit else None
             author_str = f" ({author})" if author else ""
-            commit_link = f"[link](https://github.com/doodlum/skyrim-community-shaders/commit/{commit}){author_str}" if commit else ""
+            commit_link = f"[link](https://github.com/community-shaders/skyrim-community-shaders/commit/{commit}){author_str}" if commit else ""
             lines.append(f"| {boldmeta(name)} | {boldmeta(ver)} | {nexus_link} | {commit_link} |")
     return lines
 
@@ -1086,13 +1085,6 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
         if release_version and mod_version:
             file_description = f'{mod_filename} {mod_version} — released for Community Shaders {release_version}.'
 
-        file_group_id = ini_metadata.get('file_group_id', '').strip()
-        if auto_upload and (not file_group_id or file_group_id == '000000'):
-            print(
-                f"WARNING: {name} has auto_upload=true but nexusfilegroupid is not set in its [Nexus] ini section.",
-                file=sys.stderr,
-            )
-
         row = {
             'name': name,
             'artifact_pattern': artifact_pattern,
@@ -1101,7 +1093,6 @@ def build_nexus_upload_matrix(feature_metadata, core_mod_id, core_filename, core
             'mod_filename': mod_filename,
             'auto_upload': auto_upload,
             'file_description': file_description,
-            'file_group_id': file_group_id,
         }
         if mod_version:
             row['mod_version'] = mod_version

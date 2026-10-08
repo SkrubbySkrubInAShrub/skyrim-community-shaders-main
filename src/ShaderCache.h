@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <atomic>
 #include <efsw/efsw.hpp>
 #include <vector>
 
@@ -89,9 +90,24 @@ namespace ShaderConstants
 			return instance;
 		}
 
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
+		const int32_t WorldViewProj = 0;
+		const int32_t WorldView = 1;
+		const int32_t World = 2;
+		const int32_t PreviousWorld = 3;
+		const int32_t FogNearColor = 4;
+		const int32_t WindVector = 5;
+		const int32_t WindTimer = 6;
+		const int32_t DirLightDirection = 7;
+		const int32_t PreviousWindTimer = 8;
+		const int32_t DirLightColor = 9;
+		const int32_t AlphaParam1 = 10;
+		const int32_t AmbientColor = 11;
+		const int32_t AlphaParam2 = 12;
+		const int32_t ScaleMask = 13;
+
+		const int32_t PBRFlags = 14;
+		const int32_t PBRParams1 = 15;
+		const int32_t PBRParams2 = 16;
 	};
 
 	struct EffectPS
@@ -210,6 +226,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		LARGE_INTEGER lastCalculation;
@@ -244,6 +262,7 @@ namespace SIE
 		std::atomic<uint64_t> failedTasks = 0;
 		std::atomic<uint64_t> cacheHitTasks = 0;            // number of compiles of a previously seen shader combo
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
+		std::atomic<uint64_t> contentDedupeTasks = 0;       // compiles skipped because identical preprocessed code had already compiled this session
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
 		LARGE_INTEGER compilationPhaseStart = { 0 };        // time of first non-disk-hit task dispatch
 		std::atomic<bool> compilationPhaseStarted = false;  // set when first actual compilation begins
@@ -437,7 +456,8 @@ namespace SIE
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
-			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
+			Claimed,   // Claimed as Pending; caller must compile and call AddCompletedShader
+			Failed     // Previous attempt failed; skipped until invalidation drops the entry
 		};
 		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
 		void ResolvePendingFailure(const std::string& key);
@@ -476,7 +496,9 @@ namespace SIE
 		uint64_t GetCurrentFailedCount();
 		uint64_t GetTotalTasks();
 		uint64_t GetDiskHitTasks();
+		uint64_t GetContentDedupeTasks();
 		void IncCacheHitTasks();
+		void IncContentDedupeTasks();
 		void ToggleErrorMessages();
 		void DisableShaderBlocking();
 		void IterateShaderBlock(bool a_forward = true);
@@ -522,7 +544,9 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
-		bool backgroundCompilation = false;
+		/** @brief Updates compilation mode and wakes the dispatcher to recheck its capacity. */
+		void SetBackgroundCompilation(bool value);
+		std::atomic_bool backgroundCompilation{ false };
 		bool menuLoaded = false;
 
 		enum class LightingShaderTechniques
@@ -609,7 +633,9 @@ namespace SIE
 
 		enum class GrassShaderTechniques
 		{
+			RenderDepthStencil = 7,
 			RenderDepth = 8,
+			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags

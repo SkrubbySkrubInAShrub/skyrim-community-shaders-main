@@ -20,6 +20,10 @@
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
+// Mirror of Permutation::ExtraFeatureFlags::SnowLandIsSnowShift.
+static constexpr uint32_t kSnowLandIsSnowShift = 11;
+static_assert(uint32_t(State::ExtraFeatureDescriptors::SnowLandIsSnowMask) == (0x3Fu << kSnowLandIsSnowShift));
+
 /** @brief Lowercased diffuse path of a texture set, empty when it has none. */
 static std::string LandTexturePath(RE::BGSTextureSet* a_textureSet)
 {
@@ -1162,7 +1166,7 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	}
 
 	landMaskHits.fetch_add(1, std::memory_order_relaxed);
-	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << 10;
+	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << kSnowLandIsSnowShift;
 }
 
 // Times the game's deferred terrain draws, which the per-type overlay only sees

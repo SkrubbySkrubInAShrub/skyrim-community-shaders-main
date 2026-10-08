@@ -63,8 +63,8 @@ public:
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
 	// Frame time tracking per shader type (in milliseconds)
-	float frameTimePerType[RE::BSShader::Type::Total + 1];      ///< Per-type frame time in milliseconds.
-	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1]; ///< EMA-smoothed per-type frame time in milliseconds.
+	float frameTimePerType[RE::BSShader::Type::Total + 1];        ///< Per-type frame time in milliseconds.
+	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1];  ///< EMA-smoothed per-type frame time in milliseconds.
 
 	// Timing state for per-type frame time tracking using QueryPerformanceCounter
 	LARGE_INTEGER frameTimingFrequency;
@@ -232,39 +232,12 @@ public:
 	uint lastExtraFeatureDescriptor = 0;
 
 	/**
-	 * Bitflags describing extra shader-specific properties.
+	 * Updates Lighting shader permutation state from the current render pass.
+	 * @param a_pass The Lighting render pass whose blend state should be inspected.
 	 */
-	
-	/**
-	 * Bitflags describing extra feature-specific properties related to terrain displacement and material models.
-	 */
-	
-	/**
-	 * Checks whether the main menu or loading menu is cached as open.
-	 * @returns true if either the main menu or loading menu is open, false otherwise.
-	 */
-	
-	/**
-	 * Checks whether the main menu or loading menu is open, querying the UI if provided.
-	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
-	 * @returns true if the main menu or loading menu is open, false otherwise.
-	 */
-	
-	/**
-	 * Updates the shared constant buffer data based on world state and rendering pass.
-	 * @param a_inWorld Whether the camera is in world space.
-	 * @param a_prepass Whether this is a prepass rendering phase.
-	 */
-	
-	/**
-	 * Updates sky shader permutation based on the current render pass.
-	 * @param a_pass The render pass to inspect.
-	 */
-	
-	/**
-	 * Checks whether directional shadows are available for the current scene.
-	 * @returns true if directional shadows are present, false otherwise.
-	 */
+	void UpdateLightingShaderPermutation(RE::BSRenderPass* a_pass);
+
+	/** @brief Bitflags describing extra shader-specific properties. */
 	enum class ExtraShaderDescriptors : uint32_t
 	{
 		InWorld = 1 << 0,
@@ -272,9 +245,11 @@ public:
 		IsBeastRace = 1 << 2,
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
-		SuppressExternalEmittance = 1 << 5
+		SuppressExternalEmittance = 1 << 5,
+		AdditiveLighting = 1 << 6
 	};
 
+	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
 	enum class ExtraFeatureDescriptors : uint32_t
 	{
 		THLand0HasDisplacement = 1 << 0,
@@ -285,31 +260,32 @@ public:
 		THLand5HasDisplacement = 1 << 5,
 		ETMaterialModel = 0b111 << 6,
 		THLandHasDisplacement = 1 << 9,
-		// Bits 10-15: SnowDeformation per-tile landscape snow flags (tile 0 = bit 10).
-		SnowLandIsSnowMask = 0b111111 << 10,
+		TVMeshVariation = 1 << 10,
+		// Bits 11-16: SnowDeformation per-tile landscape snow flags (tile 0 = bit 11).
+		SnowLandIsSnowMask = 0b111111 << 11,
 		// Set per pass by SnowDeformation's statics hook: this draw's
 		// projected material is snow (flags + MATO classification).
-		SnowProjectedIsSnow = 1 << 16,
+		SnowProjectedIsSnow = 1 << 17,
 		// Set per pass by the same hook: a plain object-LOD batch (no snow
 		// flags), whose baked snow texels the horizon recolor may take.
-		SnowLODBakedIsSnow = 1 << 17,
+		SnowLODBakedIsSnow = 1 << 18,
 		// Set with SnowProjectedIsSnow when the projection was applied at
 		// runtime (Seasons of Skyrim): no authored max angle or alpha mask, so
 		// Lighting supplies the threshold the record lacks.
-		SnowProjectedUnauthored = 1 << 18,
+		SnowProjectedUnauthored = 1 << 19,
 		// With SnowProjectedUnauthored: the mesh's vertex alpha was never
 		// authored for its projection (Seasons' own snow statics read 0), so
 		// Lighting's slope mask replaces it instead of scaling it.
-		SnowProjectedNoAlpha = 1 << 19,
+		SnowProjectedNoAlpha = 1 << 20,
 		// Every pass of an object whose snow MATO is multipass (property
 		// kMultiIndexSnow): the base pass writes the skin's read-back mask as
 		// "known, unpainted" so only the snow pass's real paint takes a coat.
-		SnowMultipassBase = 1 << 20,
+		SnowMultipassBase = 1 << 21,
 		// A shape of a snow-MATO object that the game draws WITHOUT
 		// projection: it overwrites the verdict its projected siblings
 		// wrote with 0, which the drape's read-back reads as "unknown" and
 		// takes for licence to coat. Marks it "known, unpainted" instead.
-		SnowObjectBarePass = 1 << 21
+		SnowObjectBarePass = 1 << 22
 	};
 
 	bool inWorld = false;
@@ -321,9 +297,19 @@ public:
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
 	bool isStatsMenuOpen = false;
-	/** @brief Returns true if the cached main-menu or loading-menu state is open. */
+	bool flatWorldMapLoaded = false;  ///< FlatMapMarkersSSE is loaded, which flat world map mods (e.g. FWMF) rely on
+	/** @brief The map menu is open while a flat world map mod is installed. */
+	bool IsFlatWorldMapOpen() const { return isMapMenuOpen && flatWorldMapLoaded; }
+	/**
+	 * @brief Checks whether the main menu or loading menu is cached as open.
+	 * @returns true if either the main menu or loading menu is open, false otherwise.
+	 */
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
-	/** @brief Returns true if main/loading menu is open, with a live fallback query via the UI pointer. */
+	/**
+	 * @brief Checks whether the main menu or loading menu is open, querying the UI if provided.
+	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
+	 * @returns true if the main menu or loading menu is open, false otherwise.
+	 */
 	bool IsMainOrLoadingMenuOpen(RE::UI* ui) const
 	{
 		return IsMainOrLoadingMenuOpen() ||
@@ -331,14 +317,29 @@ public:
 	}
 	/** @brief Full-screen menus drawing their own art, which must not be graded by post-process effects. */
 	bool IsFullScreenMenuOpen() const { return IsMainOrLoadingMenuOpen() || isMapMenuOpen || isStatsMenuOpen; }
+	/** @brief The main menu, a loading screen or the flat world map is open. */
+	bool IsMainLoadingOrFlatMapOpen() const { return IsMainOrLoadingMenuOpen() || IsFlatWorldMapOpen(); }
 	/** @brief Gameplay is paused or suspended behind a menu. Cached menus are kept explicit in case a mod clears kPausesGame. */
 	bool IsPausedOrMenuOpen(RE::UI* ui) const
 	{
 		return (ui && ui->GameIsPaused()) || IsMainOrLoadingMenuOpen(ui) || isMapMenuOpen;
 	}
 
+	/**
+	 * @brief Updates the shared constant buffer data based on world state and rendering pass.
+	 * @param a_inWorld Whether the camera is in world space.
+	 * @param a_prepass Whether this is a prepass rendering phase.
+	 */
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
+	/**
+	 * @brief Updates sky shader permutation based on the current render pass.
+	 * @param a_pass The render pass to inspect.
+	 */
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);
+	/**
+	 * @brief Checks whether directional shadows are available for the current scene.
+	 * @returns true if directional shadows are present, false otherwise.
+	 */
 	bool HasDirectionalShadows() const;
 
 	struct PermutationCB
@@ -409,9 +410,6 @@ public:
 	D3D_FEATURE_LEVEL featureLevel;
 
 	TracyD3D11Ctx tracyCtx = nullptr;  // Tracy context
-
-	// Moon and Stars mod detection
-	inline static bool moonAndStarsLoaded = false;
 
 	void ClearDisabledFeatures();
 	bool SetFeatureDisabled(const std::string& featureName, bool isDisabled);

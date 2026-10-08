@@ -256,7 +256,7 @@ float2 SnowParallaxOffset(SnowTaps taps, float2 baseUV, float3 viewWS, float3x3 
 	g_snowParallaxBaseUV = baseUV;
 	float pixelOffsetUnused;
 	float2 resultCoords = ExtendedMaterials::GetParallaxCoords(pixelDist, baseUV, mip, viewWS, tbn, noise,
-		SnowHeightMap, SnowSampler, 0, params, pixelOffsetUnused);
+		SnowHeightMap, SnowSampler, 0, params, false, (StochasticOffsets)0, pixelOffsetUnused);
 	return resultCoords - baseUV;
 }
 #endif  // PSHADER
