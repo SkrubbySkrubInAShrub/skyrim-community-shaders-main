@@ -77,6 +77,7 @@ namespace
 		{ "ADAPTATION", Group::Camera },
 		{ "BLOOM", Group::Camera },
 		{ "LENS", Group::Camera },
+		{ "NIGHTEYE", Group::Camera },
 		{ "RAIN", Group::Rain },
 	};
 
@@ -155,6 +156,8 @@ namespace
 			return { T("feature.effects11.category.bloom", "Bloom"), T("feature.effects11.category.bloom_desc", "Overall bloom amount handed to the shaders.") };
 		if (a_category == "LENS")
 			return { T("feature.effects11.category.lens", "Lens"), T("feature.effects11.category.lens_desc", "Overall lens effect amount handed to the shaders.") };
+		if (a_category == "NIGHTEYE")
+			return { T("feature.effects11.category.nighteye", "Night Eye"), T("feature.effects11.category.nighteye_desc", "Tint, exposure and contrast applied while a Night Eye power (Khajiit, vampire, werewolf or modded) is active on the player.") };
 		if (a_category == "RAIN")
 			return { T("feature.effects11.category.rain", "Rain"), T("feature.effects11.category.rain_desc", "Motion stretch and transparency of rain drops.") };
 		return {};
@@ -793,6 +796,12 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	if (!usable) {
 		const auto unavailable = I18n::GetSingleton()->Format(TKEY("rain_unavailable"), { { "reason", raindropStatus } }, "Rain is unavailable: {reason}");
 		Util::Text::WrappedWarning("%s", unavailable.c_str());
+	}
+
+	if (a_category == "NIGHTEYE") {
+		if (EffectManager::GetSingleton().enbEffect.PresetHandlesNightEye())
+			Util::Text::WrappedInfo("%s", T(TKEY("nighteye_preset"), "This preset's enbeffect.fx handles Night Eye itself (KNActive), so these values are not applied."));
+		Util::TextUnformattedDisabled(globals::features::effects11.IsNightEyeActive() ? T(TKEY("nighteye_active"), "A Night Eye effect is active on the player.") : T(TKEY("nighteye_inactive"), "No Night Eye effect is active on the player."));
 	}
 
 	if (weatherAware)

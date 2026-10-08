@@ -519,9 +519,107 @@ void Effects11::OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmb
 	}
 }
 
+namespace
+{
+	bool IsNightEyeEditorID(const char* a_editorID)
+	{
+		if (!a_editorID)
+			return false;
+		std::string lower(a_editorID);
+		for (auto& c : lower)
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		for (const char* token : { "nighteye", "night_eye", "nightvision", "night_vision", "vampiresight", "vampire_sight", "predatorvision" }) {
+			if (lower.find(token) != std::string::npos)
+				return true;
+		}
+		return false;
+	}
+}
+
+void Effects11::DataLoaded()
+{
+	nightEyeImods.clear();
+	nightEyeKeyword = nullptr;
+	auto dataHandler = RE::TESDataHandler::GetSingleton();
+	if (!dataHandler)
+		return;
+
+	for (auto* keyword : dataHandler->GetFormArray<RE::BGSKeyword>()) {
+		if (keyword && keyword->formEditorID == std::string_view("MagicNightEye")) {
+			nightEyeKeyword = keyword;
+			break;
+		}
+	}
+
+	for (auto* imod : dataHandler->GetFormArray<RE::TESImageSpaceModifier>()) {
+		if (imod && IsNightEyeEditorID(imod->GetFormEditorID()))
+			nightEyeImods.insert(imod);
+	}
+
+	for (auto* setting : dataHandler->GetFormArray<RE::EffectSetting>()) {
+		if (!setting || !setting->data.imageSpaceMod)
+			continue;
+		if (setting->HasArchetype(RE::EffectSetting::Archetype::kNightEye) || (nightEyeKeyword && setting->HasKeyword(nightEyeKeyword)))
+			nightEyeImods.insert(setting->data.imageSpaceMod);
+	}
+
+	logger::info("[EFFECTS11] Night Eye detection: MagicNightEye keyword {}, {} night eye image space modifiers", nightEyeKeyword ? "found" : "missing", nightEyeImods.size());
+}
+
+bool Effects11::IsNightEyeSetting(const RE::EffectSetting* a_setting) const
+{
+	if (a_setting->HasArchetype(RE::EffectSetting::Archetype::kNightEye))
+		return true;
+	if (nightEyeKeyword && a_setting->HasKeyword(nightEyeKeyword))
+		return true;
+	return a_setting->data.imageSpaceMod && nightEyeImods.contains(a_setting->data.imageSpaceMod);
+}
+
+bool Effects11::HasNightEyeEffect() const
+{
+	auto player = globals::game::player;
+	if (!player || !player->GetParentCell())
+		return false;
+	auto magicTarget = player->GetMagicTarget();
+	if (!magicTarget)
+		return false;
+	auto effects = magicTarget->GetActiveEffectList();
+	if (!effects)
+		return false;
+
+	using Flag = RE::ActiveEffect::Flag;
+	for (const auto* activeEffect : *effects) {
+		if (!activeEffect || activeEffect->flags.any(Flag::kInactive, Flag::kDispelled))
+			continue;
+		const auto* setting = activeEffect->GetBaseObject();
+		if (setting && IsNightEyeSetting(setting))
+			return true;
+	}
+	return false;
+}
+
+void Effects11::UpdateNightEye()
+{
+	nightEye.active = HasNightEyeEffect();
+	const float target = nightEye.active ? 1.0f : 0.0f;
+
+	const auto& ids = EffectManager::GetSingleton().ids;
+	const float fadeTime = ids.nightEyeFadeTime != 0xFFFFFFFF ? SettingManager::GetSingleton().GetValue<float>(ids.nightEyeFadeTime) : 0.0f;
+	const float delta = globals::game::deltaTime ? *globals::game::deltaTime : 0.0f;
+	if (fadeTime <= 0.0f) {
+		nightEye.factor = target;
+		return;
+	}
+	if (delta <= 0.0f)
+		return;
+	const float step = delta / fadeTime;
+	nightEye.factor = std::clamp(nightEye.factor + std::clamp(target - nightEye.factor, -step, step), 0.0f, 1.0f);
+}
+
 void Effects11::OnSkyUpdateColors(RE::Sky* a_sky)
 {
 	CheckCommonData();
+	UpdateNightEye();
 	if (enableEffect)
 		OverrideWeather(a_sky);
 }

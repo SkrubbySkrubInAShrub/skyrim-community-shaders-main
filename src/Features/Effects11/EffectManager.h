@@ -81,11 +81,16 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> colorCorrectionComputeShader;
 	winrt::com_ptr<ID3D11Buffer> colorCorrectionConstantBuffer;
 
+	// Native Night Eye replacement pass, used when the preset does not handle KNActive itself
+	winrt::com_ptr<ID3D11PixelShader> nightEyePixelShader;
+	winrt::com_ptr<ID3D11Buffer> nightEyeConstantBuffer;
+
 	static std::string LoadShaderFile(const char* path);
 	void CreateQuadGeometry();
 	void CreateRenderStates();
 	void CreateCopyShaders();
 	void CreateColorCorrectionShader();
+	void CreateNightEyeShader();
 
 	// Common variable data (updated once, applied to all effects)
 	struct CommonVariableData
@@ -130,6 +135,9 @@ public:
 		uint32_t gammaCurve = 0xFFFFFFFF;
 
 		uint32_t enableRain = 0xFFFFFFFF;
+
+		uint32_t nightEyeEnable = 0xFFFFFFFF;
+		uint32_t nightEyeFadeTime = 0xFFFFFFFF;
 	} ids;
 
 	const CommonVariableData& GetCommonData() const { return commonData; }
@@ -153,6 +161,8 @@ public:
 
 	// Color correction using compute shader
 	void ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV);
+
+	void ApplyNightEye();
 
 	void ReloadShaders();
 

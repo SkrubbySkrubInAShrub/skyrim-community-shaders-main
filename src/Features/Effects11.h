@@ -3,6 +3,7 @@
 #include "Buffer.h"
 
 #include <memory>
+#include <unordered_set>
 #include <winrt/base.h>
 
 // C4324: the aligned PerFrame cache member pads the struct
@@ -107,6 +108,10 @@ public:
 	void DrawVolumetricRays();
 
 	void OnSkyUpdateColors(RE::Sky* a_sky);
+	virtual void DataLoaded() override;
+	void UpdateNightEye();
+	bool IsNightEyeActive() const { return nightEye.active; }
+	float GetNightEyeFactor() const { return nightEye.factor; }
 	void OverrideWeather(RE::Sky* a_sky);
 	void CheckCommonData();
 	void OverridePointLightColor(float3& a_color);
@@ -136,6 +141,16 @@ private:
 		float desaturation = 0.0f;
 		float intensity = 1.0f;
 	} pointLighting;
+
+	struct NightEyeState
+	{
+		bool active = false;
+		float factor = 0.0f;
+	} nightEye;
+	std::unordered_set<RE::TESImageSpaceModifier*> nightEyeImods;
+	RE::BGSKeyword* nightEyeKeyword = nullptr;
+	bool IsNightEyeSetting(const RE::EffectSetting* a_setting) const;
+	bool HasNightEyeEffect() const;
 
 	// The feature buffer is rebuilt several times per frame, so GetCommonBufferData's lookups are replayed from here
 	PerFrame perFrameCache{};

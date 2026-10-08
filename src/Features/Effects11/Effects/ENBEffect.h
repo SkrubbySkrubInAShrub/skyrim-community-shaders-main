@@ -12,6 +12,8 @@ public:
 
 	virtual void UpdateEffectVariables() override;
 
+	bool PresetHandlesNightEye();
+
 private:
 	uint32_t idBloomAmount = 0xFFFFFFFF;
 	uint32_t idLensAmount = 0xFFFFFFFF;
