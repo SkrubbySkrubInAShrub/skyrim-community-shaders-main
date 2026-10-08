@@ -2375,7 +2375,7 @@ void SnowDeformation::DrawSettings()
 				joinState = T(TKEY("shell_join_drawing"), "Depth prepass join: drawing");
 				break;
 			case EarlyPrepass::NotDrawing:
-				joinState = T(TKEY("shell_join_not_drawing"), "Depth prepass join: not this frame (no ground snow, a moved terrain window or a new render size)");
+				joinState = T(TKEY("shell_join_not_drawing"), "Depth prepass join: not this frame (no ground snow or a new render size)");
 				break;
 			case EarlyPrepass::NeedsDeferred:
 				joinState = T(TKEY("shell_join_needs_deferred"), "Depth prepass join: needs Deferred Shell Shading and no debug view");

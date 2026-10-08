@@ -1912,11 +1912,10 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	if (!settings.EnableSnowDeformation || !globals::state->inWorld || SnowShadersPending(1) || !lastShellCBData ||
 		shellDrawViewportFrame + 1 != frame || !shellDrawGroundGated)
 		return;
-	// The water windows and the wet cut follow the terrain window only in
-	// DrawShell, and the viewport is last frame's: a window this Prepass moved
-	// or a new render size leaves this frame to DrawShell's own prepass.
+	// The viewport is last frame's: a new render size leaves this frame to
+	// DrawShell's own prepass.
 	const auto& frameDynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	if (shellTerrainVersion != shellDrawTerrainVersion || frameDynRes.x != shellDrawDynRes[0] || frameDynRes.y != shellDrawDynRes[1])
+	if (frameDynRes.x != shellDrawDynRes[0] || frameDynRes.y != shellDrawDynRes[1])
 		return;
 	if (!shellDeferredShading || ShellDebugDataCode() != 0 || lodDebugView != 0) {
 		shellEarlyState = EarlyPrepass::NeedsDeferred;
@@ -2043,6 +2042,42 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11RenderTargetView* prevRTVs[8]{};
 	ID3D11DepthStencilView* prevDSV = nullptr;
 	context->OMGetRenderTargets(8, prevRTVs, &prevDSV);
+
+	// A terrain window this Prepass moved: the water windows follow it here, as
+	// DrawShell would, before the wet cut and the prepass read them on its grid.
+	// The slots the capture touches outside the saved set go back as found.
+	if (shellTerrainVersion != shellDrawTerrainVersion) {
+		ID3D11Buffer* prevVB = nullptr;
+		UINT prevVBStride = 0, prevVBOffset = 0;
+		ID3D11Buffer* prevIB = nullptr;
+		DXGI_FORMAT prevIBFormat = DXGI_FORMAT_UNKNOWN;
+		UINT prevIBOffset = 0;
+		ID3D11Buffer* prevVSCB1 = nullptr;
+		ID3D11ShaderResourceView* prevWaterFineSRV = nullptr;
+		ID3D11UnorderedAccessView* prevCSUAV0 = nullptr;
+		context->IAGetVertexBuffers(0, 1, &prevVB, &prevVBStride, &prevVBOffset);
+		context->IAGetIndexBuffer(&prevIB, &prevIBFormat, &prevIBOffset);
+		context->VSGetConstantBuffers(1, 1, &prevVSCB1);
+		context->PSGetShaderResources(104, 1, &prevWaterFineSRV);
+		context->CSGetUnorderedAccessViews(0, 1, &prevCSUAV0);
+		RenderWaterCapture();
+		CoverWaterWindow();
+		context->IASetVertexBuffers(0, 1, &prevVB, &prevVBStride, &prevVBOffset);
+		context->IASetIndexBuffer(prevIB, prevIBFormat, prevIBOffset);
+		context->VSSetConstantBuffers(1, 1, &prevVSCB1);
+		context->PSSetShaderResources(104, 1, &prevWaterFineSRV);
+		const UINT keepCount = UINT(-1);
+		context->CSSetUnorderedAccessViews(0, 1, &prevCSUAV0, &keepCount);
+		const auto release = [](IUnknown* a_held) {
+			if (a_held)
+				a_held->Release();
+		};
+		release(prevVB);
+		release(prevIB);
+		release(prevVSCB1);
+		release(prevWaterFineSRV);
+		release(prevCSUAV0);
+	}
 
 	if (cb.CompactLook.x > 0.5f)
 		UpdateTerrainWet();

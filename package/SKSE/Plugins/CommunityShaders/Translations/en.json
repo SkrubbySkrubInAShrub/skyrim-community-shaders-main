@@ -1701,7 +1701,7 @@
     "feature.snow_deformation.shell_join_drawing": "Depth prepass join: drawing",
     "feature.snow_deformation.shell_join_needs_deferred": "Depth prepass join: needs Deferred Shell Shading and no debug view",
     "feature.snow_deformation.shell_join_needs_tb": "Depth prepass join: needs Terrain Blending",
-    "feature.snow_deformation.shell_join_not_drawing": "Depth prepass join: not this frame (no ground snow, a moved terrain window or a new render size)",
+    "feature.snow_deformation.shell_join_not_drawing": "Depth prepass join: not this frame (no ground snow or a new render size)",
     "feature.snow_deformation.shell_join_off": "Depth prepass join: off",
     "feature.snow_deformation.shell_join_unavailable": "Depth prepass join: unavailable (tessellation, vertex bake or depth prepass off, or a shader failed)",
     "feature.snow_deformation.shell_join_view_mismatch": "Frames whose view changed under the early pass:",
