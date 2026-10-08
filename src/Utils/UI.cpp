@@ -2222,7 +2222,7 @@ namespace Util
 				ImGui::PopStyleVar();
 				ImGui::PopStyleColor(2);
 
-				if (ImGui::IsItemClicked()) {
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
@@ -2273,7 +2273,7 @@ namespace Util
 				ImGui::PopItemFlag();
 				ImGui::PopStyleVar();
 
-				if (ImGui::IsItemClicked()) {
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
@@ -2324,7 +2324,7 @@ namespace Util
 				ImGui::PopItemFlag();
 				ImGui::PopStyleVar();
 
-				if (ImGui::IsItemClicked()) {
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 					auto* weatherManager = globals::weatherManager;
 					auto* editorWindow = EditorWindow::GetSingleton();
 					auto currentWeathers = weatherManager->GetCurrentWeathers();
