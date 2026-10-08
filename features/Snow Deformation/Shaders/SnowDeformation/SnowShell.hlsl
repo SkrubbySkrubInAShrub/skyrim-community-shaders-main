@@ -38,7 +38,16 @@ SamplerState ShellLinearSampler : register(s1);
 // multiplier API cannot express. LANDSCAPE/TRUE_PBR stay undefined here.
 #	define EM_PARALLAX_CUSTOM_HEIGHT
 float EMParallaxCustomHeight(float2 uv, float mip);
+// TerrainVariation.hlsli is already included, so EM takes StochasticOffsets from it.
+#	ifndef TERRAIN_VARIATION
+#		define TERRAIN_VARIATION
+#		define SNOW_EM_TERRAIN_VARIATION
+#	endif
 #	include "ExtendedMaterials/ExtendedMaterials.hlsli"
+#	ifdef SNOW_EM_TERRAIN_VARIATION
+#		undef TERRAIN_VARIATION
+#		undef SNOW_EM_TERRAIN_VARIATION
+#	endif
 // Routed PBR tail (defines TRUE_PBR + GLINT for everything it pulls in,
 // including the glint NDF) - must come after the includes above (they must
 // compile without TRUE_PBR); SnowLights calls into it, so it comes last.
