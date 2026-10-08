@@ -1542,7 +1542,123 @@ uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, in
 	return kSnowGateBare;
 }
 
-bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
+void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
+{
+	captureViewCulled = 0;
+	captureCullBail = 1;
+	if (captureViewCullOff || capturedStatics.empty() || InInteriorCell())
+		return;
+	captureCullBail = 2;
+	int sqMinX, sqMinY, sqMaxX, sqMaxY;
+	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
+		return;
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const uint32_t stamp = snowDepthVersion.load(std::memory_order_acquire);
+	if (stamp != squareFloorVersion || sqMinX != squareFloorKey[0] || sqMinY != squareFloorKey[1] ||
+		sqMaxX != squareFloorKey[2] || sqMaxY != squareFloorKey[3]) {
+		squareFloorVersion = stamp;
+		squareFloorKey[0] = sqMinX;
+		squareFloorKey[1] = sqMinY;
+		squareFloorKey[2] = sqMaxX;
+		squareFloorKey[3] = sqMaxY;
+		squareFloorValid = true;
+		squareFloorZ = std::numeric_limits<float>::max();
+		const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+		const std::shared_lock lock(shellCellMutex);
+		for (int cy = sqMinY; cy <= sqMaxY && squareFloorValid; ++cy) {
+			for (int cx = sqMinX; cx <= sqMaxX; ++cx) {
+				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+				auto it = shellCells.find(key);
+				if (it == shellCells.end() || it->second.worldspaceID != worldspace) {
+					squareFloorValid = false;
+					break;
+				}
+				squareFloorZ = std::min(squareFloorZ, *std::min_element(it->second.height.begin(), it->second.height.end()));
+			}
+		}
+	}
+	captureCullBail = 3;
+	if (!squareFloorValid)
+		return;
+	captureCullBail = 4;
+	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
+	const double drop = cam[2] - squareFloorZ;
+	if (drop <= 0.0)
+		return;
+	captureCullBail = 5;
+	// The side planes pass through the eye: each corner ray is the cross of
+	// two of them, turned to face along w.
+	const auto& m = a_cb.CameraViewProj;
+	using V = std::array<double, 3>;
+	auto row = [&](int a_r, double a_s) {
+		return V{ double(m.m[3][0]) + a_s * double(m.m[a_r][0]), double(m.m[3][1]) + a_s * double(m.m[a_r][1]), double(m.m[3][2]) + a_s * double(m.m[a_r][2]) };
+	};
+	const V sides[4] = { row(0, 1.0), row(0, -1.0), row(1, 1.0), row(1, -1.0) };
+	const V w = { double(m.m[3][0]), double(m.m[3][1]), double(m.m[3][2]) };
+	const int pairs[4][2] = { { 0, 2 }, { 0, 3 }, { 1, 2 }, { 1, 3 } };
+	double lo[3] = { cam[0], cam[1], cam[2] };
+	double hi[3] = { cam[0], cam[1], cam[2] };
+	for (const auto& pr : pairs) {
+		const V& a = sides[pr[0]];
+		const V& b = sides[pr[1]];
+		V d = { a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
+		if (d[0] * w[0] + d[1] * w[1] + d[2] * w[2] < 0.0)
+			d = { -d[0], -d[1], -d[2] };
+		const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+		if (len < 1e-12 || d[2] > -1e-3 * len)
+			return;
+		const double t = drop / -d[2];
+		for (int c = 0; c < 3; c++) {
+			lo[c] = std::min(lo[c], cam[c] + d[c] * t);
+			hi[c] = std::max(hi[c], cam[c] + d[c] * t);
+		}
+	}
+	captureCullBail = 6;
+	// Past the loaded square the land can fall below the floor.
+	if (lo[0] < sqMinX * double(kCellSize) || lo[1] < sqMinY * double(kCellSize) ||
+		hi[0] > (sqMaxX + 1) * double(kCellSize) || hi[1] > (sqMaxY + 1) * double(kCellSize))
+		return;
+	captureCullBail = 0;
+	for (int c = 0; c < 3; c++) {
+		lo[c] -= kViewGateMarginZ;
+		hi[c] += kViewGateMarginZ;
+	}
+	// LOD batches never enter the object raster: each feeds only its own
+	// skin, and no LOD past the loaded square can be on screen. Loaded
+	// captures feed every skin's raster reads, so they go only all together,
+	// when none of them can be on screen.
+	auto unseen = [&](const CapturedSnowStatic& a_cap) {
+		const auto& bound = a_cap.geometry->worldBound;
+		if (!(bound.radius > 0.0f))
+			return false;
+		const double centre[3] = { bound.center.x, bound.center.y, bound.center.z };
+		double dist2 = 0.0;
+		for (int c = 0; c < 3; c++) {
+			const double off = centre[c] < lo[c] ? lo[c] - centre[c] : (centre[c] > hi[c] ? centre[c] - hi[c] : 0.0);
+			dist2 += off * off;
+		}
+		return dist2 > double(bound.radius) * double(bound.radius);
+	};
+	bool loadedUnseen = true;
+	for (const auto& cap : capturedStatics)
+		if (!cap.lodBatch && !unseen(cap)) {
+			loadedUnseen = false;
+			break;
+		}
+	const size_t before = capturedStatics.size();
+	std::erase_if(capturedStatics, [&](const CapturedSnowStatic& a_cap) { return a_cap.lodBatch || loadedUnseen; });
+	captureViewCulled = uint32_t(before - capturedStatics.size());
+	if (captureViewCulled == 0)
+		return;
+	capturedLoaded = 0;
+	capturedRoads = 0;
+	for (const auto& cap : capturedStatics) {
+		capturedLoaded += cap.lodBatch ? 0u : 1u;
+		capturedRoads += cap.road ? 1u : 0u;
+	}
+}
+
+bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y, float a_radius)
 {
 	// The cell and the loaded square hold for the frame's captures.
 	if (groundSnowFrame != globals::state->frameCount) {
@@ -1592,7 +1708,32 @@ bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 	auto [it, inserted] = groundSnowCellCache.try_emplace(key, uint8_t(kSnowGateUnknown));
 	if (inserted)
 		it->second = (uint8_t)CellRangeSnowVerdict(minX, minY, maxX, maxY);
-	return it->second != kSnowGateBare;
+	if (it->second != kSnowGateSnowy || coatReachUnits <= 0.0f)
+		return it->second != kSnowGateBare;
+	// The block holds snow somewhere; the object's own bound must come
+	// within coatReachUnits of a snowy or still-baking cell.
+	const float reach = coatReachUnits + std::max(a_radius, 0.0f);
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	const std::shared_lock snowLock(shellSnowyCellMutex);
+	const std::shared_lock cellLock(shellCellMutex);
+	for (int cy = minY; cy <= maxY; ++cy) {
+		const float ny = std::clamp(a_y, cy * kCellSize, (cy + 1) * kCellSize) - a_y;
+		for (int cx = minX; cx <= maxX; ++cx) {
+			const float nx = std::clamp(a_x, cx * kCellSize, (cx + 1) * kCellSize) - a_x;
+			if (nx * nx + ny * ny > reach * reach)
+				continue;
+			const uint64_t cellKey = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			if (shellSnowyCells.contains(cellKey))
+				return true;
+			auto baked = shellCells.find(cellKey);
+			if (baked != shellCells.end() && baked->second.worldspaceID == worldspace)
+				continue;
+			if (auto ft = shellFillerCells.find(cellKey); ft != shellFillerCells.end() && ft->second == worldspace)
+				continue;
+			return true;
+		}
+	}
+	return false;
 }
 
 // Fine-layer readback probe (see the header). Blocking maps: one shot, on

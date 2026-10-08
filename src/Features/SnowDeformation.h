@@ -4123,8 +4123,23 @@ protected:
 	uint32_t viewGateCellZVersion = UINT32_MAX;
 	/** @brief A/B, runtime-only: the shell gate asks the whole loaded square again instead of the view. */
 	bool shellViewGateOff = false;
-	/** @brief Whether ground within two cells of a world XY, clipped to the loaded square, can carry snow (snowy or still baking). An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
-	bool GroundNearHasSnow(float a_x, float a_y);
+	/** @brief With the ground gate closed and every frustum corner ray below the horizon, nothing visible lies below the loaded square's lowest land: the view cannot leave the loaded square, so this frame's LOD-batch captures are dropped, and the loaded ones too when none of their bounds meets the frustum's box down to that floor. No claim when the box leaves the loaded square or a cell is unbaked. Implemented in TerrainData.cpp. */
+	void CullUnseenCaptures(const ShellCB& a_cb);
+	/** @brief Lowest land height over the loaded square, keyed on the square and snowDepthVersion; invalid while any cell of it is unbaked. */
+	float squareFloorZ = 0.0f;
+	bool squareFloorValid = false;
+	uint32_t squareFloorVersion = UINT32_MAX;
+	int squareFloorKey[4] = { INT_MIN, INT_MIN, INT_MIN, INT_MIN };
+	/** @brief Captures CullUnseenCaptures dropped this frame (DevBench readout). */
+	uint32_t captureViewCulled = 0;
+	/** @brief Why CullUnseenCaptures made no claim this frame: 0 claimed, 1 off/empty/interior, 2 no square, 3 a square cell unbaked, 4 eye below the floor, 5 a corner ray at or above the horizon, 6 the view leaves the loaded square. */
+	uint32_t captureCullBail = 1;
+	/** @brief A/B, runtime-only: keep every capture whatever the view. */
+	bool captureViewCullOff = false;
+	/** @brief Whether ground near a world XY can carry snow (snowy or still baking): the two-cell block, clipped to the loaded square, then coatReachUnits past the object's bound radius. An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
+	bool GroundNearHasSnow(float a_x, float a_y, float a_radius);
+	/** @brief Object coat reach: a snowy block coats an object only when its bound comes within this many units of a snowy or still-baking cell. 0 = the whole two-cell block (A/B, runtime-only). */
+	float coatReachUnits = 1024.0f;
 	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
 	uint32_t groundSnowCellCacheVersion = 0;
 	/** @brief Per-frame inputs of GroundNearHasSnow (interior flag, loaded square), taken once per frame. */

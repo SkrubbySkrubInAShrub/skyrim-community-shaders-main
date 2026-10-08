@@ -2741,6 +2741,13 @@ void SnowDeformation::DrawShell()
 	const bool early = shellEarlyFrame == globals::state->frameCount;
 	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	const bool shellGround = shellDrawGroundGated || early;
+	// Off the ground, the captures feed only their own skins (and the volume).
+	if (!shellGround && !settings.VolumeSnow)
+		CullUnseenCaptures(cbData);
+	else {
+		captureViewCulled = 0;
+		captureCullBail = 1;
+	}
 
 	// Rasterize this frame's captured statics top-down into the object
 	// height windows, then restore the viewport for the screen-space passes.
