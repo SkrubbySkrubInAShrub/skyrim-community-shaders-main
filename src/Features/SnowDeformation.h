@@ -1892,9 +1892,7 @@ public:
 	ID3D11PixelShader* shellPSCensus = nullptr;
 	ID3D11PixelShader* GetShellPSCensus();
 
-	/** @brief Shell Shader Performance > Deferred Shell Shading (runtime, not serialised): the prepass also writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners instead of the patch lists. Near-exact: the position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. Default on. */
-	bool shellDeferredShading = true;
-	/** @brief Whether the deferred pass drew this frame (the toggle can be on while a debug view keeps the raster path). */
+	/** @brief Deferred shell shading drew this frame: the prepass also writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners instead of the patch lists. The position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. False while a debug view keeps the raster path. */
 	bool shellDeferredThisFrame = false;
 	/** @brief The deferred pass's inputs, display-size like shellRasterDepth: [0] GridLocal.xy + normal.xy (RGBA32F), [1] GridLocal's coarse derivatives (RGBA16F), [2] view depth + WorldPos.z's coarse derivatives (RGBA32F). */
 	Texture2D* shellDeferredAttr[3] = {};
@@ -1907,14 +1905,13 @@ public:
 	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
 
-	/** @brief S1, Shell Shader Performance > Join the Game's Depth Prepass (runtime, not serialised): DrawShellEarlyPrepass runs the ground prepass at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the edge and floor contests) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Deferred Shell Shading and Terrain Blending. Default on. */
-	bool shellJoinZPrepass = true;
+	/** @brief S1: DrawShellEarlyPrepass runs the ground prepass at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the edge and floor contests) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Terrain Blending and no debug view. */
 	enum class EarlyPrepass : uint8_t
 	{
 		Off,
 		Drawing,
 		NotDrawing,
-		NeedsDeferred,
+		DebugView,
 		NeedsTerrainBlending,
 		Unavailable
 	};
@@ -1962,9 +1959,7 @@ public:
 	/** @brief DepthSyncCS's SssRestoreCS entry, compiled on first use. */
 	ID3D11ComputeShader* GetSssRestoreCS();
 
-	/** @brief Runtime A/B, default off: after the skins' depth prepass, Screen-Space Shadows march again with the object snow and the ground snow in the depth (MarchSkinSss), and the skins apply that mask as Lighting does (StaticsCB::SkinSssSeen). */
-	bool skinSssSeesSnow = false;
-	/** @brief Frame MarchSkinSss ran in (menu and DevBench status). */
+	/** @brief Frame MarchSkinSss ran in (menu and DevBench status): after the skins' depth prepass, Screen-Space Shadows march again with the object snow and the ground snow in the depth, and the skins apply that mask as Lighting does (StaticsCB::SkinSssSeen). */
 	uint32_t skinSssMarchFrame = UINT32_MAX;
 	/** @brief DrawShell's ground marks as DepthSync reads them (the early marks or the raster depth; null when the ground drew no prepass), set before DrawCapturedStatics. */
 	ID3D11ShaderResourceView* shellGroundMarksSRV = nullptr;
@@ -2209,7 +2204,7 @@ public:
 	bool shellMarchBicubicRestored = false;
 	bool shellMarchBicubicCompiledPS = false;
 	bool shellMarchBicubicCompiledPSNoDepth = false;
-	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip, 8 the luminance grain over the normal map (Debugging Options checkbox too). Rekeys the no-export and deferred PSs. */
+	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip. Rekeys the no-export and deferred PSs. */
 	uint32_t shellPSLegacyBits = 0;
 	uint32_t shellPSLegacyBitsCompiled = 0;
 

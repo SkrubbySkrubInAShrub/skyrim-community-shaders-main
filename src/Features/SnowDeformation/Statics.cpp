@@ -3885,7 +3885,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// the one bound, so HasSmoothedNormals and the view never disagree.
 	// Decided before the records: SkinSssSeen tells each skin which mask it reads.
 	const bool skinSssMarch = prepass && !skinDraws.empty() && (fillPreSnow || preSnowDepthThisFrame) && SkinSssMarchReady();
-	if (!skinSssMarch && skinSssSeesSnow) {
+	if (!skinSssMarch) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Shadow Depth Sync");
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Shadow Depth Restore");
 	}

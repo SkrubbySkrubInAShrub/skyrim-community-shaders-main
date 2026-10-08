@@ -2360,15 +2360,8 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		// Shell shader changes that are not exact: A/B by eye.
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell_perf"), "Shell Shader Performance"))) {
-			ImGui::Checkbox(T(TKEY("shell_deferred_shading"), "Deferred Shell Shading"), &shellDeferredShading);
-			if (auto _ttDeferred = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_deferred_shading_tooltip"), "The ground snow is shaded in one full-screen pass after its depth prepass, instead of drawing its triangles a second time. Small and sliver triangles no longer make the GPU shade unused pixel lanes, which was a large share of the snow's cost on open snowfields. Near-exact: positions are rebuilt from the prepass's depth, texture filtering uses the prepass's own derivatives, and trampled churn's parallax keeps a constant texture detail level. Debug views keep the old path."));
 			ImGui::TextDisabled("%s", shellDeferredThisFrame ? T(TKEY("shell_deferred_active"), "Deferred pass: drawing") : T(TKEY("shell_deferred_inactive"), "Deferred pass: not drawing"));
-			ImGui::Checkbox(T(TKEY("shell_join_zprepass"), "Join the Game's Depth Prepass (S1)"), &shellJoinZPrepass);
-			if (auto _ttJoin = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_join_zprepass_tooltip"), "The ground snow's depth pass runs before the game draws the world and writes the snow into the game's depth buffer, so the game stops shading the terrain and buried objects under the snow. The saving shows in Game Terrain Draws and in the frame time rather than in the snow's own rows; Shell Depth Prepass now times the pass at the start of the frame. Snow edges and trampled floors still wait for this frame's ground grain, so the terrain is shaded there as before. Look trades: the ground snow's depth sees object snow shapes one frame late, and blood decals under thin snow may no longer show through. Needs Deferred Shell Shading and Terrain Blending."));
 			const char* joinState = T(TKEY("shell_join_off"), "Depth prepass join: off");
 			switch (shellEarlyState) {
 			case EarlyPrepass::Drawing:
@@ -2377,8 +2370,8 @@ void SnowDeformation::DrawSettings()
 			case EarlyPrepass::NotDrawing:
 				joinState = T(TKEY("shell_join_not_drawing"), "Depth prepass join: not this frame (no ground snow or a new render size)");
 				break;
-			case EarlyPrepass::NeedsDeferred:
-				joinState = T(TKEY("shell_join_needs_deferred"), "Depth prepass join: needs Deferred Shell Shading and no debug view");
+			case EarlyPrepass::DebugView:
+				joinState = T(TKEY("shell_join_debug_view"), "Depth prepass join: off while a debug view is shown");
 				break;
 			case EarlyPrepass::NeedsTerrainBlending:
 				joinState = T(TKEY("shell_join_needs_tb"), "Depth prepass join: needs Terrain Blending");
@@ -2396,18 +2389,8 @@ void SnowDeformation::DrawSettings()
 			const bool sssSynced = shellSssSyncFrame != UINT32_MAX && globals::state->frameCount - shellSssSyncFrame <= 1u;
 			ImGui::TextDisabled("%s", sssSynced ? T(TKEY("shell_sss_drawing"), "Shadow depth sync: drawing") :
 			                                       T(TKEY("shell_sss_not_drawing"), "Shadow depth sync: not this frame (needs the depth prepass join drawing, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));
-			ImGui::Checkbox(T(TKEY("skin_sss_sees_snow"), "Screen-Space Shadows See Object Snow"), &skinSssSeesSnow);
-			if (auto _ttSkinSss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("skin_sss_sees_snow_tooltip"), "Community Shaders' Screen-Space Shadows run a second time after the object snow's depth pass, with the object snow and the ground snow in the depth, and object snow applies the result the way the rest of the world does. Grass, rocks, actors and the snow's own rims cast contact shadows onto object snow near and far, and the object under the snow stops printing its shadows through it. Costs a second Screen-Space Shadows pass on frames with object snow on screen (it adds to the Screen-Space Shadows Ray March row) and two small passes (Objects - Shadow Depth Sync and Restore). Needs Snow Contact Shadows and Screen-Space Shadows."));
-			if (skinSssSeesSnow) {
-				const bool skinSssMarched = skinSssMarchFrame != UINT32_MAX && globals::state->frameCount - skinSssMarchFrame <= 1u;
-				ImGui::TextDisabled("%s", skinSssMarched ? T(TKEY("skin_sss_drawing"), "Object snow shadow march: drawing") : T(TKEY("skin_sss_not_drawing"), "Object snow shadow march: not this frame (needs object snow on screen with its depth prepass, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));
-			}
-			bool oldGrain = (shellPSLegacyBits & 8u) != 0;
-			if (ImGui::Checkbox(T(TKEY("shell_old_detail_grain"), "Old Ground Detail Grain"), &oldGrain))
-				shellPSLegacyBits = oldGrain ? (shellPSLegacyBits | 8u) : (shellPSLegacyBits & ~8u);
-			if (auto _ttGrain = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_old_detail_grain_tooltip"), "The ground snow's old detail grain: the grain drawn from the snow texture's brightness on top of the snow set's normal map, and none under frost on sets without one. Off is the recipe object snow uses: that grain only where the snow set has no normal map, with frost on top of it. Recompiles the ground snow's shader."));
+			const bool skinSssMarched = skinSssMarchFrame != UINT32_MAX && globals::state->frameCount - skinSssMarchFrame <= 1u;
+			ImGui::TextDisabled("%s", skinSssMarched ? T(TKEY("skin_sss_drawing"), "Object snow shadow march: drawing") : T(TKEY("skin_sss_not_drawing"), "Object snow shadow march: not this frame (needs object snow on screen with its depth prepass, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));
 			ImGui::TreePop();
 		}
 		ImGui::TreePop();

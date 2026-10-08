@@ -1285,8 +1285,6 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 			defines.emplace_back("SNOW_TEETH_UNGATED", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
-		if (shellPSLegacyBits & 8)
-			defines.emplace_back("SNOW_LUMBUMP_OVER_NORMAL", "");
 		shellMarchBicubicCompiledPSNoDepth = shellMarchBicubicRestored;
 		shellPSLegacyBitsCompiled = shellPSLegacyBits;
 		shellPSNoDepth = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
@@ -1353,8 +1351,6 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 			defines.emplace_back("SNOW_TEETH_UNGATED", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
-		if (shellPSLegacyBits & 8)
-			defines.emplace_back("SNOW_LUMBUMP_OVER_NORMAL", "");
 		shellPSDeferredLegacyBits = shellPSLegacyBits;
 		shellPSDeferred = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
@@ -1897,16 +1893,12 @@ void SnowDeformation::TickEffectCostProbe()
 	}
 }
 
-// S1 (shellJoinZPrepass): the ground prepass at the end of Prepass, before the
-// game's opaque draws. Last DrawShell's CB re-placed for this frame's camera
-// and windows: the deformation map and its fields are this frame's, the
-// object maps and water windows last frame's.
+// S1: the ground prepass at the end of Prepass, before the game's opaque
+// draws. Last DrawShell's CB re-placed for this frame's camera and windows:
+// the deformation map and its fields are this frame's, the object maps and
+// water windows last frame's.
 void SnowDeformation::DrawShellEarlyPrepass()
 {
-	if (!shellJoinZPrepass) {
-		shellEarlyState = EarlyPrepass::Off;
-		return;
-	}
 	shellEarlyState = EarlyPrepass::NotDrawing;
 	const uint32_t frame = globals::state->frameCount;
 	if (!settings.EnableSnowDeformation || !globals::state->inWorld || SnowShadersPending(1) || !lastShellCBData ||
@@ -1917,8 +1909,8 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	const auto& frameDynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	if (frameDynRes.x != shellDrawDynRes[0] || frameDynRes.y != shellDrawDynRes[1])
 		return;
-	if (!shellDeferredShading || ShellDebugDataCode() != 0 || lodDebugView != 0) {
-		shellEarlyState = EarlyPrepass::NeedsDeferred;
+	if (ShellDebugDataCode() != 0 || lodDebugView != 0) {
+		shellEarlyState = EarlyPrepass::DebugView;
 		return;
 	}
 	auto& tb = globals::features::terrainBlending;
@@ -2365,8 +2357,6 @@ void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_
 
 bool SnowDeformation::SkinSssMarchReady()
 {
-	if (!skinSssSeesSnow)
-		return false;
 	auto& ss = globals::features::screenSpaceShadows;
 	auto& tb = globals::features::terrainBlending;
 	auto* blended = tb.blendedDepthTexture;
@@ -3336,7 +3326,7 @@ void SnowDeformation::DrawShell()
 				// shading pass's hull skips every patch that won nothing.
 				// Deferred shading: no shading geometry, so no visible-patch flags
 				// or lists either. Debug views keep the raster path.
-				const bool deferred = (early || (shellDeferredShading && cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0 && !lodHeatmap && GetShellPSPrepassAttr(keepHidden))) &&
+				const bool deferred = (early || (cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0 && !lodHeatmap && GetShellPSPrepassAttr(keepHidden))) &&
 				                      EnsureDeferredResources() && GetShellPSDeferred();
 				shellDeferredThisFrame = deferred;
 				auto* hsVisible = !deferred && shellVisibleCull && EnsureVisiblePatchResources() ? GetShellHSVisible(bake) : nullptr;

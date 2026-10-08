@@ -3144,10 +3144,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
 	}
-#ifndef SNOW_LUMBUMP_OVER_NORMAL
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
 		normalWS = ShellLuminanceBump(normalWS, worldXYPS, bumpFade);
-#endif
 
 	// Frost crystal, laid on top of the flattened powder grain rather than
 	// instead of it: the flattening is what reads as frozen over, this puts the
@@ -3164,10 +3162,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		normalWS = normalize(normalWS +
 							 (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
 	}
-#ifdef SNOW_LUMBUMP_OVER_NORMAL
-	else if (HasSnowTexture != 0 && bumpFade > 0.001)
-		normalWS = ShellLuminanceBump(normalWS, worldXYPS, bumpFade);
-#endif
 
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
@@ -3861,10 +3855,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 }
 
 #ifdef SNOW_SHELL_DEFERRED
-// Deferred shading (Shell Shader Performance > Deferred Shell Shading): one
-// full-screen triangle at depth 0, tested LESS against the fill's private
-// depth, so it shades exactly the prepass's winners and every quad is whole.
-// The prepass's attributes stand in for the interpolants.
+// Deferred shading: one full-screen triangle at depth 0, tested LESS against
+// the fill's private depth, so it shades exactly the prepass's winners and
+// every quad is whole. The prepass's attributes stand in for the interpolants.
 Texture2D<float4> DeferredGrid : register(t91);
 Texture2D<float4> DeferredGridDeriv : register(t92);
 Texture2D<float4> DeferredDepth : register(t93);
