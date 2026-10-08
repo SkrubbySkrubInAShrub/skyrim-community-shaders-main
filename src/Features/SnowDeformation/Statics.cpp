@@ -1388,6 +1388,7 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// Global gate here, not a per-draw class: the patch is one draw and
 	// reads the road bit per texel from the raster's G channel.
 	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
+	a_scb.PatchScreenTess = patchScreenTess ? 1.0f : 0.0f;
 }
 
 uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const
@@ -4178,6 +4179,7 @@ void SnowDeformation::DrawCapturedStatics()
 			PatchCullCB cullData{};
 			if (!patchFrustumCullOff && lastShellCBData)
 				FillPatchCullLines(*lastShellCBData, cullData);
+			cullData.InsideMax = patchInsideMaxRestored ? 1u : 0u;
 			patchCullCB->Update(cullData);
 			ID3D11Buffer* cullCB = patchCullCB->CB();
 			context->HSSetConstantBuffers(11, 1, &cullCB);
@@ -4239,11 +4241,22 @@ void SnowDeformation::DrawCapturedStatics()
 		if (tessellatePatch) {
 			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
 			context->DSSetShaderResources(13, 1, &patchConeSRV);
+			// The hull's screen-size cap stands corners off any road on the terrain.
+			context->HSSetShaderResources(0, 1, &patchTerrainSRV);
+		}
+		if (patchStatsArmed) {
+			context->Begin(patchStatsQuery[shellStatsRing][0].get());
+			context->Begin(patchStatsQuery[shellStatsRing][1].get());
 		}
 		if (tessellatePatch)
 			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
 		else
 			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+		if (patchStatsArmed) {
+			context->End(patchStatsQuery[shellStatsRing][1].get());
+			context->End(patchStatsQuery[shellStatsRing][0].get());
+			patchStatsArmed = false;
+		}
 		if (tessellatePatch) {
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);

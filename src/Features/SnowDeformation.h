@@ -1848,6 +1848,10 @@ public:
 	static constexpr int kShellStatsRing = 3;
 	winrt::com_ptr<ID3D11Query> shellStatsQuery[kShellStatsRing][2];
 	winrt::com_ptr<ID3D11Query> staticsStatsQuery[kShellStatsRing][2];
+	/** @brief The same two around the trench patch draw, inside the statics pass's. */
+	winrt::com_ptr<ID3D11Query> patchStatsQuery[kShellStatsRing][2];
+	/** @brief The statics pass's queries are open this frame, so the patch issues its own. */
+	bool patchStatsArmed = false;
 	bool shellStatsIssued[kShellStatsRing] = {};
 	int shellStatsRing = 0;
 	ShellStatsResult shellStatsLast;
@@ -1860,6 +1864,7 @@ public:
 	bool EnsureVoxelStatsQueries();
 	void ReadVoxelStatsQueries(ID3D11DeviceContext* a_context);
 	ShellStatsResult staticsStatsLast;
+	ShellStatsResult patchStatsLast;
 	bool EnsureShellStatsQueries();
 	void ReadShellStatsQueries(ID3D11DeviceContext* a_context);
 	/** @brief Hull variants for the split draw: NEAR keeps patches inside the PS's far-clamp distance, FAR keeps the rest. A straddling patch lands in exactly one of them. */
@@ -2683,7 +2688,8 @@ public:
 		float PeelTol;
 		/** @brief > 0.5: this frame's Screen-Space Shadows mask was marched again with the object snow in the depth (MarchSkinSss); the skin applies it as Lighting does. Took the padOverhead slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkinSssSeen;
-		float padMeldSk;
+		/** @brief > 0.5 on the patch draws (FillPatchDrawCB): the hull caps its tessellation by TessScreen, and with ShellFlags.x bit 16 the geometry leaves churn and clods to the PS's parallax march. Took the padMeldSk slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float PatchScreenTess;
 
 		/** @brief Far road level: window centre (snapped to its texel), half-extent in world units (0 = off), and the one class depth roads carry there (Settings::RoadMeshesDepth). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float FarWindowCenterX;
@@ -3758,13 +3764,19 @@ public:
 	{
 		float4 Lines[6];
 		uint32_t LineCount;
-		uint32_t pad[3];
+		/** @brief 1 = both inside factors the largest edge (A/B). */
+		uint32_t InsideMax;
+		uint32_t pad[2];
 	};
 	ConstantBuffer* patchCullCB = nullptr;
 	/** @brief The view frustum's five planes (rows of CameraViewProj, camera-relative) with z eliminated: lines in world XY, inside where dot(xy, p) + z >= 0. */
 	uint32_t FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const;
 	/** @brief A/B, runtime-only: no frustum test in the patch hull. */
 	bool patchFrustumCullOff = false;
+	/** @brief Debugging > Trench Patch Tessellation Target, runtime-only, default off: the patch hull caps its factors at the Tessellation Target (a quarter of it for the far road-edge subdivision) and, with churn by parallax on, churn and clods leave the patch geometry for its PS march. */
+	bool patchScreenTess = false;
+	/** @brief A/B, runtime-only: both patch inside factors the largest edge again. */
+	bool patchInsideMaxRestored = false;
 	/** @brief Tessellated patch stages (optional; legacy path is the fallback). */
 	ID3D11VertexShader* patchTessVS = nullptr;
 	ID3D11HullShader* patchHS = nullptr;

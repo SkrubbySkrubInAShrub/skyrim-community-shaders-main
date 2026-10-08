@@ -987,48 +987,6 @@ float ChurnNoise(float2 worldXY)
 	return ChurnNoiseScaled(worldXY, ChurnSizeScale);
 }
 
-float ChurnHeights(float2 worldXY, float churnAmp, float clodAmp)
-{
-	float h = churnAmp * ChurnNoise(worldXY);
-	[branch] if (clodAmp > 0.001)
-		h += clodAmp * ChurnNoiseScaled(worldXY, kClodSizeScale);
-	return h;
-}
-
-// Distance along the unit view ray (dir) from the sheet point to where it first
-// meets the churn and clod heights laid over the pixel's tangent plane (slope
-// g), searched from +h to -h around the plane and refined by secant.
-float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2 worldXY)
-{
-	float rise = dir.z - dot(dir.xy, g);
-	float hMax = churnAmp + clodAmp;
-	// Single exit: a return inside [branch] trips X4000.
-	float t = 0.0;
-	[branch] if (rise <= -0.02)
-	{
-		float span = -2.0 * hMax / rise;
-		float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
-		float dt = span / steps;
-		float prevT = hMax / rise;
-		float prevGap = hMax - ChurnHeights(worldXY + dir.xy * prevT, churnAmp, clodAmp);
-		t = prevT;
-		[loop] for (float i = 1.0; i <= steps; i += 1.0)
-		{
-			float ti = hMax / rise + dt * i;
-			float gap = rise * ti - ChurnHeights(worldXY + dir.xy * ti, churnAmp, clodAmp);
-			[branch] if (gap <= 0.0)
-			{
-				t = lerp(prevT, ti, prevGap / max(prevGap - gap, 1e-6));
-				break;
-			}
-			prevT = ti;
-			prevGap = gap;
-			t = ti;
-		}
-	}
-	return t;
-}
-
 // Class borders are hard edges in the baked depth/coverage data: a +30
 // snow class meeting a -5 mud class produces a ravine wall along the
 // texture seam. BorderNoise domain-warps where the border falls and
@@ -3002,7 +2960,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (churnAmp + clodAmp > 0.05)
 		{
 			float3 dir = normalize(input.WorldPos);
-			float t = ChurnParallaxT(dir, gradZ, churnAmp, clodAmp, worldXYPS);
+			float t = ChurnParallaxT(dir, gradZ, churnAmp, clodAmp, worldXYPS, ChurnSizeScale);
 			shadePos = input.WorldPos + dir * t;
 			worldXYPS += dir.xy * t;
 			gridLocal += dir.xy * t;

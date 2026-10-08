@@ -354,12 +354,16 @@ bool SnowDeformation::EnsureShellStatsQueries()
 			D3D11_QUERY_DESC desc{};
 			desc.Query = kind == 0 ? D3D11_QUERY_PIPELINE_STATISTICS : D3D11_QUERY_OCCLUSION;
 			if (FAILED(device->CreateQuery(&desc, shellStatsQuery[ring][kind].put())) ||
-				FAILED(device->CreateQuery(&desc, staticsStatsQuery[ring][kind].put()))) {
+				FAILED(device->CreateQuery(&desc, staticsStatsQuery[ring][kind].put())) ||
+				FAILED(device->CreateQuery(&desc, patchStatsQuery[ring][kind].put()))) {
 				logger::error("SnowDeformation: pipeline statistics query creation failed");
 				for (auto& r : shellStatsQuery)
 					for (auto& q : r)
 						q = nullptr;
 				for (auto& r : staticsStatsQuery)
+					for (auto& q : r)
+						q = nullptr;
+				for (auto& r : patchStatsQuery)
 					for (auto& q : r)
 						q = nullptr;
 				return false;
@@ -391,7 +395,8 @@ void SnowDeformation::ReadShellStatsQueries(ID3D11DeviceContext* a_context)
 		out.valid = true;
 		return true;
 	};
-	if (read(shellStatsQuery[ring], shellStatsLast) && read(staticsStatsQuery[ring], staticsStatsLast))
+	if (read(shellStatsQuery[ring], shellStatsLast) && read(staticsStatsQuery[ring], staticsStatsLast) &&
+		read(patchStatsQuery[ring], patchStatsLast))
 		shellStatsIssued[ring] = false;
 }
 
@@ -3609,8 +3614,17 @@ void SnowDeformation::DrawShell()
 	}
 	const bool rasterMarks = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
 	shellGroundMarksSRV = rasterMarks ? (earlyMarks ? shellEarlyMarks->srv.get() : shellRasterDepth->srv.get()) : nullptr;
+	patchStatsArmed = shellStats;
 	DrawCapturedStatics();
 	spanClock.Lap(CpuCensus::kSpanStatics);
+	if (patchStatsArmed) {
+		// No patch drew: an empty pair keeps this ring slot's read in step.
+		context->Begin(patchStatsQuery[shellStatsRing][0].get());
+		context->Begin(patchStatsQuery[shellStatsRing][1].get());
+		context->End(patchStatsQuery[shellStatsRing][1].get());
+		context->End(patchStatsQuery[shellStatsRing][0].get());
+		patchStatsArmed = false;
+	}
 	if (shellStats) {
 		context->End(staticsStatsQuery[shellStatsRing][1].get());
 		context->End(staticsStatsQuery[shellStatsRing][0].get());

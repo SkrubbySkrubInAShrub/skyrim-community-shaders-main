@@ -189,6 +189,49 @@ float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
 	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleChurnScale(worldXY, deformation), trench);
 }
 
+// Churn plus clod heights at a point; sizeScale as for ChurnNoiseScaled.
+float ChurnHeights(float2 worldXY, float churnAmp, float clodAmp, float sizeScale)
+{
+	float h = churnAmp * ChurnNoiseScaled(worldXY, sizeScale);
+	[branch] if (clodAmp > 0.001)
+		h += clodAmp * ChurnNoiseScaled(worldXY, kClodSizeScale);
+	return h;
+}
+
+// Distance along the unit view ray (dir) from the sheet point to where it first
+// meets the churn and clod heights laid over the pixel's tangent plane (slope
+// g), searched from +h to -h around the plane and refined by secant.
+float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2 worldXY, float sizeScale)
+{
+	float rise = dir.z - dot(dir.xy, g);
+	float hMax = churnAmp + clodAmp;
+	// Single exit: a return inside [branch] trips X4000.
+	float t = 0.0;
+	[branch] if (rise <= -0.02)
+	{
+		float span = -2.0 * hMax / rise;
+		float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
+		float dt = span / steps;
+		float prevT = hMax / rise;
+		float prevGap = hMax - ChurnHeights(worldXY + dir.xy * prevT, churnAmp, clodAmp, sizeScale);
+		t = prevT;
+		[loop] for (float i = 1.0; i <= steps; i += 1.0)
+		{
+			float ti = hMax / rise + dt * i;
+			float gap = rise * ti - ChurnHeights(worldXY + dir.xy * ti, churnAmp, clodAmp, sizeScale);
+			[branch] if (gap <= 0.0)
+			{
+				t = lerp(prevT, ti, prevGap / max(prevGap - gap, 1e-6));
+				break;
+			}
+			prevT = ti;
+			prevGap = gap;
+			t = ti;
+		}
+	}
+	return t;
+}
+
 // ---- Deformation surface-state readers (spell marks). One bilinear tap;
 // channel meanings in DeformationUpdateCS.hlsl. ----
 

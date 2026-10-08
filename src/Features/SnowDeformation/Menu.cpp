@@ -1892,6 +1892,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_churn_parallax_off"), "Disable Churn Parallax"), &shellChurnParallaxOff);
 			if (auto _ttChurnParallax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_churn_parallax_off_tooltip"), "A/B for trampled snow. By default the churn lumps and berm clods are drawn by a short ray march in the pixel shader, not by geometry, so they need no small triangles; tick this to put them back into the geometry. Seen from above the two match. At low, grazing views the geometry also gives the lumps their outlines, which the march cannot; with the default 16 px Tessellation Target that detail is mostly gone either way. Trench and berm shapes are real geometry in both."));
+			ImGui::Checkbox(T(TKEY("patch_screen_tess"), "Trench Patch Tessellation Target"), &patchScreenTess);
+			if (auto _ttPatchTess = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("patch_screen_tess_tooltip"), "The trench patch (the snow on roads) follows the Tessellation Target above: its trench detail keeps no more segments than an edge's on-screen length holds at that many pixels, and its far road edges at a quarter of that. With churn parallax on, the patch's churn lumps and berm clods move from its geometry into the same ray march the ground uses. Off is the old distance-only rule. The Trails - Trench Patch row is the difference."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);
@@ -1923,6 +1926,7 @@ void SnowDeformation::DrawSettings()
 				};
 				statsLine("Shell grid", shellStatsLast);
 				statsLine("Object snow", staticsStatsLast);
+				statsLine("Trench patch (in object snow)", patchStatsLast);
 			}
 
 
@@ -2180,6 +2184,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("patch_caster_nonindexed"), "Non-indexed Trench Patch Caster (A/B)"), &patchCasterNonIndexed);
 			if (auto _ttPatchIdx = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("patch_caster_nonindexed_tooltip"), "A/B: the trench patch's sun-shadow caster normally draws through an index buffer, so each grid vertex is worked out once. Tick to draw six vertices per quad again. Same triangles in the same order; the Shadows - Trench Patch row is the difference."));
+			ImGui::Checkbox(T(TKEY("patch_inside_max"), "Old Trench Patch Inside Factors (A/B)"), &patchInsideMaxRestored);
+			if (auto _ttPatchInside = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("patch_inside_max_tooltip"), "A/B: the trench patch normally subdivides each patch along each axis by that axis's own edges, so a long, thin patch up the road ahead is not cut into slivers across its narrow side. Tick to subdivide both axes by the largest edge again. The edges, and so the seams between patches, are the same either way; the Trails - Trench Patch row is the difference."));
 			ImGui::Checkbox(T(TKEY("skin_cull_hiz_full_texture"), "Full-Size Cull Depth Pyramid (A/B)"), &skinCullHiZFullTexture);
 			if (auto _ttHiZFull = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("skin_cull_hiz_full_texture_tooltip"), "A/B: the occlusion cull's far-depth pyramid normally covers only the rectangle the frame was rendered into. Tick to build it over the whole screen-sized depth again. The cull only ever skips what could not have drawn, so the image is the same either way; the Objects - Occlusion Cull row is the difference."));

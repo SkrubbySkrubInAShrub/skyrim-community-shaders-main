@@ -189,7 +189,7 @@ cbuffer ShellCB : register(b0)
 
 	// Toroidal deformation-map addressing (see SnowShell.hlsl).
 	int2 DeformMapOrigin;
-	int2 ShellFlags;  // x bit 0: horizon march on (see SnowShell.hlsl)
+	int2 ShellFlags;  // x bit 0: horizon march on, bit 4: churn by parallax (see SnowShell.hlsl)
 
 	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
 	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
@@ -203,7 +203,8 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook3;  // landscape shell only (SnowShell.hlsl)
 	// Trampled ground (see SnowShell.hlsl); consumed inside ChurnWeight.
 	float4 TrampleStyle;
-	float4 TessScreen;  // landscape shell only (SnowShell.hlsl)
+	// x = Tessellation Target px, yz = render viewport half size.
+	float4 TessScreen;
 	// FieldDims follows, landscape shell only: not declared here.
 }
 
@@ -295,7 +296,10 @@ cbuffer StaticCB : register(b1)
 	// > 0.5: this frame's screen-space shadow mask was marched with the
 	// object snow in the depth. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float SkinSssSeen;
-	float padMeldSk;
+	// > 0.5 on the patch draws: tessellation capped by TessScreen, churn and
+	// clods by parallax (with ShellFlags.x bit 16). Mirror in
+	// SnowHeightCapture.hlsl / SnowDeformation.h.
+	float PatchScreenTess;
 
 	// Far road level (t40): the road-only top raster over the loaded-cell
 	// square, with its own window. FarHalfExtent 0 = off. Roads write one
@@ -328,6 +332,12 @@ cbuffer StaticCB : register(b1)
 	// real model. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float LODBatch;
 	float padLODCells;
+}
+
+// The patch leaves churn and clods out of its geometry; its PS marches them.
+bool PatchChurnParallax()
+{
+	return PatchScreenTess > 0.5 && (ShellFlags.x & 16) != 0;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1437,14 +1447,15 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// floor) zeroed churn AT the floor, and fully trampled road floors
 		// shaded as pristine top snow. The object-exposure guard is now the
 		// pad clamp instead: lumps dig toward the pad, never through it.
+		const bool churnInGeometry = !PatchChurnParallax();
 		float churnW = ChurnWeight(deform, bermD, worldXY) * saturate(depth / 10.0);
-		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
+		[branch] if (churnInGeometry && ObjChurnHeightAmp > 0.01 && churnW > 0.001)
 			depth = max(depth + ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW, pad);
 
 		// Berm clods: a coarser octave weighted by BermShape rather than the churn
 		// weight, since spoil lands on the crest while churn peaks in the trench.
 		// Mirrors ShellSurfaceZ; the self-shadow march skips it, as it skips churn.
-		[branch] if (RimStyle.z > 0.01 && bermD > 0.003)
+		[branch] if (churnInGeometry && RimStyle.z > 0.01 && bermD > 0.003)
 			depth += ChurnNoiseScaled(worldXY, kClodSizeScale) * RimStyle.z *
 			         BermShape(bermD) * saturate(1.0 - deform) * BermDepthGate(skinDepth);
 
@@ -1662,7 +1673,9 @@ cbuffer PatchCullCB : register(b11)
 {
 	float4 PatchCullLines[6];  // xy normal, z offset: inside where dot(xy, p) + z >= 0
 	uint PatchCullLineCount;
-	uint3 patchCullPad;
+	// 1 = both inside factors the largest edge (A/B).
+	uint PatchInsideMax;
+	uint2 patchCullPad;
 }
 
 bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
@@ -1680,9 +1693,13 @@ bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
 	return outside;
 }
 
+// Road-edge subdivision's share of the Tessellation Target: vertices live or
+// die per raster texel, so a coarse far segment steps the road's silhouette.
+static const float kPatchEdgeTargetScale = 0.25;
+
 // Same trench-aware quad factors as the landscape shell: the patch IS the
 // trench layer, so deformed edges get extended detail reach.
-float PatchEdgeTessFactor(float2 worldA, float2 worldB)
+float PatchEdgeTessFactor(float2 worldA, float2 worldB, float zA, float zB, bool screenCap)
 {
 	float2 mid = 0.5 * (worldA + worldB);
 	float dist = length(mid - ShellCameraPosAdjust.xy);
@@ -1698,6 +1715,19 @@ float PatchEdgeTessFactor(float2 worldA, float2 worldB)
 	// triangle fan. Subdivide live quads back to ~16-unit vertices; the
 	// constant function has already culled the quads with no road under them.
 	float quadFactor = clamp(length(worldA - worldB) / 16.0, 1.0, 16.0);
+	// Screen-size caps, the landscape hull's rule. Symmetric in the
+	// endpoints, so crack-free.
+	[branch] if (screenCap && max(factor, quadFactor) > 1.0)
+	{
+		float4 clipA = mul(CameraViewProj, float4(float3(worldA, zA) - ShellCameraPosAdjust.xyz, 1.0));
+		float4 clipB = mul(CameraViewProj, float4(float3(worldB, zB) - ShellCameraPosAdjust.xyz, 1.0));
+		[flatten] if (min(clipA.w, clipB.w) > 16.0)
+		{
+			float edgePx = length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz);
+			factor = min(factor, max(edgePx / TessScreen.x, 1.0));
+			quadFactor = min(quadFactor, max(edgePx / (TessScreen.x * kPatchEdgeTargetScale), 1.0));
+		}
+	}
 	return max(factor, quadFactor);
 }
 
@@ -1707,12 +1737,14 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 	// Cull patches with no live corner (off the footprint or untrampled);
 	// the cheap kill terms only, the domain shader kills per vertex.
 	bool anyLive = false;
+	float cornerZ[4] = { -1000000.0, -1000000.0, -1000000.0, -1000000.0 };
 	[branch] if (!PatchOutsideFootprint(patch[0].WorldXY, patch[1].WorldXY, patch[2].WorldXY, patch[3].WorldXY))
 	{
 		[unroll] for (uint i = 0; i < 4; i++)
 		{
 			float2 w = patch[i].WorldXY;
-			if (PatchTop(w) > -50000.0 && PatchSkinDepth(w).x >= 1.0)
+			cornerZ[i] = PatchTop(w);
+			if (cornerZ[i] > -50000.0 && PatchSkinDepth(w).x >= 1.0)
 				anyLive = true;
 		}
 		// A road narrower than a coarse quad's diagonal can cross it between all
@@ -1727,13 +1759,32 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 		f.Inside[0] = f.Inside[1] = 0.0;
 		return f;
 	}
-	f.Edge[0] = PatchEdgeTessFactor(patch[0].WorldXY, patch[3].WorldXY);
-	f.Edge[1] = PatchEdgeTessFactor(patch[0].WorldXY, patch[1].WorldXY);
-	f.Edge[2] = PatchEdgeTessFactor(patch[1].WorldXY, patch[2].WorldXY);
-	f.Edge[3] = PatchEdgeTessFactor(patch[3].WorldXY, patch[2].WorldXY);
-	float inner = max(max(f.Edge[0], f.Edge[1]), max(f.Edge[2], f.Edge[3]));
-	f.Inside[0] = inner;
-	f.Inside[1] = inner;
+	// The caps project each corner at the top it stands on, or the terrain
+	// where it stands on nothing.
+	const bool screenCap = PatchScreenTess > 0.5 && TessScreen.x > 0.0;
+	[branch] if (screenCap)
+	{
+		[unroll] for (uint c = 0; c < 4; c++)
+		{
+			[branch] if (cornerZ[c] <= -50000.0)
+				cornerZ[c] = SampleTerrainStatics(patch[c].WorldXY - GridOrigin).x;
+		}
+	}
+	f.Edge[0] = PatchEdgeTessFactor(patch[0].WorldXY, patch[3].WorldXY, cornerZ[0], cornerZ[3], screenCap);
+	f.Edge[1] = PatchEdgeTessFactor(patch[0].WorldXY, patch[1].WorldXY, cornerZ[0], cornerZ[1], screenCap);
+	f.Edge[2] = PatchEdgeTessFactor(patch[1].WorldXY, patch[2].WorldXY, cornerZ[1], cornerZ[2], screenCap);
+	f.Edge[3] = PatchEdgeTessFactor(patch[3].WorldXY, patch[2].WorldXY, cornerZ[3], cornerZ[2], screenCap);
+	// u runs along edges 1 and 3, v along 0 and 2: the short side of a long
+	// band quad keeps its own factor instead of the long side's.
+	float insideU = max(f.Edge[1], f.Edge[3]);
+	float insideV = max(f.Edge[0], f.Edge[2]);
+	[flatten] if (PatchInsideMax != 0)
+	{
+		insideU = max(insideU, insideV);
+		insideV = insideU;
+	}
+	f.Inside[0] = insideU;
+	f.Inside[1] = insideV;
 	return f;
 }
 
@@ -2667,6 +2718,32 @@ struct SkinShadeResult
 };
 SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 {
+	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
+	float3 shadePos = input.WorldPos;
+#ifdef PATCH
+	// Churn and clods by parallax, the landscape shell's march: the patch
+	// geometry left them out, and the point the view ray meets is shaded.
+	[branch] if (PatchChurnParallax())
+	{
+		float bermP = ObjBermHeightAmp > 0.005 ? BermField(input.trenchGridLocal) : 0.0;
+		float layerDepth = PatchSkinDepth(input.worldXY).x;
+		float churnW = ChurnWeight(input.pixelDeform, bermP, input.worldXY) * saturate(layerDepth / 10.0);
+		float clodW = RimStyle.z > 0.01 ? BermShape(bermP) * saturate(1.0 - input.pixelDeform) * BermDepthGate(layerDepth) : 0.0;
+		float fade = 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w);
+		float churnAmp = (ObjChurnHeightAmp > 0.01 ? ObjChurnHeightAmp * churnW : 0.0) * fade;
+		float clodAmp = RimStyle.z * clodW * fade;
+		[branch] if (churnAmp + clodAmp > 0.05)
+		{
+			float3 dir = normalize(input.WorldPos);
+			float2 slope = -normalWS.xy / max(normalWS.z, 0.1);
+			float t = ChurnParallaxT(dir, slope, churnAmp, clodAmp, input.worldXY, ObjChurnSizeScale);
+			shadePos = input.WorldPos + dir * t;
+			input.worldXY += dir.xy * t;
+			input.trenchGridLocal += dir.xy * t;
+			input.GridLocal += dir.xy * t;
+		}
+	}
+#endif
 	const float2 trenchGridLocal = input.trenchGridLocal;
 	const float2 worldXY = input.worldXY;
 	const float pixelDist = input.pixelDist;
@@ -2706,7 +2783,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		nzPlane = clamp(nzPlane, input.geoNz - 0.3, input.geoNz + 0.3);
 	float snowSteepness = smoothstep(0.75, 0.55, nzPlane);
 #endif
-	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+	float snowWorldZAbs = shadePos.z + ShellCameraPosAdjust.z;
 	// Captured, not recomputed: normalWS is perturbed further below (berm
 	// ridge, normal map), and the parallax shadow must resolve the light into
 	// the SAME plane these uvs were built on.
@@ -2794,6 +2871,20 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				ChurnNoise(worldXY + float2(cStep, 0.0)) - ChurnNoise(worldXY - float2(cStep, 0.0)),
 				ChurnNoise(worldXY + float2(0.0, cStep)) - ChurnNoise(worldXY - float2(0.0, cStep))) / (2.0 * cStep);
 			normalWS = normalize(normalWS + float3(-churnGradPix * ObjChurnHeightAmp * churnWPix, 0.0));
+		}
+	}
+	// Clods left the geometry with the churn: shade them here, the landscape
+	// PS's centre-weighted clod gradient.
+	[branch] if (PatchChurnParallax() && RimStyle.z > 0.01)
+	{
+		float clodWPix = BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(PatchSkinDepth(worldXY).x);
+		[branch] if (clodWPix > 0.001)
+		{
+			const float kStep = 4.0;
+			float2 clodGrad = float2(
+				ChurnNoiseScaled(worldXY + float2(kStep, 0.0), kClodSizeScale) - ChurnNoiseScaled(worldXY - float2(kStep, 0.0), kClodSizeScale),
+				ChurnNoiseScaled(worldXY + float2(0.0, kStep), kClodSizeScale) - ChurnNoiseScaled(worldXY - float2(0.0, kStep), kClodSizeScale)) / (2.0 * kStep);
+			normalWS = normalize(normalWS + float3(-clodGrad * RimStyle.z * clodWPix, 0.0));
 		}
 	}
 #endif
@@ -2974,7 +3065,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float satNdotL = saturate(dot(normalWS, L));
 	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
 
-	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	float worldShadow = ShadowSampling::GetWorldShadow(shadePos, ShellCameraPosAdjust.xyz);
 	// Hoisted above the cascade call: the crisp path widens its PCF ring with
 	// distance exactly as the terrain shell does, or the far cascade's texels
 	// quantise into blocky patches on object snow while the ground beside it
@@ -2999,12 +3090,12 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// (the round-31 seamShadowLift receiver raise is REVERTED -
 		// the RenderDoc replay proved no cascade shadow was missing at the
 		// seam, so the lift only risked boundary drift.)
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadowReject(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w), L, input.selfShadowReject);
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadowReject(shadePos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w), L, input.selfShadowReject);
 	}
 	else
 	{
 		float detailedShadow;
-		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		float dynamicShadow = ShadowSampling::GetLightingShadow(shadePos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 	// Heightfield self-shadowing, the landscape shell's 5-tap horizon march
@@ -3031,7 +3122,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float sunLen2D = max(length(L.xy), 1e-4);
 		float sunTan = L.z / sunLen2D;
 		float2 stepDir = L.xy / sunLen2D;
-		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float surfZ = shadePos.z + ShellCameraPosAdjust.z;
 		// Receivers rebuilt the way the taps are (see SnowShell.hlsl): one
 		// reference for terrain taps, one for object taps.
 		float refTer = surfZ;
@@ -3266,12 +3357,12 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// World-anchored glint uv on a static 4096-unit fold; see SnowShell.hlsl
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
-	                                   fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
+	                                   fmod(shadePos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
 	const float glintsHere = EnableGlints;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
@@ -3293,7 +3384,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
+		SnowLights::AccumulatePointLights(snowMtl, shadePos, shadePos + ShellCameraPosAdjust.xyz,
 			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, gameShadowMask, directDiffuse, directSpecular);
 	}
 
@@ -3303,14 +3394,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// The land's baked vertex AO under the object (see SnowShell.hlsl): snow
 	// on a rock in a dark grove shares the grove's baked shade, and using the
 	// same source as the terrain shell keeps the seam flat.
-	float2 terrainLocal = (input.WorldPos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
+	float2 terrainLocal = (shadePos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
 	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	// Skylighting parity; same path as the terrain shell.
 	[branch] if (SkylightingActive > 0.5)
 	{
-		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
+		sh2 skylightingSH = Skylighting::Sample(shadePos, normalWS);
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, shadePos, normalWS, landVertexAO);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
