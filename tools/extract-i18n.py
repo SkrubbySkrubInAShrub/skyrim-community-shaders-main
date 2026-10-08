@@ -359,7 +359,8 @@ def main():
 
     if args.orphans:
         existing = load_existing_json(en_json_path)
-        orphans = set(existing.keys()) - set(strings.keys())
+        # Key-only T() calls still reference their key
+        orphans = set(existing.keys()) - set(strings.keys()) - key_only
         if orphans:
             print(f"\n{len(orphans)} orphaned key(s) in en.json (not found in source):")
             for k in sorted(orphans):
