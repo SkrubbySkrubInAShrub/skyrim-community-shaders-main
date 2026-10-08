@@ -366,7 +366,7 @@ def main():
                 print(f"  - {k}")
         else:
             print("\nNo orphaned keys found.")
-        return
+        sys.exit(1 if orphans else 0)
 
     output = build_output(strings)
     output_text = json.dumps(output, indent=4, ensure_ascii=False) + "\n"
