@@ -552,6 +552,7 @@ RWByteAddressBuffer ClusterScratchIndices : register(u4);
 
 #define SNOW_CLUSTER_GROUP 256
 groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
+groupshared uint gClusterStart[SNOW_CLUSTER_GROUP];
 
 [numthreads(SNOW_CLUSTER_GROUP, 1, 1)] void ClusterCullCS(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID)
 {
@@ -585,6 +586,7 @@ groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
 	// Ordered exclusive scan of the surviving index counts. The trip count is
 	// a compile-time constant, so every barrier is in uniform flow control.
 	gClusterScan[gtid.x] = keep;
+	gClusterStart[gtid.x] = idxStart;
 	GroupMemoryBarrierWithGroupSync();
 	[unroll] for (uint step = 1; step < SNOW_CLUSTER_GROUP; step <<= 1)
 	{
@@ -593,19 +595,29 @@ groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
 		gClusterScan[gtid.x] += add;
 		GroupMemoryBarrierWithGroupSync();
 	}
-	uint exclusive = gClusterScan[gtid.x] - keep;
 	uint total = gClusterScan[SNOW_CLUSTER_GROUP - 1];
 
-	[branch] if (keep != 0)
+	// The whole group copies the survivors, each thread striding over the
+	// output: output index i belongs to the first cluster whose inclusive
+	// sum passes i. Same stores as one thread per cluster, without the
+	// largest cluster's serial copy setting the group's time.
+	for (uint i = gtid.x; i < total; i += SNOW_CLUSTER_GROUP)
 	{
-		uint dst = b.ScratchBase + exclusive;
-		for (uint k = 0; k < idxCount; k++)
+		uint lo = 0;
+		uint hi = SNOW_CLUSTER_GROUP - 1;
+		[loop] while (lo < hi)
 		{
-			uint si = b.IndexPoolOffset + idxStart + k;
-			uint word = ClusterIndexPool.Load((si >> 1) << 2);
-			uint v = (si & 1) ? (word >> 16) : (word & 0xFFFF);
-			ClusterScratchIndices.Store((dst + k) << 2, v);
+			uint mid = (lo + hi) >> 1;
+			[flatten] if (gClusterScan[mid] > i)
+				hi = mid;
+			else
+				lo = mid + 1;
 		}
+		uint before = lo == 0 ? 0 : gClusterScan[lo - 1];
+		uint si = b.IndexPoolOffset + gClusterStart[lo] + (i - before);
+		uint word = ClusterIndexPool.Load((si >> 1) << 2);
+		uint v = (si & 1) ? (word >> 16) : (word & 0xFFFF);
+		ClusterScratchIndices.Store((b.ScratchBase + i) << 2, v);
 	}
 
 	if (gtid.x == 0 && active)
