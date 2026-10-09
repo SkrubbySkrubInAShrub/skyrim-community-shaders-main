@@ -214,7 +214,7 @@ cbuffer AlphaTestRefCB : register(b11)
 
 Texture2D<float> TexDepthSampler : register(t17);
 
-#	if defined(EFFECTS11) && (defined(HORIZFADE) || defined(MOONMASK))
+#	if defined(EFFECTS11) && defined(HORIZFADE)
 /** Stars: StarsCurve and StarsIntensity, plus optional per-star twinkle on isolated bright texels. */
 float3 ShadeStars(float4 starTexel, float2 uv)
 {
@@ -263,10 +263,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-#			if defined(EFFECTS11) && (defined(HORIZFADE) || defined(MOONMASK))
+#			if defined(EFFECTS11) && defined(HORIZFADE)
 	[branch] if (SharedData::enbSettings.Enable)
 		baseColor.xyz = ShadeStars(baseColor, input.TexCoord0.xy);
-#			elif defined(EFFECTS11) && defined(TEX) && !defined(DITHER) && !defined(CLOUDS)
+#			elif defined(EFFECTS11) && defined(TEX) && !defined(DITHER) && !defined(CLOUDS) && !defined(MOONMASK)
 	[branch] if (SharedData::enbSettings.Enable && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsMoon))
 	{
 		float2 edge = abs(input.TexCoord0.xy * 2.0 - 1.0);
