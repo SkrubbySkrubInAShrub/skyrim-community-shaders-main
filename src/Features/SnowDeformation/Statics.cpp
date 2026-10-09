@@ -1612,6 +1612,25 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
+	// Drape twins of the pair above (SNOW_STATICS_DRAPE). A failure keeps
+	// drapes on the general pair.
+	if (!staticsPSDrapeNoDepth) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapeNoDepth)))
+				Util::SetResourceName(staticsPSDrapeNoDepth, "SnowDeformation::StaticsShellPS Drape NoDepth");
+		}
+	}
+	if (!staticsPSDrapePrepass) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrepass)))
+				Util::SetResourceName(staticsPSDrapePrepass, "SnowDeformation::StaticsShellPS Drape Prepass");
+		}
+	}
+
 	// Trench patch (PATCH define): SV_VertexID grid, no input layout. The
 	// draw guards on the pointers, so a compile failure just skips the pass.
 	if (!patchVS) {
@@ -3959,8 +3978,16 @@ void SnowDeformation::DrawCapturedStatics()
 				cpuCensus.skinLoopCBUpdates++;
 			}
 
-			ID3D11PixelShader* wantPS = a_prepass ? prepassPS :
-			                                        ((!needsDepth && staticsPSNoDepth) ? staticsPSNoDepth : staticsPS);
+			// Drapes take the SNOW_STATICS_DRAPE twins, which fold exactly
+			// what FillSkinDrawCB gives every S4 draw, with no debug view.
+			const bool drapePS = d.s4Shell && staticsDebugView == 0;
+			ID3D11PixelShader* wantPS = nullptr;
+			if (a_prepass)
+				wantPS = (drapePS && !staticsPrepassExitOff && staticsPSDrapePrepass) ? staticsPSDrapePrepass : prepassPS;
+			else if (!needsDepth && staticsPSNoDepth)
+				wantPS = (drapePS && staticsPSDrapeNoDepth) ? staticsPSDrapeNoDepth : staticsPSNoDepth;
+			else
+				wantPS = staticsPS;
 			if (wantPS != boundStaticsPS) {
 				context->PSSetShader(wantPS, nullptr, 0);
 				boundStaticsPS = wantPS;

@@ -331,6 +331,18 @@ cbuffer StaticCB : register(b1)
 	float padLODCells;
 }
 
+#ifdef SNOW_STATICS_DRAPE
+// Drape (S4) draws with the debug views off: what FillSkinDrawCB gives every
+// one of them, folded so the paths they switch off compile out.
+#	define ObjectsDepth 0.0
+#	define RoundedDepth 0.0
+#	define LegacySkin 0.0
+#	define RoadField 0.0
+#	define ClassOverride 1.0
+#	define ProjPixelEnable 2.0
+#	define StaticsDebugView 0.0
+#endif
+
 // The patch leaves churn and clods out of its geometry; its PS marches them.
 bool PatchChurnParallax()
 {

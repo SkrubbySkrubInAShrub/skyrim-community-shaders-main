@@ -3663,6 +3663,9 @@ public:
 	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
 	/** @brief SNOW_STATICS_KEEP_HIDDEN twin of the prepass shader, without the hidden-quad exit (A/B, compiled on first use). */
 	ID3D11PixelShader* staticsPSPrepassKeepHidden = nullptr;
+	/** @brief SNOW_STATICS_DRAPE twins of the no-export shading and prepass shaders: the values FillSkinDrawCB gives every drape (S4) draw, and the debug views off, folded in. Chosen per draw for drapes; a compile failure keeps the general pair. */
+	ID3D11PixelShader* staticsPSDrapeNoDepth = nullptr;
+	ID3D11PixelShader* staticsPSDrapePrepass = nullptr;
 	ID3D11PixelShader* GetStaticsPSPrepassKeepHidden();
 	/** @brief A/B, runtime-only: the skins' prepass runs the alpha cut on quads already behind the main depth. */
 	bool staticsPrepassExitOff = false;
