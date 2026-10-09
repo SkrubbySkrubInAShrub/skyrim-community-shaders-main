@@ -3082,7 +3082,8 @@ public:
 	/** @brief Frame the Debugging Options height probe readout last drew (its cone line needs the cone built). */
 	uint32_t heightProbeShownFrame = UINT32_MAX;
 	bool FineLevelOn() const { return !fineLevelDisabled && settings.ObjectSnowNearDetail; }
-	/** @brief Quality presets, Low (0) to Ultra (3); Ultra is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
+	static constexpr int kQualityPresetCount = 3;
+	/** @brief Quality presets, Low (0) to High (2); High is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);
 	/** @brief The preset every lever currently matches, or -1 (custom). */
 	int MatchingQualityPreset() const;
