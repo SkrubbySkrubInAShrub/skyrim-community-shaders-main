@@ -148,7 +148,6 @@ namespace
 namespace
 {
 	// Low = every lever at its cheapest, High = the shipped defaults, Medium halfway.
-	// Object Snow's halfway is taken inside the loaded cells (~207 m at uGridsToLoad 5).
 	struct QualityPreset
 	{
 		uint32_t mapDim;
@@ -165,8 +164,8 @@ namespace
 		bool castsShadows;
 	};
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
-		{ 1024u, 29.0f, 10.0f, 29.0f, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
-		{ 2048u, 115.0f, 105.0f, 120.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
+		{ 1024u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
+		{ 2048u, 115.0f, 105.0f, 150.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
 		{ 2048u, 200.0f, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
 	};
 }
@@ -224,7 +223,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on and every reach at its maximum. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 120 m and a 24 px Object Snow Tessellation Cap. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches and Object Snow at 29 m, NPC Trenches at 10 m and a 32 px cap. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on and every reach at its maximum. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m and a 24 px Object Snow Tessellation Cap. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m and a 32 px cap. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[kQualityPresetCount] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < kQualityPresetCount; i++) {
@@ -564,7 +563,7 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_actor_trenches_tooltip"), "How far from the camera NPCs, creatures and corpses still carve trenches. Past it they leave no prints, and the work of following their bodies is skipped. You always carve. It never reaches past the Trenches range. Lower saves CPU time where many people or animals are on the move. Applies live."));
 
-		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, kMinRangeSkinsM, 750.0f, "%.0f m");
 		if (auto _ttRk = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Loaded cells bound the real reach (~200 m at uGridsToLoad 5), so values above that only matter with a larger uGridsToLoad. Applies live."));
 

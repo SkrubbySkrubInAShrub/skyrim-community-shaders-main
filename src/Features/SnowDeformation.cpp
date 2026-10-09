@@ -2446,6 +2446,7 @@ void SnowDeformation::ClearShaderCache()
 void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.RangeSkinsM = std::clamp(settings.RangeSkinsM, kMinRangeSkinsM, 750.0f);
 	// Loaded values may change the window size or map resolution; the apply
 	// path is a no-op when they match the current state.
 	trenchRangeDirty = true;

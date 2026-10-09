@@ -3083,6 +3083,8 @@ public:
 	uint32_t heightProbeShownFrame = UINT32_MAX;
 	bool FineLevelOn() const { return !fineLevelDisabled && settings.ObjectSnowNearDetail; }
 	static constexpr int kQualityPresetCount = 3;
+	/** @brief Object Snow range floor (m); below it the 2048-unit skin dissolve band starts at the camera. */
+	static constexpr float kMinRangeSkinsM = 50.0f;
 	/** @brief Quality presets, Low (0) to High (2); High is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);
 	/** @brief The preset every lever currently matches, or -1 (custom). */
