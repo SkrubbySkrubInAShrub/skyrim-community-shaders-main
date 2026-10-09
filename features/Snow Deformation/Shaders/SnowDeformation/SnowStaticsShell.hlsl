@@ -3098,6 +3098,16 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// terrain the taps read, and terrain relief must not shadow it.
 		refTer = max(refTer, surfZ - 2.0);
 		float horizonTan = -10.0;
+		// Near softness halved: it existed to hide the tap quantisation the
+		// finer first taps now resolve. Far end untouched.
+		float soft = lerp(0.03, 0.35, farShadowT);
+		// A tap below this tangent cannot move the result: either a steeper
+		// tap sets the horizon, or every tap is under it and the smoothstep
+		// below is exactly 1. Taps are skipped on an upper bound of their
+		// height (carve <= depth, lip, berm, dunes); margins cover rounding.
+		const float skipTan = sunTan - 1.5 * soft - 1e-4;
+		const float lipGain = max(RimStyle.x, 0.0);
+		const float undBound = abs(UndulationAmp);
 		// The top raster stores only the HIGHEST surface per texel, so under
 		// a multi-level object's overhang it records the deck ABOVE the
 		// receiver and every tap reads "inside a hill" — full shadow in
@@ -3194,16 +3204,22 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 							float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
 							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && depthSmooth >= 1.0)
 							{
-								// The road's own top where something taller stands over it.
-								float topRoad = (topSmooth - tapRoadTop) >= kRoadOwnsTop ? tapRoadTop : topSmooth;
-								float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
-								float tapCone = ObjectConeDepth(tapWorld);
-								depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
-								float tapDeform = SampleDeformation(sampleLocal);
-								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
-								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
-								sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+								float roadBound = max(max(tapTops.x, tapTops.y), max(tapTops.z, tapTops.w)) +
+								                  max(max(sd00.x, sd10.x), max(sd01.x, sd11.x)) * (1.0 + lipGain + max(ObjBermHeightAmp, 0.0)) + undBound;
+								roadBound += 0.01 + 1e-6 * abs(roadBound);
+								[branch] if ((roadBound - surfZ - 1.0) / d >= skipTan)
+								{
+									// The road's own top where something taller stands over it.
+									float topRoad = (topSmooth - tapRoadTop) >= kRoadOwnsTop ? tapRoadTop : topSmooth;
+									float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
+									float tapCone = ObjectConeDepth(tapWorld);
+									depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
+									float tapDeform = SampleDeformation(sampleLocal);
+									float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+									float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
+									                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+									sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+								}
 								dbgMarch.y += 0.2;
 								tapOnObject = true;
 							}
@@ -3215,23 +3231,25 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			{
 				float3 st = SampleTerrainStatics(sampleLocal);
 				float sampleDepth = max(st.y, 0.0);
+				float terBound = st.x + sampleDepth * (1.0 + lipGain + max(BermHeightAmp, 0.0)) + undBound;
+				terBound += 0.01 + 1e-6 * abs(terBound);
+				[branch] if ((terBound - refTer - 1.0) / d >= skipTan)
 				{
-					float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
-					sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+					{
+						float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
+						sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+					}
+					float sampleDeform = SampleDeformation(sampleLocal);
+					float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+					sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
+					              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
+					// Sentinel terrain contributes a hugely negative horizon: a
+					// no-op through the max below, same as the landscape's edge.
+					sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 				}
-				float sampleDeform = SampleDeformation(sampleLocal);
-				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-				sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
-				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
-				// Sentinel terrain contributes a hugely negative horizon: a
-				// no-op through the max below, same as the landscape's edge.
-				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			}
 			horizonTan = max(horizonTan, (sh - (tapOnObject ? surfZ : refTer) - 1.0) / d);
 		}
-		// Near softness halved: it existed to hide the tap quantisation the
-		// finer first taps now resolve. Far end untouched.
-		float soft = lerp(0.03, 0.35, farShadowT);
 		// Penumbra CENTRED on the horizon. The old band ran
 		// [-0.12 - (soft-0.06)*2, +soft]: the same total width (3*soft) but
 		// entirely on the LIT side of sunTan == horizonTan, so the shadow always
