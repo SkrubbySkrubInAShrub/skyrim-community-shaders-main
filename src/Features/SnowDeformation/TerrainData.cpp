@@ -1157,8 +1157,11 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 		auto it = snowMasks.find(reinterpret_cast<uintptr_t>(material));
 		if (it == snowMasks.end()) {
 			// Count misses only for landscape materials, where a miss is a bug.
+			// Vanilla and TruePBR landscape materials answer kMultiTexLandLODBlend.
 			auto feature = material->GetFeature();
-			if (feature == RE::BSShaderMaterial::Feature::kMultiTexLand || feature == static_cast<RE::BSShaderMaterial::Feature>(33))
+			if (feature == RE::BSShaderMaterial::Feature::kMultiTexLand ||
+				feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend ||
+				feature == static_cast<RE::BSShaderMaterial::Feature>(33))
 				landMaskMisses.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
