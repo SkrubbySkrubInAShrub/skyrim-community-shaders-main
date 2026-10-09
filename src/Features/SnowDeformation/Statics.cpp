@@ -1373,6 +1373,8 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// Objects carry no depth; roads carry theirs per texel in the skin-depth raster.
 	a_scb.ObjectsDepth = 0.0f;
 	a_scb.RoundedDepth = 0.0f;
+	// Roads are ground: no Object Snow distance dissolve.
+	a_scb.FadeExempt = 1.0f;
 	a_scb.HeightWindowCenter = heightWindowCenter;
 	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
 	// The patch stays on the coarse maps: its pass does not bind t33/t34, and
