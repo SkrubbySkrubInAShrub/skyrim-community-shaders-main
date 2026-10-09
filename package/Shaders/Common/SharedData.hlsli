@@ -134,7 +134,7 @@ namespace SharedData
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;
+		float4 OcclusionSHBasis4Pi;  // SH basis of the occlusion direction, times 4 pi (Monte Carlo weight)
 
 		float4 PosOffset;   // xyz: cell origin in camera model space
 		uint4 ArrayOrigin;  // xyz: array origin
@@ -339,6 +339,21 @@ namespace SharedData
 		float MasserBillboardTan;
 		float SecundaBillboardTan;
 		float2 SkyScatteringPad0;
+
+		uint EnableWater;
+		float WaterWavesAmplitude;
+		float WaterMuddiness;
+		float WaterSunLightingMultiplier;
+
+		float WaterSunSpecularMultiplier;
+		float WaterFresnelMin;
+		float WaterFresnelMax;
+		float WaterFresnelMultiplier;
+
+		float WaterReflectionAmount;
+		float WaterPad0;
+		float WaterPad1;
+		float WaterPad2;
 	};
 	struct TerrainBlendingSettings
 	{

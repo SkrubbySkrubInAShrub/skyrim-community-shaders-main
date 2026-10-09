@@ -214,6 +214,16 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.EnableProceduralSun = enableEffect && settingManager.GetValue<bool>("EnableProceduralSun", "EFFECT");
 
+	data.EnableWater = enableEffect && settingManager.GetValue<bool>("EnableWater", "EFFECT");
+	data.WaterWavesAmplitude = settingManager.GetInterpolatedTimeOfDayValue("WavesAmplitude", "WATER");
+	data.WaterMuddiness = settingManager.GetValue<float>("Muddiness", "WATER");
+	data.WaterSunLightingMultiplier = settingManager.GetValue<float>("SunLightingMultiplier", "WATER");
+	data.WaterSunSpecularMultiplier = settingManager.GetValue<float>("SunSpecularMultiplier", "WATER");
+	data.WaterFresnelMin = settingManager.GetValue<float>("FresnelMin", "WATER");
+	data.WaterFresnelMax = settingManager.GetValue<float>("FresnelMax", "WATER");
+	data.WaterFresnelMultiplier = settingManager.GetValue<float>("FresnelMultiplier", "WATER");
+	data.WaterReflectionAmount = settingManager.GetValue<float>("ReflectionAmount", "WATER");
+
 	{
 		// The ENB keys describe a disc drawn across the sun billboard: Size is its radius as a share of
 		// the billboard (0.04 per unit) and the glow fades out at the billboard edge. They are mapped to
@@ -568,6 +578,16 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 			skyStaticsColor = F3ToNi(skyStaticsColorF3);
 		}
 
+		if (settingManager.GetValue<bool>("EnableWater", "EFFECT")) {
+			auto& waterColor = colors[(uint)RE::TESWeather::ColorTypes::kWaterMultiplier];
+
+			auto waterColorF3 = NiToF3(waterColor);
+
+			waterColorF3 = Intensity(waterColorF3, settingManager.GetInterpolatedTimeOfDayValue("Brightness", "WATER"));
+
+			waterColor = F3ToNi(waterColorF3);
+		}
+
 		float gradientIntensity = settingManager.GetInterpolatedTimeOfDayValue("GradientIntensity", "SKY");
 		float gradientDesaturation = settingManager.GetInterpolatedTimeOfDayValue("GradientDesaturation", "SKY");
 
@@ -693,7 +713,8 @@ bool Effects11::HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET
 		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
 		// Only claim the tonemap pass if the effect chain actually wrote the output
 		if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
-			tonemapReplacedFrame = globals::state->frameCount;
+			// State::Reset bumps frameCount at the start of Present, before HDR Display composites this output
+			tonemapReplacedFrame = globals::state->frameCount + 1;
 			return true;
 		}
 	}
