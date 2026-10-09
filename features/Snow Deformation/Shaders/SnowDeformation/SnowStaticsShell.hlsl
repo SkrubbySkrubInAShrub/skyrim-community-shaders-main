@@ -3330,8 +3330,18 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
 	                                   fmod(shadePos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
-	// Built once, shared by the sun and every point light (M3).
-	const float glintsHere = EnableGlints;
+	// Built once, shared by the sun and every point light (M3). Glints reach
+	// only the direct lobes: the sun's, zero without sunShadow, and the
+	// cluster's lights (the same cluster AccumulatePointLights reads below).
+	bool glintsLit = sunShadow != 0.0;
+	[branch] if (!glintsLit && PointLightsActive > 0.5)
+	{
+		float glintViewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
+		float4 glintClip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		float2 glintClusterUV = glintClip.xy / max(glintClip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		glintsLit = SnowLights::ClusterLightCount(glintClusterUV, glintViewZ) > 0;
+	}
+	const float glintsHere = glintsLit ? EnableGlints : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
