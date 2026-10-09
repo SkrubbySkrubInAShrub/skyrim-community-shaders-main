@@ -1203,6 +1203,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		[flatten] if (owns && (top - roadTop) >= kRoadOwnsTop)
 			top = roadTop;
 
+	// With the road heightfield on, an owned vertex never rims and always
+	// tramples, and an unowned one always dies: nothing below can change it.
+	[branch] if (RoadField < 0.5)
+	{
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
 	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
@@ -1303,6 +1307,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		[unroll] for (uint rayI = 0; rayI < 16; rayI++)
 			aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + kAliveRays[rayI]));
 	}
+	}  // RoadField < 0.5
 
 	// Road heightfield: the patch IS the road's snow, so it must exist over
 	// the whole surface, not just around trails. Untrampled road resolves to
@@ -1447,6 +1452,8 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// vertex-rate gradient interpolated to smooth and trampled floors
 		// shaded as pristine top snow (Josef's road-floor report). Geometry
 		// keeps the coarse displacement above; the normal carries the look.
+		// The caster is depth-only: no normal.
+#ifndef SNOW_SHADOW_CAST
 		const float gStep = 4.0;
 		float dXP = saturate(SampleDeformationSmooth(gridLocal + float2(gStep, 0.0)));
 		float dXN = saturate(SampleDeformationSmooth(gridLocal - float2(gStep, 0.0)));
@@ -1483,7 +1490,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// smoothing; clamped to 45 degrees so the verge drop cannot roll
 		// the edge ring over.
 		float2 topGrad = float2(0.0, 0.0);
-#ifndef SNOW_SHADOW_CAST
 		{
 			const float tStep = 16.0;
 			float tXP = PatchSurfaceTop(worldXY + float2(tStep, 0.0));
@@ -1493,10 +1499,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 			topGrad = float2(PatchTopSlope(tXP, tXN, top, tStep), PatchTopSlope(tYP, tYN, top, tStep));
 			topGrad /= max(1.0, length(topGrad));
 		}
-#endif
 		// Surface z = top + profile, so normal.xy = -d(top) - d(profile); the
 		// other fields RAISE the surface and subtract for the same reason.
 		v.NormalWS = normalize(float3(-topGrad - profGrad - undGrad - bermGrad, 1.0));
+#endif
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
@@ -1551,11 +1557,13 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	else
 	{
 		float3 rel = v.WorldAbs - ShellCameraPosAdjust.xyz;
-		float3 prevRel = v.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
 		vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
+#ifndef SNOW_SHADOW_CAST
+		float3 prevRel = v.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
 		vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 		vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 		vsout.WorldPos = rel;
+#endif
 	}
 	return vsout;
 }
