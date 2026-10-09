@@ -13,7 +13,7 @@
 // UndulationAmp/Scale, UndulationFieldWindow, BorderStyle, TrampleStyle,
 // GridOrigin, DeformMapOrigin), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
-// (t14), ExtentFieldMap (t56), ExclusionFieldMap (t15), the frost patterns (t16/t17),
+// (t14), ExtentFieldMap (t56), UntouchedTiles (t57), ExclusionFieldMap (t15), the frost patterns (t16/t17),
 // UndulationFieldMap (t29), SnowSampler
 // (PS) and the TerrainVariation include - all declared before this include.
 // Deliberately NOT shared: the deformation .x samplers (the landscape
@@ -122,6 +122,25 @@ float BermFieldBaked(float2 gridLocal)
 	float s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Every map and berm read within 8 units of here returns exactly zero, so the
+// carve, berm and surface-state terms equal their zero-input results. Just
+// outside the window a tap can still reach in, so only far outside skips.
+bool ShellUntouched(float2 gridLocal)
+{
+#ifdef SNOW_UNTOUCHED_SKIP_OFF
+	return false;
+#else
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	float2 pad = 8.0 * DeformInvWorldSize;
+	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
+	SNOW_DEFORM_DIMS(dims);
+	int2 logical = clamp(int2(uv * dims), 0, int2(dims) - 1);
+	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
+	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
+	return BermBakeActive > 0.5 && (farOutside || (inside && zeroTile));
+#endif
 }
 
 // Trample extent (ExtentCS in BermFieldCS.hlsl): one texel per 8x8 PHYSICAL

@@ -3452,6 +3452,11 @@ void SnowDeformation::DrawCapturedStatics()
 	                                             heightTopRaw[heightCurrent]->srv.get() :
 	                                             nullptr;
 	context->PSSetShaderResources(11, 1, &objectTopSRV);
+	// Untouched tiles (PS t57): the march skips carve and berm reads over
+	// them, as the ground's does. DrawShell unbinds the slot; the skins, the
+	// patch and the volume take it from here, and the pass unbinds it last.
+	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
+	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
 	// Scene depth copy (PS t3): the SSS hug gate, ported from the terrain
 	// shell, reads it. Same helper and same slot the shell binds - a COPY
 	// (Terrain Blending's blended depth when that feature owns it, else
@@ -4309,6 +4314,8 @@ void SnowDeformation::DrawCapturedStatics()
 	// included, and shades through the same material.
 	DrawVoxelSnow();
 
+	ID3D11ShaderResourceView* nullUntouchedSRV = nullptr;
+	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullUntouchedSRV);
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);
 	context->PSSetConstantBuffers(1, 1, &nullCB);

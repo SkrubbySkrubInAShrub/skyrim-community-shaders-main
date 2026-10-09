@@ -1192,25 +1192,6 @@ float3 SampleTerrainShaped(float2 gridLocal)
 // so boundaries between differently-deep snows are geometric depth ramps;
 // negative depths (roads) submerge the shell below the surface.
 // Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
-// Every map and berm read within 8 units of here returns exactly zero, so the
-// carve, berm and surface-state terms equal their zero-input results. Just
-// outside the window a tap can still reach in, so only far outside skips.
-bool ShellUntouched(float2 gridLocal)
-{
-#ifdef SNOW_UNTOUCHED_SKIP_OFF
-	return false;
-#else
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	float2 pad = 8.0 * DeformInvWorldSize;
-	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
-	SNOW_DEFORM_DIMS(dims);
-	int2 logical = clamp(int2(uv * dims), 0, int2(dims) - 1);
-	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
-	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
-	return BermBakeActive > 0.5 && (farOutside || (inside && zeroTile));
-#endif
-}
-
 #ifdef SNOW_BAKE_CS
 // ShellSurfaceZ's raw deformation tap at the vertex, read once: the bake's .w
 // and the descent's billow take it from here.

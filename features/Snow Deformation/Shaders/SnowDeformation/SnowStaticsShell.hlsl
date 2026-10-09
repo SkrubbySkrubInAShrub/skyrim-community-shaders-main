@@ -364,6 +364,9 @@ int3 DeformTexel(int2 t, int2 dims)
 Texture2D<float> BermFieldMap : register(t14);
 // Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
 Texture2D<float> ExtentFieldMap : register(t56);
+// 1 per 8x8 physical map tile where the map and the berm field read zero
+// within one tile (BermFieldCS UntouchedCS). Unbound reads 0 = touched.
+Texture2D<uint> UntouchedTiles : register(t57);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);
@@ -3098,10 +3101,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			{
 				float depth0 = max(st0.y, 0.0);
 				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(SampleExclusionField(GridOrigin + input.GridLocal).y));
-				float deform0 = SampleDeformation(input.GridLocal);
-				float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(input.GridLocal) : 0.0;
-				depth0 = CarveProfile(deform0, depth0, GridOrigin + input.GridLocal) +
-				         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
+				// Untouched: deformation and berm read 0, CarveProfile(0, d) is d.
+				[branch] if (!ShellUntouched(input.GridLocal))
+				{
+					float deform0 = SampleDeformation(input.GridLocal);
+					float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(input.GridLocal) : 0.0;
+					depth0 = CarveProfile(deform0, depth0, GridOrigin + input.GridLocal) +
+					         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
+				}
 				refTer = st0.x + depth0 + Undulation(GridOrigin + input.GridLocal) * saturate(depth0 / 8.0);
 			}
 		}
@@ -3226,10 +3233,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 									float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
 									float tapCone = ObjectConeDepth(tapWorld);
 									depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
-									float tapDeform = SampleDeformation(sampleLocal);
-									float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-									float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
-									                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+									float tapDepth = depthSmooth;
+									[branch] if (!ShellUntouched(sampleLocal))
+									{
+										float tapDeform = SampleDeformation(sampleLocal);
+										float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+										tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
+										           BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+									}
 									sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
 								}
 								dbgMarch.y += 0.2;
@@ -3251,10 +3262,13 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
 						sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 					}
-					float sampleDeform = SampleDeformation(sampleLocal);
-					float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-					sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
-					              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
+					[branch] if (!ShellUntouched(sampleLocal))
+					{
+						float sampleDeform = SampleDeformation(sampleLocal);
+						float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+						sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
+						              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
+					}
 					// Sentinel terrain contributes a hugely negative horizon: a
 					// no-op through the max below, same as the landscape's edge.
 					sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
