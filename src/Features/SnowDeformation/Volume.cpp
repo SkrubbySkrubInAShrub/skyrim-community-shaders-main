@@ -1193,6 +1193,9 @@ void SnowDeformation::DrawVoxelSnow()
 	context->PSSetShaderResources(11, 1, &topSRV);
 	ID3D11ShaderResourceView* skinDepthSRV = (heightSkinDepth && heightSkinDepth->srv) ? heightSkinDepth->srv.get() : nullptr;
 	context->PSSetShaderResources(12, 1, &skinDepthSRV);
+	// The march's road taps read the object snow cone.
+	ID3D11ShaderResourceView* coneSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
+	context->PSSetShaderResources(13, 1, &coneSRV);
 
 	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 	context->RSGetState(savedRaster.put());
@@ -1272,6 +1275,7 @@ void SnowDeformation::DrawVoxelSnow()
 	context->VSSetShaderResources(41, 1, &nullSRV);
 	context->PSSetShaderResources(42, 1, &nullSRV);
 	context->PSSetShaderResources(3, 1, &nullSRV);
+	context->PSSetShaderResources(13, 1, &nullSRV);
 	context->PSSetSamplers(3, 1, &nullSampler);
 	context->VSSetConstantBuffers(2, 1, &nullCB);
 	context->PSSetConstantBuffers(2, 1, &nullCB);

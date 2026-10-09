@@ -4273,6 +4273,8 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11ShaderResourceView* patchConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
 		context->VSSetShaderResources(0, 1, &patchTerrainSRV);
 		context->VSSetShaderResources(13, 1, &patchConeSRV);
+		// The march's road taps read the same cone.
+		context->PSSetShaderResources(13, 1, &patchConeSRV);
 		if (tessellatePatch) {
 			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
 			context->DSSetShaderResources(13, 1, &patchConeSRV);
@@ -4302,6 +4304,7 @@ void SnowDeformation::DrawCapturedStatics()
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
 		context->VSSetShaderResources(11, 2, nullHeightSRVs);
+		context->PSSetShaderResources(13, 1, nullHeightSRVs);
 		ID3D11ShaderResourceView* nullPatchRune[2 * kRuneMaxTiles] = {};
 		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullPatchRune);
 		context->PSSetShaderResources(90, 1, nullPatchRune);
