@@ -167,7 +167,7 @@ ID3D11ComputeShader* SnowDeformation::GetTrenchDebugCS()
 
 void SnowDeformation::UpdateTrenchDebugTexture()
 {
-	if (!settings.ShowDebugTexture || !trenchDebugUAV)
+	if (!showDebugTexture || !trenchDebugUAV)
 		return;
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;

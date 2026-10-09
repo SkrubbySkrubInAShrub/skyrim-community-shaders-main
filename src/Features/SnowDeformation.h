@@ -346,7 +346,6 @@ public:
 	struct Settings
 	{
 		bool EnableSnowDeformation = true;
-		bool ShowDebugTexture = false;
 		/** @brief Scale on Havok collision-shape radii: 20 = the shapes' actual size; the 10 default halves them, which is the intended in-game read (full-size prints read bloated). */
 		float StampRadius = 10.0f;
 		/** @brief Width multiplier on foot-bone stamps (length stays anatomical). */
@@ -4058,7 +4057,8 @@ public:
 		return snowMasks.size();
 	}
 
-	/** @brief Runtime-only diagnostic toggle; not persisted in settings JSON. */
+	/** @brief Runtime-only diagnostic toggles; not persisted in settings JSON. */
+	bool showDebugTexture = false;
 	bool debugTerrainOverlay = false;
 
 	/** @brief Debug melt emitter: a stationary heat source dropped from the menu at the player, exercising the additive stamp path before any spell detection exists. Runtime-only, never persisted. */

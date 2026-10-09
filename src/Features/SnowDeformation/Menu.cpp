@@ -1503,8 +1503,8 @@ void SnowDeformation::DrawSettings()
 			// what is holding the pass on, so "why is it running" answers itself.
 			ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Update"), &debugForceDeformationUpdate);
 
-			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &settings.ShowDebugTexture);
-			if (settings.ShowDebugTexture) {
+			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &showDebugTexture);
+			if (showDebugTexture) {
 				// The honest caption. ImGui blends by the texture's alpha, and this
 				// map's .w was claimed by the retired bow wave's deposit field, so the view
 				// is drawn through deposit: transparent wherever nothing has been
