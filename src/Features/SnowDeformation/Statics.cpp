@@ -1452,15 +1452,52 @@ bool SnowDeformation::EnsurePatchCasterIB()
 	if (patchCasterIB)
 		return true;
 	// Six indices per quad in the non-indexed VS's corner order, so the
-	// triangles and their order are the same.
+	// triangles and their order are the same. A triangle with a corner
+	// past the caster's distance kill (SnowStaticsShell.hlsl
+	// BuildPatchVertex) never rasterises, and lattice offsets from the
+	// patch centre are fixed, so those are left out. No lattice vertex
+	// lies within 4 units of the kill radius (~4063).
 	constexpr uint32_t stride = kPatchGridDim + 1;
 	static constexpr uint32_t kCorners[6][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	const auto warp = [](int a_u) {
+		static constexpr double kBandVerts[5] = { 128.0, 16.0, 8.0, 4.0, 57.0 };
+		static constexpr double kBandMul[5] = { 1.0, 2.0, 4.0, 8.0, 32.0 };
+		double a = std::abs(double(a_u));
+		double off = 0.0;
+		for (int band = 0; band < 5; band++) {
+			const double take = std::min(a, kBandVerts[band]);
+			off += take * kBandMul[band];
+			a -= take;
+		}
+		return (off + a * kBandMul[4]) * 8.0;
+	};
+	std::vector<uint8_t> casts(size_t(stride) * stride);
+	for (uint32_t y = 0; y < stride; y++) {
+		for (uint32_t x = 0; x < stride; x++) {
+			const double dist = std::hypot(warp(int(x) - int(kPatchGridDim / 2)), warp(int(y) - int(kPatchGridDim / 2)));
+			const double t = std::clamp((dist - 2800.0) / 2100.0, 0.0, 1.0);
+			casts[size_t(y) * stride + x] = (1.0 - t * t * (3.0 - 2.0 * t)) >= 0.35 - 1e-4;
+		}
+	}
 	std::vector<uint32_t> indices;
 	indices.reserve(size_t(kPatchGridDim) * kPatchGridDim * 6);
-	for (uint32_t qy = 0; qy < kPatchGridDim; qy++)
-		for (uint32_t qx = 0; qx < kPatchGridDim; qx++)
-			for (const auto& c : kCorners)
-				indices.push_back((qy + c[1]) * stride + qx + c[0]);
+	for (uint32_t qy = 0; qy < kPatchGridDim; qy++) {
+		for (uint32_t qx = 0; qx < kPatchGridDim; qx++) {
+			for (uint32_t tri = 0; tri < 2; tri++) {
+				uint32_t idx[3];
+				bool keep = true;
+				for (uint32_t k = 0; k < 3; k++) {
+					const auto& c = kCorners[tri * 3 + k];
+					idx[k] = (qy + c[1]) * stride + qx + c[0];
+					keep = keep && casts[idx[k]];
+				}
+				if (keep)
+					indices.insert(indices.end(), idx, idx + 3);
+			}
+		}
+	}
+	if (indices.empty())
+		return false;
 	D3D11_BUFFER_DESC desc{};
 	desc.ByteWidth = UINT(indices.size() * sizeof(uint32_t));
 	desc.Usage = D3D11_USAGE_IMMUTABLE;

@@ -684,7 +684,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// after the mask passes), the frame whose rasters this VS reads, and
 	// with none the VS kills every vertex.
 	// Indexed over the shared lattice: one VS invocation per vertex, the
-	// same triangles in the same order.
+	// same triangles in the same order, minus those past the fade band.
 	const bool patchIndexed = !patchCasterNonIndexed && !SnowShadersPending(2) && GetPatchShadowVS(true) && EnsurePatchCasterIB();
 	if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS(patchIndexed);
 		patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
