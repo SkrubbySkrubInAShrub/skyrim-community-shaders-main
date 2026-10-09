@@ -674,9 +674,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// the caster pass zeroes the camera adjust and the distance-based
 	// precision pad ballooned to full depth - an uncarved slab. The
 	// PATCH+SNOW_SHADOW_CAST VS measures the pad from the snapped patch
-	// centre instead, kills casters under ~4 units of depth (trampled
-	// floors never self-shadow) and fades out over the same 40-70 m
-	// band as the skins. SV_VertexID grid, no IA state; t0 terrain,
+	// centre instead and fades out over the landscape caster's 40-70 m
+	// band. SV_VertexID grid, no IA state; t0 terrain,
 	// t1 deformation and t14 berm bake are already bound above for the
 	// shell grid, t11/t13 by the skin block; t12 (skin-depth raster,
 	// inside the saved t10-t13 range) is the patch's own addition.

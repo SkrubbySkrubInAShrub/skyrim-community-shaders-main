@@ -1468,20 +1468,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
-#ifdef SNOW_SHADOW_CAST
-		// The landscape caster's conventions (SnowShell.hlsl SNOW_SHADOW_CAST):
-		// only snow standing meaningfully above its ground casts - a dusting
-		// shadowing the object beneath it reads as the object darkening - and
-		// the caster fades out over the same 40-70 m band so the two
-		// surfaces' shadows end together at the verge. Distance from the
-		// patch centre, which tracks the camera; killed vertices take the
-		// same NaN path as dead ones.
-		float castVis = smoothstep(2.0, 5.0, depth) *
-		                (1.0 - smoothstep(2800.0, 4900.0, length(worldXY - WorldRow0.xy)));
-		[flatten] if (castVis < 0.35)
-			v.Killed = 1.0;
-#endif
-
 		// Carved-surface shading normal: finite differences of the SAME
 		// function the depth uses, exactly as the landscape PS differences
 		// CarveProfile. S1 moved the depth onto CarveProfile but left this
@@ -1552,6 +1538,13 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
+#ifdef SNOW_SHADOW_CAST
+		// The landscape caster's fade-out band (40-70 m), measured from the
+		// patch centre. No depth kill: a trampled road floor would take the
+		// trench walls' triangles, and their shadow, with it.
+		[flatten] if (1.0 - smoothstep(2800.0, 4900.0, length(worldXY - WorldRow0.xy)) < 0.35)
+			v.Killed = 1.0;
+#endif
 	}
 
 	return v;
