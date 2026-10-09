@@ -3730,6 +3730,35 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 }
 #endif
 
+#if !defined(VOXEL) && !defined(PATCH)
+float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixelDist, float3 groundData, float pixelAbsZ)
+{
+	float sheetMeet = 0.0;
+	[branch] if (pdMode && ObjectMeetBand > 0.0 && pixelDist < 2048.0 && groundData.x > -50000.0)
+	{
+		float sheetZ = SheetSurfaceZ(input.GridLocal);
+		float sheetGap = pixelAbsZ - sheetZ;
+		[branch] if (sheetZ > -50000.0 && sheetGap < ObjectMeetBand * 0.5)
+		{
+			sheetMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, sheetGap)) * smoothstep(0.35, 0.6, normalize(input.NormalWS).z) *
+			            (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
+			const float mStep = 4.0;
+			float3 mXP = SampleTerrainStatics(input.GridLocal + float2(mStep, 0.0));
+			float3 mXN = SampleTerrainStatics(input.GridLocal - float2(mStep, 0.0));
+			float3 mYP = SampleTerrainStatics(input.GridLocal + float2(0.0, mStep));
+			float3 mYN = SampleTerrainStatics(input.GridLocal - float2(0.0, mStep));
+			[flatten] if (min(min(mXP.x, mXN.x), min(mYP.x, mYN.x)) > -50000.0)
+			{
+				float3 sheetN = normalize(float3(-((mXP.x + max(mXP.y, 0.0)) - (mXN.x + max(mXN.y, 0.0))) / (2.0 * mStep),
+					-((mYP.x + max(mYP.y, 0.0)) - (mYN.x + max(mYN.y, 0.0))) / (2.0 * mStep), 1.0));
+				normalWS = normalize(lerp(normalWS, sheetN, 0.5 * sheetMeet));
+			}
+		}
+	}
+	return normalWS;
+}
+#endif
+
 #if !defined(VOXEL)
 #if defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_STATICS_KEEP_HIDDEN)
 // Every lane of the quad lies behind the depth the private buffer started
@@ -4348,29 +4377,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the sheet's DRAWN surface (one-sided: everything at or under that surface
 	// holds the full weight, so no stripe can float over the junction). The
 	// sheet comes the other half (SnowShell.hlsl ShellObjectMeet).
-	float sheetMeet = 0.0;
 #	ifndef PATCH
-	[branch] if (pdMode && ObjectMeetBand > 0.0 && pixelDist < 2048.0 && groundData.x > -50000.0)
-	{
-		float sheetZ = SheetSurfaceZ(input.GridLocal);
-		float sheetGap = pixelAbsZ - sheetZ;
-		[branch] if (sheetZ > -50000.0 && sheetGap < ObjectMeetBand * 0.5)
-		{
-			sheetMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, sheetGap)) * smoothstep(0.35, 0.6, normalize(input.NormalWS).z) *
-			            (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
-			const float mStep = 4.0;
-			float3 mXP = SampleTerrainStatics(input.GridLocal + float2(mStep, 0.0));
-			float3 mXN = SampleTerrainStatics(input.GridLocal - float2(mStep, 0.0));
-			float3 mYP = SampleTerrainStatics(input.GridLocal + float2(0.0, mStep));
-			float3 mYN = SampleTerrainStatics(input.GridLocal - float2(0.0, mStep));
-			[flatten] if (min(min(mXP.x, mXN.x), min(mYP.x, mYN.x)) > -50000.0)
-			{
-				float3 sheetN = normalize(float3(-((mXP.x + max(mXP.y, 0.0)) - (mXN.x + max(mXN.y, 0.0))) / (2.0 * mStep),
-					-((mYP.x + max(mYP.y, 0.0)) - (mYN.x + max(mYN.y, 0.0))) / (2.0 * mStep), 1.0));
-				normalWS = normalize(lerp(normalWS, sheetN, 0.5 * sheetMeet));
-			}
-		}
-	}
+#	ifndef SNOW_STATICS_DEPTH_PREPASS
+	normalWS = DrapeSheetMeet(normalWS, input, pdMode, pixelDist, groundData, pixelAbsZ);
+#	endif
 #	endif
 
 	// Guaranteed snow floor in object trenches; the statics-skin mirror of
@@ -4506,7 +4516,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// slope (smooth normal) scales the drop, so at reach 0 nothing
 				// changes and a wall stays as the game painted it while the
 				// roof beside it fills in.
+#ifdef SNOW_STATICS_DEPTH_PREPASS
+				// The sheet-meet bend reaches the prepass only through
+				// steepKeep, and the cut is monotone in it: evaluate the cut at
+				// both ends of its range and bend only when they disagree.
+				const float npLo = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * (1.0 - SteepThin)) * 50.0 + 0.5);
+				const float npHi = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth) * 50.0 + 0.5);
+				const float kLo = (npLo - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
+				const float kHi = (npHi - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
+				const bool surelyKeep = npLo > 0.15 + 1e-4 && kLo >= 1e-4;
+				const bool surelyCut = !(npHi > 0.15 - 1e-4 && kHi >= -1e-4);
+				float steepKeep = surelyKeep ? 1.0 : 1.0 - SteepThin;
+				[branch] if (!surelyKeep && !surelyCut)
+				{
+					float3 bentN = DrapeSheetMeet(normalWS, input, pdMode, pixelDist, groundData, pixelAbsZ);
+					steepKeep = 1.0 - SteepThin * (1.0 - smoothstep(0.15, 0.5, bentN.z));
+				}
+#else
 				float steepKeep = 1.0 - SteepThin * (1.0 - smoothstep(0.15, 0.5, normalWS.z));
+#endif
 				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * steepKeep) * 50.0 + 0.5);
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
