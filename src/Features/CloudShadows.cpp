@@ -1,8 +1,8 @@
 #include "CloudShadows.h"
 
+#include "../I18n/I18n.h"
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
-#include "../I18n/I18n.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -173,6 +173,9 @@ void CloudShadows::SkyShaderHacks()
 		UINT sampleMask = 0xffffffff;
 
 		context->OMSetBlendState(cloudShadowBlendState, blendFactor, sampleMask);
+		// Make the engine re-apply its own targets and blend state on the next draw
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
+		globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_ALPHA_BLEND);
 
 		auto cubemapDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kCUBEMAP_REFLECTIONS];
 		context->PSSetShaderResources(17, 1, &cubemapDepth.depthSRV);
@@ -197,7 +200,9 @@ int CloudShadows::FindCloudLayer(RE::BSRenderPass* Pass)
 	if (!sky || !sky->clouds)
 		return -1;
 
-	for (int i = 0; i < kMaxCloudLayers; i++) {
+	// Slots past numLayers can still hold a previous weather's cloud geometry
+	const int layerCount = std::min(static_cast<int>(sky->clouds->numLayers), kMaxCloudLayers);
+	for (int i = 0; i < layerCount; i++) {
 		if (sky->clouds->clouds[i].get() == Pass->geometry)
 			return i;
 	}
@@ -234,6 +239,19 @@ void CloudShadows::ReflectionsPrepass()
 			return;
 
 		auto context = globals::d3d::context;
+
+		// No cloud layer draws, so nothing would overwrite the last weather's occlusion
+		auto clouds = globals::game::sky->clouds;
+		if (!clouds || clouds->numLayers == 0) {
+			if (!occlusionClearedWithoutClouds) {
+				float black[4] = { 0, 0, 0, 0 };
+				for (auto* rtv : cloudShadowLayerRTVs[kMaxCloudLayers - 1])
+					context->ClearRenderTargetView(rtv, black);
+				occlusionClearedWithoutClouds = true;
+			}
+		} else {
+			occlusionClearedWithoutClouds = false;
+		}
 
 		context->CopyResource(texCubemapCloudOccCopy->resource.get(), texCloudShadowLayers[kMaxCloudLayers - 1]->resource.get());
 
