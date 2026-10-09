@@ -2135,9 +2135,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
 	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
 	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
-	// Only road records write RT2 anything but its clear (SnowHeightCapture).
+	// Only road records write RT2 anything but its clear (SnowHeightCapture),
+	// so it is bound for the road draws alone (see the raster loop).
 	const bool roadRaster = capturedRoads > 0 || objectRoadGateOff;
-	context->OMSetRenderTargets(roadRaster ? 3 : 2, heightRTVs, nullptr);
+	context->OMSetRenderTargets(2, heightRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
@@ -2316,49 +2317,58 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	globals::profiler->BeginPass("SnowDeformation::Objects - Height Map");
 	SD_DrawBinds binds;
-	for (uint32_t ci = 0; ci < captureCount; ci++) {
-		const auto& cap = capturedStatics[ci];
-		auto* geometry = cap.geometry.get();
-		if (!geometry)
-			continue;
-		if (cap.lodBatch)
-			continue;
-		if (outsideWindow(geometry, halfExtent))
-			continue;
-		auto triShape = geometry->AsTriShape();
-		if (!triShape)
-			continue;
-		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-			continue;
-		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-		if (indexCount == 0)
-			continue;
+	// Non-road captures first, without RT2: they write its clear value, a
+	// no-op under MAX, and the MAX/MIN blends do not depend on draw order.
+	for (uint32_t rasterPass = 0; rasterPass < 2; rasterPass++) {
+		const bool roadPass = rasterPass == 1;
+		if (roadPass && roadRaster)
+			context->OMSetRenderTargets(3, heightRTVs, nullptr);
+		for (uint32_t ci = 0; ci < captureCount; ci++) {
+			const auto& cap = capturedStatics[ci];
+			if (cap.road != roadPass)
+				continue;
+			auto* geometry = cap.geometry.get();
+			if (!geometry)
+				continue;
+			if (cap.lodBatch)
+				continue;
+			if (outsideWindow(geometry, halfExtent))
+				continue;
+			auto triShape = geometry->AsTriShape();
+			if (!triShape)
+				continue;
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				continue;
+			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0)
+				continue;
 
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-			continue;
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+				continue;
 
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto layoutIt = staticsILCache.find(descKey);
-		if (layoutIt == staticsILCache.end() || !layoutIt->second)
-			continue;  // layouts are created by the skin pass; reuse only
-		binds.Layout(context, layoutIt->second.get());
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto layoutIt = staticsILCache.find(descKey);
+			if (layoutIt == staticsILCache.end() || !layoutIt->second)
+				continue;  // layouts are created by the skin pass; reuse only
+			binds.Layout(context, layoutIt->second.get());
 
-		UINT stride = uint32_t(descKey & 0xF) * 4;
-		if (stride == 0)
-			continue;
-		binds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
-		binds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
+			UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0)
+				continue;
+			binds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
+			binds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
 
-		binds.Smooth(context, captureSmoothSRVs[ci].get());
-		if (captureRecordsLive)
-			bindRasterRecord(ci);
-		else
-			staticsCB->Update(captureRecords[ci]);
+			binds.Smooth(context, captureSmoothSRVs[ci].get());
+			if (captureRecordsLive)
+				bindRasterRecord(ci);
+			else
+				staticsCB->Update(captureRecords[ci]);
 
-		context->DrawIndexed(indexCount, 0, 0);
+			context->DrawIndexed(indexCount, 0, 0);
+		}
 	}
 	globals::profiler->EndPass();
 
