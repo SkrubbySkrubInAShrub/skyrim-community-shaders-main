@@ -606,6 +606,7 @@ void LandscapeSeamsFix::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 
 	std::vector<QuadKey> keys;
 	keys.reserve(16);
+	std::vector<std::shared_ptr<Resources>> staleResources;
 	{
 		const std::unique_lock lock(mutex);
 
@@ -630,6 +631,8 @@ void LandscapeSeamsFix::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 			quad.grid = std::move(entry.quad.grid);
 			quad.geometry = entry.quad.geometry;
 			quad.pbr = entry.quad.pbr;
+			// Healed from the previous data, so they must not be bound until Rebuild replaces them.
+			staleResources.push_back(std::move(quad.resources));
 
 			keys.push_back(entry.key);
 		}
