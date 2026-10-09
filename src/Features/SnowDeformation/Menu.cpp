@@ -1292,7 +1292,7 @@ void SnowDeformation::DrawSettings()
 					auto drawHalf = [&](float a_v0, float a_v1) {
 						const ImVec2 topLeft = ImGui::GetCursorScreenPos();
 						ImGui::Image(contactViewSRV.get(), { box, box }, { 0.0f, a_v0 }, { 1.0f, a_v1 });
-						if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+						if (auto* player = globals::game::player) {
 							if (auto* root = player->Get3D(false)) {
 								auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
 								auto toY = [&](float a_wy) { return topLeft.y + ((center.y + viewHalf) - a_wy) * scale; };
@@ -1326,7 +1326,7 @@ void SnowDeformation::DrawSettings()
 					drawHalf(0.0f, 0.5f);
 					ImGui::SameLine();
 					drawHalf(0.5f, 1.0f);
-					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					if (auto* player = globals::game::player) {
 						if (auto* root = player->Get3D(false))
 							// Crop centre beside the live bound: the box is drawn from the
 							// crop, so a gap between these two is the only way the box can
@@ -1342,7 +1342,7 @@ void SnowDeformation::DrawSettings()
 					// Heights against the baked ground: what the carve's (contact - ground) / layer
 					// sees, in numbers. Red arms with hands 60 units up means the raster's Z
 					// or the ground sample is wrong, not the silhouette.
-					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					if (auto* player = globals::game::player) {
 						if (auto* root = player->Get3D(false)) {
 							const auto probe = ProbeShellData(player->GetPositionX(), player->GetPositionY());
 							WrapTextF("  ground at player (baked vertex): %.1f, layer %.1f | player Z %.1f (%.1f above ground)",
@@ -2030,7 +2030,7 @@ void SnowDeformation::DrawSettings()
 				auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 				const ShellProbe probe = ProbeShellData(eye.x, eye.y);
 				const char* worldspaceName = "none";
-				if (auto* tes = RE::TES::GetSingleton())
+				if (auto* tes = globals::game::tes)
 					if (auto* worldspace = tes->GetRuntimeData2().worldSpace)
 						worldspaceName = worldspace->GetFormEditorID();
 
@@ -2078,7 +2078,7 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttEmitterCat = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_cat_melt_emitter_tooltip"), "A stand-in heat source that answers to no spell at all. Kept for testing a mark on its own: when a school stops marking, this says whether the fault is in the detector or in the mark itself."));
 			if (ImGui::Button(T(TKEY("melt_emitter_drop"), "Drop Melt Emitter Here"))) {
-				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+				if (auto* player = globals::game::player) {
 					debugMeltEmitterPos = player->GetPosition();
 					debugMeltEmitterActive = true;
 				}
@@ -2250,7 +2250,7 @@ void SnowDeformation::DrawSettings()
 				const float fade = settings.AccumulationFadeDays > 0.01f ? 1.0f / (settings.AccumulationFadeDays * 24.0f) : 0.0f;
 				const float rate = growth - melt - fade;
 
-				auto* tes = RE::TES::GetSingleton();
+				auto* tes = globals::game::tes;
 				const bool indoors = tes && tes->interiorCell;
 
 				// The scale the shells are actually handed, not what the peak would
@@ -2282,7 +2282,7 @@ void SnowDeformation::DrawSettings()
 			}
 
 
-			if (auto* sky = RE::Sky::GetSingleton())
+			if (auto* sky = globals::game::sky)
 				WrapTextF("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
 					Util::Units::RadiansToDegrees(sky->windAngle));
 			ImGui::TreePop();

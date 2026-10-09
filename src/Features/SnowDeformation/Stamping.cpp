@@ -725,7 +725,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				return;
 			nearby.push_back({ a_d2, a_actor->formID });
 		};
-		if (auto player = RE::PlayerCharacter::GetSingleton())
+		if (auto player = globals::game::player)
 			consider(player, -1.0f);
 		if (const auto processLists = RE::ProcessLists::GetSingleton())
 			for (auto& handle : processLists->highActorHandles)
@@ -835,7 +835,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// elevated-surface behavior.
 		if (!isDead) {
 			float landZ = position.z;
-			if (const auto tesLand = RE::TES::GetSingleton()) {
+			if (const auto tesLand = globals::game::tes) {
 				ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 				tesLand->GetLandHeight(position, landZ);
 			}
@@ -854,7 +854,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// snow beneath its flight arc.
 		float groundZ = position.z;
 		if (isDead)
-			if (const auto tesGround = RE::TES::GetSingleton()) {
+			if (const auto tesGround = globals::game::tes) {
 				ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 				tesGround->GetLandHeight(position, groundZ);
 			}
@@ -1043,7 +1043,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (!stampStats.nearestValid || distSq < nearestDistSq) {
 				nearestDistSq = distSq;
 				float landZ = position.z;
-				if (const auto tesNear = RE::TES::GetSingleton()) {
+				if (const auto tesNear = globals::game::tes) {
 					ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 					tesNear->GetLandHeight(position, landZ);
 				}
@@ -1540,7 +1540,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 	};
 
-	if (auto player = RE::PlayerCharacter::GetSingleton()) {
+	if (auto player = globals::game::player) {
 		ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
 		addStampsCounted(player->GetHandle());
 	}
@@ -1572,8 +1572,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// hazards it found are revisited, and anchors update in place rather
 	// than being rebuilt. Hazards replay every frame from the cache because
 	// the emitter list is cleared per frame.
-	const auto tes = RE::TES::GetSingleton();
-	auto* playerRef = RE::PlayerCharacter::GetSingleton();
+	const auto tes = globals::game::tes;
+	auto* playerRef = globals::game::player;
 	// Hazards present means a wall or rune spell is live: those spawn a
 	// SERIES of hazard references as they spread, and a segment placed
 	// between scans is invisible until the next one - the wall's growing

@@ -390,7 +390,7 @@ namespace
 		auto [it, inserted] = ownershipCache.try_emplace(a_geometry, false);
 		if (!inserted)
 			return it->second;
-		auto* tes = RE::TES::GetSingleton();
+		auto* tes = globals::game::tes;
 		if (!tes)
 			return false;
 		const RE::NiPoint3 center = a_geometry->worldBound.center;
@@ -512,7 +512,7 @@ namespace
 			flags.all(Flag::kProjectedUV) ? 1 : 0, flags.all(Flag::kSnow) ? 1 : 0,
 			flags.all(Flag::kLODObjects) ? 1 : 0, flags.all(Flag::kHDLODObjects) ? 1 : 0,
 			flags.all(Flag::kLODLandscape) ? 1 : 0,
-			RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode,
+			globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode,
 			alpha && alpha->GetAlphaTesting() ? 1 : 0, alpha && alpha->GetAlphaBlending() ? 1 : 0,
 			refr && refr->GetBaseObject() ? refr->GetBaseObject()->GetFormID() : 0u,
 			texPath, a_outcome);
@@ -857,7 +857,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (preDecalMasksFrame != globals::state->frameCount &&
 		!(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) {
 		using DecalFlag = RE::BSShaderProperty::EShaderPropertyFlag;
-		const auto biasMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode;
+		const auto biasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 		if (biasMode != 0 || a_pass->shaderProperty->flags.any(DecalFlag::kDecal, DecalFlag::kDynamicDecal)) {
 			preDecalMasksFrame = globals::state->frameCount;
 			CapturePreDecalMasks();
@@ -896,7 +896,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		CaptureDecalOverlay(a_pass);
 	// A live rune's decal goes to the rune atlas.
 	if (!rec.bloodTex && settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) {
-		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
+		const bool decalMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
 		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
 		if (decalMode && CaptureRuneDraw(a_pass))
 			return;
@@ -905,7 +905,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		return;
 	if (rec.bloodTex) {
 		const bool poolQuad = NameFactsOf(a_pass->geometry).bloodPool;
-		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
+		const bool decalMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
 		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
 		if (decalMode || poolQuad) {
 			if (settings.BloodOnSnow) {
@@ -963,7 +963,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// viewport range, so at grazing views the mesh's own depth sits far
 	// nearer than the geometry; the skin has to draw through the same state
 	// (Windhelm paving, RenderDoc 2026-09-10).
-	const uint32_t depthBiasMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode;
+	const uint32_t depthBiasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
@@ -2763,7 +2763,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Only while the readout is on screen.
 	if (globals::state->frameCount - heightProbeShownFrame >= 3) {
 		probeValid = false;
-	} else if (auto probePlayer = RE::PlayerCharacter::GetSingleton()) {
+	} else if (auto probePlayer = globals::game::player) {
 		if (!probeStaging[0]) {
 			D3D11_TEXTURE2D_DESC sdesc{
 				.Width = 8,
@@ -6111,8 +6111,8 @@ void SnowDeformation::ServiceLandTriProbe()
 // radius) and then the sky cell. Slot i is one of those cells.
 void SnowDeformation::StartExclusionGather()
 {
-	auto* player = RE::PlayerCharacter::GetSingleton();
-	auto* tes = RE::TES::GetSingleton();
+	auto* player = globals::game::player;
+	auto* tes = globals::game::tes;
 	if (!player || !tes) {
 		exclusionGatherSlot = 0;
 		return;
@@ -6138,7 +6138,7 @@ void SnowDeformation::StepExclusionGather()
 {
 	if (exclusionGatherSlot == 0)
 		return;
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	if (!tes || (tes->interiorCell != nullptr) != exclusionGatherInterior) {
 		exclusionGatherSlot = 0;
 		return;
@@ -6178,7 +6178,7 @@ void SnowDeformation::StepExclusionGather()
 
 RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR* a_ref)
 {
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	// Collect past the CB cap: the nearest-first sort below
 	// picks the winners, so a far sconce can never evict a
 	// near door. 4x cap bounds the pathological case.

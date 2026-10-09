@@ -26,7 +26,7 @@ void SnowDeformation::TickAccumulation()
 	// interior weather snows, so a live reading would melt the exterior while
 	// the player sleeps. TES::interiorCell is the test the rest of CS uses; its
 	// few-frame lag through a load transition is immaterial at these rates.
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	if (!tes || !tes->interiorCell)
 		accumWeatherIntensity.store(std::clamp(snowfallIntensity, 0.0f, 1.0f), std::memory_order_relaxed);
 

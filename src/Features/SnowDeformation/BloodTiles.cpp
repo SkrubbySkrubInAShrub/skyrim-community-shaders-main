@@ -575,7 +575,7 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	// of units around the blood it is looking at, and tiles ranked by it
 	// changed hands as it turned.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-	if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+	if (auto* player = globals::game::player) {
 		const auto position = player->GetPosition();
 		eye.x = position.x;
 		eye.y = position.y;

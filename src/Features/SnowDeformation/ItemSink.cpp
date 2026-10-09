@@ -331,8 +331,8 @@ void SnowDeformation::ItemSinkUpdate()
 		return;
 	lastRenderFrame = globals::state->frameCount;
 	itemSinkFrame++;
-	auto* player = RE::PlayerCharacter::GetSingleton();
-	auto* tes = RE::TES::GetSingleton();
+	auto* player = globals::game::player;
+	auto* tes = globals::game::tes;
 	if (!player || !tes)
 		return;
 	const RE::NiPoint3 origin = player->GetPosition();

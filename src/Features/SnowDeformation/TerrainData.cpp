@@ -413,7 +413,7 @@ RE::BSTriShape* SnowDeformation::LandQuadGeometry(RE::TESObjectLAND::LoadedLandD
 
 void SnowDeformation::RefreshLandMeshHeights()
 {
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	auto* grid = tes ? tes->gridCells : nullptr;
 	if (!grid)
 		return;
@@ -741,7 +741,7 @@ SnowDeformation::ShellProbe SnowDeformation::ProbeShellData(float a_x, float a_y
 
 void SnowDeformation::UpdateActiveWorldspace()
 {
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
 	// Interiors keep the last exterior's state: a shop visit must not wipe the
 	// tracks outside its door.
@@ -1195,7 +1195,7 @@ void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	if (frame != landscapeRunFrame) {
 		CloseLandscapeRun();
-		const auto* player = RE::PlayerCharacter::GetSingleton();
+		const auto* player = globals::game::player;
 		if (!landscapeCensusLogged && landscapeRunsThisFrame > 0 && player && player->GetParentCell()) {
 			landscapeCensusRuns += landscapeRunsThisFrame;
 			landscapeCensusBatches += landscapeBatchesThisFrame;
@@ -1440,7 +1440,7 @@ bool SnowDeformation::CasterDiscMayCast() const
 
 bool SnowDeformation::LoadedCellSquare(int& a_minX, int& a_minY, int& a_maxX, int& a_maxY) const
 {
-	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* player = globals::game::player;
 	if (!player)
 		return false;
 	static const int uGrids = [] {
@@ -2075,7 +2075,7 @@ void SnowDeformation::ClampCameraAboveSnow()
 	// Not State::inWorld: that is a render-scope flag, true only inside the
 	// world pass, and the camera updates outside it.
 	auto* camera = RE::PlayerCamera::GetSingleton();
-	auto* player = RE::PlayerCharacter::GetSingleton();
+	auto* player = globals::game::player;
 	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !player || !player->Is3DLoaded())
 		return;
 	cameraProbeState = 4;

@@ -894,7 +894,7 @@ void SnowDeformation::TickGameClock()
 
 float SnowDeformation::ComputeSnowfallIntensity() const
 {
-	auto* sky = RE::Sky::GetSingleton();
+	auto* sky = globals::game::sky;
 	if (!sky)
 		return 0.0f;
 
@@ -982,7 +982,7 @@ void SnowDeformation::PrepassSimulation()
 
 	// Child worldspace = walled city (WhiterunWorld etc. parent Tamriel).
 	cityWorldspace = false;
-	if (auto* tes = RE::TES::GetSingleton())
+	if (auto* tes = globals::game::tes)
 		if (auto* worldSpace = tes->GetRuntimeData2().worldSpace)
 			cityWorldspace = worldSpace->parentWorld != nullptr;
 
@@ -1165,7 +1165,7 @@ void SnowDeformation::PrepassSimulation()
 	// Wind bias for the refill: the engine's live blended wind (derived from
 	// the weather records), so drifting accumulation tracks transitions.
 	perFrameData.WindBias = { 0.0f, 0.0f };
-	if (auto* sky = RE::Sky::GetSingleton()) {
+	if (auto* sky = globals::game::sky) {
 		float windStrength = std::clamp(sky->windSpeed, 0.0f, 1.0f);
 		perFrameData.WindBias = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
 	}
@@ -1257,7 +1257,7 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.ViewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
 	contactViewBoundRadius = 0.0f;
 	if (debugContactView) {
-		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+		if (auto* player = globals::game::player) {
 			if (auto* root = player->Get3D(false)) {
 				perFrameData.ViewCenter = { root->worldBound.center.x, root->worldBound.center.y };
 				// Held for the overlay: the box has to be the bound this crop was

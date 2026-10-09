@@ -506,7 +506,7 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	if (element == SpellElement::None)
 		return;
 
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	if (!tes)
 		return;
 
@@ -984,7 +984,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 {
 	if (spellEmitters.size() >= kSpellEmitterCeiling || !a_actor)
 		return;
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	if (!tes)
 		return;
 
@@ -1296,7 +1296,7 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 	                            std::max(settings.AtronachFireBurnSeconds, 0.0f) :
 	                            0.0f;
 
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	float groundZ = a_position.z;
 	if (tes)
 		tes->GetLandHeight(a_position, groundZ);
@@ -1508,7 +1508,7 @@ void SnowDeformation::GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_
 		}
 	};
 
-	if (auto* player = RE::PlayerCharacter::GetSingleton())
+	if (auto* player = globals::game::player)
 		consider(player->GetHandle());
 	if (auto* processLists = RE::ProcessLists::GetSingleton())
 		for (auto& handle : processLists->highActorHandles)
@@ -1587,7 +1587,7 @@ void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_
 			controller && (controller->context.currentState == RE::hkpCharacterStateType::kInAir ||
 							  controller->context.currentState == RE::hkpCharacterStateType::kFlying))
 			continue;
-		if (auto* tes = RE::TES::GetSingleton()) {
+		if (auto* tes = globals::game::tes) {
 			float landZ = position.z;
 			tes->GetLandHeight(position, landZ);
 			if (position.z - landZ > kDashGroundBand)
@@ -1874,7 +1874,7 @@ void SnowDeformation::GatherSpellEmitters()
 	}
 
 	auto* manager = RE::Projectile::Manager::GetSingleton();
-	auto* tes = RE::TES::GetSingleton();
+	auto* tes = globals::game::tes;
 	if (!manager || !tes) {
 		spellPrevPositions.clear();
 		return;

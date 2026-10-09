@@ -3008,7 +3008,7 @@ public:
 	/** @brief Interior cell: no landscape exists, so no ground shell and no trench can; object snow is unaffected. */
 	bool InInteriorCell() const
 	{
-		auto* tes = RE::TES::GetSingleton();
+		auto* tes = globals::game::tes;
 		return tes && tes->interiorCell;
 	}
 	/** @brief The reach the accumulated maps were built at; a change re-texels the grid, so the scroll cannot carry them and the window clears instead. */

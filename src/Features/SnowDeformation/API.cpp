@@ -35,7 +35,7 @@ float SnowDeformation::APISnowDepthAtRef(RE::TESObjectREFR* a_ref)
 	const RE::NiPoint3 position = a_ref->GetPosition();
 	// The stamps' elevated gate: a walkway, bridge or roof is not in the snow.
 	float landZ = position.z;
-	if (auto* tes = RE::TES::GetSingleton())
+	if (auto* tes = globals::game::tes)
 		tes->GetLandHeight(position, landZ);
 	if (position.z - landZ > kElevatedStampCutoff)
 		return 0.0f;
