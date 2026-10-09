@@ -4088,8 +4088,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// is no gap: the patch drapes that column by construction, flanks
 	// included. Where ownership cannot answer - beyond the raster window -
 	// it already answers "keep the skin", which is the far-field hand-off.
-	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && RoadOwnsColumn(worldXY))
-		discard;
+	// Nested: HLSL's && evaluates both sides.
+	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0)
+	{
+		[branch] if (RoadOwnsColumn(worldXY))
+			discard;
+	}
 
 	// Hand-off to the trench patch: trampled rounded pixels near the camera
 	// dissolve out so the patch's real carved geometry beneath shows
