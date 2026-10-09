@@ -60,15 +60,6 @@ namespace
 		return children.empty() ? nullptr : static_cast<RE::BSGeometry*>(children[0].get());
 	}
 
-	bool IsPbrLandGeometry(RE::BSGeometry* a_geometry)
-	{
-		auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
-		if (property == nullptr || property->GetRTTI() != globals::rtti::BSLightingShaderPropertyRTTI.get())
-			return false;
-		auto* lightingProperty = static_cast<RE::BSLightingShaderProperty*>(property);
-		return lightingProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kVertexLighting);
-	}
-
 	void ReadQuad(RE::TESObjectLAND* a_land, uint32_t a_quad, LandscapeSeamsFix::Quad& a_out)
 	{
 		const auto& data = *a_land->loadedData;
@@ -583,6 +574,8 @@ void LandscapeSeamsFix::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 	};
 	std::vector<LoadedQuad> loadedNow;
 	loadedNow.reserve(4);
+	// Asked directly: True PBR's own SetupMaterial detour may assign the PBR property only after this hook returns.
+	const bool pbr = globals::features::truePBR.IsPBRLand(a_land);
 
 	for (uint32_t quadIndex = 0; quadIndex < 4; ++quadIndex) {
 		auto* geometry = GetQuadGeometry(a_land, quadIndex);
@@ -598,7 +591,7 @@ void LandscapeSeamsFix::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land)
 		ReadQuad(a_land, quadIndex, entry.quad);
 		geometry->IncRefCount();
 		entry.quad.geometry = geometry;
-		entry.quad.pbr = IsPbrLandGeometry(geometry);
+		entry.quad.pbr = pbr;
 	}
 
 	if (loadedNow.empty())
