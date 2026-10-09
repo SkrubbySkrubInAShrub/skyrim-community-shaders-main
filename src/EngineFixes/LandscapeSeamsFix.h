@@ -21,9 +21,9 @@ struct LandscapeSeamsFix : EngineFix
 	static constexpr uint32_t GridVertices = GridSize * GridSize;
 	static constexpr uint32_t PerimeterVertices = 64;
 	static constexpr uint32_t EngineLayers = 6;
-	static constexpr uint32_t MaxExtraLayers = 4;
+	static constexpr uint32_t MaxExtraLayers = 2;
 	static constexpr uint32_t MaxLayers = EngineLayers + MaxExtraLayers;
-	static constexpr uint32_t TexturesPerExtra = 4;
+	static constexpr uint32_t TexturesPerExtra = 3;
 	static constexpr uint32_t FirstPSTexture = 104;
 	static constexpr uint32_t NumPSTextures = 2 + MaxExtraLayers * TexturesPerExtra;
 
@@ -57,12 +57,12 @@ struct LandscapeSeamsFix : EngineFix
 		float2 Origin;
 		uint32_t Flags;
 		uint32_t ExtraCount;
-		float4 IsSnow;
-		float4 SpecPower;
+		float2 IsSnow;
+		float2 SpecPower;
 		float4 PBRParams[MaxExtraLayers];
 		float4 GlintParams[MaxExtraLayers];
 	};
-	static_assert(sizeof(QuadData) == 176);
+	static_assert(sizeof(QuadData) == 96);
 
 	struct Resources
 	{
@@ -97,7 +97,7 @@ struct LandscapeSeamsFix : EngineFix
 	void Reset();
 	/** @brief True when this land quad geometry has blend resources and should draw with the seams permutation. */
 	bool IsBlended(RE::BSGeometry* a_geometry);
-	/** @brief Binds the quad's weights, quad data and borrowed textures to t104-t121. Render thread only, before the draw. */
+	/** @brief Binds the quad's weights, quad data and borrowed textures to t104-t111. Render thread only, before the draw. */
 	void Bind(RE::BSGeometry* a_geometry);
 	/** @brief Reads a newly set up land record's quads and rebuilds them and their neighbours. */
 	void TESObjectLAND_SetupMaterial(RE::TESObjectLAND* a_land);

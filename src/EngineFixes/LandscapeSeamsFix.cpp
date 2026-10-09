@@ -1,6 +1,5 @@
 #include "LandscapeSeamsFix.h"
 
-#include "Features/TerrainHelper.h"
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
@@ -13,9 +12,7 @@ namespace
 	constexpr uint32_t SeamsFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::LandscapeSeams);
 
 	constexpr uint32_t FlagPbr = 1u << 0;
-	constexpr uint32_t FlagDisplacement = 1u << 4;
 	constexpr uint32_t FlagGlint = 1u << 8;
-	constexpr uint32_t FlagParallax = 1u << 12;
 	constexpr uint32_t FlagValid = 1u << 31;
 
 	constexpr int GridMax = static_cast<int>(LandscapeSeamsFix::GridSize) - 1;
@@ -26,7 +23,6 @@ namespace
 
 	constexpr auto DiffuseTexture = static_cast<RE::BSTextureSet::Texture>(0);
 	constexpr auto NormalTexture = static_cast<RE::BSTextureSet::Texture>(1);
-	constexpr auto DisplacementTexture = static_cast<RE::BSTextureSet::Texture>(3);
 	constexpr auto RmaosTexture = static_cast<RE::BSTextureSet::Texture>(5);
 
 	RE::TESLandTexture* GetDefaultLandTexture()
@@ -364,7 +360,6 @@ std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources
 	auto resources = std::make_shared<Resources>();
 	const auto& defaults = globals::game::graphicsState->GetRuntimeData();
 	auto& truePBR = globals::features::truePBR;
-	auto& terrainHelper = globals::features::terrainHelper;
 
 	QuadData data{};
 	data.Origin = { static_cast<float>(a_healed.key.x) * QuadSize, static_cast<float>(a_healed.key.y) * QuadSize };
@@ -388,11 +383,8 @@ std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources
 		if (a_healed.pbr) {
 			if (const auto* pbrData = truePBR.GetPBRTextureSetData(textureSet)) {
 				textureSet->SetTexture(RmaosTexture, layer[2]);
-				textureSet->SetTexture(DisplacementTexture, layer[3]);
 
 				data.Flags |= FlagPbr << extra;
-				if (layer[3] != nullptr && layer[3] != defaults.defaultTextureBlack)
-					data.Flags |= FlagDisplacement << extra;
 				if (pbrData->glintParameters.enabled)
 					data.Flags |= FlagGlint << extra;
 				data.PBRParams[extra] = { pbrData->roughnessScale, pbrData->displacementScale, pbrData->specularLevel, 0.0f };
@@ -406,32 +398,9 @@ std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources
 					layer[2] = defaults.defaultTextureWhite;
 			}
 		} else {
-			const float isSnow = landTexture->shaderTextureIndex != 0 ? 1.0f : 0.0f;
-			const float specPower = static_cast<float>(static_cast<uint8_t>(landTexture->specularExponent));
-			switch (extra) {
-			case 0:
-				data.IsSnow.x = isSnow;
-				data.SpecPower.x = specPower;
-				break;
-			case 1:
-				data.IsSnow.y = isSnow;
-				data.SpecPower.y = specPower;
-				break;
-			case 2:
-				data.IsSnow.z = isSnow;
-				data.SpecPower.z = specPower;
-				break;
-			default:
-				data.IsSnow.w = isSnow;
-				data.SpecPower.w = specPower;
-				break;
-			}
-
-			if (terrainHelper.loaded && terrainHelper.enabled && textureSet->GetTexturePath(DisplacementTexture) != nullptr) {
-				textureSet->SetTexture(DisplacementTexture, layer[2]);
-				if (layer[2] != nullptr && layer[2] != defaults.defaultTextureNormalMap)
-					data.Flags |= FlagParallax << extra;
-			}
+			static_assert(MaxExtraLayers == 2, "IsSnow and SpecPower hold one component per borrowed layer");
+			(extra == 0 ? data.IsSnow.x : data.IsSnow.y) = landTexture->shaderTextureIndex != 0 ? 1.0f : 0.0f;
+			(extra == 0 ? data.SpecPower.x : data.SpecPower.y) = static_cast<float>(static_cast<uint8_t>(landTexture->specularExponent));
 		}
 
 		if (layer[0] == nullptr)
@@ -440,7 +409,7 @@ std::shared_ptr<LandscapeSeamsFix::Resources> LandscapeSeamsFix::CreateResources
 			layer[1] = defaults.defaultTextureNormalMap;
 	}
 
-	constexpr uint32_t sliceCount = 3;
+	constexpr uint32_t sliceCount = (MaxLayers + 3) / 4;
 	constexpr uint32_t sliceBytes = GridVertices * 4;
 	std::array<std::array<uint8_t, sliceBytes>, sliceCount> pixels{};
 	for (uint32_t layer = 0; layer < MaxLayers; ++layer) {
