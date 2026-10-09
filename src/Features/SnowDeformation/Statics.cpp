@@ -1102,32 +1102,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// far brighter than the shell (Josef, 2026-09-06). Coated whole at every
 	// loaded distance; the projection default below still applies.
 	const bool fullCoat = nameFacts.drift;
-	// Measured to the bound's nearest point, not the origin: a long wall or
-	// a building's shape can sit inside the range with its origin outside it.
-	const auto& translate = a_pass->geometry->world.translate;
-	const auto& rangeBound = a_pass->geometry->worldBound;
-	float dx = rangeBound.center.x - eye.x;
-	float dy = rangeBound.center.y - eye.y;
-	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter + std::max(rangeBound.radius, 0.0f);
-	if (!fadeExempt && !fullCoat && dx * dx + dy * dy > captureRange * captureRange) {
-		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: range cap despite family signal (fadeExempt did not fire)");
-		return;
-	}
-
-	// Object snow needs snow-capable ground near it, unless the object IS
-	// the snow (ice family, drifts) or carries projected snow, which takes
-	// the drape wherever it stands. Two cells of reach clipped to the
-	// loaded square; a still-baking cell counts as snow.
-	if (!fadeExempt && !fullCoat && !(flags.any(Flag::kProjectedUV) && !projectedGroundGate) && !GroundNearHasSnow(translate.x, translate.y)) {
-		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no snow ground within two loaded cells");
-		return;
-	}
-
-	// The same geometry renders through multiple passes; capture once.
-	if (!capturedStaticsSet.insert(a_pass->geometry).second)
-		return;
-	LogIceJourney(a_pass, rec.ice || driftJourney, fadeExempt ? "CAPTURED (fadeExempt)" : "CAPTURED (range-faded)");
-
 	// Road-mesh model class: deterministic NAME + texture-path match. The
 	// name check matters: road models are built from MULTIPLE trishapes
 	// ('RoadChunk...:0', ':2'), and only some wear road textures; matching
@@ -1156,6 +1130,33 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		road = false;
 		roadVia = "city";
 	}
+
+	// Measured to the bound's nearest point, not the origin: a long wall or
+	// a building's shape can sit inside the range with its origin outside it.
+	const auto& translate = a_pass->geometry->world.translate;
+	const auto& rangeBound = a_pass->geometry->worldBound;
+	float dx = rangeBound.center.x - eye.x;
+	float dy = rangeBound.center.y - eye.y;
+	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter + std::max(rangeBound.radius, 0.0f);
+	// Road skins belong to the ground: no Object Snow range cap, no distance dissolve.
+	if (!fadeExempt && !fullCoat && !road && dx * dx + dy * dy > captureRange * captureRange) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: range cap despite family signal (fadeExempt did not fire)");
+		return;
+	}
+
+	// Object snow needs snow-capable ground near it, unless the object IS
+	// the snow (ice family, drifts) or carries projected snow, which takes
+	// the drape wherever it stands. Two cells of reach clipped to the
+	// loaded square; a still-baking cell counts as snow.
+	if (!fadeExempt && !fullCoat && !(flags.any(Flag::kProjectedUV) && !projectedGroundGate) && !GroundNearHasSnow(translate.x, translate.y)) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no snow ground within two loaded cells");
+		return;
+	}
+
+	// The same geometry renders through multiple passes; capture once.
+	if (!capturedStaticsSet.insert(a_pass->geometry).second)
+		return;
+	LogIceJourney(a_pass, rec.ice || driftJourney, fadeExempt ? "CAPTURED (fadeExempt)" : "CAPTURED (range-faded)");
 
 	// Capture log, one line per unique geometry name: classification plus the
 	// diffuse. Began as the road-class log; widened to EVERY capture because
@@ -1236,7 +1237,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed;
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow });
 	capturedRoads += road ? 1u : 0u;
 	capturedLoaded += lodBatch ? 0u : 1u;
 }
