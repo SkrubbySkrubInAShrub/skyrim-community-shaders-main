@@ -289,7 +289,7 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 	return { { "shellKill", shellKillMask }, { "shellSplitTiming", shellSplitTiming }, { "shellPrepass", !shellDepthPrepassDisabled },
 		{ "shellBake", !shellVertexBakeDisabled }, { "shellStats", shellPipelineStatsEnabled }, { "shellVisibleCull", shellVisibleCull }, { "shellPrepassLastFrame", shellPrepassLastFrame }, { "shellMainCullAll", shellMainCullAll },
 		{ "tessellation", settings.Tessellation },
-		{ "coneSkip", !coneSkipDisabled }, { "conePasses", { { "coarse", conePassesCoarse }, { "fine", conePassesFine } } },
+		{ "coneSkip", !coneSkipDisabled }, { "conePasses", { { "coarse", conePassesCoarse } } },
 		{ "shadowAtlasLive", !shadowAtlasLiveReadOff }, { "shadowAtlasCopyActive", shadowAtlasLiveReadOff && shadowCopyWantedFrames > 0 }, { "shadowAtlasCopyHeld", shadowAtlasCopyTex != nullptr },
 		{ "pointShadowLive", !pointShadowLiveReadOff }, { "pointShadowCopyHeld", pointShadowAtlasCopyTex != nullptr },
 		{ "casterFullGrid", shellCasterFullGrid }, { "casterIndices", shellGridCasterIndexCount }, { "hullTrust", !shellHullTrustOff }, { "gatherEveryScroll", exclusionGatherEveryScroll }, { "exclusionCount", statExclusionCount }, { "exclusionWalk", { { "slot", exclusionGatherSlot }, { "slots", exclusionGatherSlots } } }, { "hiZCopyPath", hiZCopyPath }, { "patchSplit", shellPatchSplit }, { "patchSplitActive", shellPatchSplitThisFrame }, { "patchCounts", { { "flat", shellPatchFlatCount }, { "tessellated", shellPatchTessCount } } },

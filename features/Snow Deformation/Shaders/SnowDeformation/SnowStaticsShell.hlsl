@@ -731,10 +731,9 @@ Texture2D<float> ObjectTopRaw : register(t11);
 // Cone-transformed snow surface over the same window: the angle of repose
 // already applied, so the edge taper is one read instead of a ring walk.
 Texture2D<float> ObjectSnowCone : register(t13);
-// Near clipmap level 0: the same top raster and cone over a quarter-width
-// window, one world unit per texel. Shares HeightWindowCenter; the reach is
+// Near clipmap level 0: the same top raster over a quarter-width window, one
+// world unit per texel. Shares HeightWindowCenter; the reach is
 // FineHalfExtent (0 = the level is off and every read below stays coarse).
-Texture2D<float> ObjectSnowConeFine : register(t33);
 Texture2D<float> ObjectTopFine : register(t34);
 // Far road level: the road captures alone, rasterized over the loaded-cell
 // square into one top map, with its own window (FarWindowCenterX/Y,
@@ -783,21 +782,6 @@ float2 FineTexel(float2 worldXY, float2 dims)
 	float2 local = (worldXY - HeightWindowCenter) / FineHalfExtent;
 	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
 	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-}
-
-// How much of the fine level a point may take: 1 well inside it, ramping to 0
-// at its border so a reader crossing the boundary sees no step. The band is
-// an eighth of the window, so it scales with the level rather than pinning a
-// world width that would swallow a narrow one.
-float FineWeight(float2 worldXY)
-{
-	float result = 0.0;
-	[branch] if (FineHalfExtent > 0.0)
-	{
-		float2 d = abs(worldXY - HeightWindowCenter);
-		result = 1.0 - smoothstep(FineHalfExtent * 0.875, FineHalfExtent, max(d.x, d.y));
-	}
-	return result;
 }
 
 // The fine top, MAX of four like PatchTop; the empty sentinel where the fine
@@ -910,34 +894,13 @@ float PatchTop(float2 worldXY)
 }
 
 // Snow DEPTH the repose field allows above the local surface, bilinear over
-// the window. Outside it there is no data, so nothing is limited.
+// the window. Outside it there is no data, so nothing is limited. Coarse
+// level only: roads seed it per texel, and only road readers remain.
 float ObjectConeDepth(float2 worldXY)
 {
 	float2 windowLocal = abs(worldXY - HeightWindowCenter);
 	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
 		return 1000000.0;
-
-	// The cone is a SMOOTHED field, so its coarse and fine answers genuinely
-	// differ - a hard switch would draw the fine window's border across the
-	// snow. Blended over the window's outer eighth instead. Both are real here:
-	// the fine window is contained in the coarse one, so neither read can be
-	// the out-of-window sentinel.
-	float fineW = FineWeight(worldXY);
-	float fineCone = 0.0;
-	[branch] if (fineW > 0.0)
-	{
-		float2 fineDims;
-		ObjectSnowConeFine.GetDimensions(fineDims.x, fineDims.y);
-		float2 ft = FineTexel(worldXY, fineDims);
-		int2 f0 = (int2)ft;
-		float2 ff = ft - f0;
-		int2 f1 = min(f0 + 1, int2(fineDims) - 1);
-		float g00 = ObjectSnowConeFine.Load(int3(f0.x, f0.y, 0));
-		float g10 = ObjectSnowConeFine.Load(int3(f1.x, f0.y, 0));
-		float g01 = ObjectSnowConeFine.Load(int3(f0.x, f1.y, 0));
-		float g11 = ObjectSnowConeFine.Load(int3(f1.x, f1.y, 0));
-		fineCone = lerp(lerp(g00, g10, ff.x), lerp(g01, g11, ff.x), ff.y);
-	}
 
 	float2 dims;
 	ObjectSnowCone.GetDimensions(dims.x, dims.y);
@@ -949,8 +912,7 @@ float ObjectConeDepth(float2 worldXY)
 	float s10 = ObjectSnowCone.Load(int3(t1.x, t0.y, 0));
 	float s01 = ObjectSnowCone.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone.Load(int3(t1.x, t1.y, 0));
-	float coarse = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	return lerp(coarse, fineCone, fineW);
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 // P3: baked sky openness, bilinear (the map is half the raster's resolution;

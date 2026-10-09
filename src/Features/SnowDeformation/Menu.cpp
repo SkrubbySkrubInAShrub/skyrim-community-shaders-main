@@ -2170,10 +2170,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("cone_skip_disabled"), "Run Every Cone Pass (A/B)"), &coneSkipDisabled);
 			if (auto _ttConeSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("cone_skip_disabled_tooltip"), "Measurement aid: the object snow's slope passes spread snow down edges in steps of 64 down to 1 texel, and a step longer than the deepest snow divided by the slope cannot change anything. Normally those passes are skipped; tick to run all of them and A/B. Same result either way."));
-			WrapTextDisabledF("Cone passes run this frame: coarse %u, fine %u of 8", conePassesCoarse, conePassesFine);
+			WrapTextDisabledF("Cone passes run this frame: %u of 8", conePassesCoarse);
 			ImGui::Checkbox(T(TKEY("object_road_gate_off"), "Build Road Maps Every Frame (A/B)"), &objectRoadGateOff);
 			if (auto _ttRoadGate = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_road_gate_off_tooltip"), "A/B: the snow slopes, the near detail level and the sky openness field are read only by roads, the trench patch, the debug views and Volume Snow, so with no road captured (and Volume Snow off) they are not built. Tick to build them every frame again. Same image either way; the Objects - Snow Slopes, Snow Slopes Fine, Height Map Fine and Sky Openness rows are the difference."));
+				ImGui::Text("%s", T(TKEY("object_road_gate_off_tooltip"), "A/B: the snow slopes, the near detail level and the sky openness field are read only by roads, the trench patch, the debug views and Volume Snow, so with no road captured (and Volume Snow off) they are not built. Tick to build them every frame again. Same image either way; the Objects - Snow Slopes, Height Map Fine and Sky Openness rows are the difference."));
 			WrapTextDisabledF("Roads captured this frame: %u", capturedRoads);
 			ImGui::Checkbox(T(TKEY("patch_frustum_cull_off"), "Disable Trench Patch View Cull (A/B)"), &patchFrustumCullOff);
 			if (auto _ttPatchCull = Util::HoverTooltipWrapper())
@@ -2186,7 +2186,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("skin_cull_hiz_full_texture_tooltip"), "A/B: the occlusion cull's far-depth pyramid normally covers only the rectangle the frame was rendered into. Tick to build it over the whole screen-sized depth again. The cull only ever skips what could not have drawn, so the image is the same either way; the Objects - Occlusion Cull row is the difference."));
 			ImGui::Checkbox(T(TKEY("statics_fine_level_disabled"), "Disable Near Detail Level"), &fineLevelDisabled);
 			if (auto _ttFineLevel = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("statics_fine_level_disabled_tooltip"), "The object height raster the skin's shape is read from covers 4096 units around the camera in 2048 texels, so one texel is 4 world units and no snow shape finer than that can exist. The near level rasterises the same objects a second time over 1024 units, where a texel is 1 unit, and the skin reads it wherever it reaches, fading back to the coarse map at the border. Tick to switch it off and A/B the shape. Cost is the ObjectHeightMapFine pass plus one cone chain."));
+				ImGui::Text("%s", T(TKEY("statics_fine_level_disabled_tooltip"), "The object height raster the skin's shape is read from covers 4096 units around the camera in 2048 texels, so one texel is 4 world units and no snow shape finer than that can exist. The near level rasterises the same objects a second time over 1024 units, where a texel is 1 unit, and the skin reads it wherever it reaches, fading back to the coarse map at the border. Tick to switch it off and A/B the shape. Cost is the ObjectHeightMapFine pass."));
 
 			ImGui::Checkbox(T(TKEY("statics_record_disabled"), "Disable Per-Draw Constant Offsets (D3D11.1)"), &staticsRecordDisabled);
 			if (auto _ttRecord = Util::HoverTooltipWrapper())

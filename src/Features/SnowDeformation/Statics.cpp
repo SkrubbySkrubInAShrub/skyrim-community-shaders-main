@@ -1795,10 +1795,9 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop2Raw[0] = makeHeightTexture("SnowDeformation::HeightTop2Raw0");
 	heightTop2Raw[1] = makeHeightTexture("SnowDeformation::HeightTop2Raw1");
 	// Near clipmap level 0: same grid, quarter reach, so one texel is one
-	// world unit. Two textures, not six - no ghost pair, and the cone chain
-	// borrows heightScratch (the passes are sequential and same-sized).
+	// world unit. The top alone: no ghost pair, and no cone (roads read the
+	// coarse one).
 	heightTopRawFine = makeHeightTexture("SnowDeformation::HeightTopRawFine");
-	objectSnowConeFine = makeHeightTexture("SnowDeformation::ObjectSnowConeFine");
 	// Far road level: the road captures alone over the loaded-cell square.
 	// Same grid, so a texel is 12 units at uGridsToLoad 5 and 16 at 7.
 	heightTopRawFar = makeHeightTexture("SnowDeformation::HeightTopRawFar");
@@ -1940,7 +1939,7 @@ void SnowDeformation::SkipObjectHeightMap()
 	static constexpr const char* kRows[] = {
 		"SnowDeformation::Objects - Height Map", "SnowDeformation::Objects - Height Ghost", "SnowDeformation::Objects - Height Map Fine",
 		"SnowDeformation::Objects - Height Map Roads", "SnowDeformation::Objects - Height Peel", "SnowDeformation::Objects - Peel Ghost",
-		"SnowDeformation::Objects - Shelter Mask", "SnowDeformation::Objects - Snow Slopes", "SnowDeformation::Objects - Snow Slopes Fine",
+		"SnowDeformation::Objects - Shelter Mask", "SnowDeformation::Objects - Snow Slopes",
 		"SnowDeformation::Objects - Sky Openness", "SnowDeformation::Ground - Far Clearings"
 	};
 	for (const char* row : kRows)
@@ -2149,7 +2148,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Three blocks per capture: the coarse raster, the peel, and the near
 	// clipmap's raster (the same draw against a quarter-width window).
 	const bool roadMaps = RoadMapsWanted();
-	const bool fineLevel = roadMaps && FineLevelOn() && heightTopRawFine && objectSnowConeFine;
+	const bool fineLevel = roadMaps && FineLevelOn() && heightTopRawFine;
 	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
 	// Far road level: the road captures alone against the loaded-cell square,
 	// one block each, appended after the per-capture blocks. The window snaps
@@ -2646,10 +2645,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ObjectSnowDepth = 0.1f;
 	heightProcessCB->Update(processData);
 	conePassesCoarse = 0;
-	conePassesFine = 0;
 	if (!roadMaps) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes Fine");
 	} else if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
 		globals::profiler->BeginPass("SnowDeformation::Objects - Snow Slopes");
 		const auto coarseSteps = activeConeSteps(processData, std::max(maxSeedDepth, processData.ObjectSnowDepth));
@@ -2716,45 +2713,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		};
 		repose(objectSnowCone, coarseSeed, processData, coarseSteps);
 		globals::profiler->EndPass();
-
-		// The same seed + repose chain over the near clipmap's top, at one
-		// unit per texel. Two inputs differ from the coarse chain: InB (the
-		// per-texel skin-depth raster) is unbound, so the seed is the class
-		// constant - roads seed per texel on the coarse level only, and the
-		// patch reads that one; and InC (the next peeled layer, for the rise
-		// rim's "does our plane continue under the cover" test) is the fine
-		// top itself, which makes every upward break a plane boundary. That
-		// is what a detail level wants: a rock's own steps rim.
-		if (fineLevel) {
-			globals::profiler->BeginPass("SnowDeformation::Objects - Snow Slopes Fine");
-			HeightProcessCB fineData = processData;
-			fineData.HeightHalfExtent = FineRasterHalfExtent();
-			fineData.ConeStep = 1;
-			// InB is unbound here, so the seed is the constant alone.
-			const auto fineSteps = activeConeSteps(fineData, fineData.ObjectSnowDepth);
-			conePassesFine = uint32_t(fineSteps.size());
-			Texture2D* fineSeed = (fineSteps.size() % 2) ? heightScratch : objectSnowConeFine;
-			heightProcessCB->Update(fineData);
-			context->CSSetShader(objectConeSeedCS, nullptr, 0);
-			ID3D11ShaderResourceView* fineSeedSRVs[2] = { heightTopRawFine->srv.get(), nullptr };
-			ID3D11ShaderResourceView* fineNextSRV = heightTopRawFine->srv.get();
-			ID3D11UnorderedAccessView* fineSeedUAV = fineSeed->uav.get();
-			context->CSSetShaderResources(0, 2, fineSeedSRVs);
-			context->CSSetShaderResources(3, 1, &fineNextSRV);
-			context->CSSetUnorderedAccessViews(0, 1, &fineSeedUAV, nullptr);
-			context->Dispatch(dispatchDim, dispatchDim, 1);
-			ID3D11ShaderResourceView* nullFineSeedSRVs[2] = { nullptr, nullptr };
-			context->CSSetShaderResources(0, 2, nullFineSeedSRVs);
-			context->CSSetShaderResources(3, 1, nullCsSRVs);
-			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-
-			repose(objectSnowConeFine, fineSeed, fineData, fineSteps);
-			// The coarse chain's constants are what every later pass expects.
-			heightProcessCB->Update(processData);
-			globals::profiler->EndPass();
-		} else {
-			globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Snow Slopes Fine");
-		}
 	}
 
 	// This run's field, for the next run's volume.
@@ -2873,7 +2831,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
-	a_scb.FineHalfExtent = (FineLevelOn() && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
+	a_scb.FineHalfExtent = (FineLevelOn() && heightTopRawFine) ? FineRasterHalfExtent() : 0.0f;
 	// Far road level (t40, bound by the skin pass): the road skin's
 	// RoadOwnsColumn steps aside on far roads through it.
 	a_scb.FarWindowCenterX = farWindowCenter.x;
@@ -3494,17 +3452,13 @@ void SnowDeformation::DrawCapturedStatics()
 	// Land-exact layer (t52): the drape finds the landscape sheet's drawn surface with it.
 	ID3D11ShaderResourceView* landFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->PSSetShaderResources(52, 1, &landFineSRV);
-	// Near clipmap (t33 cone, t34 top): the same two maps at one unit per
-	// texel over the inner window. Every reader that takes them falls back to
-	// t13/t11 outside it, so a null bind here is simply the coarse behaviour.
-	ID3D11ShaderResourceView* fineSRVs[2] = {
-		(FineLevelOn() && objectSnowConeFine && objectSnowConeFine->srv) ? objectSnowConeFine->srv.get() : nullptr,
-		(FineLevelOn() && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr
-	};
-	context->VSSetShaderResources(33, 2, fineSRVs);
-	context->DSSetShaderResources(33, 2, fineSRVs);
-	context->PSSetShaderResources(33, 2, fineSRVs);
-	context->HSSetShaderResources(33, 2, fineSRVs);
+	// Near clipmap top (t34): the top raster at one unit per texel over the
+	// inner window. Every reader falls back to t11 outside it, so a null bind
+	// here is simply the coarse behaviour.
+	ID3D11ShaderResourceView* fineTopSRV = (FineLevelOn() && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr;
+	context->VSSetShaderResources(34, 1, &fineTopSRV);
+	context->DSSetShaderResources(34, 1, &fineTopSRV);
+	context->PSSetShaderResources(34, 1, &fineTopSRV);
 	// Far road level (t40): PatchTop's fallback past the coarse window. Null
 	// when the level is off; FarHalfExtent is 0 then, so nothing reads it.
 	ID3D11ShaderResourceView* farTopSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;

@@ -3059,9 +3059,8 @@ public:
 	Texture2D* objectSkyOpen = nullptr;
 	/** @brief Per 8x8 tile of the layer-1 raw maps, 1 where no texel holds both a top and a bottom: the layer-1 merge writes it (u3), the shelter mask skips tiles whose 5x5 block is all 1 (t4). */
 	Texture2D* heightTileEmpty = nullptr;
-	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside FineRasterHalfExtent(). */
+	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside FineRasterHalfExtent(). */
 	Texture2D* heightTopRawFine = nullptr;
-	Texture2D* objectSnowConeFine = nullptr;
 	/** @brief Far road level (t40): the road captures alone, MAX-rasterized over the loaded-cell square every frame. Single, no ghost - roads never move, and an off-screen road needs no patch. Window in farWindowCenter / farHalfExtentLive (0 = off this frame). */
 	Texture2D* heightTopRawFar = nullptr;
 	float2 farWindowCenter = { 0, 0 };
@@ -3071,10 +3070,9 @@ public:
 	bool fineLevelDisabled = false;
 	/** @brief Measurement, runtime-only: run every cone pass, including the ones the seed bound proves are no-ops. */
 	bool coneSkipDisabled = false;
-	/** @brief Cone passes the coarse / fine chains ran this frame (of kConeSteps). */
+	/** @brief Cone passes the chain ran this frame (of kConeSteps). */
 	uint32_t conePassesCoarse = 0;
-	uint32_t conePassesFine = 0;
-	/** @brief A/B, runtime-only: build the height chain's road-only outputs (both cone chains, the near level, sky openness) and the road heightfield channel every frame, as before the road gate. */
+	/** @brief A/B, runtime-only: build the height chain's road-only outputs (the cone chain, the near level, sky openness) and the road heightfield channel every frame, as before the road gate. */
 	bool objectRoadGateOff = false;
 	/** @brief Only road skins, the trench patch, the march's road taps and the debug views read the cones and the near level: true when one of them can this frame. */
 	bool RoadMapsWanted() const;
