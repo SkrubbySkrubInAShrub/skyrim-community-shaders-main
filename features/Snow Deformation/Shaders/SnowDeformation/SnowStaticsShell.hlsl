@@ -2352,6 +2352,9 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 3> patch)
 [outputtopology("triangle_cw")]
 [outputcontrolpoints(3)]
 [patchconstantfunc("PatchConstants")]
+// EdgeTessFactor clamps to 16. Without it fxc instances the fork phase per
+// edge and bakes edge 0's vertex reads into all three (CODE-NOTES).
+[maxtessfactor(16.0)]
 TessControlPoint main(InputPatch<TessControlPoint, 3> patch, uint i : SV_OutputControlPointID)
 {
 	return patch[i];
