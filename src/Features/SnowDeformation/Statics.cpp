@@ -2731,7 +2731,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Height-field probe (Debugging Options): the seven object maps read
 	// back at the player's texel. Copy this frame, map LAST frame's copy
 	// with DO_NOT_WAIT, so the readout is one frame old and never stalls.
-	if (auto probePlayer = RE::PlayerCharacter::GetSingleton()) {
+	// Only while the readout is on screen.
+	if (globals::state->frameCount - heightProbeShownFrame >= 3) {
+		probeValid = false;
+	} else if (auto probePlayer = RE::PlayerCharacter::GetSingleton()) {
 		if (!probeStaging[0]) {
 			D3D11_TEXTURE2D_DESC sdesc{
 				.Width = 8,
