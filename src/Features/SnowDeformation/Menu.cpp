@@ -556,7 +556,11 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			trenchRangeDirty = true;
 		if (auto _ttRt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches. NOT a performance setting: cost follows Deformation Map Resolution, not range. Texel detail is range divided by resolution, so a smaller range at the same resolution means sharper footprints over a shorter reach."));
+			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius: you carve anywhere inside it, NPCs out to NPC Trenches. Applying a change CLEARS existing trenches. NOT a GPU setting: GPU cost follows Deformation Map Resolution, not range. Texel detail is range divided by resolution, so a smaller range at the same resolution means sharper footprints over a shorter reach."));
+
+		ImGui::SliderFloat(T(TKEY("range_actor_trenches"), "NPC Trenches"), &settings.RangeActorTrenchesM, 10.0f, 200.0f, "%.0f m");
+		if (auto _ttRat = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_actor_trenches_tooltip"), "How far from the camera NPCs, creatures and corpses still carve trenches. Past it they leave no prints, and the work of following their bodies is skipped. You always carve. It never reaches past the Trenches range. Lower saves CPU time where many people or animals are on the move. Applies live."));
 
 		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
 		if (auto _ttRk = Util::HoverTooltipWrapper())

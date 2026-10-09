@@ -673,6 +673,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	const uint actorCeiling = kMaxStamps - kSpellStampReserve;
 	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
+	// NPCs past the actor trench range neither stamp nor take a raster slot; the player always carves.
+	auto* const playerActor = globals::game::player;
+	const float windowReach = 0.5f * deformWorldSize;
+	const float actorReach = std::min(windowReach, std::max(settings.RangeActorTrenchesM, 0.0f) * kUnitsPerMeter);
+	const float actorReachSq = actorReach * actorReach;
 	std::unordered_map<uint64_t, float2> currentPositions;
 	// Refs the stamp budget cut short; their anchors carry to the next frame.
 	std::unordered_set<uint32_t> budgetCutRefs;
@@ -713,7 +718,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		static std::vector<Nearby> nearby;
 		nearby.clear();
 		auto consider = [&](RE::Actor* a_actor, float a_d2) {
-			if (!a_actor || a_actor->IsDead() || !a_actor->Is3DLoaded())
+			if (!a_actor || a_d2 > actorReachSq || a_actor->IsDead() || !a_actor->Is3DLoaded())
 				return;
 			auto* root = a_actor->Get3D(false);
 			if (!root)
@@ -744,8 +749,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!actor || !actor->Is3DLoaded())
 			return;
 		auto position = actor->GetPosition();
-		// Cull to the deformation window.
-		if (cameraPosition.GetSquaredDistance(position) > 0.25f * deformWorldSize * deformWorldSize)
+		// Cull to the deformation window, NPCs to the actor trench range.
+		const float reach = actor.get() == playerActor ? windowReach : actorReach;
+		if (cameraPosition.GetSquaredDistance(position) > reach * reach)
 			return;
 		auto root = actor->Get3D(false);
 		if (!root)

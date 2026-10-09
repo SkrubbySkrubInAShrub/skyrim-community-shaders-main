@@ -156,6 +156,7 @@
 	X(BloodSpreadSeconds) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
+	X(RangeActorTrenchesM) \
 	X(RangeSkinsM) \
 	X(SkinDepthBias) \
 	X(SkinSlopeDepthBias) \

@@ -642,6 +642,8 @@ public:
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 200.0f;
+		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
+		float RangeActorTrenchesM = 200.0f;
 		float RangeSkinsM = 750.0f;
 		/** @brief Reach (m) of the object height window - the radius inside which the skin has rim, cornice and shelter data at all. Outside it ObjectConeDepth and PatchTop return their sentinels and the skin is a uniform coat over the whole mesh, which is the coarse look. The window is a fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near clipmap stays a quarter of it, so the near field coarsens by the same factor. */
 		float ObjectRasterReachM = 100.0f;
