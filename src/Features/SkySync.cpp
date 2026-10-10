@@ -74,7 +74,7 @@ void SkySync::DrawSettings()
 
 	ImGui::SliderFloat(T(TKEY("shadow_transition_duration"), "Shadow Transition Duration"), &settings.ShadowTransitionDuration, 0.0f, 500.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("shadow_transition_duration_tooltip"), "How long (in game-time units) the shadow direction takes to fade between sources. 100 = ~5 seconds at timescale 20."));
+		ImGui::Text("%s", T(TKEY("shadow_transition_duration_tooltip"), "How long (in game-time units) the shadow direction takes to fade between sources. 300 = ~15 seconds at timescale 20."));
 	}
 
 	ImGui::Checkbox(T(TKEY("dim_sunlight_under_horizon"), "Dim Sunlight Under Horizon"), &settings.DimSunlightUnderHorizon);
@@ -90,7 +90,7 @@ void SkySync::DrawSettings()
 	if (settings.DimSunlightUnderHorizon || settings.DimVolumetricLighting) {
 		ImGui::SliderFloat(T(TKEY("horizon_fade_duration"), "Horizon Fade Duration"), &settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours, "%.1f h", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::TextUnformatted(T(TKEY("horizon_fade_duration_tooltip"), "How long (in game hours) the dim eases out after sunset and back in before sunrise."));
+			ImGui::TextUnformatted(T(TKEY("horizon_fade_duration_tooltip"), "How long (in game hours) moonlight takes to fade in once a moon casts shadows, and to fade out before sunrise."));
 		}
 	}
 
@@ -132,7 +132,7 @@ void SkySync::DrawSettings()
 
 		ImGui::Text("Shadow target: %s", CasterNames[static_cast<int>(shadowFader.target)]);
 		ImGui::Text("Shadow dir:    (%.2f, %.2f, %.2f)", shadowFader.currentDir.x, shadowFader.currentDir.y, shadowFader.currentDir.z);
-		ImGui::Text("VL intensity factor: %.3f", shadowFader.vlIntensityFactor);
+		ImGui::Text("Transition intensity factor: %.3f", shadowFader.intensityFactor);
 		if (shadowFader.transitioning) {
 			const float t = settings.ShadowTransitionDuration > 0.0f ? shadowFader.fadeTimer / settings.ShadowTransitionDuration : 1.0f;
 			ImGui::ProgressBar(t, { -1.0f, 0.0f }, "");
@@ -218,19 +218,17 @@ void SkySync::OnSkyUpdateColors(RE::Sky* sky)
 	if (!settings.Enabled || !sky)
 		return;
 
-	if (settings.DimSunlightUnderHorizon && currentDim > 0.0f && currentDim < 1.0f) {
+	const float transitionFactor = shadowFader.intensityFactor;
+	const float dirLightFactor = settings.DimSunlightUnderHorizon ? transitionFactor * currentDim : transitionFactor;
+	if (dirLightFactor < 1.0f) {
 		auto& dirLight = sky->skyColor[static_cast<uint>(RE::TESWeather::ColorTypes::kSunlight)];
-		dirLight.red *= currentDim;
-		dirLight.green *= currentDim;
-		dirLight.blue *= currentDim;
+		dirLight.red *= dirLightFactor;
+		dirLight.green *= dirLightFactor;
+		dirLight.blue *= dirLightFactor;
 	}
 
-	if (gVolumetricLighting) {
-		float vlFactor = shadowFader.vlIntensityFactor;
-		if (settings.DimVolumetricLighting)
-			vlFactor *= currentDim;
-		gVolumetricLighting->intensity *= vlFactor;
-	}
+	if (gVolumetricLighting)
+		gVolumetricLighting->intensity *= settings.DimVolumetricLighting ? transitionFactor * currentDim : transitionFactor;
 }
 
 void SkySync::Sky_Update::thunk(RE::Sky* sky)
@@ -304,51 +302,9 @@ bool SkySync::Update(const RE::Sky* sky)
 		return false;
 	}
 
-	// Compute dim once per frame - used by OnSkyUpdateColors (if option on) and ShadowFader (always)
-	if (sky->currentClimate) {
-		const auto& timing = sky->currentClimate->timing;
-		const float hour = sky->currentGameHour;
-		const float sunriseBegin = timing.sunrise.begin / 6.0f;
-		const float sunriseMiddle = (timing.sunrise.begin + timing.sunrise.end) / 12.0f;
-		const float sunsetMiddle = (timing.sunset.begin + timing.sunset.end) / 12.0f;
-		const float sunsetEnd = timing.sunset.end / 6.0f;
-		const float fadeHours = settings.HorizonFadeHours;
-
-		// Hours elapsed from a to b, wrapping across midnight so gap windows survive past 24h.
-		auto hoursBetween = [](float from, float to) {
-			float d = to - from;
-			return d < 0.0f ? d + 24.0f : d;
-		};
-
-		sunSetting = hour >= sunsetMiddle && hour < sunsetEnd;
-		sunRising = hour >= sunriseBegin && hour < sunriseMiddle;
-		sunBelowHorizon = hour >= sunsetEnd || hour < sunriseBegin;
-
-		if (hour >= sunsetMiddle && hour < sunsetEnd) {
-			// Dusk: sun dipping under the horizon, fade the directional light out.
-			float range = sunsetEnd - sunsetMiddle;
-			float t = range > 0.0f ? (hour - sunsetMiddle) / range : 1.0f;
-			currentDim = std::sqrt(1.0f - t);
-		} else if (fadeHours > 0.0f && hoursBetween(sunsetEnd, hour) < fadeHours) {
-			// Caster has swapped to the moon but the colour is still dusk-bright; ease the dim back out.
-			currentDim = hoursBetween(sunsetEnd, hour) / fadeHours;
-		} else if (fadeHours > 0.0f && hoursBetween(hour, sunriseBegin) > 0.0f && hoursBetween(hour, sunriseBegin) <= fadeHours) {
-			// Still on the moon but the colour is brightening toward dawn; ease the dim back in.
-			currentDim = hoursBetween(hour, sunriseBegin) / fadeHours;
-		} else if (hour >= sunriseBegin && hour < sunriseMiddle) {
-			// Dawn: sun rising above the horizon, fade the directional light in.
-			float range = sunriseMiddle - sunriseBegin;
-			float t = range > 0.0f ? (hour - sunriseBegin) / range : 1.0f;
-			currentDim = std::sqrt(t);
-		} else {
-			currentDim = 1.0f;
-		}
-	} else {
-		currentDim = 1.0f;
-		sunSetting = false;
-		sunRising = false;
-		sunBelowHorizon = false;
-	}
+	const float hour = sky->currentGameHour;
+	const auto [sunriseHorizon, sunsetHorizon] = GetSunHorizonHours(climate->timing, settings.UseAlternateSunPath);
+	sunBelowHorizon = hour >= sunsetHorizon || hour < sunriseHorizon;
 
 	RE::NiPoint3 directions[3] = {};
 	float intensities[3] = {};
@@ -358,27 +314,53 @@ bool SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 
+	// Dim by elevation so every sun path fades over the same arc, however long it lingers near the horizon
+	const float sunElevation = DirectX::XMScalarASinEst(directions[static_cast<int>(Caster::Sun)].z);
+	const float sunDim = sunBelowHorizon ? 0.0f : std::clamp(sunElevation / DirectX::XMConvertToRadians(SunDimStartElevation), 0.0f, 1.0f);
+	const bool sunNearHorizon = !sunBelowHorizon && sunDim < 1.0f;
+	sunSetting = sunNearHorizon && hour >= (sunriseHorizon + sunsetHorizon) * 0.5f;
+	sunRising = sunNearHorizon && !sunSetting;
+	currentDim = sunDim;  // ShadowFader reads it to lock the sunset heading
+
 	const auto calendar = globals::game::calendar;
 	const auto deltaTime = globals::game::deltaTime;
 	float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;
 
 	// The clock can outrun real time (waiting, fast travel) or move while frames are paused
 	// (console, scrubbing), so advance by whichever of the two elapsed more.
-	const float gameHour = sky->currentGameHour;
 	if (lastGameHour >= 0.0f) {
-		float hourDelta = gameHour - lastGameHour;
+		float hourDelta = hour - lastGameHour;
 		if (hourDelta > 12.0f)
 			hourDelta -= 24.0f;
 		else if (hourDelta < -12.0f)
 			hourDelta += 24.0f;
 		fadeAdvance = std::max(fadeAdvance, std::abs(hourDelta) * SecondsPerGameHour);
 	}
-	lastGameHour = gameHour;
+	lastGameHour = hour;
 
 	const bool transitionCompleted = immediateTransitionReady;
 	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
+
+	const float hoursToSunrise = hour < sunriseHorizon ? sunriseHorizon - hour : sunriseHorizon + 24.0f - hour;
+	UpdateMoonlightFade(hoursToSunrise, fadeAdvance / SecondsPerGameHour, transitionCompleted);
+	if (sunBelowHorizon)
+		currentDim = moonlightFade;
+
 	immediateTransitionReady = false;
 	return transitionCompleted;
+}
+
+void SkySync::UpdateMoonlightFade(float hoursToSunrise, float advanceHours, bool immediate)
+{
+	const bool moonCasting = shadowFader.target == Caster::Masser || shadowFader.target == Caster::Secunda;
+	const float target = sunBelowHorizon && moonCasting ? 1.0f : 0.0f;
+	const float fadeHours = settings.HorizonFadeHours;
+	const float step = fadeHours > 0.0f ? advanceHours / fadeHours : 1.0f;
+	moonlightFade = immediate ? target : std::clamp(target, moonlightFade - step, moonlightFade + step);
+
+	// The sun takes over at the horizon from zero, so the moonlight must be gone by then
+	if (fadeHours > 0.0f)
+		moonlightFade = std::min(moonlightFade, hoursToSunrise / fadeHours);
 }
 void SkySync::SetSunAngle()
 {
@@ -418,6 +400,19 @@ void SkySync::SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell)
 	sky->root->Update(updateData);
 }
 
+float SkySync::MiddleHour(const RE::TESClimate::Timing::Interval& interval)
+{
+	return (interval.end * HoursPerTimingUnit + interval.begin * HoursPerTimingUnit) * 0.5f;
+}
+
+std::pair<float, float> SkySync::GetSunHorizonHours(const RE::TESClimate::Timing& timing, bool alternatePath)
+{
+	// Vanilla's sun touches the horizon where its alpha fade ends: the interval midpoint +- half fSunAlphaTransTime
+	const float halfTransition = alternatePath ? AlternateSunHorizonOffsetHours :
+	                                             (gSunAlphaTransTime ? gSunAlphaTransTime->GetFloat() : DefaultSunAlphaTransTime) * 0.5f;
+	return { MiddleHour(timing.sunrise) - halfTransition, MiddleHour(timing.sunset) + halfTransition };
+}
+
 void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[])
 {
 	const auto sun = sky->sun;
@@ -425,9 +420,7 @@ void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensit
 	float dist;
 
 	if (settings.UseAlternateSunPath) {
-		const auto climate = sky->currentClimate;
-		const float sunrise = (climate->timing.sunrise.begin / 6.0f + climate->timing.sunrise.end / 6.0f) * 0.5f - 0.25f;
-		const float sunset = (climate->timing.sunset.begin / 6.0f + climate->timing.sunset.end / 6.0f) * 0.5f + 0.25f;
+		const auto [sunrise, sunset] = GetSunHorizonHours(sky->currentClimate->timing, true);
 		CalculateAlternateSunDirectionAndDistance(dir, dist, sky->currentGameHour, sunrise, sunset, sunAngle);
 	} else
 		CalculateSunDirectionAndDistance(sun, dir, dist);
@@ -446,15 +439,8 @@ void SkySync::HideSunOutsideFadeWindow(const RE::Sky* sky)
 	if (!gSunAlphaTransTime)
 		return;
 
-	// Same float ops as Sun::Update so the bounds match its exactly, but made inclusive
-	constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
-	auto middleHour = [](const RE::TESClimate::Timing::Interval& interval) {
-		return (interval.end * HoursPerTimingUnit + interval.begin * HoursPerTimingUnit) * 0.5f;
-	};
-	const auto& timing = sky->currentClimate->timing;
-	const float halfTransition = gSunAlphaTransTime->GetFloat() * 0.5f;
-	const float fadeInStart = middleHour(timing.sunrise) - halfTransition;
-	const float fadeOutEnd = middleHour(timing.sunset) + halfTransition;
+	// Same bounds as Sun::Update's fade, but made inclusive
+	const auto [fadeInStart, fadeOutEnd] = GetSunHorizonHours(sky->currentClimate->timing, false);
 	const float hour = sky->currentGameHour;
 	if (hour > fadeInStart && hour < fadeOutEnd)
 		return;
@@ -595,6 +581,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		previousTarget = target;
 		target = best;
 		startDir = currentDir;
+		startIntensityFactor = intensityFactor;
 		fadeTimer = 0.0f;
 		transitioning = true;
 	}
@@ -603,7 +590,7 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 
 	if (!transitioning) {
 		currentDir = targetDir;
-		vlIntensityFactor = target == Caster::None ? 0.0f : 1.0f;
+		intensityFactor = target == Caster::None ? 0.0f : 1.0f;
 		if (target != Caster::None)
 			immediateTransitionRemaining = 0.0f;
 		SetLighting(sky, currentDir);
@@ -628,8 +615,9 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		transitioning = false;
 	}
 
-	// Fade VL out as it settles into the no-caster fallback, otherwise fade with shadow alignment.
-	vlIntensityFactor = target == Caster::None ? 1.0f - t : ComputeVLFactor(currentDir, targetDir);
+	// Fade out as the direction leaves the old caster and back in as it reaches the new one; the no-caster fallback only fades out.
+	const float fadeOut = startIntensityFactor * (target == Caster::None ? 1.0f - t : ComputeAlignmentFactor(currentDir, startDir));
+	intensityFactor = target == Caster::None ? fadeOut : std::max(fadeOut, ComputeAlignmentFactor(currentDir, targetDir));
 	if (target != Caster::None && !transitioning)
 		immediateTransitionRemaining = 0.0f;
 	SetLighting(sky, currentDir);
@@ -695,12 +683,12 @@ inline void SkySync::ShadowFader::SetElevation(RE::NiPoint3& dir, float elevRadi
 	SetDirection(dir, std::atan2(dir.y, dir.x), elevRadians);
 }
 
-float SkySync::ShadowFader::ComputeVLFactor(const RE::NiPoint3& current, const RE::NiPoint3& target)
+float SkySync::ShadowFader::ComputeAlignmentFactor(const RE::NiPoint3& current, const RE::NiPoint3& target)
 {
 	const float dot = std::clamp(current.Dot(target), -1.0f, 1.0f);
 	const float angle = DirectX::XMConvertToDegrees(DirectX::XMScalarACosEst(dot));
 
-	return std::clamp((VLFadeEndAngle - angle) / (VLFadeEndAngle - VLFadeStartAngle), 0.0f, 1.0f);
+	return std::clamp((AlignmentFadeEndAngle - angle) / (AlignmentFadeEndAngle - AlignmentFadeStartAngle), 0.0f, 1.0f);
 }
 
 inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
@@ -713,7 +701,5 @@ inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 
 	SetElevation(dir, minElev);
 }
-
-
 
 #undef I18N_KEY_PREFIX

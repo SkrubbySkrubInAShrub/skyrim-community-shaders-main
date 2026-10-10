@@ -36,7 +36,7 @@ public:
 		int32_t SunPath = 0;
 		float CustomAngle = -35.0f;
 		float MinShadowElevation = 10.0f;
-		float ShadowTransitionDuration = 100.0f;
+		float ShadowTransitionDuration = 300.0f;
 		bool DimSunlightUnderHorizon = true;
 		bool DimVolumetricLighting = true;
 		float HorizonFadeHours = 0.7f;
@@ -129,7 +129,8 @@ private:
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
-		float vlIntensityFactor = 1.0f;
+		float intensityFactor = 1.0f;  // scales directional light and VL while the caster changes
+		float startIntensityFactor = 1.0f;
 
 		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		void LockSunElevation(RE::NiPoint3 dirs[]);
@@ -137,7 +138,7 @@ private:
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
 		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
 		static void ClampDirection(RE::NiPoint3& dir);
-		static float ComputeVLFactor(const RE::NiPoint3& current, const RE::NiPoint3& target);
+		static float ComputeAlignmentFactor(const RE::NiPoint3& current, const RE::NiPoint3& target);
 		void Reset();
 	};
 
@@ -148,9 +149,13 @@ private:
 	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
 	static constexpr float SecondsPerGameHour = 3600.0f;
 	static constexpr float SunsetHeadingLockThreshold = 0.5f;
-	static constexpr float VLFadeStartAngle = 2.0f;
-	static constexpr float VLFadeEndAngle = 10.0f;
+	static constexpr float AlignmentFadeStartAngle = 2.0f;
+	static constexpr float AlignmentFadeEndAngle = 10.0f;
 	static constexpr float MaxHorizonFadeHours = 1.5f;
+	static constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
+	static constexpr float DefaultSunAlphaTransTime = 2.0f;
+	static constexpr float AlternateSunHorizonOffsetHours = 0.25f;
+	static constexpr float SunDimStartElevation = 10.0f;  // degrees
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
@@ -167,6 +172,7 @@ private:
 	float4 colors[3] = {};
 	RE::NiPoint3 rawDirections[3] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
+	float moonlightFade = 0.0f;
 	bool sunSetting = false;
 	bool sunRising = false;
 	bool sunBelowHorizon = false;
@@ -178,9 +184,18 @@ private:
 
 	bool Update(const RE::Sky* sky);
 
+	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, reaching zero by sunrise. */
+	void UpdateMoonlightFade(float hoursToSunrise, float advanceHours, bool immediate);
+
 	void SetSunAngle();
 
 	void SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell);
+
+	/** @brief Midpoint hour of a climate sunrise or sunset interval, using the same float ops as Sun::Update. */
+	static float MiddleHour(const RE::TESClimate::Timing::Interval& interval);
+
+	/** @brief Hours at which the given sun path crosses the horizon, as { sunrise, sunset }. */
+	static std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing, bool alternatePath);
 
 	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
 
