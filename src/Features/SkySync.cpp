@@ -18,6 +18,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DimSunlightUnderHorizon,
 	DimVolumetricLighting,
 	HorizonFadeHours,
+	HorizonFadeElevation,
 	NewMoonIntensity,
 	CrescentMoonIntensity,
 	FullMoonIntensity)
@@ -79,7 +80,7 @@ void SkySync::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("dim_sunlight_under_horizon"), "Dim Sunlight Under Horizon"), &settings.DimSunlightUnderHorizon);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::TextUnformatted(T(TKEY("dim_sunlight_under_horizon_tooltip"), "Fade directional light to zero as the sun goes below the horizon."));
+		ImGui::TextUnformatted(T(TKEY("dim_sunlight_under_horizon_tooltip"), "Fade directional light to zero as the sun or moon approaches the horizon."));
 	}
 
 	ImGui::Checkbox(T(TKEY("fade_volumetric_lighting"), "Fade Volumetric Lighting"), &settings.DimVolumetricLighting);
@@ -91,6 +92,11 @@ void SkySync::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("horizon_fade_duration"), "Horizon Fade Duration"), &settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours, "%.1f h", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::TextUnformatted(T(TKEY("horizon_fade_duration_tooltip"), "How long (in game hours) moonlight takes to fade in once a moon casts shadows, and to fade out before sunrise."));
+		}
+
+		ImGui::SliderFloat(T(TKEY("horizon_fade_elevation"), "Horizon Fade Elevation"), &settings.HorizonFadeElevation, 0.0f, MaxHorizonFadeElevation, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::TextUnformatted(T(TKEY("horizon_fade_elevation_tooltip"), "Height above the horizon at which the sun or moon light starts fading out. Higher = longer fade."));
 		}
 	}
 
@@ -154,6 +160,7 @@ void SkySync::LoadSettings(json& o_json)
 	settings.CustomAngle = std::clamp(settings.CustomAngle, -90.0f, 90.0f);
 	settings.MinShadowElevation = std::clamp(settings.MinShadowElevation, 0.0f, 45.0f);
 	settings.HorizonFadeHours = std::clamp(settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours);
+	settings.HorizonFadeElevation = std::clamp(settings.HorizonFadeElevation, 0.0f, MaxHorizonFadeElevation);
 	SetSunAngle();
 }
 
@@ -314,9 +321,7 @@ bool SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 
-	// Dim by elevation so every sun path fades over the same arc, however long it lingers near the horizon
-	const float sunElevation = DirectX::XMScalarASinEst(directions[static_cast<int>(Caster::Sun)].z);
-	const float sunDim = sunBelowHorizon ? 0.0f : std::clamp(sunElevation / DirectX::XMConvertToRadians(SunDimStartElevation), 0.0f, 1.0f);
+	const float sunDim = sunBelowHorizon ? 0.0f : GetHorizonDim(directions[static_cast<int>(Caster::Sun)]);
 	const bool sunNearHorizon = !sunBelowHorizon && sunDim < 1.0f;
 	sunSetting = sunNearHorizon && hour >= (sunriseHorizon + sunsetHorizon) * 0.5f;
 	sunRising = sunNearHorizon && !sunSetting;
@@ -343,11 +348,19 @@ bool SkySync::Update(const RE::Sky* sky)
 
 	const float hoursToSunrise = hour < sunriseHorizon ? sunriseHorizon - hour : sunriseHorizon + 24.0f - hour;
 	UpdateMoonlightFade(hoursToSunrise, fadeAdvance / SecondsPerGameHour, transitionCompleted);
+	// Follow the light's own direction so the dim stays continuous while it swings between moons
 	if (sunBelowHorizon)
-		currentDim = moonlightFade;
+		currentDim = moonlightFade * GetHorizonDim(shadowFader.currentDir);
 
 	immediateTransitionReady = false;
 	return transitionCompleted;
+}
+
+float SkySync::GetHorizonDim(const RE::NiPoint3& dir) const
+{
+	// Elevation-based so every path fades over the same arc, however long it lingers near the horizon
+	const float fadeRadians = std::max(DirectX::XMConvertToRadians(settings.HorizonFadeElevation), FLT_EPSILON);
+	return std::clamp(DirectX::XMScalarASinEst(dir.z) / fadeRadians, 0.0f, 1.0f);
 }
 
 void SkySync::UpdateMoonlightFade(float hoursToSunrise, float advanceHours, bool immediate)
@@ -471,7 +484,8 @@ void SkySync::ProcessMoon(const RE::Sky* sky, const Caster type, RE::NiPoint3 di
 	if (!isValidSource)
 		return;
 
-	intensities[idx] = color.w;
+	// A moon sinking toward the horizon loses out to one that is still up
+	intensities[idx] = color.w * GetHorizonDim(dirs[idx]);
 }
 
 RE::NiPoint3 SkySync::GetCelestialDirection(const RE::Sky* sky, const Caster caster) const

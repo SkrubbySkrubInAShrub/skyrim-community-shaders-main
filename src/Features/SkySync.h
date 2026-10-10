@@ -40,6 +40,7 @@ public:
 		bool DimSunlightUnderHorizon = true;
 		bool DimVolumetricLighting = true;
 		float HorizonFadeHours = 0.7f;
+		float HorizonFadeElevation = 10.0f;
 		float NewMoonIntensity = 0.05f;
 		float CrescentMoonIntensity = 0.25f;
 		float FullMoonIntensity = 1.0f;
@@ -155,7 +156,7 @@ private:
 	static constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
 	static constexpr float DefaultSunAlphaTransTime = 2.0f;
 	static constexpr float AlternateSunHorizonOffsetHours = 0.25f;
-	static constexpr float SunDimStartElevation = 10.0f;  // degrees
+	static constexpr float MaxHorizonFadeElevation = 45.0f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
@@ -183,6 +184,9 @@ private:
 	void PreparePendingTransitions();
 
 	bool Update(const RE::Sky* sky);
+
+	/** @brief Fades from 1 at the horizon fade elevation to 0 at the horizon for a sky-local direction. */
+	float GetHorizonDim(const RE::NiPoint3& dir) const;
 
 	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, reaching zero by sunrise. */
 	void UpdateMoonlightFade(float hoursToSunrise, float advanceHours, bool immediate);
