@@ -37,6 +37,32 @@ namespace
 		       std::ranges::any_of(kPointerButtons, [](auto button) { return ImGui::IsMouseClicked(button) || ImGui::IsMouseReleased(button); }) ||
 		       std::ranges::any_of(kActivateKeys, [](auto key) { return ImGui::IsKeyPressed(key); });
 	}
+
+	bool skipVanillaDoF = false;
+	bool skipVanillaBloom = false;
+	std::optional<bool> savedVanillaLensFlare;
+
+	struct VanillaDoF_IsActive
+	{
+		static bool thunk(RE::ImageSpaceEffectDepthOfField* effect)
+		{
+			return (!skipVanillaDoF || globals::state->permutationData.RenderToUI) && func(effect);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct VanillaBlur_Render
+	{
+		static void thunk(RE::ImageSpaceEffect* effect, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
+		{
+			if (skipVanillaBloom && !globals::state->permutationData.RenderToUI &&
+				effect->effectTextures.capacity() > 0 && effect->effectTextures[0] &&
+				effect->effectTextures[0]->renderTarget == RE::RENDER_TARGETS::kHDR_BLOOM)
+				return;
+			func(effect, shape, param);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
 }
 
 void PostProcessing::DrawSettings()
@@ -497,6 +523,9 @@ void PostProcessing::SetupResources()
 
 void PostProcessing::Reset()
 {
+	skipVanillaDoF = false;
+	skipVanillaBloom = false;
+
 	// Cleared per frame rather than only at the end of PreProcess: when Effects11 owns the
 	// tonemap (or the pipeline is bypassed) PreProcess never runs, and a stale flag would
 	// make the next frame we do run read from the wrong buffer.
@@ -743,8 +772,53 @@ bool PostProcessing::WantsAutoHDR() const
 	return colorGrading && colorGrading->IsActive() && colorGrading->WantsAutoHDR();
 }
 
+void PostProcessing::UpdateVanillaEffects(bool active)
+{
+	const bool runnable = active && loaded && !bypass && globals::shaderCache->IsEnabled();
+	const bool inMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
+	const bool linear = globals::features::linearLighting.IsLinearLightingActive();
+	const auto replaces = [&](FeaturePipelineIndex idx) {
+		const auto& feature = pipeline[static_cast<size_t>(idx)];
+		return runnable && feature && feature->IsActive() &&
+		       (!inMainLoadingMenu || (!linear && !feature->DisableInMainLoadingMenu()));
+	};
+
+	skipVanillaDoF = replaces(FeaturePipelineIndex::DoF);
+	skipVanillaBloom = globals::state->enablePShaders && globals::state->ShaderEnabled(RE::BSShader::Type::ImageSpace) &&
+	                   (replaces(FeaturePipelineIndex::PhysicalGlare) || replaces(FeaturePipelineIndex::CODBloom));
+	if (skipVanillaBloom) {
+		using enum RE::ImageSpaceManager::ImageSpaceEffectEnum;
+		static const std::array<uint32_t, 2> tonemapShaders{
+			RE::ImageSpaceManager::GetCurrentIndex(ISHDRTonemapBlendCinematic),
+			RE::ImageSpaceManager::GetCurrentIndex(ISHDRTonemapBlendCinematicFade)
+		};
+		skipVanillaBloom = globals::shaderCache->blockedKeyIndex == -1 &&
+		                   globals::shaderCache->HasPixelShaders(RE::BSShader::Type::ImageSpace, tonemapShaders);
+	}
+
+	static auto* lensFlare = RE::GetINISetting("bLensFlare:ImageSpace");
+	if (lensFlare) {
+		if (replaces(FeaturePipelineIndex::LensFlare)) {
+			if (!savedVanillaLensFlare) {
+				savedVanillaLensFlare = lensFlare->data.b;
+				lensFlare->data.b = false;
+			}
+		} else if (savedVanillaLensFlare) {
+			lensFlare->data.b = *savedVanillaLensFlare;
+			savedVanillaLensFlare.reset();
+		}
+	}
+}
+
 void PostProcessing::Prepass()
 {
+	if (!pendingSettings.empty()) {
+		logger::info("Processing pending post processing settings...");
+		ProcessSettings(pendingSettings);
+		pendingSettings = {};
+		UpdateVanillaEffects(globals::state->GetTonemapOwner() == State::TonemapOwner::kPostProcessing);
+	}
+
 	if (auto* lut = GetPipelineFeature<::LUT>(FeaturePipelineIndex::LUT))
 		lut->UpdateTexture();
 
@@ -771,6 +845,7 @@ void PostProcessing::Prepass()
 void PostProcessing::PostPostLoad()
 {
 	logger::info("Hooking preprocess passes");
-	DoF::InstallHooks();
+	stl::write_vfunc<0x6, VanillaDoF_IsActive>(RE::VTABLE_ImageSpaceEffectDepthOfField[0]);
+	stl::write_vfunc<0x1, VanillaBlur_Render>(RE::VTABLE_ImageSpaceEffectBlur[0]);
 	stl::write_vfunc<0x2, BSImagespaceShaderRefraction_SetupTechnique>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
 }
