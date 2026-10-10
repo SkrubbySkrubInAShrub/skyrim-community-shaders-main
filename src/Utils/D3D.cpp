@@ -378,10 +378,10 @@ namespace Util
 		if (shaderErrors)
 			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
 		if (diskPath)
-			Store(*diskPath, shaderBlob);
+			Store(*diskPath, shaderBlob.get());
 
 		ID3D11DeviceChild* shader = nullptr;
-		DX::ThrowIfFailed(CreateShaderObject(device, ProgramType, shaderBlob, &shader));
+		DX::ThrowIfFailed(CreateShaderObject(device, ProgramType, shaderBlob.get(), &shader));
 		return shader;
 	}
 
