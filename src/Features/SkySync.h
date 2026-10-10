@@ -41,6 +41,7 @@ public:
 		bool DimVolumetricLighting = true;
 		float HorizonFadeHours = 0.7f;
 		float HorizonFadeElevation = 10.0f;
+		float HorizonElevation = 0.0f;
 		float NewMoonIntensity = 0.05f;
 		float CrescentMoonIntensity = 0.25f;
 		float FullMoonIntensity = 1.0f;
@@ -62,6 +63,9 @@ public:
 	 * @param sky The sky object whose directional light color may be modified.
 	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
+
+	/** @brief While the sun is below the horizon, rebuilds the sunlight colour and VL from the weathers' night values only; runs before colour grading. */
+	void ApplyMoonlightColors(RE::Sky* sky);
 
 	/** @brief Installs rendering hooks and detects conflicting mods after plugin load. */
 	virtual void PostPostLoad() override;
@@ -157,10 +161,12 @@ private:
 	static constexpr float DefaultSunAlphaTransTime = 2.0f;
 	static constexpr float AlternateSunHorizonOffsetHours = 0.25f;
 	static constexpr float MaxHorizonFadeElevation = 45.0f;
+	static constexpr float MaxHorizonElevation = 10.0f;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
 	inline static RE::Setting* gSunAlphaTransTime = nullptr;
+	inline static RE::Setting* gWeatherFlashDirectional = nullptr;
 
 	RE::TESObjectCELL* currentCell = nullptr;
 	bool currentCellInterior = false;
@@ -185,11 +191,14 @@ private:
 
 	bool Update(const RE::Sky* sky);
 
-	/** @brief Fades from 1 at the horizon fade elevation to 0 at the horizon for a sky-local direction. */
-	float GetHorizonDim(const RE::NiPoint3& dir) const;
+	/** @brief Signed angle in radians of a sky-local direction above the effective horizon. */
+	float GetHeightAboveHorizon(const RE::NiPoint3& dir) const;
 
-	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, reaching zero by sunrise. */
-	void UpdateMoonlightFade(float hoursToSunrise, float advanceHours, bool immediate);
+	/** @brief Fades from 0 at the effective horizon to 1 at the horizon fade elevation above it. */
+	float GetHorizonDim(float heightAboveHorizon) const;
+
+	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, never above sunriseCap. */
+	void UpdateMoonlightFade(float sunriseCap, float advanceHours, bool immediate);
 
 	void SetSunAngle();
 
@@ -200,6 +209,12 @@ private:
 
 	/** @brief Hours at which the given sun path crosses the horizon, as { sunrise, sunset }. */
 	static std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing, bool alternatePath);
+
+	/** @brief The engine's VL fallback for weathers without a VL form, read from the fVolumetricLighting*:Display INI settings. */
+	static RE::BSVolumetricLightingRenderData GetDefaultVolumetricLighting();
+
+	/** @brief Blends the current and last weathers' night VL with the given weights, as vanilla's time-of-day VL blend does. */
+	static RE::BSVolumetricLightingRenderData BlendNightVolumetricLighting(const RE::Sky* sky, float currentWeight, float lastWeight);
 
 	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
 
