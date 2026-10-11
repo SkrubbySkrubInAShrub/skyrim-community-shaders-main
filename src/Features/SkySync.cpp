@@ -390,7 +390,6 @@ bool SkySync::Update(const RE::Sky* sky)
 	}
 
 	const float hour = sky->currentGameHour;
-	const auto [sunriseHorizon, sunsetHorizon] = GetSunHorizonHours(climate->timing, settings.UseAlternateSunPath);
 
 	RE::NiPoint3 directions[3] = {};
 	float intensities[3] = {};
@@ -400,18 +399,13 @@ bool SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 
-	// Vanilla runs the sun's night arc mirrored above the horizon; flip it below so its height is continuous
-	RE::NiPoint3 sunDir = directions[static_cast<int>(Caster::Sun)];
-	if (!settings.UseAlternateSunPath && (hour >= sunsetHorizon || hour < sunriseHorizon))
-		sunDir.z = -sunDir.z;
+	const RE::NiPoint3 sunDir = GetSunDirectionAtHour(climate->timing, hour);
 	const float sunHeight = GetHeightAboveHorizon(sunDir);
 	sunBelowHorizon = sunHeight < 0.0f;
-
-	const float sunDim = GetHorizonDim(sunHeight);
-	const bool sunNearHorizon = !sunBelowHorizon && sunDim < 1.0f;
-	sunSetting = sunNearHorizon && hour >= (sunriseHorizon + sunsetHorizon) * 0.5f;
-	sunRising = sunNearHorizon && !sunSetting;
-	currentDim = sunDim;  // ShadowFader reads it to lock the sunset heading
+	currentDim = GetHorizonDim(sunHeight);
+	// A sun below the horizon never casts, so skip the search
+	if (!sunBelowHorizon)
+		HoldLowSunDirection(climate->timing, hour, sunDir, directions[static_cast<int>(Caster::Sun)]);
 
 	const auto calendar = globals::game::calendar;
 	const auto deltaTime = globals::game::deltaTime;
@@ -432,11 +426,7 @@ bool SkySync::Update(const RE::Sky* sky)
 	const bool transitionCompleted = immediateTransitionReady;
 	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
 
-	// The sun takes over at the horizon from zero, so before sunrise fade the moonlight out as the sun climbs toward it
-	const float hoursToSunrise = hour < sunriseHorizon ? sunriseHorizon - hour : sunriseHorizon + 24.0f - hour;
-	const float hoursSinceSunset = hour >= sunsetHorizon ? hour - sunsetHorizon : hour + 24.0f - sunsetHorizon;
-	const float sunriseCap = hoursToSunrise < hoursSinceSunset ? GetHorizonDim(-sunHeight) : 1.0f;
-	UpdateMoonlightFade(sunriseCap, fadeAdvance / SecondsPerGameHour, transitionCompleted);
+	UpdateMoonlightFade(GetTwilightCap(climate->timing, hour, sunHeight), fadeAdvance / SecondsPerGameHour, transitionCompleted);
 	// Follow the light's own direction so the dim stays continuous while it swings between moons
 	if (sunBelowHorizon)
 		currentDim = moonlightFade * GetHorizonDim(GetHeightAboveHorizon(shadowFader.currentDir));
@@ -457,13 +447,82 @@ float SkySync::GetHorizonDim(float heightAboveHorizon) const
 	return std::clamp(heightAboveHorizon / fadeRadians, 0.0f, 1.0f);
 }
 
-void SkySync::UpdateMoonlightFade(float sunriseCap, float advanceHours, bool immediate)
+void SkySync::UpdateMoonlightFade(float twilightCap, float advanceHours, bool immediate)
 {
 	const bool moonCasting = shadowFader.target == Caster::Masser || shadowFader.target == Caster::Secunda;
 	const float target = sunBelowHorizon && moonCasting ? 1.0f : 0.0f;
 	const float fadeHours = settings.HorizonFadeHours;
 	const float step = fadeHours > 0.0f ? advanceHours / fadeHours : 1.0f;
-	moonlightFade = std::min(immediate ? target : std::clamp(target, moonlightFade - step, moonlightFade + step), sunriseCap);
+	moonlightFade = std::min(immediate ? target : std::clamp(target, moonlightFade - step, moonlightFade + step), twilightCap);
+}
+
+float SkySync::GetTwilightCap(const RE::TESClimate::Timing& timing, float hour, float sunHeight) const
+{
+	if (sunHeight >= 0.0f)
+		return 0.0f;
+
+	// Derived from the clock rather than accumulated, so scrubbing either way gives the same light
+	const float sunriseHorizon = GetSunHorizonHours(timing, settings.UseAlternateSunPath).first;
+	const float hoursToSunrise = hour < sunriseHorizon ? sunriseHorizon - hour : sunriseHorizon + HoursPerDay - hour;
+	float hoursSinceHandover = hour - GetSunCrossingHour(timing, DirectX::XMConvertToRadians(settings.HorizonElevation), false);
+	if (hoursSinceHandover < 0.0f)
+		hoursSinceHandover += HoursPerDay;
+	if (hoursToSunrise < hoursSinceHandover)
+		return GetHorizonDim(-sunHeight);
+
+	const float fadeHours = settings.HorizonFadeHours;
+	return fadeHours > 0.0f ? std::min(hoursSinceHandover / fadeHours, 1.0f) : 1.0f;
+}
+
+float SkySync::GetSunCrossingHour(const RE::TESClimate::Timing& timing, float elevation, bool rising) const
+{
+	// Both paths climb steadily from the middle of the night to midday and sink back after, so bisect within one half
+	const auto [sunrise, sunset] = GetSunHorizonHours(timing, settings.UseAlternateSunPath);
+	const float halfNight = (HoursPerDay - (sunset - sunrise)) * 0.5f;
+	float above = (sunrise + sunset) * 0.5f;
+	float below = rising ? sunrise - halfNight : sunset + halfNight;
+	for (int i = 0; i < SunCrossingSearchIterations; ++i) {
+		const float middle = (above + below) * 0.5f;
+		(DirectX::XMScalarASinEst(GetSunDirectionAtHour(timing, middle).z) >= elevation ? above : below) = middle;
+	}
+	return below;
+}
+
+void SkySync::HoldLowSunDirection(const RE::TESClimate::Timing& timing, float hour, const RE::NiPoint3& sunDir, RE::NiPoint3& shadowDir) const
+{
+	const float minElevation = DirectX::XMConvertToRadians(settings.MinShadowElevation);
+	if (DirectX::XMScalarASinEst(sunDir.z) >= minElevation)
+		return;
+
+	// Hold where the sun crossed the minimum, so a low sun moves the shadow neither up nor sideways
+	const auto [sunrise, sunset] = GetSunHorizonHours(timing, settings.UseAlternateSunPath);
+	const bool rising = hour < (sunrise + sunset) * 0.5f;
+	shadowDir = GetSunDirectionAtHour(timing, GetSunCrossingHour(timing, minElevation, rising));
+}
+
+RE::NiPoint3 SkySync::GetSunDirectionAtHour(const RE::TESClimate::Timing& timing, float hour) const
+{
+	const auto [sunrise, sunset] = GetSunHorizonHours(timing, settings.UseAlternateSunPath);
+	if (!settings.UseAlternateSunPath)
+		return CalculateVanillaSunDirection(hour, sunrise, sunset);
+
+	RE::NiPoint3 dir;
+	float distance;
+	CalculateAlternateSunDirectionAndDistance(dir, distance, hour, sunrise, sunset, sunAngle);
+	return dir;
+}
+
+RE::NiPoint3 SkySync::CalculateVanillaSunDirection(float hour, float sunrise, float sunset)
+{
+	const float dayLength = sunset - sunrise;
+	const float hoursSinceSunrise = hour >= sunrise ? hour - sunrise : hour + HoursPerDay - sunrise;
+	const bool day = hoursSinceSunrise < dayLength;
+	const float x = day ? (1.0f - 2.0f * hoursSinceSunrise / dayLength) * SunPeakDistance :
+	                      (2.0f * (hoursSinceSunrise - dayLength) / (HoursPerDay - dayLength) - 1.0f) * SunPeakDistance;
+	const float z = day ? SunPeakDistance - std::abs(x) : std::abs(x) - SunPeakDistance;
+	RE::NiPoint3 dir{ x, VanillaSunOffsetY, z };
+	dir.Unitize();
+	return dir;
 }
 void SkySync::SetSunAngle()
 {
@@ -641,9 +700,6 @@ void SkySync::ShadowFader::Reset()
 	fadeTimer = 0.0f;
 	immediateTransitionRemaining = 0.0f;
 	transitioning = false;
-	sunriseReleased = false;
-	frozenHeading = 0.0f;
-	sunsetHeadingLocked = false;
 }
 
 void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition)
@@ -672,8 +728,6 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 	} else {
 		best = Caster::Sun;
 	}
-
-	LockSunElevation(dirs);
 
 	// No valid caster points straight up so shadows fall directly down.
 	auto casterDir = [&](Caster c) {
@@ -725,37 +779,6 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 	if (target != Caster::None && !transitioning)
 		immediateTransitionRemaining = 0.0f;
 	SetLighting(sky, currentDir);
-}
-
-void SkySync::ShadowFader::LockSunElevation(RE::NiPoint3 dirs[])
-{
-	// Dusk: lock elevation to the minimum so the shadow can't tilt back up as the sun goes under,
-	// and once dimming passes the threshold lock heading too so it stops sweeping while the VL fades.
-	// Dawn: lock at the minimum until the sun naturally rises above it, then follow it.
-	const auto& skySync = globals::features::skySync;
-	const int sunIdx = static_cast<int>(Caster::Sun);
-	const float minElev = DirectX::XMConvertToRadians(skySync.settings.MinShadowElevation);
-	if (skySync.sunSetting) {
-		if (skySync.currentDim <= SunsetHeadingLockThreshold) {
-			if (!sunsetHeadingLocked) {
-				frozenHeading = std::atan2(dirs[sunIdx].y, dirs[sunIdx].x);
-				sunsetHeadingLocked = true;
-			}
-			SetDirection(dirs[sunIdx], frozenHeading, minElev);
-		} else {
-			SetElevation(dirs[sunIdx], minElev);
-		}
-	} else if (skySync.sunRising) {
-		if (!sunriseReleased) {
-			if (DirectX::XMScalarASinEst(dirs[sunIdx].z) >= minElev)
-				sunriseReleased = true;
-			else
-				SetElevation(dirs[sunIdx], minElev);
-		}
-	} else {
-		sunriseReleased = false;
-		sunsetHeadingLocked = false;
-	}
 }
 
 void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir)

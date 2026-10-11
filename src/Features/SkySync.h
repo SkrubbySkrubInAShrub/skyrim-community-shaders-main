@@ -131,14 +131,10 @@ private:
 		float fadeTimer = 0.0f;
 		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
-		bool sunriseReleased = false;
-		float frozenHeading = 0.0f;
-		bool sunsetHeadingLocked = false;
 		float intensityFactor = 1.0f;  // scales directional light and VL while the caster changes
 		float startIntensityFactor = 1.0f;
 
 		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
-		void LockSunElevation(RE::NiPoint3 dirs[]);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
 		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
@@ -153,7 +149,6 @@ private:
 	static constexpr float NorthernSunAngle = 90.0f + 35.0f;
 	static constexpr float VanillaSunAngle = 90.0f + 5.0f;
 	static constexpr float SecondsPerGameHour = 3600.0f;
-	static constexpr float SunsetHeadingLockThreshold = 0.5f;
 	static constexpr float AlignmentFadeStartAngle = 2.0f;
 	static constexpr float AlignmentFadeEndAngle = 10.0f;
 	static constexpr float MaxHorizonFadeHours = 1.5f;
@@ -162,6 +157,9 @@ private:
 	static constexpr float AlternateSunHorizonOffsetHours = 0.25f;
 	static constexpr float MaxHorizonFadeElevation = 45.0f;
 	static constexpr float MaxHorizonElevation = 10.0f;
+	static constexpr float HoursPerDay = 24.0f;
+	static constexpr float VanillaSunOffsetY = 25.0f;  // Sun::Update's fixed sideways offset of the sun's arc
+	static constexpr int SunCrossingSearchIterations = 16;
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
@@ -180,8 +178,6 @@ private:
 	RE::NiPoint3 rawDirections[3] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
 	float moonlightFade = 0.0f;
-	bool sunSetting = false;
-	bool sunRising = false;
 	bool sunBelowHorizon = false;
 	ShadowFader shadowFader;
 
@@ -197,8 +193,20 @@ private:
 	/** @brief Fades from 0 at the effective horizon to 1 at the horizon fade elevation above it. */
 	float GetHorizonDim(float heightAboveHorizon) const;
 
-	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, never above sunriseCap. */
-	void UpdateMoonlightFade(float sunriseCap, float advanceHours, bool immediate);
+	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, never above twilightCap. */
+	void UpdateMoonlightFade(float twilightCap, float advanceHours, bool immediate);
+
+	/** @brief Upper bound on moonlight: zero at the sun's handover, rising over the moonlight fade duration after sunset and falling with the sun's depth before sunrise. */
+	float GetTwilightCap(const RE::TESClimate::Timing& timing, float hour, float sunHeight) const;
+
+	/** @brief Hour at which the sun crosses an elevation in radians, rising before midday or setting after it; may fall outside 0-24. */
+	float GetSunCrossingHour(const RE::TESClimate::Timing& timing, float elevation, bool rising) const;
+
+	/** @brief Below the minimum shadow elevation, replaces the sun's shadow direction with the one where it crossed that elevation. */
+	void HoldLowSunDirection(const RE::TESClimate::Timing& timing, float hour, const RE::NiPoint3& sunDir, RE::NiPoint3& shadowDir) const;
+
+	/** @brief Sky-local sun direction for the active path at any hour, with the night arc below the horizon. */
+	RE::NiPoint3 GetSunDirectionAtHour(const RE::TESClimate::Timing& timing, float hour) const;
 
 	void SetSunAngle();
 
@@ -224,6 +232,9 @@ private:
 	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
 
 	static void CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::NiPoint3& outDir, float& outDistance);
+
+	/** @brief Sun::Update's arc as a unit direction, except that the night half runs below the horizon instead of mirrored above it. */
+	static RE::NiPoint3 CalculateVanillaSunDirection(float hour, float sunrise, float sunset);
 
 	static void CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, float time, float sunrise, float sunset, float sunAngle);
 
