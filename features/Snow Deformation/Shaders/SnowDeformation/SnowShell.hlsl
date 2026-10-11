@@ -70,6 +70,8 @@ static float gDeferredRampDepth;
 
 // SNOW_SURFACE_ONLY: included for its surface recipe alone (LandscapeSnow.hlsl),
 // with ShellCB moved off b0 and no entry points or stage structs.
+// SNOW_SHELL_NO_MAIN: everything but the vertex, hull and domain entry points
+// (LandscapeSnowShell.hlsl).
 #ifndef SNOW_SHELL_CB_REGISTER
 #	define SNOW_SHELL_CB_REGISTER b0
 #endif
@@ -1480,6 +1482,30 @@ float2 ShellVertexSlope(float2 gridLocal)
 		position = float3((footXY), (terrainHeight)) + drapeDir * drapeAbove;                               \
 	}
 
+// The sun caster's visibility, shared with the raised landscape's shadow
+// passes (LandscapeSnow.hlsl); below 0.35 nothing casts. Its terms:
+// - The far anti-pinhole pass dilates coverage AND height (4-tap max + ridge
+//   pad), so beyond ~3000 units a ring around every patch passes both castVis
+//   terms while the main view discards those pixels per-texel — and this
+//   depth-only caster has no PS to do the same. Gating coverage on the
+//   UNDILATED texel under the vertex keeps true snowfields casting and
+//   silences the dilation skirt over bare coast.
+// - Melt pits do not cast: snow the melt removed casts nothing, and the pit
+//   dissolves at texture resolution while the caster rim collapses at vertex
+//   resolution, printing a blocky shadow on the revealed ground. Stamped
+//   (spell) melt only - static clearings are the exclusion field's. Keep the
+//   thresholds well above the residue floor, or decaying .y lands on the
+//   castVis NaN cliff and caster triangles flip once a second.
+// - The far field keeps printing blotches from residual data/geometry
+//   mismatches the near gates cannot see, and the shell's crisp shadows only
+//   matter near the camera anyway — the far field is diffuse-dominated and
+//   terrain shadows carry the rest. Fade the caster out entirely over ~40-70 m.
+#define SHELL_CAST_VIS(castVis, gridLocal, z, coverage)                                                                               \
+	float3 rawTerrainCast = SampleTerrain(gridLocal);                                                                                 \
+	float castVis = smoothstep(2.0, 5.0, (z) - rawTerrainCast.x) * smoothstep(0.2, 0.5, min((coverage), saturate(rawTerrainCast.z))); \
+	castVis *= 1.0 - smoothstep(0.35, 0.6, SampleMelted(gridLocal));                                                                  \
+	castVis *= 1.0 - smoothstep(2800.0, 4900.0, length((gridLocal) - WarpedHalfSpan));
+
 #ifndef SNOW_SURFACE_ONLY
 // The two height differences arrive as separate scalars, exactly as the four
 // taps used to leave them: as a float2 the compiler vectorises the normalize
@@ -1543,7 +1569,7 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 }
 #endif
 
-#if defined(VSHADER) && !defined(SNOW_TESS) && !defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY)
+#if defined(VSHADER) && !defined(SNOW_TESS) && !defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
 #ifdef SNOW_GRID_NONINDEXED
@@ -1640,28 +1666,7 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// rasterizer, so no sun angle can resurrect it. Sinking geometry instead of
 	// culling it does not work - underground geometry still clips low-sun rays
 	// and prints sideways blotches on bare ground.
-	float3 rawTerrainCast = SampleTerrain(gridLocal);
-	// the far anti-pinhole
-	// pass dilates coverage AND height (4-tap max + ridge pad), so beyond
-	// ~3000 units a ring around every patch passes both castVis terms while
-	// the main view discards those pixels per-texel — and this depth-only
-	// caster has no PS to do the same. Gating coverage on the UNDILATED
-	// texel under the vertex keeps true snowfields casting and silences
-	// the dilation skirt over bare coast.
-	float castVis = smoothstep(2.0, 5.0, z - rawTerrainCast.x) * smoothstep(0.2, 0.5, min(coverage, saturate(rawTerrainCast.z)));
-	// Melt pits do not cast: snow the melt removed casts nothing, and the pit
-	// dissolves at texture resolution while the caster rim collapses at vertex
-	// resolution, printing a blocky shadow on the revealed ground. Stamped
-	// (spell) melt only - static clearings are the exclusion field's. Keep the
-	// thresholds well above the residue floor, or decaying .y lands on the
-	// castVis NaN cliff and caster triangles flip once a second.
-	castVis *= 1.0 - smoothstep(0.35, 0.6, SampleMelted(gridLocal));
-	// the far field keeps printing blotches from
-	// residual data/geometry mismatches the near gates cannot see, and the
-	// shell's crisp shadows only matter near the camera anyway — the far
-	// field is diffuse-dominated and terrain shadows carry the rest. Fade
-	// the caster out entirely over ~40-70 m.
-	castVis *= 1.0 - smoothstep(2800.0, 4900.0, length(gridLocal - WarpedHalfSpan));
+	SHELL_CAST_VIS(castVis, gridLocal, z, coverage)
 	if (castVis < 0.35)
 		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
@@ -1719,7 +1724,7 @@ TessControlPoint ShellPatchControlPoint(uint2 quadXY, uint corner)
 	return cp;
 }
 
-#if defined(VSHADER) && defined(SNOW_TESS) && !defined(SNOW_SURFACE_ONLY)
+#if defined(VSHADER) && defined(SNOW_TESS) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
 #ifdef SNOW_TESS_LIST
 // The shading pass's tessellated patches (PatchListCS), drawn indirect.
 StructuredBuffer<uint> TessPatches : register(t62);
@@ -1737,7 +1742,7 @@ TessControlPoint main(uint vertexID : SV_VertexID)
 }
 #endif
 
-#if defined(VSHADER) && defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY)
+#if defined(VSHADER) && defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
 // The shading pass's flat patches (every hull factor 1 in the prepass): the
 // two triangles the tessellator emits for them, on its (1,0)-(0,1) domain
 // diagonal, corners read from the bake exactly as the domain shader's
@@ -1781,7 +1786,7 @@ static const float kTessReachBoost = 3.0;
 static const float kTessCutoff = kTessNear * kTessReachBoost;
 #endif
 
-#if defined(HULLSHADER) && !defined(SNOW_SURFACE_ONLY)
+#if defined(HULLSHADER) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
 
 // Edge factor from the edge midpoint's camera distance, computed from the
 // shared corners only, so both patches on an edge agree (crack-free).
@@ -2179,7 +2184,7 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 }
 #endif  // DOMAINSHADER || COMPUTESHADER || SNOW_SURFACE_ONLY
 
-#if defined(DOMAINSHADER) && !defined(SNOW_SURFACE_ONLY)
+#if defined(DOMAINSHADER) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
 [domain("quad")]
 VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
 {

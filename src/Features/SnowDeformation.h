@@ -2994,8 +2994,8 @@ public:
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
-	/** @brief The ground shell and its caster draw nothing: suspended, or hidden for the landscape snow A/B (the road class and patch stay). */
-	bool GroundShellHidden() const { return GroundShellsSuspended() || (landscapeSnow && landscapeHideShell); }
+	/** @brief The ground shell and its caster draw nothing: suspended, or hidden for the landscape snow A/B (the road class and patch stay). Snow on Landscape overrides the hide. */
+	bool GroundShellHidden() const { return GroundShellsSuspended() || (landscapeSnow && landscapeHideShell && !landscapeShade); }
 	/** @brief 2^(1 - Berm Steepness): the berm tap reach both the bake and the shells use. Exactly 1 at the default. */
 	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
 	/** @brief 1 - Snow Resistance: the share of a body's reach into the layer that carves. */
@@ -3983,6 +3983,14 @@ public:
 	void LandscapeSnowRestore();
 	/** @brief Rebuilds the landscape's ShellCB copy and SRV set from the live fields; false while one is missing or the footprint holds no snow. */
 	bool LandscapeSnowRefresh();
+	/** @brief The surface's SRV set t0-t59 (the slots ShellVertexZ and the landscape hull read) for a_cb, from the fields as they stand now. */
+	void LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderResourceView** a_srvs);
+	/** @brief Snow on Landscape this frame: the switch is on, the replay's shaders are ready and this frame's depth prepass has been captured. Counts the frames that wanted it and fell back to the grid. */
+	bool LandscapeShadeReady();
+	/** @brief The raised landscape casts the ground snow into the sun cascades under Snow on Landscape, so the shell caster stands down. */
+	bool LandscapeCastsGroundSnow() const;
+	/** @brief Snow on Landscape: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl where the shell prepass draws its grid. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
+	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB);
 	/** @brief One-line status for the Debugging menu. */
 	std::string LandscapeSnowStatus() const;
 	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */
@@ -3991,6 +3999,8 @@ public:
 	bool landscapeSnow = false;
 	/** @brief Debug, not serialised: hide the ground shell and its caster (GroundShellHidden). */
 	bool landscapeHideShell = false;
+	/** @brief Debug, not serialised (Snow on Landscape, Phase 3): the ground shell's prepass draws the landscape's own meshes instead of its grid; camera passes stay unraised and the sun cascades are raised by the shell caster's rules in place of the caster. Needs landscapeSnow. */
+	bool landscapeShade = false;
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
 	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */

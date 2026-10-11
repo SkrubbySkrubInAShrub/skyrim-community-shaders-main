@@ -1793,9 +1793,12 @@ void SnowDeformation::DrawSettings()
 			}
 			ImGui::Checkbox(T(TKEY("landscape_snow"), "Landscape Snow"), &landscapeSnow);
 			if (auto _ttLandscapeSnow = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("landscape_snow_tooltip"), "Experimental: raises the game's own landscape to the ground snow's surface, trenches, berms and drifts included, in every pass that draws it, shadows too. Only the shape so far: the raised ground still wears its own textures, so leave the ground shell on to see snow."));
+				ImGui::Text("%s", T(TKEY("landscape_snow_tooltip"), "Experimental: raises the game's own landscape to the ground snow's surface, trenches, berms and drifts included, in every pass that draws it, shadows too. The raised ground wears its own textures; Snow on Landscape below draws the ground snow on it instead of on the ground shell."));
 			if (landscapeSnow) {
 				ImGui::Indent();
+				ImGui::Checkbox(T(TKEY("landscape_shade"), "Snow on Landscape"), &landscapeShade);
+				if (auto _ttLandscapeShade = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("landscape_shade_tooltip"), "The ground snow is drawn on the landscape's own meshes instead of the ground shell's grid: the same snow and look, with its shadows cast by the raised landscape. Overrides Hide Ground Shell."));
 				ImGui::Checkbox(T(TKEY("landscape_hide_shell"), "Hide Ground Shell"), &landscapeHideShell);
 				if (auto _ttLandscapeHide = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("landscape_hide_shell_tooltip"), "Hides the ground shell and its shadows so the raised landscape can be seen on its own. Road snow and object snow stay."));

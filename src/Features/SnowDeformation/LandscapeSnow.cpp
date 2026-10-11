@@ -152,6 +152,41 @@ namespace
 		kRaise
 	};
 
+	// Snow on Landscape: one depth-prepass landscape draw, as the replay re-issues it.
+	struct LsCapture
+	{
+		const void* geometry = nullptr;
+		winrt::com_ptr<ID3D11InputLayout> layout;
+		winrt::com_ptr<ID3D11Buffer> vb;
+		UINT stride = 0;
+		UINT vbOffset = 0;
+		winrt::com_ptr<ID3D11Buffer> ib;
+		DXGI_FORMAT ibFormat = DXGI_FORMAT_UNKNOWN;
+		UINT ibOffset = 0;
+		UINT indexCount = 0;
+		double translate[3]{};
+		float2 boundXY{};
+		float boundRadius = 0.0f;
+	};
+
+	struct LssShaders
+	{
+		winrt::com_ptr<ID3D11VertexShader> vs;
+		winrt::com_ptr<ID3D11HullShader> hs;
+		winrt::com_ptr<ID3D11DomainShader> ds;
+		double compileMs = 0.0;
+	};
+
+	struct LsShadeCounts
+	{
+		uint32_t captures = 0;
+		uint32_t mainDraws = 0;
+		uint32_t mainMissed = 0;
+		uint32_t replayCalls = 0;
+		uint32_t replayDraws = 0;
+		uint32_t replayTess = 0;
+	};
+
 	struct LsState
 	{
 		LsConfig cfg;
@@ -181,6 +216,20 @@ namespace
 		ID3D11ShaderResourceView* savedVSSRVs[kLsSRVCount]{};
 		ID3D11Buffer* savedVSCB[2]{};
 		ID3D11SamplerState* savedVSSampler = nullptr;
+
+		// Snow on Landscape: this frame's depth-prepass landscape draws, the
+		// replay's shaders, and the counts (this frame's, the last full one's).
+		std::vector<LsCapture> captures;
+		std::unordered_set<const void*> captured;
+		uint32_t captureFrame = UINT32_MAX;
+		bool capturePending = false;
+		LsCapture pendingCapture;
+		int shadeState = 0;  // 1 compiling, 2 ready, 3 failed
+		std::future<LssShaders> shadePending;
+		LssShaders shade;
+		LsShadeCounts shadeFrame;
+		LsShadeCounts shadeLast;
+		uint64_t shadeFallbacks = 0;
 	};
 
 	LsState ls;
@@ -216,6 +265,105 @@ namespace
 		out.ds.attach(static_cast<ID3D11DomainShader*>(snow.CompileSnowShader(path, defs, "ds_5_0", "LS_DS")));
 		out.compileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 		return out;
+	}
+
+	LssShaders LssCompile()
+	{
+		LssShaders out;
+		const auto t0 = std::chrono::steady_clock::now();
+		auto& snow = globals::features::snowDeformation;
+		const wchar_t* path = L"Data\\Shaders\\SnowDeformation\\LandscapeSnowShell.hlsl";
+		out.vs.attach(static_cast<ID3D11VertexShader*>(snow.CompileSnowShader(path, {}, "vs_5_0")));
+		out.hs.attach(static_cast<ID3D11HullShader*>(snow.CompileSnowShader(path, {}, "hs_5_0")));
+		out.ds.attach(static_cast<ID3D11DomainShader*>(snow.CompileSnowShader(path, {}, "ds_5_0")));
+		out.compileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+		return out;
+	}
+
+	// Starts the replay's compile on first use; true once it is ready.
+	bool LssPoll()
+	{
+		if (ls.shadeState == 0) {
+			ls.shadePending = std::async(std::launch::async, LssCompile);
+			ls.shadeState = 1;
+		}
+		if (ls.shadeState == 1 && ls.shadePending.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+			ls.shade = ls.shadePending.get();
+			ls.shadeState = (ls.shade.vs && ls.shade.hs && ls.shade.ds) ? 2 : 3;
+			if (ls.shadeState == 2)
+				logger::info("[SNOW DEFORMATION] Snow on Landscape: replay shaders ready in {:.0f} ms", ls.shade.compileMs);
+			else
+				logger::warn("[SNOW DEFORMATION] Snow on Landscape: LandscapeSnowShell.hlsl failed to compile, the ground shell keeps its grid");
+		}
+		return ls.shadeState == 2;
+	}
+
+	// Depth prepass: queue the draw for capture (its IA state is read at
+	// RestoreGeometry). Main pass: count the draws the capture missed.
+	void LsShadeTrack(RE::BSRenderPass* a_pass, uint32_t a_cat, uint32_t a_frame)
+	{
+		if (a_frame != ls.captureFrame) {
+			ls.shadeLast = ls.shadeFrame;
+			ls.shadeLast.captures = uint32_t(ls.captures.size());
+			ls.shadeFrame = {};
+			ls.captures.clear();
+			ls.captured.clear();
+			ls.captureFrame = a_frame;
+		}
+		const void* geometry = a_pass->geometry;
+		if (a_cat == kLsMain) {
+			ls.shadeFrame.mainDraws++;
+			if (!ls.captured.contains(geometry))
+				ls.shadeFrame.mainMissed++;
+			return;
+		}
+		auto* triShape = a_pass->geometry->AsTriShape();
+		if (!triShape || ls.captured.contains(geometry))
+			return;
+		// The replay places model space by the translate alone, as the raise does.
+		const auto& world = a_pass->geometry->world;
+		if (std::abs(world.scale - 1.0f) > 1e-4f)
+			return;
+		for (int r = 0; r < 3; r++)
+			for (int c = 0; c < 3; c++)
+				if (std::abs(world.rotate.entry[r][c] - (r == c ? 1.0f : 0.0f)) > 1e-4f)
+					return;
+		auto& cap = ls.pendingCapture;
+		cap = {};
+		cap.geometry = geometry;
+		cap.indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		cap.translate[0] = world.translate.x;
+		cap.translate[1] = world.translate.y;
+		cap.translate[2] = world.translate.z;
+		const auto& b = a_pass->geometry->worldBound;
+		cap.boundXY = { b.center.x, b.center.y };
+		cap.boundRadius = b.radius;
+		ls.capturePending = cap.indexCount > 0;
+	}
+
+	void LsShadeCapture()
+	{
+		ls.capturePending = false;
+		auto* context = globals::d3d::context;
+		auto& cap = ls.pendingCapture;
+		context->IAGetInputLayout(cap.layout.put());
+		context->IAGetVertexBuffers(0, 1, cap.vb.put(), &cap.stride, &cap.vbOffset);
+		context->IAGetIndexBuffer(cap.ib.put(), &cap.ibFormat, &cap.ibOffset);
+		if (cap.layout && cap.vb && cap.ib && cap.stride) {
+			ls.captured.insert(cap.geometry);
+			ls.captures.push_back(std::move(cap));
+		}
+		cap = {};
+	}
+
+	// Where ShellEdgeFade can be above zero: the seam square, within the grid's span.
+	float4 LsLiveRect(const SnowDeformation::ShellCB& a_cb)
+	{
+		const float2 spanLo = a_cb.GridOrigin;
+		const float2 spanHi = { a_cb.GridOrigin.x + 2.0f * a_cb.WarpedHalfSpan, a_cb.GridOrigin.y + 2.0f * a_cb.WarpedHalfSpan };
+		if (a_cb.SeamRampInv > 0.0f)
+			return { std::max(spanLo.x, a_cb.SeamBounds.x), std::max(spanLo.y, a_cb.SeamBounds.y), std::min(spanHi.x, a_cb.SeamBounds.z), std::min(spanHi.y, a_cb.SeamBounds.w) };
+		return { spanLo.x, spanLo.y, spanHi.x, spanHi.y };
 	}
 
 	void LsDetach()
@@ -476,8 +624,17 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	ls.shellCB->Update(cb);
 	lsCB = cb;
 
-	auto& s = ls.srvs;
-	std::fill(std::begin(s), std::end(s), nullptr);
+	LandscapeSurfaceSRVs(cb, ls.srvs);
+	ls.sampler = shellSnowSampler.get();
+	ls.liveRect = LsLiveRect(cb);
+	ls.cbValid = true;
+	return true;
+}
+
+void SnowDeformation::LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderResourceView** a_srvs)
+{
+	auto* s = a_srvs;
+	std::fill(s, s + kLsSRVCount, nullptr);
 	s[0] = shellTerrainTexture->srv.get();
 	s[1] = GetDeformationSRV();
 	s[4] = heightTopFiltered->srv.get();
@@ -494,18 +651,111 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	s[29] = GetUndulationFieldSRV();
 	s[kExtentFieldSlot] = GetExtentFieldSRV();
 	s[kUntouchedTilesSlot] = untouchedTilesSRV.get();
-	s[kTerrainWetSlot] = TerrainWetSRV(cb.CompactLook.x > 0.5f);
-	s[kTerrainPlainSlot] = TerrainPlainSRV(cb);
-	ls.sampler = shellSnowSampler.get();
+	s[kTerrainWetSlot] = TerrainWetSRV(a_cb.CompactLook.x > 0.5f);
+	s[kTerrainPlainSlot] = TerrainPlainSRV(a_cb);
+}
 
-	// Where ShellEdgeFade can be above zero: the seam square, within the grid's span.
-	const float2 spanLo = cb.GridOrigin;
-	const float2 spanHi = { cb.GridOrigin.x + 2.0f * cb.WarpedHalfSpan, cb.GridOrigin.y + 2.0f * cb.WarpedHalfSpan };
-	ls.liveRect = { spanLo.x, spanLo.y, spanHi.x, spanHi.y };
-	if (cb.SeamRampInv > 0.0f)
-		ls.liveRect = { std::max(spanLo.x, cb.SeamBounds.x), std::max(spanLo.y, cb.SeamBounds.y), std::min(spanHi.x, cb.SeamBounds.z), std::min(spanHi.y, cb.SeamBounds.w) };
-	ls.cbValid = true;
-	return true;
+bool SnowDeformation::LandscapeShadeReady()
+{
+	if (!landscapeSnow || !landscapeShade || !settings.EnableSnowDeformation)
+		return false;
+	const bool ready = ls.shadeState == 2 && ls.captureFrame == globals::state->frameCount;
+	if (!ready)
+		ls.shadeFallbacks++;
+	return ready;
+}
+
+bool SnowDeformation::LandscapeCastsGroundSnow() const
+{
+	return landscapeSnow && landscapeShade && settings.EnableSnowDeformation && ls.cfg.attach[kLsShadowSun];
+}
+
+uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB)
+{
+	auto& counts = ls.shadeFrame;
+	counts.replayCalls++;
+	if (ls.captures.empty())
+		return 0;
+	const auto& cfg = ls.cfg;
+	if (!ls.drawCB)
+		ls.drawCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<LsCBData>(), "SnowDeformation::LandscapeSnowCB");
+
+	// Every slot this binds outside the caller's own save set goes back as found.
+	winrt::com_ptr<ID3D11InputLayout> prevLayout;
+	a_context->IAGetInputLayout(prevLayout.put());
+	winrt::com_ptr<ID3D11Buffer> prevVB, prevIB;
+	UINT prevStride = 0, prevVBOffset = 0, prevIBOffset = 0;
+	DXGI_FORMAT prevIBFormat = DXGI_FORMAT_UNKNOWN;
+	a_context->IAGetVertexBuffers(0, 1, prevVB.put(), &prevStride, &prevVBOffset);
+	a_context->IAGetIndexBuffer(prevIB.put(), &prevIBFormat, &prevIBOffset);
+	ID3D11Buffer* prevCB11[3]{};
+	a_context->VSGetConstantBuffers(11, 1, &prevCB11[0]);
+	a_context->HSGetConstantBuffers(11, 1, &prevCB11[1]);
+	a_context->DSGetConstantBuffers(11, 1, &prevCB11[2]);
+
+	ID3D11ShaderResourceView* srvs[kLsSRVCount];
+	LandscapeSurfaceSRVs(a_cb, srvs);
+	ID3D11SamplerState* sampler = shellSnowSampler.get();
+	auto* state = globals::state;
+	ID3D11Buffer* shared[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+	a_context->VSSetShader(ls.shade.vs.get(), nullptr, 0);
+	a_context->HSSetShader(ls.shade.hs.get(), nullptr, 0);
+	a_context->DSSetShader(ls.shade.ds.get(), nullptr, 0);
+	a_context->HSSetConstantBuffers(0, 1, &a_shellCB);
+	a_context->DSSetConstantBuffers(0, 1, &a_shellCB);
+	a_context->DSSetConstantBuffers(4, 3, shared);
+	a_context->HSSetShaderResources(0, kLsSRVCount, srvs);
+	a_context->DSSetShaderResources(0, kLsSRVCount, srvs);
+	a_context->HSSetSamplers(0, 1, &sampler);
+	a_context->DSSetSamplers(0, 1, &sampler);
+	a_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+	ID3D11Buffer* drawCB = ls.drawCB->CB();
+	a_context->VSSetConstantBuffers(11, 1, &drawCB);
+	a_context->HSSetConstantBuffers(11, 1, &drawCB);
+	a_context->DSSetConstantBuffers(11, 1, &drawCB);
+
+	const float4 live = LsLiveRect(a_cb);
+	const auto& cam = a_cb.CameraPosAdjust;
+	ID3D11InputLayout* boundLayout = nullptr;
+	uint32_t issued = 0;
+	for (const auto& cap : ls.captures) {
+		const auto& c = cap.boundXY;
+		const float r = cap.boundRadius;
+		if (c.x + r < live.x || c.y + r < live.y || c.x - r > live.z || c.y - r > live.w)
+			continue;
+		const float dx = c.x - cam.x;
+		const float dy = c.y - cam.y;
+		const bool tessNear = cfg.tessellate && std::sqrt(dx * dx + dy * dy) - r < cfg.tessReach;
+		LsCBData data{
+			{ float(cap.translate[0] - double(a_cb.GridOrigin.x)), float(cap.translate[1] - double(a_cb.GridOrigin.y)), float(cap.translate[2]), std::max(cfg.lift, 0.0f) },
+			{ 1.0f, tessNear ? std::clamp(cfg.maxFactor, 1.0f, 64.0f) : 1.0f, cfg.gate ? float(std::clamp(cfg.gateMask, 0, 31)) : 0.0f, cfg.cull ? 1.0f : 0.0f },
+			{ std::max(cfg.guard, 0.0f), 0.0f, 0.0f, 0.0f }
+		};
+		ls.drawCB->Update(data);
+		if (cap.layout.get() != boundLayout) {
+			boundLayout = cap.layout.get();
+			a_context->IASetInputLayout(boundLayout);
+		}
+		ID3D11Buffer* vb = cap.vb.get();
+		a_context->IASetVertexBuffers(0, 1, &vb, &cap.stride, &cap.vbOffset);
+		a_context->IASetIndexBuffer(cap.ib.get(), cap.ibFormat, cap.ibOffset);
+		a_context->DrawIndexed(cap.indexCount, 0, 0);
+		issued++;
+		counts.replayTess += tessNear ? 1 : 0;
+	}
+	counts.replayDraws += issued;
+
+	a_context->IASetInputLayout(prevLayout.get());
+	ID3D11Buffer* vb = prevVB.get();
+	a_context->IASetVertexBuffers(0, 1, &vb, &prevStride, &prevVBOffset);
+	a_context->IASetIndexBuffer(prevIB.get(), prevIBFormat, prevIBOffset);
+	a_context->VSSetConstantBuffers(11, 1, &prevCB11[0]);
+	a_context->HSSetConstantBuffers(11, 1, &prevCB11[1]);
+	a_context->DSSetConstantBuffers(11, 1, &prevCB11[2]);
+	for (auto* b : prevCB11)
+		if (b)
+			b->Release();
+	return issued;
 }
 
 void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighting)
@@ -513,8 +763,10 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	if (ls.mode != LsMode::kNone)
 		LsDetach();
 	ls.curDraw = -1;
+	ls.capturePending = false;
 	const auto& cfg = ls.cfg;
-	const bool raiseOn = landscapeSnow && settings.EnableSnowDeformation && !SnowShadersPending(1);
+	// Not in the walled cities while their ground shell is off: no snow layer there to stand for.
+	const bool raiseOn = landscapeSnow && settings.EnableSnowDeformation && !SnowShadersPending(1) && !GroundShellsSuspended();
 	if (!raiseOn && !cfg.measure)
 		return;
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
@@ -549,6 +801,11 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	if (frame != ls.lastFrame)
 		LsNewFrame(frame);
 	auto& slot = ls.slots[ls.slotIndex];
+	// Snow on Landscape: the ground shell's prepass draws this frame's depth-
+	// prepass landscape; only the sun cascades, which the shell caster drew, are raised.
+	const bool shadeOn = raiseOn && landscapeShade;
+	if (shadeOn && (cat == kLsDepth || cat == kLsMain) && LssPoll())
+		LsShadeTrack(a_pass, cat, frame);
 	slot.draws[cat]++;
 	auto* triShape = a_pass->geometry->AsTriShape();
 	if (triShape)
@@ -557,7 +814,7 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	LsMode want = LsMode::kNone;
 	bool tbDraw = false;
 	bool tbOffset = false;
-	if (raiseOn && cfg.attach[cat]) {
+	if (raiseOn && cfg.attach[cat] && (!shadeOn || cat == kLsShadowSun)) {
 		want = LsMode::kRaise;
 		// Terrain Blending draws near terrain twice in the depth prepass and binds its own VS at the
 		// draw: first its terrain depth, then the main depth with OFFSET_DEPTH (renderAltTerrain).
@@ -736,6 +993,8 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 
 void SnowDeformation::LandscapeSnowRestore()
 {
+	if (ls.capturePending)
+		LsShadeCapture();
 	if (ls.curDraw >= 0) {
 		auto* context = globals::d3d::context;
 		auto& slot = ls.slots[ls.slotIndex];
@@ -765,8 +1024,15 @@ std::string SnowDeformation::LandscapeSnowStatus() const
 		tess += e.tessAttaches;
 		raise += e.raiseAttaches;
 	}
-	return std::format("shader sets: {} ready, {} compiling, {} failed | draws raised so far: {} tessellated, {} vertex-only{}", ready, compiling, failed, tess, raise,
-		ls.cbValid ? "" : " | waiting for the shell's fields (no snow in the footprint, or not drawn yet)");
+	std::string shade;
+	if (landscapeShade) {
+		constexpr const char* kStates[4] = { "not started", "compiling", "ready", "FAILED" };
+		const auto& c = ls.shadeLast;
+		shade = std::format(" | Snow on Landscape: replay {}, {} draws captured, {} replayed ({} tessellated), {} main-pass draws not captured", kStates[std::clamp(ls.shadeState, 0, 3)],
+			c.captures, c.replayDraws, c.replayTess, c.mainMissed);
+	}
+	return std::format("shader sets: {} ready, {} compiling, {} failed | draws raised so far: {} tessellated, {} vertex-only{}{}", ready, compiling, failed, tess, raise,
+		ls.cbValid ? "" : " | waiting for the shell's fields (no snow in the footprint, or not drawn yet)", shade);
 }
 
 json SnowDeformation::LandscapeSnowTool(const json& a_args)
@@ -784,6 +1050,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		rdb(kLsNames[i], c.attach[i]);
 	rdb("landscapeSnow", landscapeSnow);
 	rdb("hideShell", landscapeHideShell);
+	rdb("landscapeShade", landscapeShade);
 	rdb("tessellate", c.tessellate);
 	rdb("gate", c.gate);
 	rdb("cull", c.cull);
@@ -805,6 +1072,10 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	if (a_args.contains("recompile") && a_args["recompile"].is_boolean() && a_args["recompile"].get<bool>()) {
 		for (auto it = ls.entries.begin(); it != ls.entries.end();)
 			it = it->second.state == 1 ? std::next(it) : ls.entries.erase(it);
+		if (ls.shadeState != 1) {
+			ls.shade = {};
+			ls.shadeState = 0;
+		}
 		Util::ClearShaderCompileFailures();
 	}
 
@@ -833,7 +1104,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	json attach = json::object();
 	for (uint32_t i = 0; i < kLsCategories; i++)
 		attach[kLsNames[i]] = c.attach[i];
-	out["config"] = { { "landscapeSnow", landscapeSnow }, { "hideShell", landscapeHideShell }, { "attach", attach }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull }, { "tbNear", c.tbNear },
+	out["config"] = { { "landscapeSnow", landscapeSnow }, { "hideShell", landscapeHideShell }, { "landscapeShade", landscapeShade }, { "attach", attach }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull }, { "tbNear", c.tbNear },
 		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shellSink", c.shellSink } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
@@ -842,6 +1113,9 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	out["shaders"] = entries;
 	out["surface"] = { { "valid", ls.cbValid }, { "gridOrigin", { lsCB.GridOrigin.x, lsCB.GridOrigin.y } },
 		{ "liveRect", { ls.liveRect.x, ls.liveRect.y, ls.liveRect.z, ls.liveRect.w } }, { "camera", { lsCB.CameraPosAdjust.x, lsCB.CameraPosAdjust.y, lsCB.CameraPosAdjust.z } } };
+	const auto& sc = ls.shadeLast;
+	out["shade"] = { { "replayState", ls.shadeState }, { "compileMs", ls.shade.compileMs }, { "fallbackFrames", ls.shadeFallbacks },
+		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess } } } };
 	out["status"] = LandscapeSnowStatus();
 	return out;
 }

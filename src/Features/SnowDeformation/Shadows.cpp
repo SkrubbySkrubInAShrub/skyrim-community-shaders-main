@@ -258,6 +258,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		logOnce("skip: no snow depth within the shell footprint");
 		return;
 	}
+	// Snow on Landscape: the raised landscape casts the layer itself.
+	if (LandscapeCastsGroundSnow()) {
+		logOnce("skip: the raised landscape casts the ground snow");
+		return;
+	}
 	// Off-view snow alone: the vertex bake is skipped with the grid, so the
 	// caster would evaluate live for a layer whose shadow stays off screen.
 	if (!shellDrawGroundGated && !shellViewGateOff) {

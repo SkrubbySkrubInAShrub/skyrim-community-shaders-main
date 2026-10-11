@@ -2079,6 +2079,9 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	if (cb.CompactLook.x > 0.5f)
 		UpdateTerrainWet();
 
+	// Snow on Landscape: the landscape's own meshes replace the grid, which
+	// is all the bake serves (the shell caster stands down with it).
+	const bool shade = LandscapeShadeReady();
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
@@ -2099,7 +2102,10 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
 
 	// DrawShell's bake, on this CB: the prepass hull and domain read it.
-	globals::profiler->BeginPass("SnowDeformation::Ground - Vertex Bake");
+	if (shade)
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Vertex Bake");
+	else
+		globals::profiler->BeginPass("SnowDeformation::Ground - Vertex Bake");
 	context->CSSetConstantBuffers(0, 1, cbs);
 	context->CSSetConstantBuffers(4, 3, sharedBuffers);
 	context->CSSetShaderResources(0, 6, shellSRVs);
@@ -2120,10 +2126,12 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->CSSetUnorderedAccessViews(1, 3, bakeUAVs, nullptr);
 	context->CSSetShader(bakeCS, nullptr, 0);
 	constexpr UINT bakeGroups = (kShellGridDim + 1 + 7) / 8;
-	context->Dispatch(bakeGroups, bakeGroups, 1);
+	if (!shade)
+		context->Dispatch(bakeGroups, bakeGroups, 1);
 	ID3D11UnorderedAccessView* nullBakeUAVs[3] = {};
 	context->CSSetUnorderedAccessViews(1, 3, nullBakeUAVs, nullptr);
-	globals::profiler->EndPass();
+	if (!shade)
+		globals::profiler->EndPass();
 
 	globals::profiler->BeginPass("SnowDeformation::Ground - Shell Depth Prepass");
 	// The private depth starts as the blended scene depth: the terrain's true
@@ -2197,9 +2205,13 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->PSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 	context->PSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
 	context->PSSetSamplers(0, 1, &snowSampler);
-	uint32_t firstRow = 0, endRow = kShellGridDim;
-	ShellSeamRows(cb, firstRow, endRow);
-	context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
+	if (shade) {
+		DrawLandscapeSnowPrepass(context, cb, cbs[0]);
+	} else {
+		uint32_t firstRow = 0, endRow = kShellGridDim;
+		ShellSeamRows(cb, firstRow, endRow);
+		context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
+	}
 
 	// The settled pixels into the main depth: the game's opaque draws, the
 	// terrain replay among them, now test against the snow.
@@ -2268,9 +2280,11 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	shellEarlyState = EarlyPrepass::Drawing;
 	// Every field the bake read is final here and is next written in the
 	// next Prepass, after the next frame's shadow mask.
-	shellCastBakeValid = true;
-	shellSlopeKey = shellSlopeKeyPending;
-	shellSlopeKeyValid = true;
+	shellCastBakeValid = !shade;
+	if (!shade) {
+		shellSlopeKey = shellSlopeKeyPending;
+		shellSlopeKeyValid = true;
+	}
 }
 
 void SnowDeformation::SyncSssDepth()
@@ -3386,12 +3400,16 @@ void SnowDeformation::DrawShell()
 						context->HSSetShaderResources(60, 1, &prevSRV);
 					}
 					context->PSSetShader(psPrepass, nullptr, 0);
-					// The last-frame hull indexes its flags by SV_PrimitiveID, which
-					// restarts at the first patch drawn.
-					uint32_t firstRow = 0, endRow = kShellGridDim;
-					if (!prepassLastFrame)
-						ShellSeamRows(cbData, firstRow, endRow);
-					context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
+					if (deferred && !visibleCull && LandscapeShadeReady()) {
+						DrawLandscapeSnowPrepass(context, cbData, cbs[0]);
+					} else {
+						// The last-frame hull indexes its flags by SV_PrimitiveID, which
+						// restarts at the first patch drawn.
+						uint32_t firstRow = 0, endRow = kShellGridDim;
+						if (!prepassLastFrame)
+							ShellSeamRows(cbData, firstRow, endRow);
+						context->Draw((endRow - firstRow) * kShellGridDim * 4, firstRow * kShellGridDim * 4);
+					}
 					if (prepassLastFrame) {
 						ID3D11ShaderResourceView* nullPrevSRV = nullptr;
 						context->HSSetShaderResources(60, 1, &nullPrevSRV);
