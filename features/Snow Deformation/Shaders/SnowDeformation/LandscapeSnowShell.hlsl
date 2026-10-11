@@ -51,9 +51,11 @@ bool LssBeyondSeam(float2 lo, float2 hi)
 }
 
 // ShellFullyBare on a triangle: corners and centroid for the object lift.
+// Under land-blended edges the land's snow keeps its film wherever it is
+// painted, under water too.
 bool LssFullyBare(float2 a, float2 b, float2 c, float2 lo, float2 hi)
 {
-	bool bare = ShellTerrainAllBare(lo, hi);
+	bool bare = ShellTerrainAllBare(lo, hi) && (!LandBlendMode() || LandRectNoSnow(lo, hi));
 	[branch] if (bare && ObjectLiftCap > 1.0)
 		bare = !(ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) || ShellObjectLiftsAt((a + b + c) / 3.0));
 	return bare;

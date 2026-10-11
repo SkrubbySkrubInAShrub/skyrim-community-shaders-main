@@ -1091,6 +1091,9 @@ bool LandBlendMode()
 }
 
 static const float kLandFilm = 0.5;
+// Remaining depth under which the snow is a film: the land's own verdict
+// decides it pixel by pixel, objects included.
+static const float kLandFilmDepth = 1.0;
 
 // The land's snow-texture weight, bilinear like TerrainHeightAt.
 float LandSnowWeight(float2 gridLocal)
@@ -1105,6 +1108,25 @@ float LandSnowWeight(float2 gridLocal)
 	float b01 = TerrainBare.Load(int3(t0.x, t1.y, 0));
 	float b11 = TerrainBare.Load(int3(t1.x, t1.y, 0));
 	return 1.0 - lerp(lerp(b00, b10, f.x), lerp(b01, b11, f.x), f.y);
+}
+
+// No land snow weight on any texel a bilinear tap over [lo, hi] can reach
+// (ShellTerrainAllBare's texel range).
+bool LandRectNoSnow(float2 lo, float2 hi)
+{
+	float2 tLo = (GridToTerrainOffset + lo) / TerrainTexelSize;
+	float2 tHi = (GridToTerrainOffset + hi) / TerrainTexelSize;
+	float maxTexel = (float)(TerrainDim - 1);
+	int2 i0 = (int2)clamp(floor(tLo), 0.0, maxTexel);
+	int2 i1 = (int2)clamp(floor(tHi) + 1.0, 0.0, maxTexel);
+	i1 = min(i1, i0 + 3);
+	float bare = 1.0;
+	[loop] for (int y = i0.y; y <= i1.y; ++y)
+	{
+		[loop] for (int x = i0.x; x <= i1.x; ++x)
+			bare = min(bare, TerrainBare.Load(int3(x, y, 0)));
+	}
+	return bare >= 0.998;
 }
 
 // The land's snow odds in Masks.y; -16 where something else drew there (an
@@ -2786,7 +2808,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Trampled Border Fade retired: its default-0 behavior is the
 	// keeper, so the window is the constant it resolved to.
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, 1.0, pixelTerrain.y);
-	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
+	// Land-blended edges: a film is the land's own snow, so the land's verdict,
+	// not the view-dependent proximity fade, decides it next to objects.
+	bool landFilm = false;
+	float landRemaining = 0.0;
+#ifndef SNOW_SHELL_DEFERRED
+	[branch] if (LandBlendMode() && coverageAlpha > 0.001)
+	{
+		landRemaining = CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
+		landFilm = landRemaining < kLandFilmDepth;
+	}
+#endif
+	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
 
 	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): shape the COMBINED
 	// alpha once, after the overrides, so every partial band commits by grain
@@ -2809,13 +2842,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeSurf = 0.0;
 	[branch] if (edgeContest)
 		edgeSurf = pixelEffDepth + (SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip) - 0.5) * 2.0;
-	// Land-blended edges: on mixed land the snow could lose to the land's
-	// grain wherever its side is under the odds' +16 ceiling.
+	// Land-blended edges: on mixed land and on a film the snow could lose to
+	// the land's verdict wherever its side is under the odds' +16 ceiling.
 	bool landContest = false;
 	float landSide = 0.0;
-	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && pixelSnowWeight < 0.998)
+	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
-		landSide = LandSnowSide(CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal), pixelCarve);
+		landSide = LandSnowSide(landRemaining, pixelCarve);
 		landContest = landSide < 16.0;
 	}
 	float floorCarve = 0.0;
@@ -2832,10 +2865,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	const float earlyAlpha = coverageAlpha;
 #	else
-	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && pixelSnowWeight < 0.998)
+	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
-		float side = LandSnowSide(CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal), pixelCarve);
-		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + side < 0.0)
+		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + LandSnowSide(landRemaining, pixelCarve) < 0.0)
 			coverageAlpha = 0.0;
 	}
 	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
