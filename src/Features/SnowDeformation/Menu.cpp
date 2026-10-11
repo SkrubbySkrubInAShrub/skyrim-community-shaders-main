@@ -1793,7 +1793,7 @@ void SnowDeformation::DrawSettings()
 			}
 			ImGui::Checkbox(T(TKEY("landscape_snow"), "Landscape Snow"), &landscapeSnow);
 			if (auto _ttLandscapeSnow = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("landscape_snow_tooltip"), "Experimental: raises the game's own landscape to the ground snow's surface, trenches, berms and drifts included, in every pass that draws it, shadows too. Only the shape so far: the raised ground still wears its own textures, so leave the ground shell on to see snow. Terrain Blending's near ground stays unraised for now."));
+				ImGui::Text("%s", T(TKEY("landscape_snow_tooltip"), "Experimental: raises the game's own landscape to the ground snow's surface, trenches, berms and drifts included, in every pass that draws it, shadows too. Only the shape so far: the raised ground still wears its own textures, so leave the ground shell on to see snow."));
 			if (landscapeSnow) {
 				ImGui::Indent();
 				ImGui::Checkbox(T(TKEY("landscape_hide_shell"), "Hide Ground Shell"), &landscapeHideShell);
