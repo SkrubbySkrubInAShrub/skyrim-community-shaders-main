@@ -1799,6 +1799,18 @@ void SnowDeformation::DrawSettings()
 				ImGui::Checkbox(T(TKEY("landscape_shade"), "Snow on Landscape"), &landscapeShade);
 				if (auto _ttLandscapeShade = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("landscape_shade_tooltip"), "The ground snow is drawn on the landscape's own meshes instead of the ground shell's grid: the same snow and look, with its shadows cast by the raised landscape. Overrides Hide Ground Shell."));
+				if (landscapeShade) {
+					ImGui::Indent();
+					ImGui::Checkbox(T(TKEY("landscape_blend"), "Land-Blended Edges"), &landscapeBlend);
+					if (auto _ttLandscapeBlend = Util::HoverTooltipWrapper())
+						ImGui::Text("%s", T(TKEY("landscape_blend_tooltip"), "Where the land is painted part snow, part ground, the land's own height blend decides which shows, as when two landscape textures meet: snow in the hollows, stones through. The snow deepens only where the land is nearly all snow, and trenches reach the ground. Off: the ground shell's own edge."));
+					if (landscapeBlend) {
+						ImGui::SliderFloat(T(TKEY("landscape_blend_start"), "Deep Snow From"), &landscapeBlendStart, 0.5f, 1.0f, "%.2f");
+						if (auto _ttLandscapeBlendStart = Util::HoverTooltipWrapper())
+							ImGui::Text("%s", T(TKEY("landscape_blend_start_tooltip"), "How much of the land's paint must be snow before the snow starts to deepen (1 = all of it). Below it the snow is a thin layer the land's blend breaks up. Lower keeps deep snow on more mixed ground."));
+					}
+					ImGui::Unindent();
+				}
 				ImGui::Checkbox(T(TKEY("landscape_hide_shell"), "Hide Ground Shell"), &landscapeHideShell);
 				if (auto _ttLandscapeHide = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("landscape_hide_shell_tooltip"), "Hides the ground shell and its shadows so the raised landscape can be seen on its own. Road snow and object snow stay."));

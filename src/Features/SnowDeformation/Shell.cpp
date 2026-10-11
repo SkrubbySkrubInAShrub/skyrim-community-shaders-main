@@ -1832,9 +1832,11 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 	a_cb.DeformMapOrigin = mapOrigin;
 	// Bit 0 horizon march, bit 1 hull frustum cull, bit 2 land-exact height
 	// off, bit 3 the tessellated patches' old, land-crossing diagonal, bit 4
-	// churn by parallax, bit 5 far relief off. .y is DrawShell's (road tops this frame).
+	// churn by parallax, bit 5 far relief off, bit 6 land-blended edges. .y is
+	// DrawShell's (road tops this frame).
 	a_cb.ShellFlags.x = (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2) |
-	                    (shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalUnflip ? 8 : 0) | (shellChurnParallaxOff ? 0 : 16) | (shellFarTessDisabled ? 32 : 0);
+	                    (shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalUnflip ? 8 : 0) | (shellChurnParallaxOff ? 0 : 16) | (shellFarTessDisabled ? 32 : 0) |
+	                    (LandBlendActive() ? 64 : 0);
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
@@ -2205,6 +2207,8 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
 	context->PSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 	context->PSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+	ID3D11ShaderResourceView* bareSRV = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
+	context->PSSetShaderResources(kTerrainBareSlot, 1, &bareSRV);
 	context->PSSetSamplers(0, 1, &snowSampler);
 	if (shade) {
 		DrawLandscapeSnowPrepass(context, cb, cbs[0]);
@@ -2597,14 +2601,19 @@ void SnowDeformation::DrawShell()
 	// Sparkle: the shell's specular runs TruePBR's glint NDF when its shared
 	// noise texture exists (bound to t20 below for the whole pass).
 	cbData.EnableGlints = (settings.SnowGlints && globals::features::truePBR.glintsNoiseTexture) ? 1.0f : 0.0f;
-	cbData.BorderNoise = settings.SnowBorderNoise;
-	cbData.BorderSmooth = settings.SnowBorderSmoothness;
+	// Land-blended edges: the land's own blend replaces the border shaping, and
+	// trenches reach the ground.
+	const bool landBlend = LandBlendActive();
+	cbData.BorderNoise = landBlend ? 0.0f : settings.SnowBorderNoise;
+	cbData.BorderSmooth = landBlend ? 0.0f : settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
-		std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f),
+		landBlend ? 0.0f : std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f),
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	// x = the water cut (runtime A/B in Debugging Options); yzw spare.
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f };
+	// x = the water cut (runtime A/B in Debugging Options); y, z = the land-blend
+	// contest's depth bonus and carve penalty (log2 odds); w spare.
+	const float2 landContest = landBlend ? LandBlendContest() : float2(0.0f, 0.0f);
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, 0.0f };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.
@@ -3048,6 +3057,8 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(0, 9, shellSRVs);
 	context->PSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 	context->PSSetShaderResources(kTerrainPlainSlot, 1, &plainSRV);
+	ID3D11ShaderResourceView* bareSRV = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
+	context->PSSetShaderResources(kTerrainBareSlot, 1, &bareSRV);
 	context->PSSetShaderResources(13, 1, &fineSRV);
 	context->PSSetShaderResources(27, 2, waterSRVs);
 	context->PSSetShaderResources(19, 1, &waterNearSRV);

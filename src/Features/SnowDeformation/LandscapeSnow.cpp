@@ -69,6 +69,10 @@ namespace
 		// Shadow maps read the shell caster's per-frame bake (on its own grid) instead of
 		// evaluating the surface per vertex in every cascade.
 		bool shadowBake = true;
+		// Phase 5, land-blended edges (landscapeBlend): the resolve's depth bonus
+		// (log2 odds per unit of remaining snow) and carve penalty.
+		float blendBonus = 6.0f;
+		float blendPenalty = 16.0f;
 	};
 
 	// Mirrors LandscapeSnowTess.hlsli LsExcl / LsExclAxis.
@@ -757,6 +761,7 @@ void SnowDeformation::LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderReso
 	s[9] = shellVertexBake ? shellVertexBake->srv.get() : nullptr;
 	s[23] = shellVertexBakeSlope ? shellVertexBakeSlope->srv.get() : nullptr;
 	s[63] = shellCastBake ? shellCastBake->srv.get() : nullptr;
+	s[kTerrainBareSlot] = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
 }
 
 bool SnowDeformation::LandscapeShadeReady()
@@ -767,6 +772,21 @@ bool SnowDeformation::LandscapeShadeReady()
 	if (!ready)
 		ls.shadeFallbacks++;
 	return ready;
+}
+
+bool SnowDeformation::LandBlendActive() const
+{
+	return landscapeSnow && landscapeShade && settings.EnableSnowDeformation && landscapeBlend;
+}
+
+float SnowDeformation::LandBlendDepthStart() const
+{
+	return std::clamp(landscapeBlendStart, 0.0f, 1.0f);
+}
+
+float2 SnowDeformation::LandBlendContest() const
+{
+	return { std::max(ls.cfg.blendBonus, 0.0f), std::max(ls.cfg.blendPenalty, 0.0f) };
 }
 
 bool SnowDeformation::LandscapeShadowsReadBake() const
@@ -1181,6 +1201,10 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("shellSink", c.shellSink);
 	rdb("shadowMainCamera", c.shadowMainCamera);
 	rdb("shadowBake", c.shadowBake);
+	rdb("landBlend", landscapeBlend);
+	rdf("blendStart", landscapeBlendStart);
+	rdf("blendBonus", c.blendBonus);
+	rdf("blendPenalty", c.blendPenalty);
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
@@ -1220,7 +1244,8 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	for (uint32_t i = 0; i < kLsCategories; i++)
 		attach[kLsNames[i]] = c.attach[i];
 	out["config"] = { { "landscapeSnow", landscapeSnow }, { "hideShell", landscapeHideShell }, { "landscapeShade", landscapeShade }, { "attach", attach }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull }, { "tbNear", c.tbNear },
-		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shellSink", c.shellSink }, { "shadowMainCamera", c.shadowMainCamera }, { "shadowBake", c.shadowBake } };
+		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shellSink", c.shellSink }, { "shadowMainCamera", c.shadowMainCamera }, { "shadowBake", c.shadowBake },
+		{ "landBlend", landscapeBlend }, { "landBlendActive", LandBlendActive() }, { "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
 		entries.push_back({ { "type", (key >> 32) == 1 ? "Lighting" : ((key >> 32) == 3 ? "Utility (depth offset)" : "Utility") }, { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
@@ -1243,6 +1268,38 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	for (uint32_t i = 0; i < kLsCategories; i++)
 		cams[kLsNames[i]] = { { "used", { ls.camUsed[i].x, ls.camUsed[i].y, ls.camUsed[i].z } }, { "perFrameBuffer", { ls.camFrame[i].x, ls.camFrame[i].y, ls.camFrame[i].z } }, { "castBaked", ls.castBakedCat[i] } };
 	out["cameras"] = cams;
+	// Mixed land around the camera (the window's land snow weight 0.2-0.8), for aiming the land-blend A/Bs.
+	if (a_args.contains("mixed") && a_args["mixed"].is_boolean() && a_args["mixed"].get<bool>() && !shellBareScratch.empty()) {
+		const auto* camera = RE::Main::WorldRootCamera();
+		const RE::NiPoint3 eye = camera ? camera->world.translate : RE::NiPoint3{};
+		const float radius = a_args.contains("mixedRadius") && a_args["mixedRadius"].is_number() ? a_args["mixedRadius"].get<float>() : 3000.0f;
+		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+		const float originX = shellWindowCellX * cellSize;
+		const float originY = shellWindowCellY * cellSize;
+		json texels = json::array();
+		uint32_t count = 0;
+		// Every texel with land snow weight in the radius, in tenths (the last bin is exactly 1).
+		uint32_t histogram[11]{};
+		for (int ty = 0; ty < kShellWindowDim; ++ty) {
+			for (int tx = 0; tx < kShellWindowDim; ++tx) {
+				const uint8_t bare = shellBareScratch[size_t(ty) * kShellWindowDim + tx];
+				const float wx = originX + tx * kShellVertexSpacing;
+				const float wy = originY + ty * kShellVertexSpacing;
+				if ((wx - eye.x) * (wx - eye.x) + (wy - eye.y) * (wy - eye.y) > radius * radius)
+					continue;
+				const float snow = 1.0f - bare / 255.0f;
+				if (bare < 255)
+					histogram[bare == 0 ? 10 : std::min(int(snow * 10.0f), 9)]++;
+				if (snow < 0.2f || snow > 0.8f)
+					continue;
+				count++;
+				if (texels.size() < 64)
+					texels.push_back({ wx, wy, snow });
+			}
+		}
+		out["mixed"] = { { "count", count }, { "texels", texels }, { "snowWeightHistogram", histogram }, { "windowBlend", shellWindowLandBlend },
+			{ "windowBlendStart", shellWindowLandBlendStart } };
+	}
 	out["status"] = LandscapeSnowStatus();
 	return out;
 }

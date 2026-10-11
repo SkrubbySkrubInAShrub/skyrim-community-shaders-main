@@ -586,6 +586,13 @@ void SnowDeformation::SetupResources()
 		shellTerrainPlain = new Texture2D(plainDesc, "SnowDeformation::ShellTerrainPlain");
 		shellTerrainPlain->CreateSRV(plainSrvDesc);
 		shellTerrainPlain->CreateUAV(plainUavDesc);
+		D3D11_TEXTURE2D_DESC bareDesc = terrainDesc;
+		bareDesc.Format = DXGI_FORMAT_R8_UNORM;
+		bareDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		D3D11_SHADER_RESOURCE_VIEW_DESC bareSrvDesc = terrainSrvDesc;
+		bareSrvDesc.Format = bareDesc.Format;
+		shellTerrainBare = new Texture2D(bareDesc, "SnowDeformation::ShellTerrainBare");
+		shellTerrainBare->CreateSRV(bareSrvDesc);
 	}
 
 	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");
@@ -696,7 +703,8 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
-	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u);
+	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
+	                           (LandBlendActive() ? 128u : 0u);
 	// Water raster frame (t104): the window's min corner, texel size, dim.
 	data.WaterWindowDim = 0.0f;
 	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {

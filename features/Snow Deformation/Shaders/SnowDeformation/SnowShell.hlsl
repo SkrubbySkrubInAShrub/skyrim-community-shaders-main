@@ -288,6 +288,9 @@ Texture2D<float4> TerrainWindowWet : register(t58);
 // shaped tap can reach from this texel's quad (TerrainCutCS; unbound while
 // the border reach could pass one texel): every tap there reads one value.
 Texture2D<uint> TerrainPlain : register(t59);
+// Land-blended edges (ShellFlags.x bit 6): 1 - the land's snow-texture weight
+// per window texel; unbound reads 0, all snow.
+Texture2D<float> TerrainBare : register(t26);
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
 // The land mesh is then flat between these points with a checkerboard
@@ -1076,6 +1079,46 @@ float TerrainHeightAt(float2 gridLocal)
 	[flatten] if (min(min(s00, s10), min(s01, s11)) <= -50000.0)
 		return -100000.0;
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Snow on Landscape's land-blended edges: on mixed land the landscape's own
+// height blend decides snow or ground (Lighting WriteLandSnowOdds), the snow
+// lies as a film where the land has any snow weight, and trenches reach the
+// ground. LANDSCAPE-SNOW-PLAN Phase 5.
+bool LandBlendMode()
+{
+	return (ShellFlags.x & 64) != 0;
+}
+
+static const float kLandFilm = 0.5;
+
+// The land's snow-texture weight, bilinear like TerrainHeightAt.
+float LandSnowWeight(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	float b00 = TerrainBare.Load(int3(t0.x, t0.y, 0));
+	float b10 = TerrainBare.Load(int3(t1.x, t0.y, 0));
+	float b01 = TerrainBare.Load(int3(t0.x, t1.y, 0));
+	float b11 = TerrainBare.Load(int3(t1.x, t1.y, 0));
+	return 1.0 - lerp(lerp(b00, b10, f.x), lerp(b01, b11, f.x), f.y);
+}
+
+// The land's snow odds in Masks.y; -16 where something else drew there (an
+// object's base, grass), so thin snow never claims it.
+float LandSnowOdds(float masksY)
+{
+	return masksY > 0.002 && masksY < 1.5 ? saturate((masksY - 0.004) * (1.0 / 0.996)) * 32.0 - 16.0 : -16.0;
+}
+
+// The snow's side of the contest: remaining depth buries the land's grain
+// (CompactLook.y per unit), a carve pushes thin snow away (CompactLook.z).
+float LandSnowSide(float remaining, float carve)
+{
+	return CompactLook.y * remaining - CompactLook.z * smoothstep(0.3, 1.0, carve);
 }
 
 // Rise above the waterline over which the cap runs the class ramp's 38
@@ -2505,6 +2548,12 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 			if (screenNoise * screenNoise >= dust)
 				discard;
 		}
+		// Land-blended edges: the land's own verdict against the snow's side.
+		[branch] if ((flags & 4) != 0)
+		{
+			if (LandSnowOdds(hLandRaw) + pending.y < 0.0)
+				discard;
+		}
 		if ((flags & 1) != 0 && hLandRaw < 1.5)
 			depth = min(depth, SceneDepth.Load(px) - 1e-5);
 	}
@@ -2668,6 +2717,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the ground, so grain interlocks at the fringe. One number cannot do both.
 	float rampTerm = smoothstep(1.0, 3.0, pixelRampDepth) * saturate(0.5 + pixelEffDepth / rampFadeBand);
 	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * rampTerm;
+#ifndef SNOW_SHELL_DEFERRED
+	// Land-blended edges: wherever the land has snow weight the pixel is a
+	// candidate; on mixed land the land's own verdict decides it below.
+	const float pixelSnowWeight = LandBlendMode() ? LandSnowWeight(gridLocal) : 1.0;
+	[flatten] if (LandBlendMode())
+		coverageAlpha = pixelSnowWeight > 0.002 ? psEdgeFade : 0.0;
+#endif
 	// Josef's border spec: the alpha may not cut geometry still standing
 	// above its ground - the sheet dives below the terrain (the VS descent's
 	// undershoot) and the depth test against the terrain IS the border.
@@ -2749,13 +2805,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// The land grain is drawn after this pass: the contests' snow sides are
 	// recorded and the resolve runs them. They only lower the alpha, so the
 	// cut below on the uncontested alpha discards nothing they would keep.
-	const bool edgeContest = HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999;
+	const bool edgeContest = !LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999;
 	float edgeSurf = 0.0;
 	[branch] if (edgeContest)
 		edgeSurf = pixelEffDepth + (SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip) - 0.5) * 2.0;
+	// Land-blended edges: on mixed land the snow could lose to the land's
+	// grain wherever its side is under the odds' +16 ceiling.
+	bool landContest = false;
+	float landSide = 0.0;
+	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && pixelSnowWeight < 0.998)
+	{
+		landSide = LandSnowSide(CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal), pixelCarve);
+		landContest = landSide < 16.0;
+	}
 	float floorCarve = 0.0;
 	float floorSurf = 0.0;
-	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
+	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
 	{
 		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
 		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
@@ -2767,7 +2832,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	const float earlyAlpha = coverageAlpha;
 #	else
-	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
+	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && pixelSnowWeight < 0.998)
+	{
+		float side = LandSnowSide(CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal), pixelCarve);
+		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + side < 0.0)
+			coverageAlpha = 0.0;
+	}
+	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
 		// Statics behind the shell carry the recolor's weight here as
@@ -2794,7 +2865,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// over ~6 units beats the ~2-unit dirt grain; toward 0 trampling wears
 	// through. The tight carve gate keeps walls solid. Runs after the carve
 	// override, and is the one voice allowed to overrule it.
-	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
+	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
 	{
 		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
 		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
@@ -2869,10 +2940,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Marked by a negative raster depth; the claim fill skips it.
 	const bool clampPending = prepassOut.DepthLE < input.Position.z;
 	prepassOut.Pending = 0.0;
-	[branch] if (edgeContest || floorCarve > 0.0 || clampPending)
+	[branch] if (edgeContest || floorCarve > 0.0 || clampPending || landContest)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
-		prepassOut.Pending = float4(earlyAlpha, edgeSurf, floorSurf, floorCarve + (clampPending ? 2.0 : 0.0) + (edgeContest ? 4.0 : 0.0));
+		prepassOut.Pending = float4(earlyAlpha, landContest ? landSide : edgeSurf, floorSurf,
+			floorCarve + (clampPending ? 2.0 : 0.0) + (edgeContest ? 4.0 : 0.0) + (landContest ? 8.0 : 0.0));
 	}
 #	endif
 	return prepassOut;

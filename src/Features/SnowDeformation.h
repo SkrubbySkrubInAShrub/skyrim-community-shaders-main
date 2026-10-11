@@ -1489,6 +1489,14 @@ public:
 	Texture2D* shellTerrainWet = nullptr;
 	/** @brief R8_UINT, 1 where shellTerrainWet's depth and coverage are bit-identical over the 4x4 texels around a texel's quad (TerrainCutCS, same dispatch). */
 	Texture2D* shellTerrainPlain = nullptr;
+	/** @brief R8_UNORM beside the terrain window: 1 - the land's snow-texture weight (texture depth > 0) per texel, 0 where unbaked. Read by Snow on Landscape's land-blended edges (LandBlendActive). */
+	Texture2D* shellTerrainBare = nullptr;
+	std::vector<uint8_t> shellBareScratch;
+	/** @brief Shell SRV slot of shellTerrainBare (SnowShell.hlsl TerrainBare). */
+	static constexpr UINT kTerrainBareSlot = 26;
+	/** @brief The land-blend state the window was last built with, so a switch rebuilds it. */
+	bool shellWindowLandBlend = false;
+	float shellWindowLandBlendStart = 1.0f;
 	ID3D11ComputeShader* shellTerrainCutCS = nullptr;
 	ID3D11ComputeShader* GetShellTerrainCutCS();
 	/** @brief Rebuilds shellTerrainWet when its inputs changed. Call after the water cover pass, before any landscape-shell pass. */
@@ -3991,6 +3999,14 @@ public:
 	bool LandscapeCastsGroundSnow() const;
 	/** @brief Under Snow on Landscape the sun cascades read the shell caster's per-frame bake, so the early prepass keeps baking. */
 	bool LandscapeShadowsReadBake() const;
+	/** @brief Snow on Landscape's land-blended edges (LANDSCAPE-SNOW-PLAN Phase 5): wherever the land is mixed, its own height blend decides snow or ground (Lighting writes its snow odds into Masks.y); no trench floor; the window bake keeps snow depth only where the land is nearly all snow. */
+	bool LandBlendActive() const;
+	/** @brief The land's snow-texture weight from which the bake keeps snow depth (smoothstep to 1). */
+	float LandBlendDepthStart() const;
+	/** @brief A blended class depth under the land-blend rule: positive depth scaled by smoothstep(LandBlendDepthStart, 1, snow weight); unchanged when the mode is off. Shared by the window bake and GetNominalSnowDepthAt. */
+	float LandBlendDepth(float a_depth, float a_snowWeight) const;
+	/** @brief The resolve's depth bonus (log2 odds per unit of remaining snow) and carve penalty (log2 odds at a full carve). */
+	float2 LandBlendContest() const;
 	/** @brief Snow on Landscape: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl where the shell prepass draws its grid. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
 	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB);
 	/** @brief One-line status for the Debugging menu. */
@@ -4003,6 +4019,10 @@ public:
 	bool landscapeHideShell = false;
 	/** @brief Debug, not serialised (Snow on Landscape, Phase 3): the ground shell's prepass draws the landscape's own meshes instead of its grid; camera passes stay unraised and the sun cascades are raised by the shell caster's rules in place of the caster. Needs landscapeSnow. */
 	bool landscapeShade = false;
+	/** @brief Debug, not serialised (Phase 5): Snow on Landscape's land-blended edges, on by default under it (LandBlendActive). */
+	bool landscapeBlend = true;
+	/** @brief The land's snow-texture weight from which the snow deepens under land-blended edges; below it the snow is a film the land's blend cuts. */
+	float landscapeBlendStart = 0.85f;
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
 	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */

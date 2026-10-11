@@ -690,13 +690,27 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	// Same layer resolve the window rebuild uses, for one vertex.
 	const uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
 	float depth = 0.0f;
+	float snowWeight = 0.0f;
 	const std::shared_lock textureLock(landTextureMutex);
 	for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
 		const uint16_t texture = it->second.layerTexture[idx][slot];
-		if (texture < landTextures.size())
-			depth += it->second.layerWeight[idx][slot] / 255.0f * landTextures[texture].depth;
+		if (texture < landTextures.size()) {
+			const float w = it->second.layerWeight[idx][slot] / 255.0f;
+			depth += w * landTextures[texture].depth;
+			if (IsSnowDepth(landTextures[texture].depth))
+				snowWeight += w;
+		}
 	}
-	return depth;
+	return LandBlendDepth(depth, snowWeight);
+}
+
+float SnowDeformation::LandBlendDepth(float a_depth, float a_snowWeight) const
+{
+	if (a_depth <= 0.0f || !LandBlendActive())
+		return a_depth;
+	const float start = LandBlendDepthStart();
+	const float t = std::clamp((std::min(a_snowWeight, 1.0f) - start) / std::max(1.0f - start, 1e-3f), 0.0f, 1.0f);
+	return a_depth * t * t * (3.0f - 2.0f * t);
 }
 
 SnowDeformation::ShellProbe SnowDeformation::ProbeShellData(float a_x, float a_y)
@@ -787,6 +801,10 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	// would stay resident.
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	bool worldspaceChanged = worldspace != shellWindowWorldspace;
+	const bool landBlend = LandBlendActive();
+	const float landBlendStart = landBlend ? LandBlendDepthStart() : 1.0f;
+	if (landBlend != shellWindowLandBlend || landBlendStart != shellWindowLandBlendStart)
+		shellDataDirty.store(true, std::memory_order_release);
 	RefreshLandMeshHeights();
 	if (!originChanged && !fillChanged && !worldspaceChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel)) {
 		// Mesh data that arrived after the last build: the fine layer alone.
@@ -803,6 +821,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	shellDataDirty.store(false, std::memory_order_release);
 
 	shellUploadScratch.resize(size_t(kShellWindowDim) * kShellWindowDim * 4);
+	shellBareScratch.assign(size_t(kShellWindowDim) * kShellWindowDim, 0);
 	// One snapshot for the whole texel loop; the bake thread may register new
 	// textures while it runs, and those cells are not in this window yet.
 	const std::vector<float> textureDepths = LandTextureDepthSnapshot();
@@ -862,6 +881,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					// the shell from cached weights without a re-bake.
 					float rampDepth = 0.0f;
 					float coverage = 0.0f;
+					float snowWeight = 0.0f;
 					for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
 						const uint16_t texture = rowCell->layerTexture[idx][slot];
 						if (texture >= textureDepths.size())
@@ -869,7 +889,12 @@ void SnowDeformation::UpdateShellTerrainWindow()
 						float w = rowCell->layerWeight[idx][slot] / 255.0f;
 						rampDepth += w * textureDepths[texture];
 						coverage += w;
+						if (IsSnowDepth(textureDepths[texture]))
+							snowWeight += w;
 					}
+					snowWeight = std::min(snowWeight, 1.0f);
+					const bool snowy = rampDepth > 0.0f || (landBlend && snowWeight > 0.0f);
+					rampDepth = LandBlendDepth(rampDepth, snowWeight);
 					texel[0] = rowCell->height[idx];
 					texel[1] = rampDepth;
 					texel[2] = std::min(coverage, 1.0f);
@@ -877,8 +902,9 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					// writes its provenance codes at >= 0.5 and skips baked
 					// texels (x wins), so both meanings coexist in one channel.
 					texel[3] = rowCell->vertexAO[idx] * (0.499f / 255.0f);
+					shellBareScratch[size_t(ty) * kShellWindowDim + tx] = uint8_t(std::lround((1.0f - snowWeight) * 255.0f));
 
-					rowSnowy |= rampDepth > 0.0f;
+					rowSnowy |= snowy;
 					rowCovered |= texel[2] > 0.0f;
 					statMinH = std::min(statMinH, texel[0]);
 					statMaxH = std::max(statMaxH, texel[0]);
@@ -917,6 +943,10 @@ void SnowDeformation::UpdateShellTerrainWindow()
 
 	globals::d3d::context->UpdateSubresource(shellTerrainTexture->resource.get(), 0, nullptr,
 		shellUploadScratch.data(), kShellWindowDim * 4 * sizeof(float), 0);
+	if (shellTerrainBare)
+		globals::d3d::context->UpdateSubresource(shellTerrainBare->resource.get(), 0, nullptr, shellBareScratch.data(), kShellWindowDim, 0);
+	shellWindowLandBlend = landBlend;
+	shellWindowLandBlendStart = landBlendStart;
 	shellTerrainVersion++;
 
 	FillShellWindowFromHeightmap();
@@ -1147,8 +1177,8 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	// Clear first so bits never leak from the previous landscape draw.
 	state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::SnowLandIsSnowMask);
 
-	// The bits' only reader is the Terrain Overlay (SnowLighting.hlsli).
-	if (material == nullptr || !debugTerrainOverlay)
+	// Read by the Terrain Overlay and Snow on Landscape's land-blended edges (SnowLighting.hlsli).
+	if (material == nullptr || !(debugTerrainOverlay || LandBlendActive()))
 		return;
 
 	uint8_t mask = 0;

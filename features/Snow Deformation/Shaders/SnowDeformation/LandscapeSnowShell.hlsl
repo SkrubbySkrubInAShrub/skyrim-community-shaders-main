@@ -135,6 +135,9 @@ VS_OUTPUT main(LSS_Const c, float3 uvw : SV_DomainLocation, const OutputPatch<LS
 	float coverage;
 	float terrainHeight;
 	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
+	// Land-blended edges: a film over the land wherever it has snow weight.
+	[branch] if (LandBlendMode() && LandSnowWeight(gridLocal) > 0.002)
+		z = max(z, p[0].Local.z * uvw.x + p[1].Local.z * uvw.y + p[2].Local.z * uvw.z + kLandFilm);
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
 }
 #endif

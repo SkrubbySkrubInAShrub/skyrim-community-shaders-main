@@ -359,7 +359,7 @@ void SnowDeformation::ItemSinkUpdate()
 		picks.resize(kItemSinkMax);
 
 	const bool enabled = settings.ItemSink;
-	const float trenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
+	const float trenchFloor = LandBlendActive() ? 0.0f : std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	const float embedShare = std::clamp(settings.ItemEmbedPercent, 0.0f, 100.0f) * 0.01f;
 	const float roundFloor = std::clamp(settings.ItemMinRoundness, 0.0f, 1.0f);
 	const float roundFull = std::max(0.5f, roundFloor + 0.05f);
