@@ -65,8 +65,6 @@ public:
 	bool renderDepth = false;
 	bool renderTerrainDepth = false;
 	bool renderAltTerrain = false;
-	/** @brief Set by a feature that bound its own vertex shader for the next near-terrain depth draw (renderAltTerrain says which of the two); TerrainShaderHacks keeps it and clears the flag. */
-	bool keepVertexShader = false;
 
 	RE::NiPoint3 eyePosition;
 
