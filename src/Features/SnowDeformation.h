@@ -758,8 +758,10 @@ public:
 		float ProjAlphaDensity;
 		/** @brief Settings::ProjSnowNormals as 0/1. Mirror in SharedData.hlsli. */
 		float ProjSnowNormalEnable;
-		float ProjAlphaPad1;
-		float ProjAlphaPad2;
+		/** @brief The snow set's specular level (F0 scale), for the land recolor. Mirror in SharedData.hlsli. */
+		float SnowSpecularLevel;
+		/** @brief Land Snow Recolor: luminance where a snow layer's texel starts to read as snow. Mirror in SharedData.hlsli. */
+		float LandRecolorLumLo;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -3681,6 +3683,12 @@ public:
 	json LandscapeSnowTool(const json& a_args);
 	/** @brief Debug, not serialised: the land's snow-texture weight from which the snow deepens; below it the snow is a film the land's blend cuts. */
 	float landscapeBlendStart = 0.85f;
+	/** @brief Land Snow Recolor (LANDSCAPE-SNOW-PLAN 7.4): the land's snow layers wear the shell's snow set texel by texel wherever the land shows (DebugTerrainOverlay bit 256; 512 = the set's RMAOS is bound). Debug A/B, default on, not serialised. */
+	bool landRecolor = true;
+	/** @brief Land Snow Recolor: gamma luminance where a snow layer's texel starts to read as snow (full 0.18 above). Debug, not serialised. */
+	float landRecolorLumLo = 0.48f;
+	/** @brief The recolor runs this frame: the ground snow draws here and the snow set is loaded. */
+	bool LandRecolorActive() const { return landRecolor && LandBlendActive() && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
 	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */

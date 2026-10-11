@@ -424,8 +424,11 @@ namespace SharedData
 		// Recolored projected snow also wears the shell snow's normal (vanilla's
 		// own projected normal is a dead write). Mirror in SnowDeformation.h.
 		float ProjSnowNormalEnable;
-		float ProjAlphaPad1;
-		float ProjAlphaPad2;
+		// The snow set's specular level (its F0 scale), for the land recolor.
+		float SnowSpecularLevel;
+		// Land Snow Recolor: luminance where a snow layer's texel starts to
+		// read as snow. Mirror in SnowDeformation.h.
+		float LandRecolorLumLo;
 	};
 
 	cbuffer FeatureData : register(b6)

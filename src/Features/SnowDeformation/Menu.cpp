@@ -1654,6 +1654,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("landscape_blend_start"), "Deep Snow From"), &landscapeBlendStart, 0.5f, 1.0f, "%.2f");
 			if (auto _ttLandscapeBlendStart = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("landscape_blend_start_tooltip"), "How much of the land's paint must be snow before the snow starts to deepen (1 = all of it). Below it the snow is a thin layer the land's blend breaks up. Lower keeps deep snow on more mixed ground."));
+			ImGui::Checkbox(T(TKEY("land_recolor"), "Recolor Land Snow (A/B)"), &landRecolor);
+			if (auto _ttLandRecolor = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("land_recolor_tooltip"), "Where the land itself shows (prints down to the ground, thin snow, the bases of blended objects), its snow textures wear this mod's snow, texel by texel. Rocks, grass and dirt inside those textures keep their own look."));
+			ImGui::SliderFloat(T(TKEY("land_recolor_lum_lo"), "Land Snow Brightness Cut"), &landRecolorLumLo, 0.2f, 0.8f, "%.2f");
+			if (auto _ttLandRecolorLum = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("land_recolor_lum_lo_tooltip"), "How bright a land snow texel must be before it takes this mod's snow. Lower recolors more of a snowy-rocks or grass-snow texture; higher keeps more of it."));
 			WrapTextF("  %s", LandscapeSnowStatus().c_str());
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())

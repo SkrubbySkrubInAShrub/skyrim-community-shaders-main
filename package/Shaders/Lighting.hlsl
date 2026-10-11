@@ -1427,6 +1427,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(LANDSCAPE)
+#		if defined(SNOW_DEFORMATION)
+	SnowLighting::LandRecolorBegin(snowState, input.WorldPosition.xyz);
+#		endif
 #		if defined(TERRAIN_VARIATION)
 	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(uv);
 #			define SampleTerrain(TEX, SAMP, UV, OFFSET) StochasticEffect(TEX, SAMP, UV, OFFSET)
@@ -1686,6 +1689,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3x3 tbnTr = ReconstructTBN(input.WorldPosition.xyz, worldNormal, screenUV);
 #	else
 	float3 worldNormal = normalize(mul(tbn, normal.xyz));
+#		if defined(SNOW_DEFORMATION) && defined(LANDSCAPE)
+	SnowLighting::LandRecolorNormal(snowState, worldNormal);
+#		endif
 #		if defined(TREE_ANIM)
 	float3 viewNormal = normalize(FrameBuffer::WorldToView(worldNormal, false));
 	viewNormal = float3(viewNormal.xy, -abs(viewNormal.z));
@@ -2842,7 +2848,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 
-#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LANDSCAPE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	SnowLighting::RelightLOD(snowState, dirLightContext, indirectContext, directionalAmbientColor,
 		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
 #	endif

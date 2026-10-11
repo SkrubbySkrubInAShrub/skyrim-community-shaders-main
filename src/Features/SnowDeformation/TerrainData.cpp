@@ -1186,6 +1186,15 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 
 	landMaskHits.fetch_add(1, std::memory_order_relaxed);
 	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << kSnowLandIsSnowShift;
+
+	// Land Snow Recolor samples the shell's snow set; like the projected
+	// match, it is bound per draw (the Prepass-time bind does not survive).
+	if (mask != 0 && LandRecolorActive()) {
+		ID3D11ShaderResourceView* snowSet[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
+		globals::d3d::context->PSSetShaderResources(102, 2, snowSet);
+		ID3D11ShaderResourceView* snowRmaos = shellSnowRmaosSRV.get();
+		globals::d3d::context->PSSetShaderResources(105, 1, &snowRmaos);
+	}
 }
 
 // Times the game's deferred terrain draws, which the per-type overlay only sees

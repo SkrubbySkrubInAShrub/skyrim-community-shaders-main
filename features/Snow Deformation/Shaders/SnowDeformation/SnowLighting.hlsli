@@ -9,9 +9,10 @@
 #ifndef __SNOW_LIGHTING_HLSLI__
 #define __SNOW_LIGHTING_HLSLI__
 
-#if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+#if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV) || defined(LANDSCAPE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 // Non-TRUE_PBR permutations that re-light snow through the PBR evaluators:
-// the LOD terrain family (horizon snow) and projected-snow statics. The
+// the LOD terrain family (horizon snow), the land's recolored snow layers and
+// projected-snow statics. The
 // optional-lobe branches inside are TRUE_PBR-gated, so these permutations
 // compile the coatless diffuse/lobe core against the vanilla
 // MaterialProperties.
@@ -34,6 +35,15 @@ namespace SnowLighting
 		float texWeight;
 		// Total accumulated lights before the tail clobbers diffuseColor.
 		float3 projLightTotal;
+		// Land Snow Recolor: the shell's snow at this pixel in the layers'
+		// own colour domain, its normal xy and RMAOS, and the share of the
+		// blend that took it.
+		bool landRecolor;
+		uint landSnowBits;
+		float3 landSnowRaw;
+		float2 landSnowNormal;
+		float4 landSnowRMAOS;
+		float landSnowFrac;
 	};
 
 #if defined(LANDSCAPE)
@@ -78,6 +88,134 @@ namespace SnowLighting
 			float odds = clamp(log2(max(snow, 1e-12)) - log2(max(rest, 1e-12)), -16.0, 16.0);
 			masksY = 0.004 + 0.996 * (odds + 16.0) * (1.0 / 32.0);
 		}
+	}
+
+	// Land Snow Recolor (DebugTerrainOverlay bit 256): the module's snow layers
+	// wear the shell's snow set texel by texel, so wherever the land shows
+	// through the shell, its snow is the shell's snow. The taps are the shell's
+	// own (SnowParallax.hlsli ComputeSnowTapsNoGrad) at the shell's tiling.
+	float2 LandSnowHash(float2 cell)
+	{
+		float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+		p3 += dot(p3, p3.yzx + 33.33);
+		return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
+	}
+
+	float4 LandSnowSample(Texture2D<float4> tex, float2 uv0, float2 uv1, float2 uv2, float3 w, float2 dx, float2 dy)
+	{
+		return w.x * tex.SampleGrad(SampColorSampler, uv0, dx, dy) + w.y * tex.SampleGrad(SampColorSampler, uv1, dx, dy) +
+		       w.z * tex.SampleGrad(SampColorSampler, uv2, dx, dy);
+	}
+
+	void LandRecolorBegin(inout State s, float3 worldRel)
+	{
+		uint bits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
+		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 256) != 0 && bits != 0)
+		{
+			float2 worldXY = worldRel.xy + FrameBuffer::CameraPosAdjust.xy;
+			float2 uv = frac(FrameBuffer::CameraPosAdjust.xy / SnowDeformation::SnowUVTile) + worldRel.xy / SnowDeformation::SnowUVTile;
+			float2 dx = ddx(uv);
+			float2 dy = ddy(uv);
+			float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
+			float2 cellBase = floor(lattice);
+			float2 f = frac(lattice);
+			bool upper = f.x + f.y >= 1.0;
+			float2 v0 = cellBase + (upper ? float2(1.0, 1.0) : float2(0.0, 0.0));
+			float2 v1 = cellBase + (upper ? float2(0.0, 1.0) : float2(1.0, 0.0));
+			float2 v2 = cellBase + (upper ? float2(1.0, 0.0) : float2(0.0, 1.0));
+			float3 bary = upper ? float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y) : float3(1.0 - f.x - f.y, f.x, f.y);
+			bary = pow(bary, 4.0);
+			bary /= dot(bary, 1.0);
+			float2 uv0 = uv + LandSnowHash(v0);
+			float2 uv1 = uv + LandSnowHash(v1);
+			float2 uv2 = uv + LandSnowHash(v2);
+
+			float3 a = LandSnowSample(SnowDeformation::HorizonSnowAlbedo, uv0, uv1, uv2, bary, dx, dy).rgb;
+			// Shell albedo convention (SnowShell.hlsl kSnowAlbedo), then the layer
+			// value the land's own Color::Diffuse turns back into it.
+			float3 shellAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? a : Color::LinearToSrgb(a)) : Color::ColorToLinear(a);
+#	if defined(TRUE_PBR)
+			s.landSnowRaw = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? a : (ENABLE_LL ? shellAlbedo : pow(abs(shellAlbedo), 2.2));
+#	else
+			s.landSnowRaw = ENABLE_LL ? pow(abs(shellAlbedo / max(SharedData::linearLightingSettings.vanillaDiffuseColorMult, 1e-3)), 1.0 / SharedData::linearLightingSettings.colorGamma) : shellAlbedo;
+			s.lodAlbedo = shellAlbedo;
+#	endif
+			// Classification debug (bit 4): the recolored texels in magenta too.
+			[flatten] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 4) != 0)
+			{
+				s.landSnowRaw = float3(1.0, 0.0, 1.0);
+				s.lodAlbedo = float3(1.0, 0.0, 1.0);
+			}
+			s.landSnowNormal = 0.0;
+			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+			{
+				float2 n = LandSnowSample(SnowDeformation::HorizonSnowNormal, uv0, uv1, uv2, bary, dx, dy).xy * 2.0 - 1.0;
+				s.landSnowNormal = float2(n.x, -n.y);
+			}
+			// The shell's material defaults; its RMAOS map where the set has one.
+			s.landSnowRMAOS = float4(0.6, 0.0, 1.0, 0.028);
+			[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 512) != 0)
+			{
+				float4 r = LandSnowSample(SnowDeformation::HorizonSnowRmaos, uv0, uv1, uv2, bary, dx, dy);
+				s.landSnowRMAOS = float4(clamp(r.x * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0), 0.0, r.z, r.w * SharedData::snowDeformationSettings.SnowSpecularLevel);
+			}
+			s.landSnowBits = bits;
+			s.landRecolor = true;
+		}
+	}
+
+	// How much a snow layer's texel reads as snow: bright and grey. A snowy
+	// rocks, grass snow or path layer keeps its rock, grass and dirt texels.
+	float LandSnowTexel(float3 layerColor)
+	{
+#	if defined(TRUE_PBR)
+		float3 g = Color::LinearToSrgb(max(layerColor, 0.0));
+#	else
+		float3 g = layerColor;
+#	endif
+		float lum = dot(g, float3(0.2126, 0.7152, 0.0722));
+		float sat = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
+		float lo = SharedData::snowDeformationSettings.LandRecolorLumLo;
+		return smoothstep(lo, lo + 0.18, lum) * (1.0 - smoothstep(0.10, 0.22, sat));
+	}
+
+	void LandRecolorLayer(inout State s, uint tile, float weight, inout float3 layerColor, inout float3 layerNormal, inout float4 layerRMAOS)
+	{
+		[branch] if (s.landRecolor && ((s.landSnowBits >> tile) & 1) != 0)
+		{
+			float w = LandSnowTexel(layerColor);
+			layerColor = lerp(layerColor, s.landSnowRaw, w);
+			layerNormal = lerp(layerNormal, float3(0.5, 0.5, 1.0), w);
+			layerRMAOS = lerp(layerRMAOS, s.landSnowRMAOS, w);
+			s.landSnowFrac += weight * w;
+		}
+	}
+
+	void LandRecolorLayer(inout State s, uint tile, float weight, inout float3 layerColor, inout float3 layerNormal)
+	{
+		[branch] if (s.landRecolor && ((s.landSnowBits >> tile) & 1) != 0)
+		{
+			float w = LandSnowTexel(layerColor);
+			layerColor = lerp(layerColor, s.landSnowRaw, w);
+			layerNormal = lerp(layerNormal, float3(0.5, 0.5, 1.0), w);
+			s.landSnowFrac += weight * w;
+		}
+	}
+
+	// The shell's grain on the recolored share, the shell's own perturbation
+	// (world +X/+Y frame, SnowShell.hlsl). The layers' own grain was flattened
+	// out of it above. Vanilla land then re-lights that share like horizon snow.
+	void LandRecolorNormal(inout State s, inout float3 worldNormal)
+	{
+		[branch] if (s.landSnowFrac > 0.003 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+		{
+			float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), worldNormal) + float3(1e-5, 0.0, 0.0));
+			float3 bumpB = cross(worldNormal, bumpT);
+			worldNormal = normalize(worldNormal + (bumpT * s.landSnowNormal.x + bumpB * s.landSnowNormal.y) * saturate(s.landSnowFrac));
+		}
+#	if !defined(TRUE_PBR) && !defined(WORLD_MAP)
+		s.lodReplaceW = s.landRecolor ? saturate(s.landSnowFrac) : 0.0;
+#	endif
 	}
 
 	void DebugLandOverlay(inout float3 baseColor, float2 worldXYRel, float snowness, float2 uvOriginal)
@@ -176,7 +314,9 @@ namespace SnowLighting
 			}
 		}
 	}
+#endif
 
+#if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LANDSCAPE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels are
 	// re-evaluated through the SAME PBR functions the shell and TruePBR
 	// statics use - the context already carries this pixel's perturbed
@@ -483,5 +623,16 @@ namespace SnowLighting
 	}
 #endif
 }
+
+// Land Snow Recolor's per-layer step (Common/LightingLandscape.hlsli hook),
+// expanded inside main where the layer's samples and snowState are in scope.
+#if defined(LANDSCAPE)
+#	undef LIGHTING_LANDSCAPE_LAYER_HOOK
+#	if defined(TRUE_PBR)
+#		define LIGHTING_LANDSCAPE_LAYER_HOOK(TILE) SnowLighting::LandRecolorLayer(snowState, TILE, weight, landColorRGB, landNormalRGB, landRMAOS);
+#	else
+#		define LIGHTING_LANDSCAPE_LAYER_HOOK(TILE) SnowLighting::LandRecolorLayer(snowState, TILE, weight, landColorRGB, landNormalRGB);
+#	endif
+#endif
 
 #endif  // __SNOW_LIGHTING_HLSLI__

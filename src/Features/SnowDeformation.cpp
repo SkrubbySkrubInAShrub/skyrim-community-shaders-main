@@ -689,7 +689,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
-	                           (LandBlendActive() ? 128u : 0u);
+	                           (LandBlendActive() ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (LandRecolorActive() && shellSnowRmaosSRV ? 512u : 0u);
 	// Water raster frame (t104): the window's min corner, texel size, dim.
 	data.WaterWindowDim = 0.0f;
 	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {
@@ -717,6 +717,8 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowTexturedEnable = (settings.EnableSnowDeformation && settings.SnowTexturedRecolor && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.ProjAlphaDensity = settings.ProjAlphaDensity ? 1.0f : 0.0f;
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
+	data.SnowSpecularLevel = snowSpecularLevel;
+	data.LandRecolorLumLo = std::clamp(landRecolorLumLo, 0.0f, 1.0f);
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// skins are gated the same way in DrawCapturedStatics.
@@ -725,6 +727,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 		data.ProjSnowEnable = 0.0f;
 		data.LODObjectEnable = 0.0f;
 		data.SnowTexturedEnable = 0.0f;
+		data.DebugTerrainOverlay &= ~(256u | 512u);
 	}
 	return data;
 }

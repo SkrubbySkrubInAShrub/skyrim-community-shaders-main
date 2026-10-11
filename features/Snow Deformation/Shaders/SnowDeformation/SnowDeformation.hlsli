@@ -17,6 +17,8 @@ namespace SnowDeformation
 	// Drawn water top-down in the terrain window's frame (RenderWaterCapture),
 	// kShellMissingHeight where none drew; rows grow with -Y.
 	Texture2D<float> WaterWindow : register(t104);
+	// Shell snow RMAOS, for the land recolor (bound with the set on land draws).
+	Texture2D<float4> HorizonSnowRmaos : register(t105);
 
 	// Ground under drawn water: the shell's WaterBareTexel test (2 u skim).
 	// Bilinear over the four texels: a sloped plane is linear, so this

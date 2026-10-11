@@ -1126,6 +1126,8 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("blendStart", landscapeBlendStart);
 	rdf("blendBonus", c.blendBonus);
 	rdf("blendPenalty", c.blendPenalty);
+	rdb("landRecolor", landRecolor);
+	rdf("landRecolorLumLo", landRecolorLumLo);
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
@@ -1163,7 +1165,8 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	}
 	out["config"] = { { "shadowSun", c.raiseSun }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
 		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shadowMainCamera", c.shadowMainCamera },
-		{ "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty } };
+		{ "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty },
+		{ "landRecolor", landRecolor }, { "landRecolorLumLo", landRecolorLumLo }, { "landRecolorActive", LandRecolorActive() } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
 		entries.push_back({ { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
