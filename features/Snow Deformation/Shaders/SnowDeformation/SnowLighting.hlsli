@@ -77,8 +77,10 @@ namespace SnowLighting
 	// Snow on Landscape's edge verdict (DebugTerrainOverlay bit 128): log2 odds
 	// of the module's snow layers (the per-draw permutation bits) against the
 	// rest, after EM's height blend, clamped to +-16 and packed into the land's
-	// (0.004, 1]. Decoded by SnowShell.hlsl LandSnowOdds.
-	void WriteLandSnowOdds(float4 blendWeights1, float2 blendWeights2, inout float masksY)
+	// (0.004, 1]. Decoded by SnowShell.hlsl LandSnowOdds. Masks is written
+	// opaque: under Terrain Blending's alpha the odds mixed with the code of
+	// the object base behind the land.
+	void WriteLandSnowOdds(float4 blendWeights1, float2 blendWeights2, inout float4 masks)
 	{
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 128) != 0)
 		{
@@ -86,7 +88,8 @@ namespace SnowLighting
 			float snow = dot(blendWeights1, float4(bits & 1, (bits >> 1) & 1, (bits >> 2) & 1, (bits >> 3) & 1)) + dot(blendWeights2, float2((bits >> 4) & 1, (bits >> 5) & 1));
 			float rest = max(dot(blendWeights1, 1.0) + blendWeights2.x + blendWeights2.y - snow, 0.0);
 			float odds = clamp(log2(max(snow, 1e-12)) - log2(max(rest, 1e-12)), -16.0, 16.0);
-			masksY = 0.004 + 0.996 * (odds + 16.0) * (1.0 / 32.0);
+			masks.y = 0.004 + 0.996 * (odds + 16.0) * (1.0 / 32.0);
+			masks.w = 1.0;
 		}
 	}
 

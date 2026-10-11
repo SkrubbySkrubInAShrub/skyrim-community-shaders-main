@@ -3120,7 +3120,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// the far fade) for Snow Deformation's two-sided edge contest. 0 = no
 	// data; heights encode to (0.004, 1].
 	psout.Masks = float4(0, pixelOffset > 0.0 ? 0.004 + pixelOffset * 0.996 : 0.0, masksZ, psout.Diffuse.w);
-	SnowLighting::WriteLandSnowOdds(input.LandBlendWeights1, input.LandBlendWeights2.xy, psout.Masks.y);
+	SnowLighting::WriteLandSnowOdds(input.LandBlendWeights1, input.LandBlendWeights2.xy, psout.Masks);
 #		else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #			if defined(SNOW_DEFORMATION)
