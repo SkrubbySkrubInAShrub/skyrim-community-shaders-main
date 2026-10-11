@@ -814,7 +814,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	}
 	shellFineDirty.store(false, std::memory_order_release);
 
-	lodWindowRebuilds++;  // C3 event counter: whole-window height re-upload.
 	shellWindowCellX = desiredOriginX;
 	shellWindowCellY = desiredOriginY;
 	shellWindowWorldspace = worldspace;
@@ -831,8 +830,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	// deformation map can ever show. Filled from this loop's own arithmetic,
 	// so it costs one comparison per texel.
 	std::unordered_set<uint64_t> snowyCells;
-	// Cells with coverage in any texel; the baked rest are the bare cells.
-	std::unordered_set<uint64_t> coveredCells;
 	float statMinH = FLT_MAX;
 	float statMaxH = -FLT_MAX;
 	std::unordered_set<uint64_t> statCells;
@@ -846,15 +843,12 @@ void SnowDeformation::UpdateShellTerrainWindow()
 			uint64_t rowKey = ~0ull;
 			// The cell sets take each run of one cell's texels once.
 			bool rowSnowy = false;
-			bool rowCovered = false;
 			auto flushRowCell = [&] {
 				if (!rowCell)
 					return;
 				statCells.insert(rowKey);
 				if (rowSnowy)
 					snowyCells.insert(rowKey);
-				if (rowCovered)
-					coveredCells.insert(rowKey);
 			};
 			for (int tx = 0; tx < kShellWindowDim; ++tx) {
 				int cellX = shellWindowCellX + tx / kShellTexelsPerCell;
@@ -864,7 +858,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				if (key != rowKey) {
 					flushRowCell();
 					rowSnowy = false;
-					rowCovered = false;
 					auto it = shellCells.find(key);
 					// A cell baked in another worldspace is not this window's
 					// ground: city worldspaces reuse the coordinates of the
@@ -905,7 +898,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					shellBareScratch[size_t(ty) * kShellWindowDim + tx] = uint8_t(std::lround((1.0f - snowWeight) * 255.0f));
 
 					rowSnowy |= snowy;
-					rowCovered |= texel[2] > 0.0f;
 					statMinH = std::min(statMinH, texel[0]);
 					statMaxH = std::max(statMaxH, texel[0]);
 					if (texel[2] > 0.05f)
@@ -921,14 +913,9 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		}
 	}
 
-	std::unordered_set<uint64_t> bareCells;
-	for (const uint64_t key : statCells)
-		if (!coveredCells.contains(key))
-			bareCells.insert(key);
 	{
 		const std::unique_lock snowLock(shellSnowyCellMutex);
 		shellSnowyCells = std::move(snowyCells);
-		shellBareCells = std::move(bareCells);
 	}
 	// The snowy set only covers the window; a move changes every cell
 	// verdict near its edge.
@@ -966,7 +953,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
 	shellFineValid = false;
-	shellFineVersion++;
 	auto* cs = GetTerrainFineCS();
 	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv)
 		return;
@@ -1177,7 +1163,7 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	// Clear first so bits never leak from the previous landscape draw.
 	state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::SnowLandIsSnowMask);
 
-	// Read by the Terrain Overlay and Snow on Landscape's land-blended edges (SnowLighting.hlsli).
+	// Read by the Terrain Overlay and the land-blended edges (SnowLighting.hlsli).
 	if (material == nullptr || !(debugTerrainOverlay || LandBlendActive()))
 		return;
 
@@ -1438,35 +1424,6 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 					*a_verdictOut = kSnowGateUnknown;
 				return true;
 			}
-		}
-	}
-	return false;
-}
-
-// castVis kills every grid vertex past 4062.9 u of the grid centre and every
-// vertex whose raw bilinear coverage is zero; a vertex's footprint reaches one
-// texel on each axis. Two texels of margin, grid centre as the caster places it.
-bool SnowDeformation::CasterDiscMayCast() const
-{
-	constexpr float kCellSize = kShellVertexSpacing * kShellTexelsPerCell;
-	constexpr float kReach = 4063.0f + 2.0f * kShellVertexSpacing;
-	const auto camAdjust = globals::game::frameBufferCached.GetCameraPosAdjust();
-	const float centreX = std::floor(camAdjust.x / kShellOriginSnap) * kShellOriginSnap;
-	const float centreY = std::floor(camAdjust.y / kShellOriginSnap) * kShellOriginSnap;
-	const int cellMinX = (int)std::floor((centreX - kReach) / kCellSize);
-	const int cellMaxX = (int)std::floor((centreX + kReach) / kCellSize);
-	const int cellMinY = (int)std::floor((centreY - kReach) / kCellSize);
-	const int cellMaxY = (int)std::floor((centreY + kReach) / kCellSize);
-	const std::shared_lock lock(shellSnowyCellMutex);
-	for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
-		for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
-			const float dx = std::max({ float(cx) * kCellSize - centreX, 0.0f, centreX - float(cx + 1) * kCellSize });
-			const float dy = std::max({ float(cy) * kCellSize - centreY, 0.0f, centreY - float(cy + 1) * kCellSize });
-			if (dx * dx + dy * dy > kReach * kReach)
-				continue;
-			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
-			if (!shellBareCells.contains(key))
-				return true;
 		}
 	}
 	return false;
@@ -1990,82 +1947,6 @@ void SnowDeformation::ProbeFineLayer(const ShellCB& a_cb)
 			const float wt = windowTri(wx, wy);
 			out += std::format("  {:5.0f}: {:9.1f} | {:9.1f} | {:9.1f}{}\n", d, sf, cf, wt,
 				(sf > -50000.0f && cf > -50000.0f && std::fabs(sf - cf) > 0.5f) ? "  <-- shader != cells" : "");
-		}
-
-		// D: the vertex bake along the view axis - the height the vertex stage
-		// stood on LAST frame (the bake runs after this fill) - against the
-		// cells and against the data morph's coarse bilinear, with the band.
-		if (shellVertexBake && shellVertexBake->resource) {
-			const uint32_t bakeDim = shellVertexBake->desc.Width;
-			auto bakeStage = stage(shellVertexBake, DXGI_FORMAT_R32G32B32A32_FLOAT, bakeDim);
-			D3D11_MAPPED_SUBRESOURCE bm{};
-			if (bakeStage && SUCCEEDED(context->Map(bakeStage.get(), 0, D3D11_MAP_READ, 0, &bm))) {
-				auto bakeAt = [&](int x, int y) {
-					return reinterpret_cast<const float*>(static_cast<const uint8_t*>(bm.pData) + size_t(y) * bm.RowPitch + size_t(x) * 16);
-				};
-				auto warpAxis = [](int u) {
-					float a = float(std::abs(u));
-					float off = 0.0f;
-					for (int band = 0; band < kShellWarpBands; ++band) {
-						const float take = std::min(a, kShellWarpBandVerts[band]);
-						off += take * kShellWarpBandMul[band];
-						a -= take;
-					}
-					off += a * kShellWarpBandMul[kShellWarpBands - 1];
-					return (u < 0 ? -1.0f : (u > 0 ? 1.0f : 0.0f)) * off * kShellGridSpacing;
-				};
-				auto bandOf = [](int u, float& a_t) {
-					const float a = float(std::abs(u));
-					float prev = 0.0f;
-					for (int band = 0; band < kShellWarpBands; ++band) {
-						const float acc = prev + kShellWarpBandVerts[band];
-						if (a < acc) {
-							a_t = std::clamp((a - prev) / std::max(kShellWarpBandVerts[band], 1.0f), 0.0f, 1.0f);
-							return kShellWarpBandMul[band] * kShellGridSpacing;
-						}
-						prev = acc;
-					}
-					a_t = 1.0f;
-					return kShellWarpBandMul[kShellWarpBands - 1] * kShellGridSpacing;
-				};
-				const bool alongX = std::fabs(fwdX) >= std::fabs(fwdY);
-				const int sgn = (alongX ? fwdX : fwdY) < 0.0f ? -1 : 1;
-				const int c = int(kShellGridDim / 2);
-				const float halfSpan = ShellWarpedHalfSpan();
-				out += std::format("D bake (last frame, {}{} axis): dist step morphT | bake terrain | cells | coarse bilinear | bake z\n", sgn < 0 ? "-" : "+", alongX ? "x" : "y");
-				float nextPrint = 128.0f;
-				for (int u = 1; u <= c; u++) {
-					const float off = warpAxis(u * sgn);
-					const float dist = std::fabs(off);
-					if (dist < nextPrint)
-						continue;
-					if (dist > 4200.0f)
-						break;
-					nextPrint = dist + 128.0f;
-					float t = 0.0f;
-					const float step = bandOf(u, t);
-					const int gx = alongX ? c + u * sgn : c;
-					const int gy = alongX ? c : c + u * sgn;
-					if (gx < 0 || gy < 0 || gx >= int(bakeDim) || gy >= int(bakeDim))
-						break;
-					const float wx = a_cb.GridOrigin.x + halfSpan + (alongX ? off : 0.0f);
-					const float wy = a_cb.GridOrigin.y + halfSpan + (alongX ? 0.0f : off);
-					const float* b = bakeAt(gx, gy);
-					const float cr = cellsCR(wx, wy);
-					float coarse = -100000.0f;
-					if (step > kShellGridSpacing) {
-						const float cs = step * 2.0f;
-						const float bx = std::floor(wx / cs) * cs, by = std::floor(wy / cs) * cs;
-						const float fx = (wx - bx) / cs, fy = (wy - by) / cs;
-						const float h00 = cellsCR(bx, by), h10 = cellsCR(bx + cs, by), h01 = cellsCR(bx, by + cs), h11 = cellsCR(bx + cs, by + cs);
-						if (std::min({ h00, h10, h01, h11 }) > -50000.0f)
-							coarse = std::lerp(std::lerp(h00, h10, fx), std::lerp(h01, h11, fx), fy);
-					}
-					out += std::format("  {:5.0f} {:4.0f} {:.2f} | {:9.1f} | {:9.1f} | {:9.1f} | {:9.1f}{}\n", dist, step, t, b[2], cr, coarse, b[0],
-						(cr > -50000.0f && std::fabs(b[2] - cr) > 2.0f) ? "  <-- bake != cells" : "");
-				}
-				context->Unmap(bakeStage.get(), 0);
-			}
 		}
 	}
 	context->Unmap(winStage.get(), 0);

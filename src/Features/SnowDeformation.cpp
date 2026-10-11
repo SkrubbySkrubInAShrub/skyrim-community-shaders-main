@@ -116,11 +116,6 @@
 	X(SnowPBRConfig) \
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
-	X(SnowBorderDithering) \
-	X(TrenchFloorFraction) \
-	X(SnowBorderNoise) \
-	X(SnowBorderSmoothness) \
-	X(SnowBorderFade) \
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
 	X(Tessellation) \
@@ -146,7 +141,6 @@
 	X(SnowScreenSpaceShadows) \
 	X(SnowCastsShadows) \
 	X(ObjectSnowNearDetail) \
-	X(ShellBareGroundCull) \
 	X(CameraAboveSnow) \
 	X(BloodOnSnow) \
 	X(BloodIntensity) \
@@ -577,15 +571,6 @@ void SnowDeformation::SetupResources()
 		shellTerrainWet = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWet");
 		shellTerrainWet->CreateSRV(terrainSrvDesc);
 		shellTerrainWet->CreateUAV(terrainUavDesc);
-		D3D11_TEXTURE2D_DESC plainDesc = terrainDesc;
-		plainDesc.Format = DXGI_FORMAT_R8_UINT;
-		D3D11_SHADER_RESOURCE_VIEW_DESC plainSrvDesc = terrainSrvDesc;
-		plainSrvDesc.Format = plainDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC plainUavDesc = terrainUavDesc;
-		plainUavDesc.Format = plainDesc.Format;
-		shellTerrainPlain = new Texture2D(plainDesc, "SnowDeformation::ShellTerrainPlain");
-		shellTerrainPlain->CreateSRV(plainSrvDesc);
-		shellTerrainPlain->CreateUAV(plainUavDesc);
 		D3D11_TEXTURE2D_DESC bareDesc = terrainDesc;
 		bareDesc.Format = DXGI_FORMAT_R8_UNORM;
 		bareDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -957,8 +942,6 @@ void SnowDeformation::PostPrepass()
 
 void SnowDeformation::PrepassSimulation()
 {
-	// The fields the vertex bake read are rewritten from here on.
-	shellCastBakeValid = false;
 	LoadTraceFramePulse();
 	RollCpuCensus();
 	cpuCensusArmed = globals::state->frameCount <= cpuCensusArmedUntil;
@@ -998,7 +981,7 @@ void SnowDeformation::PrepassSimulation()
 	// Copy A/B gate for both shadow copies. Prepass runs after the shadow
 	// mask passes, so this is read at next frame's; the hold keeps a coat
 	// popping in and out from flapping between the crisp and fallback paths.
-	const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellHidden();
+	const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	if (shellMayDraw || !capturedStatics.empty())
 		shadowCopyWantedFrames = kShellGateBareFrames;
 	else if (shadowCopyWantedFrames > 0)
@@ -2136,36 +2119,6 @@ void SnowDeformation::ClearShaderCache()
 	if (exclusionFieldCS)
 		exclusionFieldCS->Release();
 	exclusionFieldCS = nullptr;
-	if (shellVS)
-		shellVS->Release();
-	shellVS = nullptr;
-	if (shellTessVS)
-		shellTessVS->Release();
-	shellTessVS = nullptr;
-	if (shellHS)
-		shellHS->Release();
-	shellHS = nullptr;
-	if (shellHSNear)
-		shellHSNear->Release();
-	shellHSNear = nullptr;
-	if (shellHSFar)
-		shellHSFar->Release();
-	shellHSFar = nullptr;
-	if (shellHSBake)
-		shellHSBake->Release();
-	shellHSBake = nullptr;
-	if (shellHSNearBake)
-		shellHSNearBake->Release();
-	shellHSNearBake = nullptr;
-	if (shellHSFarBake)
-		shellHSFarBake->Release();
-	shellHSFarBake = nullptr;
-	if (shellPSNoDepth)
-		shellPSNoDepth->Release();
-	shellPSNoDepth = nullptr;
-	if (shellPSCensus)
-		shellPSCensus->Release();
-	shellPSCensus = nullptr;
 	if (shellPSDeferred)
 		shellPSDeferred->Release();
 	shellPSDeferred = nullptr;
@@ -2185,9 +2138,6 @@ void SnowDeformation::ClearShaderCache()
 	if (shellFillPSClaim)
 		shellFillPSClaim->Release();
 	shellFillPSClaim = nullptr;
-	if (shellPSPrepass)
-		shellPSPrepass->Release();
-	shellPSPrepass = nullptr;
 	if (shellFillVS)
 		shellFillVS->Release();
 	shellFillVS = nullptr;
@@ -2197,93 +2147,10 @@ void SnowDeformation::ClearShaderCache()
 	if (shellFillPSPreSnow)
 		shellFillPSPreSnow->Release();
 	shellFillPSPreSnow = nullptr;
-	if (shellFillPSVisible)
-		shellFillPSVisible->Release();
-	shellFillPSVisible = nullptr;
-	if (shellPSPrepassPatch)
-		shellPSPrepassPatch->Release();
-	shellPSPrepassPatch = nullptr;
-	for (auto*& ps : shellPSPrepassKeepHidden) {
-		if (ps)
-			ps->Release();
-		ps = nullptr;
-	}
-	for (auto*& ds : shellDSPatch) {
-		if (ds)
-			ds->Release();
-		ds = nullptr;
-	}
-	for (auto*& ds : shellDSLean) {
-		if (ds)
-			ds->Release();
-		ds = nullptr;
-	}
-	if (shellHSVisible)
-		shellHSVisible->Release();
-	shellHSVisible = nullptr;
-	if (shellHSVisibleBake)
-		shellHSVisibleBake->Release();
-	shellHSVisibleBake = nullptr;
-	if (shellHSVisibleTrust)
-		shellHSVisibleTrust->Release();
-	shellHSVisibleTrust = nullptr;
-	if (shellHSVisibleTrustBake)
-		shellHSVisibleTrustBake->Release();
-	shellHSVisibleTrustBake = nullptr;
-	if (shellPatchListCS)
-		shellPatchListCS->Release();
-	shellPatchListCS = nullptr;
-	if (shellTessVSList)
-		shellTessVSList->Release();
-	shellTessVSList = nullptr;
-	if (shellHSListMain)
-		shellHSListMain->Release();
-	shellHSListMain = nullptr;
-	if (shellFlatVS)
-		shellFlatVS->Release();
-	shellFlatVS = nullptr;
-	if (shellDS)
-		shellDS->Release();
-	shellDS = nullptr;
-	if (shellDSFlat)
-		shellDSFlat->Release();
-	shellDSFlat = nullptr;
-	if (shellDSBake)
-		shellDSBake->Release();
-	shellDSBake = nullptr;
-	if (shellDSBakeCheck)
-		shellDSBakeCheck->Release();
-	shellDSBakeCheck = nullptr;
-	if (shellBakeCS)
-		shellBakeCS->Release();
-	shellBakeCS = nullptr;
-	shellSlopeKeyValid = false;
 	if (shellTerrainCutCS)
 		shellTerrainCutCS->Release();
 	shellTerrainCutCS = nullptr;
 	shellTerrainWetValid = false;
-	if (shellShadowVS)
-		shellShadowVS->Release();
-	shellShadowVS = nullptr;
-	if (shellShadowVSBaked)
-		shellShadowVSBaked->Release();
-	shellShadowVSBaked = nullptr;
-	if (shellShadowVSBakedCheck)
-		shellShadowVSBakedCheck->Release();
-	shellShadowVSBakedCheck = nullptr;
-	shellCastBakeValid = false;
-	if (shellVSNonIndexed)
-		shellVSNonIndexed->Release();
-	shellVSNonIndexed = nullptr;
-	if (shellShadowVSNonIndexed)
-		shellShadowVSNonIndexed->Release();
-	shellShadowVSNonIndexed = nullptr;
-	if (shellPS)
-		shellPS->Release();
-	shellPS = nullptr;
-	if (shellLODPS)
-		shellLODPS->Release();
-	shellLODPS = nullptr;
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
@@ -2340,9 +2207,6 @@ void SnowDeformation::ClearShaderCache()
 		st = nullptr;
 	skinCullCapacity = 0;
 	skinCullLevels = 0;
-	if (lodProbeCS)
-		lodProbeCS->Release();
-	lodProbeCS = nullptr;
 	if (windowFillCS)
 		windowFillCS->Release();
 	windowFillCS = nullptr;

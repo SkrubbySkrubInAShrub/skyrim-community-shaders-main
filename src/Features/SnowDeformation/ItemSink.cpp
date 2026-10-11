@@ -359,7 +359,6 @@ void SnowDeformation::ItemSinkUpdate()
 		picks.resize(kItemSinkMax);
 
 	const bool enabled = settings.ItemSink;
-	const float trenchFloor = LandBlendActive() ? 0.0f : std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	const float embedShare = std::clamp(settings.ItemEmbedPercent, 0.0f, 100.0f) * 0.01f;
 	const float roundFloor = std::clamp(settings.ItemMinRoundness, 0.0f, 1.0f);
 	const float roundFull = std::max(0.5f, roundFloor + 0.05f);
@@ -465,7 +464,6 @@ void SnowDeformation::ItemSinkUpdate()
 		}
 
 		const float weight = Smooth((std::log(std::max(measure, 1e-4f)) - std::log(kMeasureFloat)) / (std::log(kMeasureFull) - std::log(kMeasureFloat)));
-		const float sink = weight * (1.0f - trenchFloor);
 		const float lying = state.lyingHeight > 0.0f ? std::min(thickness, state.lyingHeight) : thickness;
 		const float embed = weight * weight * embedShare * lying * Smooth((roundness - roundFloor) / (roundFull - roundFloor));
 
@@ -492,11 +490,11 @@ void SnowDeformation::ItemSinkUpdate()
 			std::sort(std::begin(taps), std::end(taps), std::greater<float>());
 			state.carveAround = std::clamp((taps[0] + taps[1] + taps[2]) / 3.0f, 0.0f, 1.0f);
 		}
-		const float carveAround = std::min(state.carveAround, 1.0f - trenchFloor);
+		const float carveAround = state.carveAround;
 		// The height a snow state puts this item at, under the CURRENT settings.
 		// Over the land under the item, not an absolute height: the rest then
 		// holds for an item a load has shoved a few units along a slope.
-		auto heightIn = [&](float a_rise, float a_depth, float a_carve) { return ground.z + a_rise - std::max(sink, a_carve) * a_depth - embed; };
+		auto heightIn = [&](float a_rise, float a_depth, float a_carve) { return ground.z + a_rise - std::max(weight, a_carve) * a_depth - embed; };
 		const float today = heightIn(rise, snowDepth, carveAround);
 
 		// Snow buries: what is kept is the snow the item settled in. Rising
@@ -622,7 +620,7 @@ void SnowDeformation::ItemSinkUpdate()
 		if (body.asleep && !state.wasAsleep && itemSinkRestsLogged < 200) {
 			itemSinkRestsLogged++;
 			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS at {:.1f}, {:.1f} (the game's own record of it {:.1f}, {:.1f}) | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
-				state.formID, base->GetName(), body.world.x, body.world.y, ref->GetPositionX(), ref->GetPositionY(), snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
+				state.formID, base->GetName(), body.world.x, body.world.y, ref->GetPositionX(), ref->GetPositionY(), snowDepth, surfaceZ, ground.z, carveAround, weight, embed, today, target, state.buried ? " (buried)" : "",
 				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
 		}
 		// The game keeps no running record of where a dropped item lies: carried
@@ -657,7 +655,7 @@ void SnowDeformation::ItemSinkUpdate()
 			itemSinkReadout = std::format("nearest: {:08X} {} | {} | mass {:.1f} -> measure {:.3f} | roundness {:.2f}, thickness {:.1f} (lying {:.1f})\n"
 										  "snow {:.1f} deep | sinks {:.0f} % of it + {:.1f} into the floor | held +{:.1f} | rest height {}",
 				state.formID, base->GetName(), body.asleep ? "asleep" : "MOVING", body.mass, measure, roundness, thickness, lying,
-				snowDepth, sink * 100.0f, embed, state.appliedLift,
+				snowDepth, weight * 100.0f, embed, state.appliedLift,
 				state.restValid ? std::format("z {:.1f}, {:.1f} under where today's snow would put it{} | snow dug away around it {:.0f} %",
 									  target, today - target, state.buried ? " (BURIED, no trench)" : "", carveAround * 100.0f) :
 								  std::string("not settled"));

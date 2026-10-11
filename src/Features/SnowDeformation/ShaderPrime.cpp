@@ -220,21 +220,15 @@ void SnowDeformation::RunShaderPrime()
 	// compile.
 	const std::function<void()> groundSteps[] = {
 		[&] { ShaderSourcesFingerprint(); },
-		[&] { GetShellVS(); },
-		[&] { GetShellPS(); },
-		[&] { GetShellHS(false); },
-		[&] { GetShellHS(true); },
-		[&] { GetShellHSNear(false); },
-		[&] { GetShellHSNear(true); },
-		[&] { GetShellHSFar(false); },
-		[&] { GetShellHSFar(true); },
-		[&] { GetShellDS(); },
-		[&] { GetShellDSBake(false); },
-		[&] { GetShellBakeCS(); },
-		[&] { GetShellTessVS(); },
-		[&] { GetShellShadowVS(); },
-		[&] { GetShellShadowVSBaked(false); },
-		[&] { GetShellPSNoDepth(); },
+		[&] { GetShellPSPrepassEarly(false); },
+		[&] { GetShellPSPrepassAttr(false); },
+		[&] { GetShellPSEarlyResolve(); },
+		[&] { GetShellPSDeferred(); },
+		[&] { GetShellFillVS(); },
+		[&] { GetShellFillPS(); },
+		[&] { GetShellFillPSClaim(); },
+		[&] { GetShellFillPSPreSnow(); },
+		[&] { GetShellTerrainCutCS(); },
 		[&] { GetDepthSyncCS(); },
 		[&] { GetPreSnowCopyCS(); },
 		[&] { GetSssSyncCS(); },
@@ -287,7 +281,7 @@ void SnowDeformation::RunShaderPrime()
 		return true;
 	};
 
-	if (!runGroup(groundSteps, std::size(groundSteps), 1, "ground (shell + computes)"))
+	if (!runGroup(groundSteps, std::size(groundSteps), 1, "ground (snow + computes)"))
 		return;
 	if (!runGroup(objectSteps, std::size(objectSteps), 2, "object snow"))
 		return;

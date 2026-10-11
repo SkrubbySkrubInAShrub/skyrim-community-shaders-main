@@ -18,9 +18,8 @@ cbuffer LandscapeSnowCB : register(b11)
 	// 4 water, 8 object lift, 16 exclusions), w: drop patches outside the view.
 	float4 LsTess;
 	// x: view cull guard band, a fraction of clip w, y: units the raised
-	// surface sits under the ground shell while the shell still draws, z: how
-	// many LsExcl entries are live, w: shadow maps read the shell caster's bake
-	// (LandscapeSnow.hlsl LsCastBaked).
+	// surface sits under the ground snow in camera passes, z: how many LsExcl
+	// entries are live, w spare.
 	float4 LsCull;
 	// Exclusions over the draw small enough for the gate's point checks to miss
 	// (LandscapeSnow.cpp LsFillSmallExclusions): sealed containers and small
@@ -65,16 +64,13 @@ bool LsBoxUntouched(float2 lo, float2 hi)
 static const float kLsBorderTolerance = 1.0;
 
 // The class-depth term can change by at most the spread of depth (and of the
-// bare blend) over every texel a shaped tap from the box reaches: the jitter
-// and the smoothing ring, then the bilinear's next texel.
+// bare blend) over every texel a tap from the box reaches: its own and the
+// bilinear's next.
 bool LsBoxPlain(float2 lo, float2 hi)
 {
-	float reach = 0.0;
-	[flatten] if (BorderNoise >= 0.01 || BorderSmooth >= 0.01)
-		reach = min(BorderNoise, 16.0) + 0.6 * BorderNoise + BorderSmooth;
 	float maxT = (float)(TerrainDim - 1);
-	int2 t0 = (int2)clamp(floor((GridToTerrainOffset + lo - reach) / TerrainTexelSize), 0.0, maxT);
-	int2 t1 = (int2)clamp(floor((GridToTerrainOffset + hi + reach) / TerrainTexelSize) + 1.0, 0.0, maxT);
+	int2 t0 = (int2)clamp(floor((GridToTerrainOffset + lo) / TerrainTexelSize), 0.0, maxT);
+	int2 t1 = (int2)clamp(floor((GridToTerrainOffset + hi) / TerrainTexelSize) + 1.0, 0.0, maxT);
 	bool plain = all(t1 - t0 <= 5);
 	float2 lowest = 1e9;
 	float2 highest = -1e9;
@@ -205,10 +201,9 @@ bool LsTriangleHoldsExcl(float2 p0, float2 p1, float2 p2)
 	return holds;
 }
 
-// The shell's vertex spacing along the edge: its base lattice step, divided
-// in camera passes by its hull's trench factor (EdgeTessFactor) and capped
-// at TessScreen.x pixels per segment. Reads the edge's endpoints only, so
-// both patches on an edge agree.
+// The vertex spacing along the edge: the distance band's step, divided in
+// camera passes by the trench factor and capped at TessScreen.x pixels per
+// segment. Reads the edge's endpoints only, so both patches on an edge agree.
 float LsDetailFactor(float3 a, float3 b)
 {
 	float2 mid = 0.5 * (a.xy + b.xy);
@@ -237,7 +232,7 @@ float LsDetailFactor(float3 a, float3 b)
 	return factor;
 }
 
-// LsDetailFactor where the edge carries detail inside the shell's span; 1 elsewhere.
+// LsDetailFactor where the edge carries detail inside the snow's span; 1 elsewhere.
 float LsEdgeFactor(float3 a, float3 b)
 {
 	float2 mid = 0.5 * (a.xy + b.xy);

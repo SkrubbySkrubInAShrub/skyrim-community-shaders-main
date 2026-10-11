@@ -3,13 +3,11 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 // Ground snow on the landscape's own meshes (LANDSCAPE-SNOW-PLAN Phase 3): the
-// depth prepass's landscape draws, replayed through the ground shell's
-// prepass in place of its grid. The domain shader ends in the shell's own
-// lean vertex tail, so the prepass pixel shader, the deferred shading and
-// everything after them are the shell's, unchanged. One main per stage.
+// depth prepass's landscape draws, replayed through the ground snow's
+// prepass. The domain shader ends in SnowShell.hlsl's vertex tail, so the
+// prepass pixel shader, the deferred shading and everything after them are
+// SnowShell.hlsl's. One main per stage.
 
-#define SNOW_SHELL_NO_MAIN
-#define SNOW_DS_LEAN
 #include "SnowDeformation/SnowShell.hlsl"
 
 #include "SnowDeformation/LandscapeSnowTess.hlsli"
@@ -37,7 +35,7 @@ LSS_CP main(float4 position : POSITION)
 
 #if defined(HULLSHADER)
 // The box misses the open rectangle where ShellEdgeFade is above zero (the
-// grid's span, and the seam square when there is one).
+// snow's span, and the seam square when there is one).
 bool LssBeyondSeam(float2 lo, float2 hi)
 {
 	float2 liveLo = 0.0;
@@ -50,12 +48,12 @@ bool LssBeyondSeam(float2 lo, float2 hi)
 	return any(hi <= liveLo) || any(lo >= liveHi);
 }
 
-// ShellFullyBare on a triangle: corners and centroid for the object lift.
-// Under land-blended edges the land's snow keeps its film wherever it is
-// painted, under water too.
+// Fully bare: the -8 floor over every texel the triangle reaches and no land
+// snow there (the land's snow keeps its film wherever it is painted, under
+// water too); corners and centroid for the object lift.
 bool LssFullyBare(float2 a, float2 b, float2 c, float2 lo, float2 hi)
 {
-	bool bare = ShellTerrainAllBare(lo, hi) && (!LandBlendMode() || LandRectNoSnow(lo, hi));
+	bool bare = ShellTerrainAllBare(lo, hi) && LandRectNoSnow(lo, hi);
 	[branch] if (bare && ObjectLiftCap > 1.0)
 		bare = !(ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) || ShellObjectLiftsAt((a + b + c) / 3.0));
 	return bare;
@@ -96,7 +94,7 @@ LSS_Const LSS_PatchConst(InputPatch<LSS_CP, 3> p)
 	const float2 lo = min(g0.xy, min(g1.xy, g2.xy));
 	const float2 hi = max(g0.xy, max(g1.xy, g2.xy));
 	bool culled = LssBeyondSeam(lo, hi);
-	[branch] if (!culled && LsTess.w > 0.5 && (ShellFlags.x & 2) != 0)
+	[branch] if (!culled && LsTess.w > 0.5)
 		culled = LssOffView(g0, g1, g2);
 	// ShellTerrainAllBare reads at most 4x4 texels.
 	[branch] if (!culled && ShellCullBare > 0.5 && all(hi - lo <= 2.0 * TerrainTexelSize))
@@ -138,7 +136,7 @@ VS_OUTPUT main(LSS_Const c, float3 uvw : SV_DomainLocation, const OutputPatch<LS
 	float terrainHeight;
 	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
 	// Land-blended edges: a film over the land wherever it has snow weight.
-	[branch] if (LandBlendMode() && LandSnowWeight(gridLocal) > 0.002)
+	[branch] if (LandSnowWeight(gridLocal) > 0.002)
 		z = max(z, p[0].Local.z * uvw.x + p[1].Local.z * uvw.y + p[2].Local.z * uvw.z + kLandFilm);
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
 }

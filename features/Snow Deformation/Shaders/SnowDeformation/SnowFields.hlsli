@@ -10,7 +10,7 @@
 // (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
-// UndulationAmp/Scale, UndulationFieldWindow, BorderStyle, TrampleStyle,
+// UndulationAmp/Scale, UndulationFieldWindow, TrampleStyle,
 // GridOrigin, DeformMapOrigin), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
 // (t14), ExtentFieldMap (t56), UntouchedTiles (t57), ExclusionFieldMap (t15), the frost patterns (t16/t17),
@@ -38,22 +38,14 @@
 #	define SNOW_EXCLUSION_DIMS(d) 		float2 d;                  		ExclusionFieldMap.GetDimensions(d.x, d.y)
 #endif
 
-// Two-octave domain warp for snow boundaries: a capped 37-unit coarse wander
-// plus a fine 8-unit octave for raggedness. Moves WHERE a border falls without
-// touching what is sampled there, so a boundary stops following the data
-// lattice and reads as an organic edge instead of a staircase.
-//
-// The trench patch warps its silhouette with a scaled-down version of this, an
-// object footprint being a hard geometric edge rather than a soft data one.
-//
-// SnowShell.hlsl's SampleTerrainShaped holds the SAME expression inline and
-// deliberately still does: routing it through this call changes 5 of its 14
-// permutations (shadow VS and four PS variants), which the DXBC harness cannot
-// certify as a no-op. Same call as WarpAxis - see the note there. Edit the two
-// together; do not "tidy" one away without the runtime A/B harness.
-float2 BorderJitter(float2 worldXY)
+// Two-octave domain warp for a boundary, a_noise world units strong: a capped
+// 37-unit coarse wander plus a fine 8-unit octave for raggedness. Moves WHERE
+// a border falls without touching what is sampled there, so it stops following
+// the data lattice and reads as an organic edge instead of a staircase. The
+// trench patch's silhouette.
+float2 BorderJitter(float2 worldXY, float a_noise)
 {
-	float coarseAmp = min(BorderNoise, 16.0);
+	float coarseAmp = min(a_noise, 16.0);
 	return float2(
 			   ShapeNoise(worldXY / 37.0) - 0.5,
 			   ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
@@ -61,7 +53,7 @@ float2 BorderJitter(float2 worldXY)
 	       float2(
 			   ShapeNoise(worldXY / 8.0) - 0.5,
 			   ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
-	           (1.2 * BorderNoise);
+	           (1.2 * a_noise);
 }
 
 // Saturates EARLY (full height once the disc is a third carved), and the old
@@ -500,9 +492,7 @@ float2 UndulationGradSampled(float2 worldXY)
 	return result;
 }
 
-// Deformation carves the layer toward the trench floor: a FRACTION of the
-// uncarved depth (BorderStyle.y, the Trench Floor slider), so deep snow keeps
-// snow around the foot and a road's shallow layer never wears to the mesh.
+// Deformation carves the layer to the ground.
 //
 // P7 (trench plan Stage 3): DEPTH PICKS THE PROFILE. The map's carve
 // gradient is depth-blind, so a bootprint in 5 units of cover wore the same
@@ -546,9 +536,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
-	float floorFrac = saturate(BorderStyle.y);
-	float floorDepth = min(uncarvedDepth, uncarvedDepth * floorFrac);
-	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
+	float profile = uncarvedDepth * (1.0 - d);
 
 	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on
 	// the carve skirt, peaking at d ~ 0.1 and gone by mid-wall. Berm

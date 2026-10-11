@@ -553,10 +553,6 @@ public:
 		float TrampleZoneScale = 0.75f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
-		/** @brief On = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; off = a clean binary cut. */
-		bool SnowBorderDithering = true;
-		/** @brief Snow left under a fully trampled trench as a FRACTION of the local uncarved depth (0.33 = a third: 10 units in 30). Replaced the absolute-units floor 2026-09-10: deep snow keeps snow around the foot instead of a canyon to the ground, and a road's 10-unit layer can never wear through to the mesh. */
-		float TrenchFloorFraction = 0.10f;
 		/** @brief Percent of its own thickness a heavy, rounded dropped item presses into its trench floor (WEIGHT-SINK-PLAN.md). Flat items take a fraction of it by shape. */
 		float ItemEmbedPercent = 50.0f;
 		/** @brief Dropped items rest in the snow by weight and shape; off, they lie on the ground under it as the game leaves them. */
@@ -565,17 +561,11 @@ public:
 		float ItemMinRoundness = 0.20f;
 		/** @brief Percent of full grip: snow damps a dropped item's roll and slide by how deep it is in and how slowly it is travelling. 0 = the game's physics untouched. */
 		float ItemSnowGripPercent = 100.0f;
-		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
-		float SnowBorderNoise = 8.0f;
-		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
-		float SnowBorderSmoothness = 16.0f;
-		/** @brief Border Fade, as a percent. Remapped to the internal 2..64 contact-term band on upload; it mainly sets how visible the outward dust is. */
-		float SnowBorderFade = 100.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 0.5f;
-		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth. */
+		/** @brief Tessellate the ground snow and the trench patch near the camera. Its real job is trench smoothness: the hull shaders' factors key off the deformation map, so carves get vertex density the land's own triangles cannot express. */
 		bool Tessellation = true;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
@@ -622,8 +612,6 @@ public:
 		bool SnowCastsShadows = true;
 		/** @brief "Object Snow Near Detail": the object height raster's near level (1 unit a texel over FineRasterHalfExtent) and its cone chain. Off = the skin reads the coarse level everywhere. A quality-preset lever. */
 		bool ObjectSnowNearDetail = true;
-		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
-		bool ShellBareGroundCull = true;
 		/** @brief The third-person camera is pulled in along its own line when the game places it under the landscape shell (Havok has no snow to collide with). */
 		bool CameraAboveSnow = true;
 		/** @brief Blood on snow (BLOOD-DESIGN.md): the game's blood decals and pool quads are re-rasterised into a blood map the shells tint by. Off = the map is neither written nor read. */
@@ -932,8 +920,6 @@ public:
 	static constexpr UINT kUntouchedTilesSlot = 57;
 	/** @brief SampleTerrain's terrain window (TerrainWetSRV), bound wherever the shell's t0 is. */
 	static constexpr UINT kTerrainWetSlot = 58;
-	/** @brief SampleTerrainShaped's plain-texel flags (TerrainPlainSRV), bound with kTerrainWetSlot. */
-	static constexpr UINT kTerrainPlainSlot = 59;
 
 
 	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
@@ -1487,9 +1473,7 @@ public:
 	Texture2D* shellTerrainTexture = nullptr;
 	/** @brief shellTerrainTexture with WaterBareTexel applied per texel (TerrainCutCS), bound at t21 for SampleTerrain while the water cut is on. Rebuilt when the terrain window, the bound water window or its version changes. */
 	Texture2D* shellTerrainWet = nullptr;
-	/** @brief R8_UINT, 1 where shellTerrainWet's depth and coverage are bit-identical over the 4x4 texels around a texel's quad (TerrainCutCS, same dispatch). */
-	Texture2D* shellTerrainPlain = nullptr;
-	/** @brief R8_UNORM beside the terrain window: 1 - the land's snow-texture weight (texture depth > 0) per texel, 0 where unbaked. Read by Snow on Landscape's land-blended edges (LandBlendActive). */
+	/** @brief R8_UNORM beside the terrain window: 1 - the land's snow-texture weight (texture depth > 0) per texel, 0 where unbaked. Read by the land-blended edges. */
 	Texture2D* shellTerrainBare = nullptr;
 	std::vector<uint8_t> shellBareScratch;
 	/** @brief Shell SRV slot of shellTerrainBare (SnowShell.hlsl TerrainBare). */
@@ -1528,8 +1512,6 @@ public:
 	/** @brief 0 none, 1 = 17x17, 2 = 33x33, 4 = 65x65 vertices per quad. */
 	static uint32_t LandQuadLevel(RE::BSTriShape* a_geometry);
 	Texture2D* shellTerrainFine = nullptr;
-	/** @brief A/B: stops the hull's far relief tessellation (bit 5), so the 64/128-unit bands chord across the land again and the distant holes return. Runtime-only. */
-	bool shellFarTessDisabled = false;
 	float shellFineOriginX = 0.0f;
 	float shellFineOriginY = 0.0f;
 	bool shellFineValid = false;
@@ -1551,14 +1533,10 @@ public:
 	void BuildTerrainFineWindow();
 	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
 	bool shellLandHeightDisabled = false;
-	/** @brief A/B, runtime-only: the tessellated patches' old corner rotation (bit 3), which put factor-1 patches on the opposite diagonal to the land (the tessellator splits along domain (1,0)-(0,1), measured 2026-09-25). */
-	bool shellTessDiagonalUnflip = false;
-	/** @brief Runtime-only: the shell's deformation tessellation keeps no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). Default 16, with the churn parallax on (Josef, 2026-09-25). */
+	/** @brief Runtime-only: the ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). Default 16, with the churn parallax on (Josef, 2026-09-25). */
 	float shellTessTargetPx = 16.0f;
 	/** @brief Runtime-only A/B, "Disable Churn Parallax": the churn and berm clods go back into the shell geometry. Off (default) = churn by parallax (ShellFlags bit 4): the geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
 	bool shellChurnParallaxOff = false;
-	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
-	bool shellOldUnionJack = false;
 
 	/** @brief Per-draw constants for the shell pass. Layout must match ShellCB in SnowShell.hlsl. */
 	struct alignas(16) ShellCB
@@ -1584,6 +1562,7 @@ public:
 		float WarpedHalfSpan;
 		uint GridDim;
 		uint TerrainDim;
+		/** @brief Layout keeper (the retired forward PS's debug planes), uploaded as 0. */
 		uint ShellDebugData;
 
 		float DeformInvWorldSize;
@@ -1599,14 +1578,15 @@ public:
 
 		float SnowSpecularLevel;
 		float EnableGlints;
+		/** @brief Layout keepers (the retired Border Noise and Border Smoothness), uploaded as 0. */
 		float BorderNoise;
 		float BorderSmooth;
 
 		/** @brief Terrain height follows the landscape mesh's triangulation instead of bilinear, which averages the two and sits below both. Claims the retired BorderTrampledFade slot, so the buffer layout is untouched. */
 		float ShellTriHeight;
+		/** @brief Layout keeper (the retired Border Fade), uploaded as 0. */
 		float BorderUntrampledFade;
-		/** @brief Unused: the object/landscape seam cross-fade was removed. Layout keeper, uploaded as 0. */
-		/** @brief Cull landscape-shell patches whose depth has reached the -8 bare floor everywhere. Claims the retired SeamFadeUnused slot, so the buffer layout is untouched. */
+		/** @brief Cull replayed landscape triangles whose depth has reached the -8 bare floor everywhere. Claims the retired SeamFadeUnused slot, so the buffer layout is untouched. */
 		float ShellCullBare;
 		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
 		float SkinFadeStart;
@@ -1646,9 +1626,8 @@ public:
 		float ChurnHeightAmp;
 		/** @brief Multiplier on the churn lump wavelengths. */
 		float ChurnSizeScale;
-		/** @brief C3 A/B: >0.5 disables the camera-keyed far-field height pad in ShellSurfaceZ. Reuses a retired keeper row, so the CB layout is unchanged. */
+		/** @brief Layout keepers (the retired far-field pad and data-morph A/Bs), uploaded as 0. */
 		float DebugNoFarPad;
-		/** @brief C3 A/B: >0.5 disables the coarse-lattice data morph in ShellSurfaceZ. Same retired keeper row. */
 		float DebugNoDataMorph;
 
 		/** @brief Object-snow variants of the trench-detail knobs (independent of the landscape set). */
@@ -1660,7 +1639,7 @@ public:
 
 		/** @brief BermReachScale() (Berm Steepness), for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float BermReach;
-		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
+		/** @brief Layout keeper (the retired distant-snow debug views), uploaded as 0. */
 		uint ShellLODDebug;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
 		float SeamRampInv;
@@ -1682,9 +1661,9 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = trench floor as a fraction of the local uncarved depth (TrenchFloorFraction); zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief xy layout keepers (the retired dust switch and trench floor), uploaded as 0; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yzw spare. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w spare. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -1694,7 +1673,7 @@ public:
 
 		/** @brief Toroidal deformation-map addressing: physical position of logical texel (0,0). Every DeformationMap Load adds this and masks by dim-1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 DeformMapOrigin;
-		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch). Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch), bit 2 = land-exact height off, bit 4 = churn by parallax; y: bit 0 = road tops in the skin-depth raster this frame. Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 ShellFlags;
 		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
 		float4 FineWindow;
@@ -1735,114 +1714,18 @@ public:
 	static constexpr uint32_t kPointShadowMaxLights = 4;
 
 	/**
-	 * @brief Draws the snow shell into the deferred G-buffer.
+	 * @brief Draws the ground snow and the captured statics into the deferred G-buffer.
 	 *
 	 * Called from Deferred::DeferredPasses before the composite, while the
-	 * frame's G-buffer contents and main depth are complete. Binds its own
-	 * targets/state and restores the previous pipeline state afterwards.
+	 * frame's G-buffer contents and main depth are complete. The ground is the
+	 * landscape replay's prepass (here when S1 did not draw it), the resolve
+	 * and one full-screen deferred pass. Binds its own targets/state and
+	 * restores the previous pipeline state afterwards.
 	 * Implemented in SnowDeformation/Shell.cpp.
 	 */
 	void DrawShell();
 
-	/** @brief Returns the shell vertex/pixel shaders, compiling them on first use. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11VertexShader* GetShellVS();
-	ID3D11PixelShader* GetShellPS();
-	ID3D11VertexShader* shellVS = nullptr;
-	ID3D11PixelShader* shellPS = nullptr;
-
-	/** @brief Index buffers for the non-tessellated grid draws (legacy main path, shadow caster): one per union-jack parity, absolute 32-bit lattice indices, one draw. DrawShellGrid routes to the indexed draw or, under the A/B toggle, the old six-vertices-per-quad Draw. Implemented in SnowDeformation/Shell.cpp. */
-	bool EnsureShellGridIndexBuffers();
-	void DrawShellGridIndexed(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
-	void DrawShellGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
-	/** @brief Patch rows [a_first, a_end) that can reach the seam square; every patch of a row wholly outside it fails ShellBeyondSeam in the hull. One row of margin; the whole grid without seam data. */
-	static void ShellSeamRows(const ShellCB& a_cb, uint32_t& a_first, uint32_t& a_end);
-	/** @brief SampleTerrainShaped's t59: the flags while they describe the bound t58 and no border tap can reach past one texel, else null (reads 0, every tap taken). */
-	ID3D11ShaderResourceView* TerrainPlainSRV(const ShellCB& a_cb) const;
-	winrt::com_ptr<ID3D11Buffer> shellGridIB[2];
-	/** @brief The caster's subset per parity: quads with a corner inside the castVis kill radius (SnowShell.hlsl); the VS NaNs every vertex past it. */
-	winrt::com_ptr<ID3D11Buffer> shellGridCasterIB[2];
-	uint32_t shellGridCasterIndexCount = 0;
-	/** @brief A/B, runtime-only: cast from the whole grid. */
-	bool shellCasterFullGrid = false;
-	void DrawShellCasterGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
-	/** @brief A/B measurement: the non-indexed grid draws (SNOW_GRID_NONINDEXED VS variants) for reading what the index buffers are worth. Runtime-only. */
-	bool shellGridNonIndexed = false;
-	ID3D11VertexShader* shellVSNonIndexed = nullptr;
-	ID3D11VertexShader* shellShadowVSNonIndexed = nullptr;
-
-	/** @brief Heatmap-mode PS permutation (SNOW_LOD_HISTOGRAM): single SV_Target + histogram UAV at u1. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11PixelShader* GetShellLODPS();
-	ID3D11PixelShader* shellLODPS = nullptr;
-
-
-	/** @brief Tessellated-path stages (SNOW_TESS): control-point VS (grid placement only), hull shader (distance-based crack-free factors) and domain shader (full surface evaluation + displacement-map relief). Active when Relief Depth > 0. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11VertexShader* GetShellTessVS();
-	ID3D11HullShader* GetShellHS(bool a_bake);
-	ID3D11DomainShader* GetShellDS();
-	ID3D11VertexShader* shellTessVS = nullptr;
-	ID3D11HullShader* shellHS = nullptr;
-	/** @brief SNOW_HS_BAKE twin: the edge factors' two corner deformation taps come from shellVertexBake.w; the midpoint tap stays live. */
-	ID3D11HullShader* shellHSBake = nullptr;
-	ID3D11DomainShader* shellDS = nullptr;
-	/** @brief Measurement: replaces the ShellShadowCast profiler row with per-cascade CasterGrid/CasterSkins/CasterPatch rows. Runtime-only. */
-	bool shellCasterSplitDebug = false;
-	/** @brief A/B: skips the shell's sun-cascade injection (InjectShellShadowCasters) for the frame, everything else unchanged. Runtime-only. */
-	bool shellShadowCastDebugOff = false;
-
-	/** @brief A/B measurement: SNOW_DS_FLAT domain shader (terrain + class depth, no field work) bounds the geometry stages' share of the Shell row. Runtime-only. */
-	bool shellFlatDSDebug = false;
-	ID3D11DomainShader* shellDSFlat = nullptr;
-
-	/** @brief Per-vertex surface bake: BakeCS runs ShellVertexZ once per base-grid vertex into shellVertexBake (RGBA32F, (GridDim+1)^2) each frame; the SNOW_DS_BAKE domain shader reads patch corners from it by grid index and keeps interior (tess factor > 1) vertices live. Same function, full float, index lookup: bit-identical to the live path. SNOW_DS_BAKE_CHECK evaluates both and spikes any corner whose bits differ. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11ComputeShader* GetShellBakeCS();
-	ID3D11DomainShader* GetShellDSBake(bool a_check);
-	bool EnsureShellVertexBake();
-	ID3D11ComputeShader* shellBakeCS = nullptr;
-	ID3D11DomainShader* shellDSBake = nullptr;
-	ID3D11DomainShader* shellDSBakeCheck = nullptr;
-	Texture2D* shellVertexBake = nullptr;
-	/** @brief Companion to shellVertexBake: the vertex normal's two height differences, so a baked corner skips FinishShellVertex's four terrain taps as well. */
-	Texture2D* shellVertexBakeSlope = nullptr;
-	/** @brief Bit patterns of everything ShellVertexSlope reads: the placement CB fields and the terrain and fine windows' versions. While they match the last bake's, ShellFlags.y bit 1 tells BakeCS to keep the stored slope. */
-	using ShellSlopeKey = std::array<uint32_t, 17>;
-	ShellSlopeKey MakeShellSlopeKey(const ShellCB& a_cb) const;
-	ShellSlopeKey shellSlopeKey{};
-	ShellSlopeKey shellSlopeKeyPending{};
-	bool shellSlopeKeyValid = false;
-	/** @brief Bumped on every write of shellTerrainFine (BuildTerrainFineWindow). */
-	uint32_t shellFineVersion = 0;
-	/** @brief A/B measurement: returns the domain shader to evaluating every vertex live. Runtime-only. */
-	bool shellVertexBakeDisabled = false;
-	/** @brief A/B measurement: stops the hull's view-frustum patch cull (ShellFlags.x bit 1), so the whole grid is tessellated and rasterised as before. The cull is bit-identical - the rasteriser discards those triangles anyway - and it does NOT reach the shadow caster, which draws from the light's matrix through its own non-tessellated VS. Runtime-only. */
-	bool shellFrustumCullDisabled = false;
-	/** @brief Measurement: the domain shader evaluates baked corners live as well and lifts any mismatching vertex by 50 units. Runtime-only. */
-	bool shellVertexBakeCheck = false;
-	/** @brief BakeCS's ShellSurfaceZ per vertex (R32F, the bake's lattice): next frame's sun caster loads it (SNOW_CAST_BAKED) with the bake's coverage, terrain and slope instead of evaluating the surface in every cascade. */
-	Texture2D* shellCastBake = nullptr;
-	/** @brief The last DrawShell baked and no field has been written since: cleared at the top of Prepass, set by the bake dispatch. The caster also requires its refreshed grid placement to equal the snapshot's. */
-	bool shellCastBakeValid = false;
-	/** @brief A/B, runtime-only: the caster evaluates the surface live in every cascade again. */
-	bool shellCastBakeOff = false;
-	/** @brief Measurement: the baked caster also evaluates the surface live and counts the vertices whose bits differ (castCheck*). Needs UAVs at every stage (feature level 11_1). */
-	bool shellCastBakeCheck = false;
-	/** @brief The baked caster drew in the last shadow pass. */
-	bool shellCastBakedLast = false;
-	ID3D11VertexShader* GetShellShadowVSBaked(bool a_check);
-	ID3D11VertexShader* shellShadowVSBaked = nullptr;
-	ID3D11VertexShader* shellShadowVSBakedCheck = nullptr;
-	static constexpr int kCastCheckRing = 3;
-	winrt::com_ptr<ID3D11Buffer> castCheckBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> castCheckUAV;
-	winrt::com_ptr<ID3D11Buffer> castCheckStaging[kCastCheckRing];
-	bool castCheckIssued[kCastCheckRing] = {};
-	int castCheckRing = 0;
-	uint64_t castCheckMismatches = 0;
-	uint64_t castCheckVertices = 0;
-	uint32_t castCheckFrames = 0;
-	bool EnsureCastCheckResources();
-	void ReadCastCheck(ID3D11DeviceContext* a_context);
-
-	/** @brief Measurement: D3D11 pipeline-statistics + occlusion queries around the shell grid draws and the statics pass. PS invocations over samples passed is overdraw x overshade; DS/HS/VS invocations check the geometry-stage arithmetic. Ring of three, read back without flushing. Runtime-only. */
+	/** @brief Measurement: D3D11 pipeline-statistics + occlusion queries around the ground snow's draws and the statics pass. PS invocations over samples passed is overdraw x overshade; DS/HS/VS invocations check the geometry-stage arithmetic. Ring of three, read back without flushing. Runtime-only. */
 	bool shellPipelineStatsEnabled = false;
 	struct ShellStatsResult
 	{
@@ -1876,37 +1759,7 @@ public:
 	ShellStatsResult patchStatsLast;
 	bool EnsureShellStatsQueries();
 	void ReadShellStatsQueries(ID3D11DeviceContext* a_context);
-	/** @brief Hull variants for the split draw: NEAR keeps patches inside the PS's far-clamp distance, FAR keeps the rest. A straddling patch lands in exactly one of them. */
-	ID3D11HullShader* shellHSNear = nullptr;
-	ID3D11HullShader* shellHSFar = nullptr;
-	ID3D11HullShader* shellHSNearBake = nullptr;
-	ID3D11HullShader* shellHSFarBake = nullptr;
-	ID3D11HullShader* GetShellHSNear(bool a_bake);
-	ID3D11HullShader* GetShellHSFar(bool a_bake);
-	/** @brief Shell PS with the depth export compiled out, used for the split's NEAR pass while the clamp is on. Distinct from shellPS, which follows the clamp A/B flag. */
-	ID3D11PixelShader* shellPSNoDepth = nullptr;
-	ID3D11PixelShader* GetShellPSNoDepth();
-
-	/** @brief Lane census (DevBench laneCensus, measurement only): for this many frames the shading draws are re-issued with SNOW_LANE_CENSUS and no depth test, counting live pixels and the quads early-Z would launch. Totals accumulate in laneCensus, read back kLaneCensusRing frames late. */
-	uint32_t laneCensusFramesLeft = 0;
-	static constexpr int kLaneCensusRing = 3;
-	winrt::com_ptr<ID3D11Buffer> laneCensusBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> laneCensusUAV;
-	winrt::com_ptr<ID3D11Buffer> laneCensusStaging[kLaneCensusRing];
-	bool laneCensusPending[kLaneCensusRing] = {};
-	int laneCensusRing = 0;
-	struct LaneCensusTotals
-	{
-		uint64_t frames = 0;
-		uint64_t pixels = 0;
-		uint64_t quads = 0;
-		uint64_t untouched = 0;
-		uint64_t quadLive[4] = {};
-	} laneCensus;
-	ID3D11PixelShader* shellPSCensus = nullptr;
-	ID3D11PixelShader* GetShellPSCensus();
-
-	/** @brief Deferred shell shading drew this frame: the prepass also writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners instead of the patch lists. The position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. False while a debug view keeps the raster path. */
+	/** @brief The ground snow drew this frame: the prepass writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners. The position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. */
 	bool shellDeferredThisFrame = false;
 	/** @brief The deferred pass's inputs, display-size like shellRasterDepth: [0] GridLocal.xy + normal.xy (RGBA32F), [1] GridLocal's coarse derivatives (RGBA16F), [2] view depth + WorldPos.z's coarse derivatives (RGBA32F). */
 	Texture2D* shellDeferredAttr[3] = {};
@@ -1919,20 +1772,19 @@ public:
 	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
 
-	/** @brief S1: DrawShellEarlyPrepass runs the ground prepass at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the edge and floor contests) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Terrain Blending and no debug view. */
+	/** @brief S1: DrawShellEarlyPrepass runs the ground prepass (the landscape replay) at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the land's verdict) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Terrain Blending and this frame's landscape capture. */
 	enum class EarlyPrepass : uint8_t
 	{
 		Off,
 		Drawing,
 		NotDrawing,
-		DebugView,
 		NeedsTerrainBlending,
 		Unavailable
 	};
 	EarlyPrepass shellEarlyState = EarlyPrepass::Off;
 	/** @brief Frame the early prepass drew in; DrawShell finishes it only in that frame. */
 	uint32_t shellEarlyFrame = UINT32_MAX;
-	/** @brief The CB the early prepass and its bake drew with; DrawShell checks the bake's placement against it before the caster may read the bake. */
+	/** @brief The CB the early prepass drew with; DrawShell counts the frames whose view moved since. */
 	std::unique_ptr<ShellCB> shellEarlyCB;
 	D3D11_VIEWPORT shellEarlyViewport{};
 	/** @brief Frames whose shell viewport or camera differed from the ones the early prepass drew with. */
@@ -1991,77 +1843,16 @@ public:
 	ID3D11ComputeShader* GetSkinSssRestoreCS();
 	ID3D11PixelShader* shellFillPSClaim = nullptr;
 	ID3D11PixelShader* GetShellFillPSClaim();
-	/** @brief ShellCB.ShellDebugData from the debug toggles. */
-	uint32_t ShellDebugDataCode() const;
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);
-	bool EnsureLaneCensusResources();
-	void ReadLaneCensus(ID3D11DeviceContext* a_context);
 
-	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's clamped depth into the main buffer (alpha cut + export clamp) and its raster depth into shellRasterDepth; the fill pass copies that into shellTestDepth, a private depth buffer the shading pass tests EQUAL against with writes off, so occluded, self-hidden and alpha-cut fragments are rejected by hardware early-Z. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11PixelShader* GetShellPSPrepass(bool a_patch = false, bool a_keepHidden = false);
-	ID3D11PixelShader* shellPSPrepass = nullptr;
-	/** @brief SNOW_PREPASS_KEEP_HIDDEN variants [plain, patch id]: the prepass runs the alpha cut on fragments already behind the scene (A/B). */
-	ID3D11PixelShader* shellPSPrepassKeepHidden[2] = {};
-	/** @brief A/B, runtime-only: the prepass keeps its hidden fragments (the variants above). */
+	/** @brief A/B, runtime-only: the prepass runs the alpha cut on fragments already behind the scene (SNOW_PREPASS_KEEP_HIDDEN). */
 	bool shellPrepassExitOff = false;
-	/** @brief Prepass variant that also writes the winning patch id (SNOW_SHELL_PREPASS_PATCH), used only with the visible-patch cull. */
-	ID3D11PixelShader* shellPSPrepassPatch = nullptr;
 	ID3D11VertexShader* GetShellFillVS();
 	ID3D11PixelShader* GetShellFillPS();
 	ID3D11VertexShader* shellFillVS = nullptr;
 	ID3D11PixelShader* shellFillPS = nullptr;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
-	/** @brief Visible-patch cull (runtime, default ON): the prepass also writes each pixel's winning patch (+1) into shellRasterPatch, the fill marks those patches in shellVisiblePatches, and the shading pass's hull (SNOW_HS_VISIBLE) gives every other patch zero factors. The shading pass admits only prepass winners, so the image is unchanged; only the second tessellation shrinks. */
-	bool shellVisibleCull = true;
-	Texture2D* shellRasterPatch = nullptr;
-	winrt::com_ptr<ID3D11Buffer> shellVisiblePatches;
-	winrt::com_ptr<ID3D11UnorderedAccessView> shellVisiblePatchesUAV;
-
-	/** @brief Patch split (runtime, default ON): the prepass's domain shader marks patches whose hull factors are all 1 (patch id bit 31), the fill carries the mark into the visible flags (1 flat, 2 tessellated), PatchListCS compacts the visible patches into two lists, and the shading pass draws the flat list with a plain VS (the tessellator's two triangles, corners from the bake) and only the tessellated list through the hull and domain shaders. The flat list is the prepass hull's own verdict. */
-	winrt::com_ptr<ID3D11Buffer> shellFlatPatches, shellTessPatches, shellFlatArgs, shellTessArgs;
-	winrt::com_ptr<ID3D11UnorderedAccessView> shellFlatPatchesUAV, shellTessPatchesUAV, shellFlatArgsUAV, shellTessArgsUAV;
-	winrt::com_ptr<ID3D11ShaderResourceView> shellFlatPatchesSRV, shellTessPatchesSRV;
-	static constexpr int kShellPatchArgsRing = 3;
-	winrt::com_ptr<ID3D11Buffer> shellPatchArgsStaging[kShellPatchArgsRing][2];
-	int shellPatchArgsRing = 0;
-	uint32_t shellPatchFlatCount = 0;
-	uint32_t shellPatchTessCount = 0;
-	bool shellPatchSplit = true;
-	bool shellPatchSplitThisFrame = false;
-	bool EnsurePatchListResources();
-	void ReadPatchListCounts(ID3D11DeviceContext* a_context);
-	/** @brief The shading pass's two lists: the tessellated one through the list VS, the trust hull and a_ds, then the flat one with the plain VS. Leaves the patch-list topology and a_tessVS bound. */
-	void DrawShellPatchLists(ID3D11DeviceContext* a_context, ID3D11VertexShader* a_tessVS, ID3D11DomainShader* a_ds);
-	ID3D11ComputeShader* GetShellPatchListCS();
-	ID3D11VertexShader* GetShellTessVSList();
-	ID3D11HullShader* GetShellHSListMain();
-	ID3D11VertexShader* GetShellFlatVS();
-	ID3D11ComputeShader* shellPatchListCS = nullptr;
-	ID3D11VertexShader* shellTessVSList = nullptr;
-	ID3D11HullShader* shellHSListMain = nullptr;
-	ID3D11VertexShader* shellFlatVS = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePatchesSRV;
-	winrt::com_ptr<ID3D11Buffer> shellVisiblePrev;
-	winrt::com_ptr<ID3D11ShaderResourceView> shellVisiblePrevSRV;
-	bool shellVisiblePrevValid = false;
-	bool EnsureVisiblePatchResources();
-	/** @brief Prepass-draw DS variants that also carry the patch id (SNOW_SHELL_PATCH_ID): [0] live, [1] bake, [2] bake check. */
-	ID3D11DomainShader* GetShellDSPatch(bool a_bake, bool a_check);
-	ID3D11DomainShader* shellDSPatch[3] = {};
-	/** @brief The prepass draw's bake DS writing only what the prepass PS reads (SNOW_DS_LEAN): [0] plain, [1] with the patch id. */
-	ID3D11DomainShader* GetShellDSLean(bool a_patchId);
-	ID3D11DomainShader* shellDSLean[2] = {};
-	ID3D11HullShader* GetShellHSVisible(bool a_bake, bool a_trust = false);
-	ID3D11HullShader* shellHSVisible = nullptr;
-	ID3D11HullShader* shellHSVisibleBake = nullptr;
-	/** @brief SNOW_HS_TRUST: the shading pass's hull skips the culls its prepass winners passed. */
-	ID3D11HullShader* shellHSVisibleTrust = nullptr;
-	ID3D11HullShader* shellHSVisibleTrustBake = nullptr;
-	/** @brief A/B, runtime-only: the shading pass re-runs the prepass culls. */
-	bool shellHullTrustOff = false;
-	ID3D11PixelShader* GetShellFillPSVisible();
-	ID3D11PixelShader* shellFillPSVisible = nullptr;
 	/** @brief The prepass ran this frame, so shellRasterDepth marks the shell's pixels; DepthSync is skipped otherwise. */
 	bool shellPrepassThisFrame = false;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
@@ -2098,10 +1889,9 @@ public:
 	ID3D11ComputeShader* preSnowCopyCS = nullptr;
 	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target when screenRectsOff or no viewport. */
 	D3D11_BOX ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const;
+	/** @brief EQUAL against the main depth, writes off: the statics' shading admits only their prepass's winners. */
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellFillDepthState;
-	/** @brief A/B measurement: returns the shell to the near/far split draws without the depth prepass. Runtime-only. */
-	bool shellDepthPrepassDisabled = false;
 
 	ConstantBuffer* shellCB = nullptr;
 
@@ -2190,22 +1980,8 @@ public:
 	uint32_t seamMaskTerrainVersion = ~0u;
 	bool EnsureSeamMask();
 
-	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
-	bool shellDataDebug = false;
-	/** @brief Border-field debug plane (ShellDebugData 3): hue = class-depth band, brightness = snow grain, white = the cut contour, magenta grid = land grain data present. */
-	bool shellBorderDebug = false;
-	/** @brief SSS gate view (ShellDebugData 4): red = mask darkness from the ground march, green = vertical-hug trust, blue = buried-caster probe fired. Renders on the REAL shell surface with real discards. */
-	bool shellSSSDebug = false;
-	/** @brief Wall material view (ShellDebugData 5): raw two-plane albedo, unlit, red wash = side-projection weight. The strafe test for the wall-shift hunt. */
-	bool shellWallDebug = false;
-	/** @brief Edge height view (ShellDebugData 6): rendered sheet height above the terrain data, banded black/green/yellow/orange/red at 0.5/2/4/8 units, white = 1.5 (the alpha's keep height). Real surface, real discards. */
-	bool shellEdgeHeightDebug = false;
-	/** @brief Trampled-area view (ShellDebugData 7): blue -> red = raw extent, green = the field factor CarveProfile applies, white = the bracket ends. Real surface. */
-	bool shellTrampleDebug = false;
-	/** @brief Skips the extent bake so the field keeps its last content: separates a field that really changes from a view that only shimmers. */
+	/** @brief Skips the extent bake so the field keeps its last content: separates a field that really changes from a surface that only shimmers. */
 	bool debugTrampleFreeze = false;
-	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */
-	bool shellExclusionDebug = false;
 
 	/** @brief A/B measurement: gates the wide exclusion field off, returning clearings to the near mask's ~57 m reach. Runtime-only. */
 	bool shellDistantExclusionsDisabled = false;
@@ -2214,26 +1990,11 @@ public:
 	bool shellBermBakeDisabled = false;
 	/** @brief Debug A/B: zeroes UndulationFieldWindow.w so both shells fall back to the live two-octave eval; the bake keeps updating underneath. */
 	bool shellUndulationBakeDisabled = false;
-	/** @brief Debug A/B: restores the horizon march's bicubic deformation sampler (16 loads/tap) in place of the shipped bilinear (4). Rekeys both shell PS variants via SNOW_MARCH_BICUBIC. */
-	bool shellMarchBicubicRestored = false;
-	bool shellMarchBicubicCompiledPS = false;
-	bool shellMarchBicubicCompiledPSNoDepth = false;
-	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip. Rekeys the no-export and deferred PSs. */
+	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip. Rekeys the deferred PS. */
 	uint32_t shellPSLegacyBits = 0;
-	uint32_t shellPSLegacyBitsCompiled = 0;
-
-	/** @brief Clamp state the cached shellPS was compiled against; a mismatch releases it. The clamp is a debug A/B now (shellDepthClampDisabled), not a setting. */
-	bool shellDepthClampCompiled = true;
-
-
-	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
-	bool shellSplitDisabled = false;
 
 	/** @brief A/B measurement: draws the shells through the viewport bound at DrawShell time (the deferred span's decal cap) instead of the main pass's depth range, so the range fix can be read against the ~3e-5 NDC bias it removed. Runtime-only. */
 	bool shellMainViewportRangeDisabled = false;
-
-	/** @brief A/B measurement: drops the shell's SV_DepthLessEqual export outright (single no-export draw, no far-field clamp). Demoted from a setting 2026-08-27: with the split draw on by default there is no configuration where turning the clamp off is a good trade, so it is an instrument, not a choice. Runtime-only; forces a PS recompile. */
-	bool shellDepthClampDisabled = false;
 
 	/** @brief A/B measurement: returns terrain height to plain bilinear, which averages the mesh's two triangulations and so sits below both. Turning it on should bring back the poke-through on steep ground. Runtime-only. */
 	bool shellBilinearHeight = false;
@@ -2244,75 +2005,6 @@ public:
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
 	int staticsDebugView = 0;
-
-	// ---- Distant-snow / LOD diagnostics (runtime-only) ----
-
-	/** @brief 0 off, 1 depth-delta heatmap, 2 warp-ring view, 3 data-provenance view, 4 land-exact delta. Mirrors ShellCB::ShellLODDebug. */
-	int lodDebugView = 0;
-	/** @brief Shimmer meter: a probe CS evaluates the shell mesh surface at world-anchored points each frame; the CPU tracks frame-to-frame height deltas per distance band. */
-	bool lodShimmerMeter = false;
-	/** @brief C3 discriminator D2: drop the camera-keyed far-field height pad. Expect holes back if it was carrying them. */
-	bool lodDebugNoFarPad = false;
-	/** @brief C3 discriminator D3: drop the coarse-lattice data morph, leaving the fine lattice everywhere. */
-	bool lodDebugNoDataMorph = false;
-
-	static constexpr uint32_t kLODHistBands = 4;
-	static constexpr uint32_t kLODHistBuckets = 8;
-	static constexpr uint32_t kLODProbeAzimuths = 24;
-	static constexpr uint32_t kLODProbeRadii = 12;
-	static constexpr uint32_t kLODProbeCount = kLODProbeAzimuths * kLODProbeRadii;
-	/** @brief Probe ring radii in world units; must match kProbeRadius in SnowShell.hlsl. */
-	static constexpr float kLODProbeRadius[kLODProbeRadii] = { 1500, 2500, 3500, 5000, 6500, 8000, 10000, 12500, 15000, 18000, 21000, 24000 };
-	static constexpr uint32_t kLODShimmerHistory = 120;
-
-	/** @brief Heatmap-mode depth state: test ALWAYS, write off. The PS re-creates occlusion, so poke-under pixels survive to be measured. */
-	winrt::com_ptr<ID3D11DepthStencilState> shellLODDepthState;
-	winrt::com_ptr<ID3D11Buffer> lodHistogram;
-	winrt::com_ptr<ID3D11UnorderedAccessView> lodHistogramUAV;
-	winrt::com_ptr<ID3D11Buffer> lodHistogramStaging[2];
-	winrt::com_ptr<ID3D11Buffer> lodProbeBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> lodProbeUAV;
-	winrt::com_ptr<ID3D11Buffer> lodProbeStaging[2];
-	/** @brief Two-deep staging ring: frame N copies into [ring], maps [ring^1] (frame N-1's copy) so readback never stalls. */
-	int lodReadbackRing = 0;
-	bool lodHistStagingValid[2] = {};
-	bool lodProbeStagingValid[2] = {};
-	/** @brief Probe anchor (512-unit-quantized camera XY) captured at each dispatch; deltas are only valid between readbacks sharing an anchor. */
-	float2 lodProbeAnchorAtCopy[2] = {};
-
-	uint32_t lodHistData[kLODHistBands * kLODHistBuckets] = {};
-	float lodProbePrev[kLODProbeCount] = {};
-	bool lodProbePrevValid = false;
-	float2 lodProbeAnchor = { 0.0f, 0.0f };
-	/** @brief Per-band shimmer stats from the last readback: max |dZ|, mean |dZ|, probes moving > 1 unit, valid probe count. */
-	float lodShimmerMax[kLODHistBands] = {};
-	float lodShimmerAvg[kLODHistBands] = {};
-	uint32_t lodShimmerHops[kLODHistBands] = {};
-	uint32_t lodShimmerValid[kLODHistBands] = {};
-
-	// Windowed shimmer accumulators: the per-frame row is a sample, not a
-	// measurement. Reset, walk, then read - a screenshot of one frame is what
-	// voided the first C3 A/B round.
-	float lodShimmerRunMax[kLODHistBands] = {};
-	double lodShimmerRunSum[kLODHistBands] = {};
-	uint64_t lodShimmerRunCnt[kLODHistBands] = {};
-	uint32_t lodShimmerRunHops[kLODHistBands] = {};
-	uint32_t lodShimmerRunFrames = 0;
-	/** @brief Seam square (SeamBounds) rewrites: it snaps to the PLAYER's cell, so this ticks on cell crossings. C3 mechanism 3's event counter. */
-	uint32_t lodSeamChanges = 0;
-	/** @brief Terrain data window rebuilds: a whole-window re-upload of baked heights. C3's other discrete-event suspect. */
-	uint32_t lodWindowRebuilds = 0;
-	float lodShimmerHistoryBuf[kLODHistBands][kLODShimmerHistory] = {};
-	int lodShimmerHistoryIdx = 0;
-
-	/** @brief Lazily creates the LOD-diagnostic GPU resources. Implemented in SnowDeformation/Shell.cpp. */
-	bool EnsureLODDebugResources();
-	/** @brief Probe CS (COMPUTESHADER block of SnowShell.hlsl), compiled on first use. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11ComputeShader* GetLODProbeCS();
-	ID3D11ComputeShader* lodProbeCS = nullptr;
-	/** @brief Dispatches the probe CS (when the shimmer meter is on), reads back last frame's histogram + probe copies and updates the stats. Implemented in SnowDeformation/Shell.cpp. */
-	void RunLODProbePass();
-	void ReadbackLODDiagnostics();
 
 	/** @brief The landscape snow diffuse, loaded from the modlist via the VFS. Null when unavailable (constant-albedo fallback). */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;
@@ -2576,12 +2268,8 @@ public:
 	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Copies it and the ESRAM partner for crisp shell shadows, then injects the shell as a caster. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
 	void CaptureShadowAtlas();
 
-	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height; mounds, drifts; casts. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11VertexShader* GetShellShadowVS();
-
 	/** @brief Lazily compiles the trench patch's shadow-caster VS (a_indexed: the SNOW_PATCH_INDEXED twin). Implemented in SnowDeformation/Statics.cpp. */
 	ID3D11VertexShader* GetPatchShadowVS(bool a_indexed = false);
-	ID3D11VertexShader* shellShadowVS = nullptr;
 
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
 	std::unique_ptr<ShellCB> lastShellCBData;
@@ -2595,12 +2283,14 @@ public:
 	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
 	winrt::com_ptr<ID3D11DepthStencilState> shadowCastDSS;
 
-	/** @brief Depth-renders the terrain shell into both live cascade slices so the world receives snow-mound shadows. The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Depth-renders the road trench patch into the live cascade slices; the ground snow casts through the raised landscape (LandscapeSnow.cpp). The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
 	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
+	/** @brief Measurement: the Shadows - Trench Patch row becomes one row per cascade. Runtime-only. */
+	bool shellCasterSplitDebug = false;
 	/** @brief The sun cascades' real atlas slices into sunCascadeSlice every frame (the snow's shadow reads), whether or not anything casts. */
 	void RecordSunCascadeSlices(uint32_t a_atlasSlices);
 
-	/** @brief Re-derives the camera-anchored grid placement fields of a ShellCB from THIS frame's camera. Shared by DrawShell and the shadow-caster injection so the caster geometry never lags the visible surface by a frame (a stale grid slides a crisp shadow during camera motion). Implemented in SnowDeformation/Shell.cpp. */
+	/** @brief Re-derives the camera-anchored placement fields of a ShellCB (the fields' frame) from THIS frame's camera. Shared by DrawShell, S1 and the shadow passes, so no pass reads the fields through a frame-old placement (a stale one slides a crisp shadow during camera motion). Implemented in SnowDeformation/Shell.cpp. */
 	void RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust = nullptr);
 
 	/** @brief Shadow-source diagnostics for the settings UI (kept permanently; they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
@@ -2827,10 +2517,9 @@ public:
 			kSpanWaterCover,
 			kSpanBloodCapture,
 			kSpanRuneCapture,
-			kSpanShellGrid,
+			kSpanGround,
 			kSpanStatics,
 			kSpanShellRestore,
-			kSpanLODProbe,
 			kSpanShellTail,
 			kSpanPrepassHead,
 			kSpanPrepassArcsAndGate,
@@ -2857,7 +2546,7 @@ public:
 			kSpanExclusionGather,
 			kSpanCount
 		};
-		static constexpr const char* kSpanNames[kSpanCount] = { "Prepass", "DrawShell", "DrawShell.Setup", "DrawShell.ObjectHeightMap", "DrawShell.WaterCapture", "DrawShell.WaterCover", "DrawShell.BloodCapture", "DrawShell.RuneCapture", "DrawShell.GridAndBind", "DrawShell.Statics", "DrawShell.Restore", "DrawShell.LODProbe", "DrawShell.Tail",
+		static constexpr const char* kSpanNames[kSpanCount] = { "Prepass", "DrawShell", "DrawShell.Setup", "DrawShell.ObjectHeightMap", "DrawShell.WaterCapture", "DrawShell.WaterCover", "DrawShell.BloodCapture", "DrawShell.RuneCapture", "DrawShell.Ground", "DrawShell.Statics", "DrawShell.Restore", "DrawShell.Tail",
 			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail",
 			"Contact.Actor", "Contact.Upload", "Contact.Dynamic", "Contact.Draw", "Contact.Geometry", "Contact.Skinned", "DrawShell.ExclusionGather" };
 		int64_t spanTicks[kSpanCount] = {};
@@ -3004,8 +2693,6 @@ public:
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
-	/** @brief The ground shell and its caster draw nothing: suspended, or hidden for the landscape snow A/B (the road class and patch stay). Snow on Landscape overrides the hide. */
-	bool GroundShellHidden() const { return GroundShellsSuspended() || (landscapeSnow && landscapeHideShell && !landscapeShade); }
 	/** @brief 2^(1 - Berm Steepness): the berm tap reach both the bake and the shells use. Exactly 1 at the default. */
 	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
 	/** @brief 1 - Snow Resistance: the share of a body's reach into the layer that carves. */
@@ -3993,15 +3680,11 @@ public:
 	void LandscapeSnowRestore();
 	/** @brief Rebuilds the landscape's ShellCB copy and SRV set from the live fields; false while one is missing or the footprint holds no snow. */
 	bool LandscapeSnowRefresh();
-	/** @brief The surface's SRV set t0-t59 (the slots ShellVertexZ and the landscape hull read) for a_cb, from the fields as they stand now. */
+	/** @brief The surface's SRV set t0-t58 (the slots ShellVertexZ and the landscape hull read) for a_cb, from the fields as they stand now. */
 	void LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderResourceView** a_srvs);
-	/** @brief Snow on Landscape this frame: the switch is on, the replay's shaders are ready and this frame's depth prepass has been captured. Counts the frames that wanted it and fell back to the grid. */
+	/** @brief The ground snow can draw this frame: the replay's shaders are ready and this frame's depth prepass has been captured. Counts the frames that wanted it and drew no ground. */
 	bool LandscapeShadeReady();
-	/** @brief The raised landscape casts the ground snow into the sun cascades under Snow on Landscape, so the shell caster stands down. */
-	bool LandscapeCastsGroundSnow() const;
-	/** @brief Under Snow on Landscape the sun cascades read the shell caster's per-frame bake, so the early prepass keeps baking. */
-	bool LandscapeShadowsReadBake() const;
-	/** @brief Snow on Landscape's land-blended edges (LANDSCAPE-SNOW-PLAN Phase 5): wherever the land is mixed, its own height blend decides snow or ground (Lighting writes its snow odds into Masks.y); no trench floor; the window bake keeps snow depth only where the land is nearly all snow. */
+	/** @brief The land-blended edges (LANDSCAPE-SNOW-PLAN Phase 5), on whenever the feature is: wherever the land is mixed, its own height blend decides snow or ground (Lighting writes its snow odds into Masks.y); trenches reach the ground; the window bake keeps snow depth only where the land is nearly all snow. */
 	bool LandBlendActive() const;
 	/** @brief The land's snow-texture weight from which the bake keeps snow depth (smoothstep to 1). */
 	float LandBlendDepthStart() const;
@@ -4009,21 +3692,13 @@ public:
 	float LandBlendDepth(float a_depth, float a_snowWeight) const;
 	/** @brief The resolve's depth bonus (log2 odds per unit of remaining snow) and carve penalty (log2 odds at a full carve). */
 	float2 LandBlendContest() const;
-	/** @brief Snow on Landscape: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl where the shell prepass draws its grid. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
+	/** @brief The ground snow's prepass geometry: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
 	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB);
 	/** @brief One-line status for the Debugging menu. */
 	std::string LandscapeSnowStatus() const;
 	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */
 	json LandscapeSnowTool(const json& a_args);
-	/** @brief Debug, not serialised: raise the game's landscape onto the ground shell's surface. */
-	bool landscapeSnow = false;
-	/** @brief Debug, not serialised: hide the ground shell and its caster (GroundShellHidden). */
-	bool landscapeHideShell = false;
-	/** @brief Debug, not serialised (Snow on Landscape, Phase 3): the ground shell's prepass draws the landscape's own meshes instead of its grid; camera passes stay unraised and the sun cascades are raised by the shell caster's rules in place of the caster. Needs landscapeSnow. */
-	bool landscapeShade = false;
-	/** @brief Debug, not serialised (Phase 5): Snow on Landscape's land-blended edges, on by default under it (LandBlendActive). */
-	bool landscapeBlend = true;
-	/** @brief The land's snow-texture weight from which the snow deepens under land-blended edges; below it the snow is a film the land's blend cuts. */
+	/** @brief Debug, not serialised: the land's snow-texture weight from which the snow deepens; below it the snow is a film the land's blend cuts. */
 	float landscapeBlendStart = 0.85f;
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
@@ -4076,13 +3751,9 @@ public:
 	EffectCostProbe effectCost;
 	void StartEffectCostProbe();
 	void TickEffectCostProbe();
-	/** @brief Measurement, runtime-only: time the Shell pass as its four stage rows (Ground - Shell Setup / Depth Prepass / Visible Patches / Shading) instead of one. */
+	/** @brief Measurement, runtime-only: time the ground pass as its stage rows (Ground - Shell Setup / Depth Prepass / Shading) instead of one. */
 	bool shellSplitTiming = true;
-	/** @brief Measurement, runtime-only: the prepass tessellates only the patches the previous frame marked visible. Exact only for a still camera and scene: a skipped patch can never be marked again. */
-	bool shellPrepassLastFrame = false;
-	/** @brief Measurement, runtime-only: the shading draw zero-factors every patch, leaving its VS and HS cost. Breaks the image. */
-	bool shellMainCullAll = false;
-	/** @brief DevBench: applies shell measurement args (shellKill, shellSplitTiming, shellPrepass, shellBake, shellStats, shellVisibleCull, shellPrepassLastFrame, shellMainCullAll) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
+	/** @brief DevBench: applies ground measurement args (shellKill, shellSplitTiming, shellStats, ...) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
 	json DevBenchShellArgs(const json& a_args);
 	/** @brief DevBench: applies volume measurement args (memorySeconds, showRings) and returns the volume's live state per level. Implemented in DevBenchTools.cpp. */
 	json DevBenchVolumeArgs(const json& a_args);
@@ -4149,8 +3820,6 @@ protected:
 	std::unordered_map<uint64_t, uint32_t> shellFillerCells;
 	/** @brief Cells in the current window whose blended depth goes positive somewhere, keyed like shellCells. Rebuilt with the window; read per frame by DeformationWindowHasSnow. */
 	std::unordered_set<uint64_t> shellSnowyCells;
-	/** @brief Cells in the current window baked for its worldspace with zero coverage in every texel, keyed like shellCells. Rebuilt with the window (same mutex as shellSnowyCells); read by CasterDiscMayCast. */
-	std::unordered_set<uint64_t> shellBareCells;
 	mutable std::shared_mutex shellSnowyCellMutex;
 	/** @brief Snow-presence verdicts, for the gate readout and the fail-open rule. */
 	enum SnowGateVerdict : uint32_t
@@ -4215,15 +3884,13 @@ protected:
 	bool groundSnowSquareValid = false;
 	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. Never-baked ground counts as possibly snowy, and the verdict lands in deformSnowVerdict for the debug readout. */
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
-	/** @brief WindowHasSnow over the shell's own footprint, which reaches far past the deformation window. False means no shell geometry can stand above ground, so nothing casts. */
+	/** @brief WindowHasSnow over the ground snow's own footprint, which reaches far past the deformation window. False means no snow can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
-	/** @brief False only when every cell the sun caster's grid can sample is baked with zero coverage: castVis then kills every grid vertex, so the grid draws nothing. Unbaked, filler and out-of-window cells answer true. */
-	bool CasterDiscMayCast() const;
 	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
 	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
 	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square narrowed to the view), for the debug menu. */
 	mutable uint32_t shellSnowVerdict = kSnowGateUnknown;
-	/** @brief Consecutive frames the loaded square has read bare. The grid draw, its bake and the depth sync are skipped once this reaches kShellGateBareFrames; a snowy cell in view or a still-baking cell resets it, so the surface returns the frame snow enters the view. */
+	/** @brief Consecutive frames the loaded square has read bare. The ground draw and the depth sync are skipped once this reaches kShellGateBareFrames; a snowy cell in view or a still-baking cell resets it, so the surface returns the frame snow enters the view. */
 	uint32_t shellGateBareFrames = 0;
 	static constexpr uint32_t kShellGateBareFrames = 30;
 	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */

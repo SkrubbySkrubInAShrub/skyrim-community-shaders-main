@@ -1021,19 +1021,19 @@ float PatchTopSlope(float p, float n, float c, float step)
 // not draw, and the skin has to know about both.
 float PatchSilhouetteDrop(float2 worldXY)
 {
-	// Domain-warp WHERE the silhouette falls, on the landscape shell's own
-	// border recipe (BorderJitter, SnowFields.hlsli). Without it the cut
-	// follows the 4-unit raster lattice and a road's end reads as a
-	// staircase; with it the edge wanders off the lattice and reads ragged.
+	// Domain-warp WHERE the silhouette falls (BorderJitter, SnowFields.hlsli).
+	// Without it the cut follows the 4-unit raster lattice and a road's end
+	// reads as a staircase; with it the edge wanders off the lattice and reads
+	// ragged.
 	//
-	// A quarter of the shell's amplitude: a class border is soft data and can
-	// wander tens of units, but an object footprint is real geometry, and a
-	// large warp would pull a roof's top into a ground column.
+	// A quarter of the retired Border Noise's default 8: an object footprint
+	// is real geometry, and a large warp would pull a roof's top into a ground
+	// column.
 	//
 	// Applied HERE, inside the one function the patch's clip and the skin's
 	// RoadOwnsColumn both call, so the two cannot disagree about where the
 	// boundary is. Jittering them separately is how the holes came back twice.
-	worldXY += BorderJitter(worldXY) * 0.25;
+	worldXY += BorderJitter(worldXY, 8.0) * 0.25;
 
 	// The far road level has no silhouette to clip: one road top per texel
 	// and nothing standing over it. Past the coarse window the per-vertex

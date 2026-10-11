@@ -31,7 +31,7 @@ void SnowDeformation::CaptureShadowAtlas()
 		}
 		RecordSunCascadeSlices(atlasDesc.ArraySize);
 		// Before the snow reads the atlas, so the snow receives its own casters.
-		if (!shellShadowCastDebugOff && settings.SnowCastsShadows)
+		if (settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
 		if (!shadowAtlasLiveReadOff) {
@@ -506,8 +506,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// SampleTerrain's taps, cut as DrawShell cut them for this CB.
 	ID3D11ShaderResourceView* casterWetSRV = TerrainWetSRV(lastShellCBData->CompactLook.x > 0.5f);
 	context->VSSetShaderResources(kTerrainWetSlot, 1, &casterWetSRV);
-	ID3D11ShaderResourceView* casterPlainSRV = TerrainPlainSRV(*lastShellCBData);
-	context->VSSetShaderResources(kTerrainPlainSlot, 1, &casterPlainSRV);
 	// The land-exact height layer (t13).
 	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &casterFineSRV);
@@ -563,7 +561,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// Absolute-world rendering: zero the camera-relative adjust.
 		shadowCB.CameraPosAdjust = { 0.0f, 0.0f, 0.0f, 0.0f };
 		shadowCB.CameraPreviousPosAdjust = { 0.0f, 0.0f, 0.0f, 0.0f };
-		shadowCB.ShellDebugData = 0;
 		shellCB->Update(shadowCB);
 
 		context->OMSetRenderTargets(0, nullptr, shadowAtlasDSV[a_cascade].get());
@@ -662,7 +659,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->VSSetShaderResources(13, 1, &nullBermSRV);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);
 		context->VSSetShaderResources(kTerrainWetSlot, 1, &nullBermSRV);
-		context->VSSetShaderResources(kTerrainPlainSlot, 1, &nullBermSRV);
 		// The patch caster's map set.
 		ID3D11ShaderResourceView* skinSrvs[4];
 		for (uint32_t i = 0; i < 4; i++)

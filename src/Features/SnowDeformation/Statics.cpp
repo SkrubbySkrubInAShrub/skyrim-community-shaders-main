@@ -1437,7 +1437,7 @@ uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a
 
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS(bool a_indexed)
 {
-	// Lazy like GetShellShadowVS: the shadow pass runs before DrawShell has
+	// Lazy: the shadow pass runs before DrawShell has
 	// had a chance to create the statics shaders on early frames.
 	auto*& slot = a_indexed ? patchShadowVSIndexed : patchShadowVS;
 	if (!slot) {
@@ -3300,7 +3300,7 @@ void SnowDeformation::DrawCapturedStatics()
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-	const bool prepass = !staticsDepthPrepassDisabled && lodDebugView != 1 && staticsPSPrepassNoDepth &&
+	const bool prepass = !staticsDepthPrepassDisabled && staticsPSPrepassNoDepth &&
 	                     fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
 	// No statics draw has written the main depth yet. The first fill writes
 	// the copy where its viewport is exactly the copy's rectangle; otherwise

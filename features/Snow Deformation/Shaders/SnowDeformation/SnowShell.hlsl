@@ -2,9 +2,10 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
-// Snow shell renderer: a vertex-buffer-less camera-following grid built from
-// SV_VertexID, conformed to the baked terrain window, displaced by per-class
-// snow depth and carved by the deformation map. Per-pixel normals come from
+// The ground snow's surface and material: the landscape's own meshes,
+// replayed by LandscapeSnowShell.hlsl, raised by per-class snow depth and
+// carved by the deformation map; a depth prepass writes the deferred
+// attributes and one full-screen pass shades them. Per-pixel normals come from
 // the same fields, so trench walls shade smoothly on coarse geometry.
 // Camera matrices ride the private ShellCB (b0), mirrored from b12.
 
@@ -69,9 +70,8 @@ static float gDeferredRampDepth;
 #endif
 
 // SNOW_SURFACE_ONLY: included for its surface recipe alone (LandscapeSnow.hlsl),
-// with ShellCB moved off b0 and no entry points or stage structs.
-// SNOW_SHELL_NO_MAIN: everything but the vertex, hull and domain entry points
-// (LandscapeSnowShell.hlsl).
+// with ShellCB moved off b0 and no entry points or stage structs. The vertex,
+// hull and domain entry points are LandscapeSnowShell.hlsl's.
 #ifndef SNOW_SHELL_CB_REGISTER
 #	define SNOW_SHELL_CB_REGISTER b0
 #endif
@@ -99,7 +99,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float WarpedHalfSpan;
 	uint GridDim;
 	uint TerrainDim;
-	uint ShellDebugData;
+	uint ShellDebugData;  // layout keeper
 
 	float DeformInvWorldSize;
 	uint HasSnowTexture;
@@ -114,12 +114,12 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float SnowSpecularLevel;
 	float EnableGlints;
-	float BorderNoise;   // world-unit domain-warp jitter of class-depth borders
-	float BorderSmooth;  // world-unit ramp-widening radius between classes
+	float BorderNoise;   // layout keeper
+	float BorderSmooth;  // layout keeper
 
 	float ShellTriHeight;        // was BorderTrampledFade: mesh-matched terrain height
-	float BorderUntrampledFade;  // contact-term slope / outward-dust reach (Border Fade %, remapped 2..64 on upload)
-	float ShellCullBare;         // was SeamFadeUnused: cull fully-bare patches
+	float BorderUntrampledFade;  // layout keeper
+	float ShellCullBare;         // was SeamFadeUnused: cull fully-bare triangles
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
@@ -157,7 +157,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float ChurnHeightAmp;
 	float ChurnSizeScale;
-	// C3 A/B flags on the retired crisp-grain keeper row; layout unchanged.
+	// Layout keepers.
 	float DebugNoFarPad;
 	float DebugNoDataMorph;
 
@@ -170,9 +170,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	// 1 / Berm Steepness: the berm tap reach (BermFieldTapped, BermGradStep).
 	float BermReach;
-	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
-	// u1), 2 warp-ring view, 3 data-provenance view.
-	uint ShellLODDebug;
+	uint ShellLODDebug;  // layout keeper
 	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
 	// data (fall back to the warped-span fade alone).
 	float SeamRampInv;
@@ -208,11 +206,11 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// world tile size, w = whether the pattern loaded at all. Those three ride
 	// spare room here rather than growing a buffer mirrored across two shaders.
 	float4 CrustLook2;
-	// x > 0.5 = outward dust beyond the committed edge; y = trench floor
-	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
-	// them with the active-light set).
+	// xy layout keepers; zw = sun cascades' REAL atlas slices (the shared
+	// atlas moves them with the active-light set).
 	float4 BorderStyle;
-	// x = water cut (1 = the sheet ends at the drawn waterline); yzw spare.
+	// x = water cut (1 = the sheet ends at the drawn waterline); yz = the land
+	// contest's depth bonus and carve penalty; w spare.
 	float4 CompactLook;
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
@@ -225,9 +223,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// Toroidal deformation-map addressing: physical position of logical
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
-	// x bit 0 horizon march, bit 1 frustum cull, bit 2 land-exact height OFF,
-	// bit 3 flip tess diagonal sense, bit 4 far-band ground max LIFT ON
-	// (rejected default), bit 5 far relief tessellation OFF. Mirror in
+	// x bit 0 horizon march, bit 2 land-exact height OFF, bit 4 churn by
+	// parallax; y bit 0 road tops in the skin-depth raster. Mirror in
 	// SnowDeformation.h.
 	int2 ShellFlags;
 
@@ -284,12 +281,8 @@ float3 WaterBareTexel(float3 texel, int2 t)
 // TerrainWindow with WaterBareTexel already applied (TerrainCutCS), or the
 // raw window while the cut is off (CompactLook.x): SampleTerrain's taps.
 Texture2D<float4> TerrainWindowWet : register(t58);
-// 1 where TerrainWindowWet's .yz are bit-identical over the 4x4 texels a
-// shaped tap can reach from this texel's quad (TerrainCutCS; unbound while
-// the border reach could pass one texel): every tap there reads one value.
-Texture2D<uint> TerrainPlain : register(t59);
-// Land-blended edges (ShellFlags.x bit 6): 1 - the land's snow-texture weight
-// per window texel; unbound reads 0, all snow.
+// Land-blended edges: 1 - the land's snow-texture weight per window texel;
+// unbound reads 0, all snow.
 Texture2D<float> TerrainBare : register(t26);
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
@@ -313,18 +306,6 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
-// Per-vertex surface bake (BakeCS → SNOW_DS_BAKE domain shader): one texel per
-// base-grid vertex, (z, coverage, terrainHeight, deformation tap), full
-// float, and a second map holding the vertex normal's two height differences.
-// The hull (SNOW_HS_BAKE) reads .w for its edge corners.
-Texture2D<float4> ShellVertexBake : register(t9);
-Texture2D<float2> ShellVertexBakeSlope : register(t23);
-// Last frame's BakeCS surface height per vertex, read by the SNOW_CAST_BAKED caster.
-Texture2D<float> ShellCastBake : register(t63);
-#ifdef SNOW_CAST_BAKED_CHECK
-// [0] vertices whose baked inputs differ from the live evaluation, [4] vertices checked.
-RWByteAddressBuffer ShellCastCheck : register(u1);
-#endif
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
@@ -346,9 +327,9 @@ Texture2D<float4> SnowRmaosMap : register(t7);
 // self-shadow. float4 to match Extended Materials' own TexParallaxSampler
 // convention; the SRV is single-channel, so only .x carries data.
 Texture2D<float4> SnowHeightMap : register(t8);
-// Pre-shell copy of the MASKS target: y carries the land's EM grain height
-// (Lighting.hlsl LANDSCAPE writes it; 0 = no data - POM inactive, grass, or
-// an object behind), the missing side of the two-sided edge contest.
+// Pre-snow copy of the MASKS target: y carries the land's snow odds
+// (Lighting.hlsl WriteLandSnowOdds; 0 = no data - grass, or an object
+// behind), the land's side of the contest.
 Texture2D<float3> LandMasksCopy : register(t10);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
@@ -393,8 +374,7 @@ SamplerState SnowSampler : register(s0);
 // SnowStaticsShell.hlsl, SnowDeformation.hlsli and Shell.cpp.
 static const float kSnowUVTile = 4096.0 / 24.0;
 
-// Warped band grid (WarpBand/WarpAxis/InverseWarpAxis/GeomorphVertexXY):
-// shared with the trench patch, which stands on the same lattice.
+// Distance bands (WarpBand, InverseWarpAxis): ShellBandStep's spacing.
 #include "SnowDeformation/SnowGrid.hlsli"
 
 // Shell edge fade: the shell dissolves at the loaded-cell seam, where the
@@ -415,28 +395,6 @@ float ShellEdgeFade(float2 gridLocal)
 	return fade;
 }
 
-// Past the seam ShellSurfaceZ parks the surface 32 units under the LOD terrain
-// and the fade has already reached zero, so no pixel here can survive; just
-// inside it the surface is still at -8 and climbs only as the fade does. Both
-// are submerged, so dropping geometry that touches this band cannot remove a
-// visible pixel - it removes geometry the depth test was going to reject after
-// the pixel shader had already run.
-//
-// NOT the culling that was rejected on measurement: that one culled inside a
-// drawn shell, where the cost is per-pixel tap count. This drops patches that
-// produce no pixels at all.
-//
-// Centre as well as corners: the fade's zero region is the OUTSIDE of a
-// rectangle and so is not convex, and a patch can clip a rectangle corner with
-// all four of its own corners outside it.
-bool ShellBeyondSeam(float2 a, float2 b, float2 c, float2 d)
-{
-	float2 mid = 0.25 * (a + b + c + d);
-	return ShellEdgeFade(a) <= 0.0 && ShellEdgeFade(b) <= 0.0 &&
-	       ShellEdgeFade(c) <= 0.0 && ShellEdgeFade(d) <= 0.0 &&
-	       ShellEdgeFade(mid) <= 0.0;
-}
-
 #ifndef SNOW_SURFACE_ONLY
 struct VS_OUTPUT
 {
@@ -451,10 +409,6 @@ struct VS_OUTPUT
 	float DebugHeight : TEXCOORD5;
 	// xyz: smooth per-vertex terrain normal, w: coverage alpha (taper*fade).
 	float4 TerrainNormalAlpha : TEXCOORD6;
-#	ifdef SNOW_SHELL_PATCH_ID
-	// Prepass draw only: the patch (+1) for the visible-patch cull, from the DS.
-	nointerpolation uint PatchId : TEXCOORD7;
-#	endif
 };
 #endif
 
@@ -526,7 +480,8 @@ float LandHeightFine(float2 gridLocal)
 	return h;
 }
 
-// Band step (8..128 world units) of the shell quad a grid-local point lies in.
+// The vertex spacing the replay tessellates to at a grid-local point (8..128
+// world units): the distance bands of SnowGrid.hlsli.
 float ShellBandStep(float2 gridLocal)
 {
 	float2 u = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
@@ -690,15 +645,10 @@ float SampleDeformationFast(float2 gridLocal)
 // March-grade deformation tap: one bilinear (4 loads) where the visible
 // surface pays bicubic (16). The horizon march samples 28-1000 units out,
 // where the samplers' difference is invisible - the same too-fine-to-matter
-// rule that keeps churn and clods out of the marches. The debug A/B
-// ("Shell: Bicubic March") restores the surface sampler to measure the trade.
+// rule that keeps churn and clods out of the marches.
 float SampleDeformationMarch(float2 gridLocal)
 {
-#ifdef SNOW_MARCH_BICUBIC
-	return SampleDeformation(gridLocal);
-#else
 	return SampleDeformationFast(gridLocal);
-#endif
 }
 
 // Bilinear samples of the object field maps at absolute world XY. The raster
@@ -793,20 +743,6 @@ bool ShellObjectLiftsAt(float2 gridLocal)
 {
 	float field = SampleObjectHeight(GridOrigin + gridLocal);
 	return field > -50000.0 && field - SampleTerrainBilinearHeight(gridLocal) > kBareLiftMargin;
-}
-
-bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
-{
-	float2 lo = min(min(a, b), min(c, d));
-	float2 hi = max(max(a, b), max(c, d));
-	bool bare = ShellTerrainAllBare(lo, hi);
-	[branch] if (bare && ObjectLiftCap > 1.0)
-	{
-		float2 mid = 0.25 * (a + b + c + d);
-		bare = !(ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) ||
-				 ShellObjectLiftsAt(d) || ShellObjectLiftsAt(mid));
-	}
-	return bare;
 }
 
 
@@ -959,8 +895,7 @@ float3 ShellObjectMeet(float2 worldXY, float sheetZ)
 // depth, so thin snow, class boundaries and carved floors stay flat.
 // Undulation, CarveProfile and kFireMeltFloor live in SnowFields.hlsli, so the
 // surface, the shading gradient and both shells' self-shadow marches see one
-// shape. The trench floor is a fraction of the local depth (BorderStyle.y);
-// 0 lets trampling wear through to the ground.
+// shape. Trenches carve to the ground.
 
 // Edge berm: displaced snow piles along the trench rim, taller from a deeper
 // layer. Shape comes from the BLURRED deformation (BermField) - two rings
@@ -999,11 +934,6 @@ float ChurnNoise(float2 worldXY)
 	return ChurnNoiseScaled(worldXY, ChurnSizeScale);
 }
 
-// Class borders are hard edges in the baked depth/coverage data: a +30
-// snow class meeting a -5 mud class produces a ravine wall along the
-// texture seam. BorderNoise domain-warps where the border falls and
-// BorderSmooth widens the ramp with a tap cross. Terrain height is always
-// sampled at the true position, so the shell keeps conforming.
 // Water level over the texels a point touches, from the raw raster: the max,
 // so a shore texel answers with its body's level and the sentinel never
 // blends in. .y = bilinear presence of the four texels, so the cap can fade
@@ -1043,11 +973,9 @@ float SampleWaterNear(float2 gridLocal)
 	return lerp(lerp(n00, n10, f.x), lerp(n01, n11, f.x), f.y);
 }
 
-// Touch-down toe: positive depth reaches the ground where the alpha's class
-// gate turns opaque (class depth 3, smoothstep(1, 3) in the PS), tangent
-// there, and is itself again by 9. The edge then commits ON the ground
-// instead of 1-2 units up as a lip; the dust tail below 3 lies on the
-// ground too. Applied to geometry, the PS effective depth and the shading
+// Touch-down toe: positive depth eases to the ground below 9 units, tangent
+// at 3, so a thinning layer lands ON the ground instead of ending 1-2 units
+// up as a lip. Applied to geometry, the PS effective depth and the shading
 // depth alike.
 float TouchDownToe(float depth)
 {
@@ -1081,15 +1009,10 @@ float TerrainHeightAt(float2 gridLocal)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Snow on Landscape's land-blended edges: on mixed land the landscape's own
-// height blend decides snow or ground (Lighting WriteLandSnowOdds), the snow
-// lies as a film where the land has any snow weight, and trenches reach the
-// ground. LANDSCAPE-SNOW-PLAN Phase 5.
-bool LandBlendMode()
-{
-	return (ShellFlags.x & 64) != 0;
-}
-
+// Land-blended edges: on mixed land the landscape's own height blend decides
+// snow or ground (Lighting WriteLandSnowOdds), the snow lies as a film where
+// the land has any snow weight, and trenches reach the ground.
+// LANDSCAPE-SNOW-PLAN Phase 5.
 static const float kLandFilm = 0.5;
 // Remaining depth under which the snow is a film: the land's own verdict
 // decides it pixel by pixel, objects included.
@@ -1149,9 +1072,6 @@ float LandSnowSide(float remaining, float carve)
 // horizontal-distance estimate (rise / local slope) fell again wherever a
 // bank steepened inland, a trough on a straight texel edge.
 static const float kShoreRise = 10.0;
-// The wander is a horizontal pull inland; this nominal slope turns it into
-// rise.
-static const float kShoreWanderSlope = 0.2;
 
 // The snow ends AT the waterline with the class border's own depth ramp.
 // The wet texels (-8) give the shore a class ramp, but that ramp is anchored
@@ -1179,11 +1099,9 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 			float h = TerrainHeightAt(gridLocal);
 			[branch] if (h > -50000.0)
 			{
-				float2 worldXY = GridOrigin + gridLocal;
-				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
-				float rise = h - water + kWaterSkimDepth - wander * kShoreWanderSlope;
+				float rise = h - water + kWaterSkimDepth;
 				float capRise = rise * (38.0 / kShoreRise);
-				float capNear = (SampleWaterNear(gridLocal) - 1.0) * TerrainTexelSize * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth));
+				float capNear = (SampleWaterNear(gridLocal) - 1.0) * 38.0;
 				// Past the raster's last texel the cap lifts clear of the ramp.
 				float cap = max(capRise, capNear) + (1.0 - waterWeight) * 60.0;
 				waterCap = cap;
@@ -1194,83 +1112,12 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 	return terrain;
 }
 
-float3 SampleTerrainShaped(float2 gridLocal)
-{
-	float3 result = SampleTerrain(gridLocal);
-	[branch] if (BorderNoise >= 0.01 || BorderSmooth >= 0.01)
-	{
-		int2 plainT = (int2)clamp((GridToTerrainOffset + gridLocal) / TerrainTexelSize, 0.0, (float)(TerrainDim - 1) - 0.001);
-		[branch] if (TerrainPlain.Load(int3(plainT, 0)) != 0)
-		{
-			// Every tap returns the base's depth and coverage. The mean is summed
-			// in the taps' order from the quad's own texels, which fxc cannot
-			// fold, so it keeps the tapped mean's bits.
-			[branch] if (BorderSmooth >= 0.01)
-			{
-				int2 plainT1 = min(plainT + 1, int2(TerrainDim - 1, TerrainDim - 1));
-				float2 q00 = TerrainWindowWet.Load(int3(plainT.x, plainT.y, 0)).yz;
-				float2 q10 = TerrainWindowWet.Load(int3(plainT1.x, plainT.y, 0)).yz;
-				float2 q01 = TerrainWindowWet.Load(int3(plainT.x, plainT1.y, 0)).yz;
-				float2 q11 = TerrainWindowWet.Load(int3(plainT1.x, plainT1.y, 0)).yz;
-				q00.x = max(q00.x, 0.0) * RimStyle.w + min(q00.x, 0.0);
-				q10.x = max(q10.x, 0.0) * RimStyle.w + min(q10.x, 0.0);
-				q01.x = max(q01.x, 0.0) * RimStyle.w + min(q01.x, 0.0);
-				q11.x = max(q11.x, 0.0) * RimStyle.w + min(q11.x, 0.0);
-				float2 depthCoverage = result.yz;
-				depthCoverage += q00;
-				depthCoverage += q10;
-				depthCoverage += q01;
-				depthCoverage += q11;
-				depthCoverage *= 0.2;
-				result.yz = depthCoverage;
-			}
-		}
-		else
-		{
-			float2 worldXY = GridOrigin + gridLocal;
-			// Coarse wander + fine raggedness: the coarse octave is
-			// the ORIGINAL 37-unit model but capped at the strength its old 16
-			// setting had - enough organic wander, never the lobes/islands the
-			// uncapped version folded into; the fine 8-unit octave scales on
-			// with the slider for the ragged detail.
-			float coarseAmp = min(BorderNoise, 16.0);
-			float2 jitter = float2(
-								ShapeNoise(worldXY / 37.0) - 0.5,
-								ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
-			                    (2.0 * coarseAmp) +
-			                float2(
-								ShapeNoise(worldXY / 8.0) - 0.5,
-								ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
-			                    (1.2 * BorderNoise);
-			float2 shapedLocal = gridLocal + jitter;
-
-			float2 depthCoverage = SampleTerrain(shapedLocal).yz;
-			[branch] if (BorderSmooth >= 0.01)
-			{
-				float r = BorderSmooth;
-				depthCoverage += SampleTerrain(shapedLocal + float2(r, 0.0)).yz;
-				depthCoverage += SampleTerrain(shapedLocal - float2(r, 0.0)).yz;
-				depthCoverage += SampleTerrain(shapedLocal + float2(0.0, r)).yz;
-				depthCoverage += SampleTerrain(shapedLocal - float2(0.0, r)).yz;
-				depthCoverage *= 0.2;
-			}
-			result.yz = depthCoverage;
-		}
-	}
-	return result;
-}
-
 
 // The shell surface: per-texture-class snow depth carved by deformation.
 // Class depths blend by their baked weights on the CPU (window rebuild),
 // so boundaries between differently-deep snows are geometric depth ramps;
 // negative depths (roads) submerge the shell below the surface.
-// Shared by the VS (geometry) and PS (per-pixel normals) so both agree.
-#ifdef SNOW_BAKE_CS
-// ShellSurfaceZ's raw deformation tap at the vertex, read once: the bake's .w
-// and the descent's billow take it from here.
-static float gBakeDeformationTap;
-#endif
+// Shared by the geometry and the prepass so both agree.
 
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
@@ -1279,120 +1126,22 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	// return keeps fxc's X4000 quiet (early return + out params misfires).
 	float edgeFade = ShellEdgeFade(gridLocal);
 	float surfaceZ;
-#ifdef SNOW_BAKE_CS
-	// Untouched, every map and berm read at the vertex returns exactly zero.
-	const bool bakeUntouched = ShellUntouched(gridLocal);
-	gBakeDeformationTap = 0.0;
-#endif
 	[branch] if (edgeFade <= 0.0)
 	{
 		terrainHeight = SampleTerrain(gridLocal).x;
 		coverage = 0.0;
 		surfaceZ = terrainHeight - 32.0;
-#ifdef SNOW_BAKE_CS
-		[branch] if (!bakeUntouched)
-			gBakeDeformationTap = SampleDeformation(gridLocal);
-#endif
 	}
 	else
 	{
-		float3 terrain = SampleTerrainShaped(gridLocal);
+		float3 terrain = SampleTerrain(gridLocal);
 
-		// Data morph (geometry-clipmaps style): the vertex stays put on its
-		// fine world lattice; its terrain data blends toward the 2x-coarser
-		// lattice's bilinear surface, reaching it exactly at the band switch —
-		// band transitions move ONLY the height signal, by the difference
-		// between two resolutions, and never slide geometry across the
-		// terrain. Coarse taps are unshaped (border noise is near-field
-		// cosmetics).
-		// Effective lattice step here, blended across the owning band toward the
-		// next. Shared with the clearance pad, so both describe one surface.
-		float padWeight;
-		{
-			float2 centeredM = gridLocal - WarpedHalfSpan;
-			float2 uAxisM = float2(InverseWarpAxis(centeredM.x), InverseWarpAxis(centeredM.y));
-			float3 bandX = WarpBand(abs(uAxisM.x));
-			float3 bandY = WarpBand(abs(uAxisM.y));
-			float2 ringStepM = GridSpacing * float2(bandX.x, bandY.x);
-			// Morph weight is now the fraction through the OWNING BAND, not
-			// frac(lod): with power-of-two steps every lod is a whole number,
-			// so the old expression is identically zero and the morph would
-			// never fire. Band position is continuous in radius, which is what
-			// makes the hand-off seamless when the origin re-snaps and a patch
-			// of ground changes bands.
-			float morphT = max(bandX.y, bandY.y);
-			// Stands down while the land-exact layer is live: every lattice
-			// vertex is then on the land in both bands, so a band change has
-			// no vertex pop to hide, and the blend toward the coarse bilinear
-			// only pulls the far relief tessellation's vertices off the land.
-			bool fineLive = FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0;
-			[branch] if (!fineLive && max(ringStepM.x, ringStepM.y) > GridSpacing && morphT > 0.001 && DebugNoDataMorph < 0.5)
-			{
-				float2 coarseStepM = ringStepM * 2.0;
-				float2 absXYM = GridOrigin + WarpedHalfSpan + centeredM;
-				float2 cBase = floor(absXYM / coarseStepM) * coarseStepM;
-				float2 cFrac = (absXYM - cBase) / coarseStepM;
-				float2 cLocal = cBase - GridOrigin;
-				float3 t00 = SampleTerrain(cLocal);
-				float3 t10 = SampleTerrain(cLocal + float2(coarseStepM.x, 0.0));
-				float3 t01 = SampleTerrain(cLocal + float2(0.0, coarseStepM.y));
-				float3 t11 = SampleTerrain(cLocal + coarseStepM);
-				// Any sentinel tap poisons the bilinear (even averaged it can
-				// sneak past a threshold) — keep the fine data at data edges.
-				float minTap = min(min(t00.x, t10.x), min(t01.x, t11.x));
-				[flatten] if (minTap > -50000.0)
-					terrain = lerp(terrain, lerp(lerp(t00, t10, cFrac.x), lerp(t01, t11, cFrac.x), cFrac.y), morphT);
-			}
-
-			// Clearance-pad weight: how far this vertex's lattice step has
-			// outgrown a terrain texel. Zero while the lattice is at or finer
-			// than the data, which the current table always is - kept for any
-			// future table that skips texels.
-			//
-			// The RAW step, never band-blended: a ramp quantises against the
-			// 256-unit origin snap and reads as a stepped sink as the camera
-			// approaches. A weight constant within a band cannot.
-			padWeight = saturate((max(ringStepM.x, ringStepM.y) - TerrainTexelSize) / TerrainTexelSize);
-		}
-
-		// After the morph, so the coarse bands end at the water too.
 		float waterCap;
 		terrain = EndSnowAtWater(terrain, gridLocal, waterCap);
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
 		coverage = saturate(terrain.z);
-
-		// Clearance pad: 4-tap axis max of height+coverage with a capped ridge
-		// pad, filling pinholes where the bilinear surface dips under triangle
-		// diagonals or a texel reads bare. Load-bearing; disabling it exposes
-		// holes immediately.
-		//
-		// LAW: keyed on the vertex's lattice step, never on camera distance.
-		// Undersampling is a property of the lattice, and a distance ramp
-		// quantises against the origin snap into visible steps.
-		[branch] if (padWeight > 0.001 && DebugNoFarPad < 0.5)
-		{
-			float farBlend = padWeight;
-			float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
-			float3 n1 = SampleTerrain(gridLocal - float2(TerrainTexelSize, 0.0));
-			float3 n2 = SampleTerrain(gridLocal + float2(0.0, TerrainTexelSize));
-			float3 n3 = SampleTerrain(gridLocal - float2(0.0, TerrainTexelSize));
-			float h0 = n0.x > -50000.0 ? n0.x : terrainHeight;
-			float h1 = n1.x > -50000.0 ? n1.x : terrainHeight;
-			float h2 = n2.x > -50000.0 ? n2.x : terrainHeight;
-			float h3 = n3.x > -50000.0 ? n3.x : terrainHeight;
-			float maxHeight = max(max(h0, h1), max(h2, h3));
-			float c0 = n0.x > -50000.0 ? n0.z : 0.0;
-			float c1 = n1.x > -50000.0 ? n1.z : 0.0;
-			float c2 = n2.x > -50000.0 ? n2.z : 0.0;
-			float c3 = n3.x > -50000.0 ? n3.z : 0.0;
-			float maxCoverage = saturate(max(max(c0, c1), max(c2, c3)));
-			float ridgePad = min(0.25 * max(abs(h0 - h1), abs(h2 - h3)), 24.0);
-			terrainHeight = lerp(terrainHeight, max(terrainHeight, maxHeight) + ridgePad, farBlend);
-			coverage = lerp(coverage, max(coverage, maxCoverage), farBlend);
-			terrainHeight += farBlend * 3.0 * saturate(coverage);
-		}
 
 		// The mask carries two independent channels. x = coverage suppression,
 		// smooth 0-1, so doorstep clearings fade at their edges instead of
@@ -1463,28 +1212,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// fought the land for every pixel of the basin.
 		depth = lerp(depth, min(depth, kFireMeltFloor), saturate(shelterMask.y));
 
-#ifdef SNOW_BAKE_CS
-		float bakeBerm = 0.0;
-		[branch] if (!bakeUntouched)
-		{
-			gBakeDeformationTap = SampleDeformation(gridLocal);
-			bakeBerm = BermField(gridLocal);
-		}
-#endif
 		// Carves only where the layer is raised; the negative-depth submerge at
-		// class edges is untouched. The floor holds at the Trench Floor
-		// fraction of the uncarved depth and tapers toward class borders,
-		// where a full floor would leave a hard-edged slab over bare ground.
-		// Undulation rides on top, scaled by remaining depth.
+		// class edges is untouched. Undulation rides on top, scaled by
+		// remaining depth.
 		[flatten] if (depth > 0.0)
 		{
-#ifdef SNOW_BAKE_CS
-			float deformation = saturate(gBakeDeformationTap);
-			float bermD = bakeBerm;
-#else
 			float deformation = saturate(SampleDeformation(gridLocal));
 			float bermD = BermField(gridLocal);
-#endif
 			float uncarved = depth;
 			// The berm is spoil piled on snow that was NOT dug. Unmasked, the
 			// blurred field also lifted the trench floor and walls - a narrow
@@ -1511,13 +1245,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	return surfaceZ;
 }
 
-// Shared vertex tail for the legacy VS and the tessellated domain shader:
-// smooth per-vertex terrain normal, coverage alpha, debug plane, camera-
-// relative transform and output packing.
 // The vertex normal's two height differences: wide 32-unit differences bridge
 // the 128-unit data texels, and interpolation removes the faceting of the
-// per-pixel piecewise-constant gradient. Four terrain taps, so the bake
-// stores the pair rather than making every vertex re-take them.
+// per-pixel piecewise-constant gradient.
 float2 ShellVertexSlope(float2 gridLocal)
 {
 	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
@@ -1547,8 +1277,8 @@ float2 ShellVertexSlope(float2 gridLocal)
 		position = float3((footXY), (terrainHeight)) + drapeDir * drapeAbove;                               \
 	}
 
-// The sun caster's visibility, shared with the raised landscape's shadow
-// passes (LandscapeSnow.hlsl); below 0.35 nothing casts. Its terms:
+// The raised landscape's sun-cascade visibility (LandscapeSnow.hlsl); below
+// 0.35 nothing casts. Its terms:
 // - The far anti-pinhole pass dilates coverage AND height (4-tap max + ridge
 //   pad), so beyond ~3000 units a ring around every patch passes both castVis
 //   terms while the main view discards those pixels per-texel — and this
@@ -1572,55 +1302,31 @@ float2 ShellVertexSlope(float2 gridLocal)
 	castVis *= 1.0 - smoothstep(2800.0, 4900.0, length((gridLocal) - WarpedHalfSpan));
 
 #ifndef SNOW_SURFACE_ONLY
-// The two height differences arrive as separate scalars, exactly as the four
-// taps used to leave them: as a float2 the compiler vectorises the normalize
-// below, which is the same arithmetic but not the same bytecode, and the
-// untouched paths have to stay provably identical.
+// The replay domain shader's vertex tail: terrain normal, slope drape,
+// camera-relative transform and the few outputs the prepass reads. The two
+// height differences arrive as separate scalars: as a float2 the compiler
+// vectorises the normalize below, the same arithmetic but not the same
+// bytecode.
 VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, float terrainHeight, float slopeX, float slopeY)
 {
 	float3 terrainNormal = SHELL_TERRAIN_NORMAL(slopeX, slopeY);
 
-	// Coverage alpha drives both geometry taper and edge dithering in the PS.
-	float taper = smoothstep(0.0, 0.6, coverage);
-	float coverageAlpha = taper * ShellEdgeFade(gridLocal);
-
-	// Data debug (modes 1-3): conforming plane well above the sampled
-	// terrain height, colored by the sampled values. Modes 4+ diagnose the
-	// REAL surface - lifting them made every depth-relative channel in the
-	// SSS gate view meaningless (round-6 lesson: the first screenshots
-	// measured the gate from a plane 200 units up).
-	if (ShellDebugData != 0 && ShellDebugData < 4)
-		z = terrainHeight + 200.0;
-	// Provenance view: sentinel texels sit ~100k under the world and would be
-	// invisible; raise them to eye level so data gaps read as a red sheet.
-	if (ShellLODDebug == 3 && terrainHeight < -50000.0)
-		z = ShellCameraPosAdjust.z;
-
 	float3 absolutePos = float3(GridOrigin + gridLocal, z);
 	SHELL_DRAPE(absolutePos, GridOrigin + gridLocal, z, terrainHeight, terrainNormal)
 
-	// Shader world space is camera-relative; previous frame uses its own adjust.
+	// Shader world space is camera-relative.
 	float3 rel = absolutePos - ShellCameraPosAdjust.xyz;
-	float3 prevRel = absolutePos - ShellCameraPreviousPosAdjust.xyz;
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
 	vsout.WorldPos = rel;
 	vsout.GridLocal = gridLocal;
-#	ifdef SNOW_DS_LEAN
 	// The prepass PS reads CurrentClip.w and the normal's xyz of the rest.
 	vsout.CurrentClip = float4(0.0, 0.0, 0.0, mul(CameraViewProjUnjittered, float4(rel, 1.0)).w);
 	vsout.PreviousClip = 0.0;
 	vsout.Snowness = 0.0;
 	vsout.DebugHeight = 0.0;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, 0.0);
-#	else
-	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	vsout.Snowness = coverage;
-	vsout.DebugHeight = terrainHeight;
-	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
-#	endif
 	return vsout;
 }
 
@@ -1634,544 +1340,23 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 }
 #endif
 
-#if defined(VSHADER) && !defined(SNOW_TESS) && !defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
-VS_OUTPUT main(uint vertexID : SV_VertexID)
-{
-#ifdef SNOW_GRID_NONINDEXED
-	// A/B measurement path: the pre-index-buffer expansion, six vertices per
-	// quad from SV_VertexID.
-	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	static const float2 kCornersFlipped[6] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
-
-	uint quadIndex = vertexID / 6;
-	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
-	int2 parityBase = int2(floor(GridOrigin / GridSpacing));
-	uint parity = uint(parityBase.x + int(quadXY.x)) ^ uint(parityBase.y + int(quadXY.y));
-	float2 corner = ((parity & 1) != 0) ? kCornersFlipped[vertexID % 6] : kCorners[vertexID % 6];
-	float2 gridPos = float2(quadXY) + corner;
-#else
-	// Indexed draw over the (GridDim+1)^2 lattice; vertexID is the absolute
-	// lattice index (no BaseVertexLocation: with no vertex buffer bound the
-	// hardware does not add it to SV_VertexID). The union-jack triangulation
-	// and its world-anchored parity live in the index buffers
-	// (DrawShellGridIndexed).
-	uint stride = GridDim + 1;
-	float2 gridPos = float2(vertexID % stride, vertexID / stride);
-#endif
-	// Warped placement: gridLocal stays a world-unit offset from GridOrigin
-	// (the warped grid's min corner), so all field sampling is unchanged.
-	float2 u = gridPos - (float)GridDim * 0.5;
-	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
-
-	// Outer rings geomorph between world-anchored lattices (see
-	// GeomorphVertexXY) — vertices slide instead of hopping ring steps.
-	gridLocal = GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
-
-	// Seam cull, per vertex because this path has no patch scope. A NaN kills
-	// every triangle touching the vertex, which is safe here for the reason in
-	// ShellBeyondSeam: at zero fade the surface is 32 units under the LOD
-	// terrain, and just inside it is still at -8 and only climbs as the fade
-	// does, so the triangles this drops are submerged along their whole span.
-	//
-	// The shadow caster takes it too: geometry that far under the terrain is
-	// occluded from the sun by the ground above it, so it contributes nothing
-	// to the cascade. Its own base sinks further still (see below). Costs no
-	// bindings either - ShellEdgeFade is constant-buffer maths, no texture.
-	[branch] if (ShellEdgeFade(gridLocal) <= 0.0)
-	{
-		VS_OUTPUT culled = (VS_OUTPUT)0;
-		culled.Position = asfloat(0x7FC00000).xxxx;
-		return culled;
-	}
-
-	float coverage;
-	float terrainHeight;
-#ifdef SNOW_CAST_BAKED
-	// Lattice vertex (x, y) is BakeCS thread (x, y); the CPU binds this variant only
-	// while the bake's inputs still match this frame's.
-	const int3 bakeTexel = int3((int2)gridPos, 0);
-	float z = ShellCastBake.Load(bakeTexel);
-	{
-		const float4 baked = ShellVertexBake.Load(bakeTexel);
-		coverage = baked.y;
-		terrainHeight = baked.z;
-	}
-	const float2 bakedSlope = ShellVertexBakeSlope.Load(bakeTexel);
-#	ifdef SNOW_CAST_BAKED_CHECK
-	{
-		float liveCoverage;
-		float liveTerrain;
-		const float liveZ = ShellSurfaceZ(gridLocal, liveCoverage, liveTerrain);
-		const float2 liveSlope = ShellVertexSlope(gridLocal);
-		const bool same = asuint(liveZ) == asuint(z) && asuint(liveCoverage) == asuint(coverage) &&
-		                  asuint(liveTerrain) == asuint(terrainHeight) && all(asuint(liveSlope) == asuint(bakedSlope));
-		uint prior;
-		[branch] if (!same)
-			ShellCastCheck.InterlockedAdd(0, 1, prior);
-		ShellCastCheck.InterlockedAdd(4, 1, prior);
-	}
-#	endif
-#else
-	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
-#endif
-
-#ifdef SNOW_SHADOW_CAST
-	// Shadow-caster variant: only the excess height above the ambient snow
-	// depth casts. Casting the full shell shadows every receiver inside or
-	// beneath the layer (the terrain it visually replaces, wading actor
-	// legs, grass), which reads as the whole landscape darkening.
-	//
-	// The base is sunk far below the terrain rather than flattened: the terrain
-	// window is bilinear-approximate, and writing it at ground level out-depths
-	// the real terrain mesh where the approximation overshoots. Solid snow
-	// coverage is required too, so dithered-away snow never casts.
-	//
-	// The real surface casts wherever it stands meaningfully above the ground
-	// and carries snow; everything else collapses to NaN and is dropped at the
-	// rasterizer, so no sun angle can resurrect it. Sinking geometry instead of
-	// culling it does not work - underground geometry still clips low-sun rays
-	// and prints sideways blotches on bare ground.
-	SHELL_CAST_VIS(castVis, gridLocal, z, coverage)
-	if (castVis < 0.35)
-		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
-#endif
-
-#ifdef SNOW_CAST_BAKED
-	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, bakedSlope.x, bakedSlope.y);
-#else
-	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
-#endif
-}
-#endif
-
-// ---- Tessellated path (SNOW_TESS): near-camera vertex density so the
-// deformation map's full resolution and the PBR displacement relief render
-// as real geometry. The control-point VS does grid placement only; the
-// domain shader runs the full surface evaluation per generated vertex.
-
-// Base-grid vertex placement from the integer grid coordinate alone: the same
-// warped placement + world-anchored ring snapping as the legacy VS, keyed so
-// that adjacent patches share edge vertices exactly and so the tessellation
-// VS and BakeCS put vertex (x, y) on the same bits.
-float2 ShellGridVertexLocal(uint2 gridXY)
-{
-	float2 u = float2(gridXY) - (float)GridDim * 0.5;
-	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
-	return GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
-}
-
-struct TessControlPoint
-{
-	float2 GridLocal : TEXCOORD0;
-	uint2 GridXY : TEXCOORD1;
-};
-
-static const uint2 kShellPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-
-// The tessellator splits a factor-1 quad along its domain (1,0)-(0,1)
-// diagonal; rotating the corner order by one puts that split on the other
-// world diagonal, so each patch takes its land quad's split: '/' where the
-// world 32-quad index sum is even. Bit 3 restores the opposite split (A/B).
-uint ShellPatchRotation(uint2 quadXY)
-{
-	float2 gl0 = ShellGridVertexLocal(quadXY);
-	int2 q = (int2)floor((gl0 + 0.5) / 32.0);
-	bool slash = ((q.x + q.y) & 1) == 0;
-	bool unflip = (ShellFlags.x & 8) != 0;
-	return (slash != unflip) ? 1u : 0u;
-}
-
-TessControlPoint ShellPatchControlPoint(uint2 quadXY, uint corner)
-{
-	TessControlPoint cp;
-	cp.GridXY = quadXY + kShellPatchCorners[corner % 4];
-	cp.GridLocal = ShellGridVertexLocal(cp.GridXY);
-	return cp;
-}
-
-#if defined(VSHADER) && defined(SNOW_TESS) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
-#ifdef SNOW_TESS_LIST
-// The shading pass's tessellated patches (PatchListCS), drawn indirect.
-StructuredBuffer<uint> TessPatches : register(t62);
-#endif
-
-TessControlPoint main(uint vertexID : SV_VertexID)
-{
-#ifdef SNOW_TESS_LIST
-	uint quadIndex = TessPatches[vertexID / 4];
-#else
-	uint quadIndex = vertexID / 4;
-#endif
-	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
-	return ShellPatchControlPoint(quadXY, vertexID + ShellPatchRotation(quadXY));
-}
-#endif
-
-#if defined(VSHADER) && defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
-// The shading pass's flat patches (every hull factor 1 in the prepass): the
-// two triangles the tessellator emits for them, on its (1,0)-(0,1) domain
-// diagonal, corners read from the bake exactly as the domain shader's
-// corner path reads them.
-StructuredBuffer<uint> FlatPatches : register(t62);
-
-VS_OUTPUT main(uint vertexID : SV_VertexID)
-{
-	static const uint kFlatTriangles[6] = { 0, 1, 3, 1, 2, 3 };
-	uint quadIndex = FlatPatches[vertexID / 6];
-	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
-	TessControlPoint cp = ShellPatchControlPoint(quadXY, kFlatTriangles[vertexID % 6] + ShellPatchRotation(quadXY));
-	int3 bakeTexel = int3(cp.GridXY, 0);
-	float4 baked = ShellVertexBake.Load(bakeTexel);
-	float2 slope = ShellVertexBakeSlope.Load(bakeTexel);
-	return FinishShellVertexSloped(cp.GridLocal, baked.x, baked.y, baked.z, slope.x, slope.y);
-}
-#endif
-
-#if (defined(HULLSHADER) || defined(DOMAINSHADER)) && !defined(SNOW_SURFACE_ONLY)
-struct TessFactors
-{
-	float Edge[4] : SV_TessFactor;
-	float Inside[2] : SV_InsideTessFactor;
-};
-#endif
-
-#if defined(HULLSHADER) || defined(DOMAINSHADER) || defined(SNOW_SURFACE_ONLY)
-// Detail reach: full kTessMax within kTessNear/kTessMax units, factor 1 by
-// kTessNear. Matches the relief fade band so tessellation is never spent
-// where the displacement has already faded out.
+#if defined(HULLSHADER) || defined(SNOW_SURFACE_ONLY)
+// Detail reach (LandscapeSnowTess.hlsli LsDetailFactor): full kTessMax within
+// kTessNear/kTessMax units, factor 1 by kTessNear. Deformed edges stretch the
+// reach by kTessReachBoost; past the BOOSTED reach the factor clamps to 1 for
+// every deformation value, so the map taps cannot change the answer.
 static const float kTessNear = 1600.0;
 static const float kTessMax = 8.0;
-#endif
-
-#if defined(HULLSHADER) || defined(SNOW_SURFACE_ONLY)
-// Deformed edges stretch the detail reach by this much (see EdgeTessFactor).
 static const float kTessReachBoost = 3.0;
-// Past the BOOSTED reach the factor clamps to 1 for every deformation value,
-// so the map taps cannot change the answer.
 static const float kTessCutoff = kTessNear * kTessReachBoost;
-#endif
-
-#if defined(HULLSHADER) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
-
-// Edge factor from the edge midpoint's camera distance, computed from the
-// shared corners only, so both patches on an edge agree (crack-free).
-// Trench-aware: edges carrying deformation get up to kTessReachBoost times the
-// detail reach, so trench walls stay smooth well past the base band while
-// untouched snowfields keep the cheap factors; the boost reads only edge-
-// derived positions, preserving the crack-free property.
-// SNOW_HS_BAKE: the two corner taps come from BakeCS (ShellVertexBake.w,
-// same function, same vertex bits); only the midpoint stays live.
-#ifdef SNOW_HS_BAKE
-float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB, float deformA, float deformB, float zA, float zB)
-#else
-float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
-#endif
-{
-	float2 midLocal = 0.5 * (gridLocalA + gridLocalB);
-	float2 midAbs = GridOrigin + midLocal;
-	float dist = length(midAbs - ShellCameraPosAdjust.xy);
-	// Undeformed ground is subdivided ONLY to carry the displacement-map
-	// relief, so with relief off its base reach goes to zero and the factor
-	// clamps to 1 - no vertices spent on a surface that is not displaced.
-	// Trenches keep their boost either way: the carve is what the tessellated
-	// path actually exists for, and it is the half that survives relief being
-	// retired. At relief > 0 the curve is exactly the old lerp(1, boost, t).
-	float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
-	// Past the cutoff even the fully boosted reach clamps to 1, so the taps -
-	// three bicubics, sixteen loads each, the bulk of this shader - cannot
-	// change the answer and are skipped.
-	float reach = kTessNear * reliefBase;
-	[branch] if (dist < kTessCutoff)
-	{
-#ifdef SNOW_HS_BAKE
-		float deform = max(max(deformA, deformB), SampleDeformation(midLocal));
-#else
-		float deform = max(max(SampleDeformation(gridLocalA), SampleDeformation(gridLocalB)), SampleDeformation(midLocal));
-#endif
-		reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
-	}
-	float factor = clamp(reach / max(dist, 32.0), 1.0, kTessMax);
-#ifdef SNOW_HS_BAKE
-	// Screen-size cap: no more segments than the edge's projected length holds
-	// at TessScreen.x pixels each. Symmetric in the endpoints, so crack-free.
-	[branch] if (TessScreen.x > 0.0 && factor > 1.0)
-	{
-		float4 clipA = mul(CameraViewProj, float4(float3(GridOrigin + gridLocalA, zA) - ShellCameraPosAdjust.xyz, 1.0));
-		float4 clipB = mul(CameraViewProj, float4(float3(GridOrigin + gridLocalB, zB) - ShellCameraPosAdjust.xyz, 1.0));
-		[flatten] if (min(clipA.w, clipB.w) > 16.0)
-			factor = min(factor, max(length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz) / TessScreen.x, 1.0));
-	}
-#endif
-	return factor;
-}
-
-// Split gate. The PS's far-field depth clamp only fires past kClampFarStart, so
-// the pass can be drawn twice: NEAR patches take a PS with no depth export and
-// get early-Z rejection back, FAR patches keep the export and the clamp.
-//
-// Boundary: NEAR drops a patch when ANY corner is far, FAR keeps a patch unless
-// ALL corners are near - so a straddling patch lands in exactly one pass, with
-// no gap and no double-draw. Its near pixels are unaffected either way, because
-// the clamp is gated per pixel on the same distance.
-#if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
-static const float kClampFarStart = 4000.0;
-
-bool ShellPatchSplitCulled(float2 a, float2 b, float2 c, float2 d)
-{
-	float2 cam = ShellCameraPosAdjust.xy;
-	float da = length(GridOrigin + a - cam);
-	float db = length(GridOrigin + b - cam);
-	float dc = length(GridOrigin + c - cam);
-	float dd = length(GridOrigin + d - cam);
-#	ifdef SNOW_SPLIT_NEAR
-	return max(max(da, db), max(dc, dd)) > kClampFarStart;
-#	else
-	return max(max(da, db), max(dc, dd)) <= kClampFarStart;
-#	endif
-}
-#endif
-
-// View-frustum patch cull. A patch outside the camera frustum produces no
-// fragments - the rasteriser discards its triangles before any shading - so
-// dropping it here changes nothing on screen while skipping the domain
-// shader, the primitive setup and, because it runs first, every tap the
-// tests and edge factors below would have taken.
-//
-// Only the four side planes and the eye plane are tested. They are built
-// from w +/- x and w +/- y, so they hold whatever direction the depth range
-// runs in; the far field is already bounded by ShellBeyondSeam.
-//
-// NOT reachable from the shadow caster: that is a separate, non-tessellated
-// vertex shader drawn with the light's clip matrix, so snow behind the
-// camera goes on casting into the frame.
-static const float kFrustumZMargin = 512.0;
-static const float kFrustumXYMargin = 16.0;
-
-bool ShellOutsideFrustum(float2 a, float2 b, float2 c, float2 d, float zLo, float zHi)
-{
-	float2 lo = min(min(a, b), min(c, d)) - kFrustumXYMargin;
-	float2 hi = max(max(a, b), max(c, d)) + kFrustumXYMargin;
-	// Same space as the vertex chain: absolute world, less the camera adjust.
-	float3 bMin = float3(GridOrigin + lo, zLo - kFrustumZMargin) - ShellCameraPosAdjust.xyz;
-	float3 bMax = float3(GridOrigin + hi, zHi + kFrustumZMargin) - ShellCameraPosAdjust.xyz;
-
-	// Row-major storage with mul(M, v) makes clip.i = dot(M[i], v), so the
-	// side half-spaces are M[3] +/- M[0] and M[3] +/- M[1], and M[3] alone is
-	// the eye plane. A box is outside a plane when even its corner furthest
-	// along the plane normal still lies behind it.
-	float4 planes[5] = {
-		CameraViewProj[3] + CameraViewProj[0],
-		CameraViewProj[3] - CameraViewProj[0],
-		CameraViewProj[3] + CameraViewProj[1],
-		CameraViewProj[3] - CameraViewProj[1],
-		CameraViewProj[3]
-	};
-	bool outside = false;
-	[unroll] for (uint i = 0; i < 5; i++)
-	{
-		float3 n = planes[i].xyz;
-		float3 pv = float3(n.x > 0.0 ? bMax.x : bMin.x,
-			n.y > 0.0 ? bMax.y : bMin.y,
-			n.z > 0.0 ? bMax.z : bMin.z);
-		if (dot(n, pv) + planes[i].w < 0.0)
-			outside = true;
-	}
-	return outside;
-}
-
-// Far relief tessellation. Beyond ~1,920 units the shell's quads are 64 and
-// 128 units and span two to four of the land's own 32-unit quads; where the
-// ground bulges above the chord the shell would cut below it (the distant
-// holes). Rather than lift vertices (a box maximum terraces and buries
-// rocks), subdivide: an odd factor puts interior vertices at roughly the
-// land's own spacing, and every added vertex samples the exact surface. The
-// test compares the land against the chord at the land's own lattice points
-// along the edge - the edge lies on lattice lines, and the land is linear
-// between its vertices, so three samples see the exact maximum bulge. Edge
-// tests read only the edge's endpoints, so both patches on an edge agree
-// (crack-free); the inside test may raise the inside factor alone. World
-// data only: nothing here moves with the camera.
-static const float kFarReliefTolerance = 4.0;
-
-float FarReliefEdgeFactor(float2 a, float2 b)
-{
-	float factor = 1.0;
-	float step = ShellBandStep(0.5 * (a + b));
-	bool active = FineWindow.z > 0.5 && (ShellFlags.x & 32) == 0 && step >= 64.0;
-	[branch] if (active)
-	{
-		float ha = LandHeightFine(a);
-		float hb = LandHeightFine(b);
-		float excess = 0.0;
-		[unroll] for (int i = 1; i <= 3; i++)
-		{
-			float t = i * 0.25;
-			float land = LandHeightFine(lerp(a, b, t));
-			if (land > -50000.0)
-				excess = max(excess, land - lerp(ha, hb, t));
-		}
-		bool valid = min(ha, hb) > -50000.0;
-		factor = (valid && excess > kFarReliefTolerance) ? (step >= 128.0 ? 5.0 : 3.0) : 1.0;
-	}
-	return factor;
-}
-
-// Corner order 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1); the chord is the LOWER of
-// the two triangulations of the corners, the conservative surface.
-float FarReliefInsideFactor(float2 c0, float2 c1, float2 c2, float2 c3)
-{
-	float factor = 1.0;
-	float2 centre = 0.25 * (c0 + c1 + c2 + c3);
-	float step = ShellBandStep(centre);
-	bool active = FineWindow.z > 0.5 && (ShellFlags.x & 32) == 0 && step >= 64.0;
-	[branch] if (active)
-	{
-		float h0 = LandHeightFine(c0);
-		float h1 = LandHeightFine(c1);
-		float h2 = LandHeightFine(c2);
-		float h3 = LandHeightFine(c3);
-		float excess = 0.0;
-		[unroll] for (int j = 1; j <= 3; j++)
-		{
-			[unroll] for (int i = 1; i <= 3; i++)
-			{
-				float2 ff = float2(i, j) * 0.25;
-				float2 pos = lerp(lerp(c0, c1, ff.x), lerp(c3, c2, ff.x), ff.y);
-				float triA = ff.y <= ff.x ? h0 + (h1 - h0) * ff.x + (h2 - h1) * ff.y : h0 + (h3 - h0) * ff.y + (h2 - h3) * ff.x;
-				float triB = (ff.x + ff.y) <= 1.0 ? h0 + (h1 - h0) * ff.x + (h3 - h0) * ff.y : h2 + (h1 - h2) * (1.0 - ff.y) + (h3 - h2) * (1.0 - ff.x);
-				float land = LandHeightFine(pos);
-				if (land > -50000.0)
-					excess = max(excess, land - min(triA, triB));
-			}
-		}
-		bool valid = min(min(h0, h1), min(h2, h3)) > -50000.0;
-		factor = (valid && excess > kFarReliefTolerance) ? (step >= 128.0 ? 5.0 : 3.0) : 1.0;
-	}
-	return factor;
-}
-
-#ifdef SNOW_HS_VISIBLE
-// Patches that won at least one pixel in the depth prepass. The shading pass
-// only admits prepass winners (EQUAL), so a patch that won nothing cannot
-// shade and is not tessellated a second time.
-StructuredBuffer<uint> VisiblePatches : register(t60);
-#endif
-
-TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch, uint patchId : SV_PrimitiveID)
-{
-	TessFactors f;
-#ifdef SNOW_HS_VISIBLE
-	[branch] if (VisiblePatches[patchId] == 0)
-	{
-		f.Edge[0] = f.Edge[1] = f.Edge[2] = f.Edge[3] = 0.0;
-		f.Inside[0] = f.Inside[1] = 0.0;
-		return f;
-	}
-#endif
-
-	// The bake's corner records are hoisted above the culls: their z bounds
-	// the patch for the frustum test, and their deformation taps feed the
-	// edge factors below. Four loads either way.
-#ifdef SNOW_HS_BAKE
-	float4 v0 = ShellVertexBake.Load(int3(patch[0].GridXY, 0));
-	float4 v1 = ShellVertexBake.Load(int3(patch[1].GridXY, 0));
-	float4 v2 = ShellVertexBake.Load(int3(patch[2].GridXY, 0));
-	float4 v3 = ShellVertexBake.Load(int3(patch[3].GridXY, 0));
-	float zLo = min(min(v0.x, v1.x), min(v2.x, v3.x));
-	float zHi = max(max(v0.x, v1.x), max(v2.x, v3.x));
-#else
-	// No baked corner heights: an unbounded column. The side planes still
-	// cull everything left and right of the view; only up and down is given
-	// away.
-	float zLo = -65536.0;
-	float zHi = 65536.0;
-#endif
-
-	// Frustum first: pure arithmetic, and it gates every tap below - the
-	// seam and bare-ground tests sample the terrain window, and each edge
-	// factor can take three bicubic deformation taps. Off in the debug views
-	// that move a vertex's z away from the baked surface.
-	bool culled = false;
-	// SNOW_HS_TRUST (the shading pass): a prepass winner passed these three
-	// tests on the same inputs this frame.
-#ifndef SNOW_HS_TRUST
-	[branch] if ((ShellFlags.x & 2) != 0 && ShellDebugData == 0 && ShellLODDebug == 0)
-		culled = ShellOutsideFrustum(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal, zLo, zHi);
-
-	// Tested before the edge factors: a culled patch must not pay for the
-	// three bicubic deformation taps per edge that EdgeTessFactor can take.
-	[branch] if (!culled)
-		culled = ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
-	[branch] if (!culled && ShellCullBare > 0.5)
-		culled = ShellFullyBare(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
-#endif
-#if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
-	culled = culled || ShellPatchSplitCulled(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
-#endif
-	[branch] if (culled)
-	{
-		f.Edge[0] = 0.0;
-		f.Edge[1] = 0.0;
-		f.Edge[2] = 0.0;
-		f.Edge[3] = 0.0;
-		f.Inside[0] = 0.0;
-		f.Inside[1] = 0.0;
-		return f;
-	}
-
-	// Quad edge order: [0] u=0, [1] v=0, [2] u=1, [3] v=1, for the domain
-	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
-#ifdef SNOW_HS_BAKE
-	float4 edges = float4(
-		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal, v0.w, v3.w, v0.x, v3.x),
-		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal, v0.w, v1.w, v0.x, v1.x),
-		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal, v1.w, v2.w, v1.x, v2.x),
-		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal, v3.w, v2.w, v3.x, v2.x));
-#else
-	float4 edges = float4(
-		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal),
-		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal),
-		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal),
-		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal));
-#endif
-	// Far relief: raise edges where the ground bulges above their chord, and
-	// the inside where it bulges inside the patch.
-	edges = max(edges, float4(
-		FarReliefEdgeFactor(patch[0].GridLocal, patch[3].GridLocal),
-		FarReliefEdgeFactor(patch[0].GridLocal, patch[1].GridLocal),
-		FarReliefEdgeFactor(patch[1].GridLocal, patch[2].GridLocal),
-		FarReliefEdgeFactor(patch[3].GridLocal, patch[2].GridLocal)));
-	float inner = max(max(max(edges.x, edges.y), max(edges.z, edges.w)),
-		FarReliefInsideFactor(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal));
-
-	f.Edge[0] = edges.x;
-	f.Edge[1] = edges.y;
-	f.Edge[2] = edges.z;
-	f.Edge[3] = edges.w;
-	f.Inside[0] = inner;
-	f.Inside[1] = inner;
-	return f;
-}
-
-[domain("quad")]
-[partitioning("fractional_odd")]
-[outputtopology("triangle_cw")]
-[outputcontrolpoints(4)]
-[patchconstantfunc("PatchConstants")]
-[maxtessfactor(8.0)]  // kTessMax; far relief tops out at 5
-TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputControlPointID)
-{
-	return patch[i];
-}
 #endif
 
 #include "SnowDeformation/SnowParallax.hlsli"
 
-#if defined(DOMAINSHADER) || defined(COMPUTESHADER) || defined(SNOW_SURFACE_ONLY)
+#if defined(DOMAINSHADER) || defined(SNOW_SURFACE_ONLY)
 // The vertex surface: ShellSurfaceZ plus the skirt descent and the
-// displacement relief. One function for the domain shader's live path, for
-// BakeCS and for the raised landscape, so a baked corner, a live vertex and
-// a landscape vertex are the same bits.
+// displacement relief. One function for the replay's domain shader and the
+// raised landscape, so both stand on the same bits.
 float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainHeight)
 {
 	float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
@@ -2196,11 +1381,7 @@ float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainH
 	[branch] if (HasSnowHeight > 0.5 && descentBlend > 1.0 && z > terrainHeight && wEdge < 0.999)
 	{
 		float hDescent = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
-#ifdef SNOW_BAKE_CS
-		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(gBakeDeformationTap))) *
-#else
 		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)))) *
-#endif
 		                (1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0));
 		const float kEdgeBillowShift = 0.35;
 		float wBillow = saturate(wEdge + (hDescent - 0.5) * kEdgeBillowShift * billowW);
@@ -2247,108 +1428,15 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 	return ShellVertexZFrom(gridLocal, z, coverage, terrainHeight);
 }
-#endif  // DOMAINSHADER || COMPUTESHADER || SNOW_SURFACE_ONLY
+#endif  // DOMAINSHADER || SNOW_SURFACE_ONLY
 
-#if defined(DOMAINSHADER) && !defined(SNOW_SURFACE_ONLY) && !defined(SNOW_SHELL_NO_MAIN)
-[domain("quad")]
-VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
-{
-#ifdef SNOW_SHELL_PATCH_ID
-	// Same index the hull sees as SV_PrimitiveID (vertexID / 4 in the VS):
-	// the patch's (0,0) grid corner, whatever the rotation. Bit 31: every
-	// hull factor is 1, so the shading pass may draw it untessellated.
-	const uint2 dsQuadXY = min(min(patch[0].GridXY, patch[1].GridXY), min(patch[2].GridXY, patch[3].GridXY));
-	const bool dsFlat = max(max(max(factors.Edge[0], factors.Edge[1]), max(factors.Edge[2], factors.Edge[3])), max(factors.Inside[0], factors.Inside[1])) <= 1.0;
-	const uint dsPatchId = (dsQuadXY.y * GridDim + dsQuadXY.x + 1) | (dsFlat ? 0x80000000u : 0u);
-#	define SHELL_DS_OUT(expr) { VS_OUTPUT dsOut = (expr); dsOut.PatchId = dsPatchId; return dsOut; }
-#else
-#	define SHELL_DS_OUT(expr) return (expr)
-#endif
-	float2 gridLocal = lerp(
-		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
-		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
-
-#ifdef SNOW_DS_FLAT
-	// A/B measurement path: terrain plus class depth, no field work, so the
-	// Shell row's drop bounds what the geometry stages cost.
-	{
-		float3 flatTerrain = SampleTerrain(gridLocal);
-		[branch] if (flatTerrain.x < -50000.0)
-		{
-			VS_OUTPUT culled = (VS_OUTPUT)0;
-			culled.Position = asfloat(0x7FC00000).xxxx;
-			SHELL_DS_OUT(culled);
-		}
-		SHELL_DS_OUT(FinishShellVertex(gridLocal, flatTerrain.x + max(flatTerrain.y, 0.0), saturate(flatTerrain.z), flatTerrain.x));
-	}
-#endif
-
-	float coverage;
-	float terrainHeight;
-	float z;
-#if defined(SNOW_DS_BAKE) || defined(SNOW_DS_BAKE_CHECK)
-	// Patch corners are base-grid vertices the bake evaluated this frame;
-	// read them by grid index. Points tessellation adds inside the patch are
-	// not grid vertices and stay live. At a corner the lerp above is exact
-	// (grid coordinates are multiples of the step, far below 2^24), so the
-	// live and baked paths see the same gridLocal - the check variant
-	// verifies exactly that.
-	bool isCorner = (domainUV.x == 0.0 || domainUV.x == 1.0) && (domainUV.y == 0.0 || domainUV.y == 1.0);
-	[branch] if (isCorner)
-	{
-		uint corner = domainUV.x > 0.5 ? (domainUV.y > 0.5 ? 2u : 1u) : (domainUV.y > 0.5 ? 3u : 0u);
-		int3 bakeTexel = int3(patch[corner].GridXY, 0);
-		float4 baked = ShellVertexBake.Load(bakeTexel);
-		z = baked.x;
-		coverage = baked.y;
-		terrainHeight = baked.z;
-		float2 slope = ShellVertexBakeSlope.Load(bakeTexel);
-#	ifdef SNOW_DS_BAKE_CHECK
-		float liveCoverage;
-		float liveTerrain;
-		float liveZ = ShellVertexZ(gridLocal, liveCoverage, liveTerrain);
-		float2 liveSlope = ShellVertexSlope(gridLocal);
-		float liveDeform = SampleDeformation(gridLocal);
-		if (asuint(liveZ) != asuint(z) || asuint(liveCoverage) != asuint(coverage) || asuint(liveTerrain) != asuint(terrainHeight) ||
-			asuint(liveSlope.x) != asuint(slope.x) || asuint(liveSlope.y) != asuint(slope.y) || asuint(liveDeform) != asuint(baked.w))
-			z += 50.0;
-#	endif
-		SHELL_DS_OUT(FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, slope.x, slope.y));
-	}
-	else
-#endif
-	{
-		z = ShellVertexZ(gridLocal, coverage, terrainHeight);
-	}
-
-	SHELL_DS_OUT(FinishShellVertex(gridLocal, z, coverage, terrainHeight));
-}
-#undef SHELL_DS_OUT
-#endif
 
 
 #ifdef PSHADER
 
-// Depth-delta histogram (heatmap mode): 4 distance bands x 8 signed-delta
-// buckets. SM5.0 shares PS UAV slots with the render-target outputs, so the
-// heatmap runs as its own permutation with a single SV_Target — matching the
-// kMAIN-only binding — and the histogram UAV at u1.
-#	ifdef SNOW_LOD_HISTOGRAM
-RWStructuredBuffer<uint> LODHistogram : register(u1);
-#	endif
-
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
-	// Conservative depth carrying the anti-z-fight clamp. NOTE: LessEqual moves
-	// depth TOWARD the camera, which can turn a failing fragment into a passing
-	// one - so with the pass's LESS_EQUAL depth state this DISABLES early-Z
-	// rejection for the whole draw. SNOW_SHELL_NO_DEPTH_EXPORT drops it to
-	// measure what that costs.
-#	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	float DepthLE : SV_DepthLessEqual;
-#	endif
-#	ifndef SNOW_LOD_HISTOGRAM
 	float4 MotionVectors : SV_Target1;
 	float4 NormalGlossiness : SV_Target2;
 	float4 Albedo : SV_Target3;
@@ -2356,7 +1444,6 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
-#	endif
 };
 
 // Depth prepass (SNOW_SHELL_DEPTH_PREPASS): the alpha cut and the export
@@ -2367,11 +1454,6 @@ struct PS_OUTPUT
 struct PS_PREPASS_OUTPUT
 {
 	float RasterDepth : SV_Target0;
-#	ifdef SNOW_SHELL_PREPASS_PATCH
-	// Winning patch + 1 (0 = none): the fill marks it visible, and the shading
-	// pass's hull culls every patch that won no pixel.
-	uint PatchId : SV_Target1;
-#	endif
 #	ifdef SNOW_PREPASS_ATTR
 	// Deferred shading's inputs for each winning pixel: GridLocal and the
 	// terrain normal's xy; GridLocal's coarse derivatives; the view depth and
@@ -2380,9 +1462,8 @@ struct PS_PREPASS_OUTPUT
 	float4 AttrGridDeriv : SV_Target2;
 	float4 AttrDepth : SV_Target3;
 #		ifdef SNOW_PREPASS_EARLY
-	// A pending pixel's inputs for the resolve: alpha before the contests,
-	// the edge and floor contests' snow surfaces, and the floor's carve weight
-	// + 2 if the export clamped + 4 if the edge contest runs.
+	// A pending pixel's inputs for the resolve: y = the snow's side of the land
+	// contest; w = 2 if the export clamped + 8 if the land contest runs.
 	float4 Pending : SV_Target4;
 #		endif
 #	endif
@@ -2450,7 +1531,7 @@ bool ShellNearClampWindow(float shellZ, float sceneZ)
 float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve, float sceneAbove)
 {
 	float depth = rasterZ;
-	bool clampMode = (ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && sceneAbove < kShellClampOccluderSlack;
+	bool clampMode = sceneAbove < kShellClampOccluderSlack;
 	[branch] if (clampMode && ShellFarClampWindow(shellZ, sceneZ))
 		depth = min(rasterZ, rawSceneDepth - 1e-5);
 	else if (clampMode && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && ShellNearClampWindow(shellZ, sceneZ))
@@ -2484,7 +1565,7 @@ bool ShellPrepassQuadHidden(float rasterZ, float rawSceneDepth, float shellZ, fl
 }
 
 
-#if defined(PSHADER)
+#if defined(SNOW_SHELL_DEFERRED)
 // LLF cluster lookup coordinates for a camera-relative position.
 void ShellClusterCoords(float3 relPos, out float viewZ, out float2 clusterUV)
 {
@@ -2503,17 +1584,11 @@ float3 ShellLuminanceBump(float3 normalWS, float2 worldXY, float bumpFade)
 	float e = 1.5 / texDims.x;
 	float2 detailUV = worldXY / kBumpTile;
 	const float3 kLum = float3(0.30, 0.45, 0.25);
-#ifdef SNOW_SHELL_DEFERRED
 	const float2 detailDx = gDeferredGridDx / kBumpTile;
 	const float2 detailDy = gDeferredGridDy / kBumpTile;
 	float h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
 	float hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
 	float hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
-#else
-	float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
-	float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
-	float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
-#endif
 	float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 	return normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 }
@@ -2521,27 +1596,18 @@ float3 ShellLuminanceBump(float3 normalWS, float2 worldXY, float bumpFade)
 
 #if defined(SNOW_S1_RESOLVE)
 // S1 resolve (DrawShell, before the deferred pass): finishes the early
-// prepass's pending pixels with what the game's opaque draws left - the
-// edge and floor contests against this frame's land grain, the clamp against
-// a static - and writes every winner's depth into the main buffer under
-// LESS_EQUAL, so a pixel something drew in front of since the claim loses.
-// The marks are DepthSync's and the private fill's.
+// prepass's pending pixels with what the game's opaque draws left - the land's
+// verdict, the clamp against a static - and writes every winner's depth into
+// the main buffer under LESS_EQUAL, so a pixel something drew in front of
+// since the claim loses. The marks are DepthSync's and the private fill's.
 Texture2D<float> EarlyRasterDepth : register(t61);
 Texture2D<float4> EarlyPending : register(t62);
-Texture2D<float4> DeferredDepth : register(t93);
 
 struct S1_RESOLVE_OUTPUT
 {
 	float Marks : SV_Target0;
 	float Depth : SV_Depth;
 };
-
-float ShellContestWin(float snowSurf, float hLandRaw)
-{
-	float hLand01 = hLandRaw > 0.002 && hLandRaw < 1.5 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5;
-	float dirtSurf = (0.5 + (hLand01 - 0.5) * 0.5) * 2.0;
-	return smoothstep(-0.25, 0.25, snowSurf - dirtSurf);
-}
 
 S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 {
@@ -2554,23 +1620,8 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	{
 		const float4 pending = EarlyPending.Load(px);
 		const uint flags = (uint)(pending.w * 0.5);
-		const float floorCarve = pending.w - 2.0 * (float)flags;
 		const float hLandRaw = LandMasksCopy.Load(px).y;
-		// Without a contest the early pass's cut was final.
-		[branch] if ((flags & 2) != 0 || floorCarve > 0.0)
-		{
-			const float contestFade = 1.0 - smoothstep(1024.0, 2048.0, DeferredDepth.Load(px).x);
-			float alpha = pending.x;
-			if ((flags & 2) != 0)
-				alpha *= lerp(1.0, ShellContestWin(pending.y, hLandRaw), contestFade);
-			if (floorCarve > 0.0 && alpha > 0.001)
-				alpha *= lerp(1.0, ShellContestWin(pending.z, hLandRaw), contestFade * floorCarve);
-			const float screenNoise = Random::InterleavedGradientNoise(pos.xy, SharedData::FrameCount);
-			const float dust = BorderStyle.x > 0.5 ? saturate((alpha - 0.2) * (1.0 / 0.3)) : (alpha >= 0.5 ? 1.0 : 0.0);
-			if (screenNoise * screenNoise >= dust)
-				discard;
-		}
-		// Land-blended edges: the land's own verdict against the snow's side.
+		// The land's own verdict against the snow's side.
 		[branch] if ((flags & 4) != 0)
 		{
 			if (LandSnowOdds(hLandRaw) + pending.y < 0.0)
@@ -2584,64 +1635,11 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	o.Depth = depth;
 	return o;
 }
-#elif defined(SNOW_LANE_CENSUS)
-// Lane census (measurement only): the shading draws re-issued with no depth
-// test, so each lane decides itself whether the EQUAL test would pass. Counts
-// [0] live pixels, [4] quads with a live lane (the quads early-Z launches),
-// [8] live pixels on untouched tiles, [12..24] quads by live-lane count 1-4.
-RWByteAddressBuffer LaneCensus : register(u0);
-Texture2D<float> CensusTestDepth : register(t61);
-
-// The four lanes' values of v in quad order (0,0) (1,0) (0,1) (1,1).
-float4 QuadGather(float v, uint2 pixel)
-{
-	float dx = ddx_fine(v);
-	float dy = ddy_fine(v);
-	float dxy = ddy_fine(dx);
-	float px = (float)(pixel.x & 1);
-	float py = (float)(pixel.y & 1);
-	float dyCol0 = dy - px * dxy;
-	float a = v - px * dx - py * dyCol0;
-	float dxRow0 = dx - py * dxy;
-	float c = a + dyCol0;
-	return float4(a, a + dxRow0, c, c + dxRow0 + dxy);
-}
-
-void main(VS_OUTPUT input, uint coverage : SV_Coverage)
-{
-	uint2 pixel = uint2(input.Position.xy);
-	bool live = coverage != 0 && CensusTestDepth.Load(int3(pixel, 0)) == input.Position.z;
-	float4 q = QuadGather(live ? 1.0 : 0.0, pixel);
-	// The gather feeds the condition, so fxc cannot sink its derivatives into
-	// the branch where the helper lanes no longer run.
-	[branch] if (live && dot(q, 1.0) > 0.5)
-	{
-		uint lane = (pixel.x & 1) + 2 * (pixel.y & 1);
-		bool first = true;
-		[unroll] for (uint k = 0; k < 3; k++)
-		{
-			if (k < lane && q[k] > 0.5)
-				first = false;
-		}
-		uint ignored;
-		LaneCensus.InterlockedAdd(0, 1, ignored);
-		[branch] if (first)
-		{
-			uint liveCount = clamp((uint)round(q.x + q.y + q.z + q.w), 1, 4);
-			LaneCensus.InterlockedAdd(4, 1, ignored);
-			LaneCensus.InterlockedAdd(8 + 4 * liveCount, 1, ignored);
-		}
-		[branch] if (ShellUntouched(input.GridLocal))
-			LaneCensus.InterlockedAdd(8, 1, ignored);
-	}
-}
 #else
 #if defined(SNOW_SHELL_DEFERRED)
 PS_OUTPUT ShellShade(VS_OUTPUT input)
-#elif defined(SNOW_SHELL_DEPTH_PREPASS)
-PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #else
-PS_OUTPUT main(VS_OUTPUT input)
+PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #endif
 {
 	// Same convention as MotionBlur::GetSSMotionVector.
@@ -2654,12 +1652,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
 	// The prepass's only derivatives.
-	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-#ifdef SNOW_SHELL_DEFERRED
-	float edgeSnowMip = SnowHeightMipGrad(gDeferredGridDx / kSnowUVTile, gDeferredGridDy / kSnowUVTile);
-#else
-	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
-#endif
 #ifdef SNOW_PREPASS_ATTR
 	const float4 attrGridDeriv = float4(ddx_coarse(input.GridLocal), ddy_coarse(input.GridLocal));
 	const float2 attrZDeriv = float2(ddx_coarse(input.WorldPos.z), ddy_coarse(input.WorldPos.z));
@@ -2673,12 +1665,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 #endif
 
-	// Coverage alpha recomputed per PIXEL from the terrain field (Terrain
-	// Blending-style): smooth at texture resolution, independent of vertex
-	// interpolation. The temporally-varying stochastic test then dithers the
-	// boundary and TAA resolves it into a true cross-fade.
-	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
-	// dither agree with the shaped geometry.
+	// The terrain field per PIXEL: the ramp the deferred attributes carry and
+	// the inputs of the cut below.
 #ifdef SNOW_SHELL_DEFERRED
 	// The prepass computed the ramp from the same GridLocal bits; with the
 	// cut trusted, nothing else of this block reaches the outputs.
@@ -2690,14 +1678,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelClassDepth = 0.0;
 #else
 	float pixelWaterCap;
-	float3 pixelTerrain = EndSnowAtWater(SampleTerrainShaped(gridLocal), gridLocal, pixelWaterCap);
+	float3 pixelTerrain = EndSnowAtWater(SampleTerrain(gridLocal), gridLocal, pixelWaterCap);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float psEdgeFade = ShellEdgeFade(gridLocal);
 
-	// Un-carved class depth ramp; negative means the shell is submerged. The
-	// dither rides it, so a boundary toward shallower classes dissolves as the
-	// shell thins rather than plunging geometrically. Mirrors the VS
-	// object-depth cap so alpha agrees with the capped geometry.
+	// Un-carved class depth ramp; negative means the snow is submerged.
+	// Mirrors ShellSurfaceZ's object-depth cap so the cut agrees with the
+	// capped geometry.
 	float pixelClassDepth = pixelTerrain.y;
 	[branch] if (ObjectLiftCap > 1.0)
 	{
@@ -2724,35 +1711,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
 #endif
 
-	// User-tunable contest fringe (units): how far around the contact point
-	// the height contest operates.
-	float rampFadeBand = max(2.0, BorderUntrampledFade);
-	// Mirror of the VS touch-down toe, so the alpha reads the sheet's
-	// ACTUAL height above ground: without it the alpha cut lands while the
-	// geometry still has height left, and the committed edge dies in
-	// mid-air as a floating rim.
+	// Mirror of the geometry's touch-down toe, so the cut reads the sheet's
+	// ACTUAL height above ground.
 	float pixelEffDepth = TouchDownToe(pixelRampDepth);
-	// Two factors, two jobs. The CLASS GATE enforces the assigned-depth design:
-	// blended class depth must exceed ~2 units, so negative-depth classes and
-	// their blend plateaus never carry shell, independent of the band slider.
-	// The CONTACT term is the touchdown contest: w = 0.5 where the sheet meets
-	// the ground, so grain interlocks at the fringe. One number cannot do both.
-	float rampTerm = smoothstep(1.0, 3.0, pixelRampDepth) * saturate(0.5 + pixelEffDepth / rampFadeBand);
-	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * rampTerm;
-#ifndef SNOW_SHELL_DEFERRED
-	// Land-blended edges: wherever the land has snow weight the pixel is a
-	// candidate; on mixed land the land's own verdict decides it below.
-	const float pixelSnowWeight = LandBlendMode() ? LandSnowWeight(gridLocal) : 1.0;
-	[flatten] if (LandBlendMode())
-		coverageAlpha = pixelSnowWeight > 0.002 ? psEdgeFade : 0.0;
+#ifdef SNOW_SHELL_DEFERRED
+	float coverageAlpha = 1.0;
+#else
+	// Wherever the land has snow weight the pixel is a candidate; on mixed
+	// land the land's own verdict decides it below.
+	const float pixelSnowWeight = LandSnowWeight(gridLocal);
+	float coverageAlpha = pixelSnowWeight > 0.002 ? psEdgeFade : 0.0;
 #endif
 	// Josef's border spec: the alpha may not cut geometry still standing
-	// above its ground - the sheet dives below the terrain (the VS descent's
+	// above its ground - the sheet dives below the terrain (the descent's
 	// undershoot) and the depth test against the terrain IS the border.
-	// Keyed on the RENDERED height above the terrain data, not the ramp, so
-	// low-depth class plateaus hugging the ground under half a unit still
-	// die by the class gate instead of z-fighting as a film. The window-edge
-	// fade rides along; the overrides and contests below still multiply.
+	// Keyed on the RENDERED height above the terrain data, not the ramp. The
+	// window-edge fade rides along; the overrides and the land contest below
+	// still multiply.
 	float sheetAboveGround = smoothstep(0.25, 1.5, input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x);
 	coverageAlpha = max(coverageAlpha, sheetAboveGround * psEdgeFade);
 
@@ -2781,8 +1756,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	// Two cases hug the geometry behind them and must override the fade, or
 	// they dither away view-dependently: carved trench floors, and the shell
-	// riding a raised height field. The carve override is also what ends
-	// trenches hard at class borders while untrampled snow dissolves softly.
+	// riding a raised height field.
 	const bool pixelUntouched = ShellUntouched(gridLocal);
 	float pixelCarve = 0.0;
 	[branch] if (!pixelUntouched)
@@ -2813,7 +1787,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	bool landFilm = false;
 	float landRemaining = 0.0;
 #ifndef SNOW_SHELL_DEFERRED
-	[branch] if (LandBlendMode() && coverageAlpha > 0.001)
+	[branch] if (coverageAlpha > 0.001)
 	{
 		landRemaining = CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
 		landFilm = landRemaining < kLandFilmDepth;
@@ -2821,105 +1795,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 #endif
 	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
 
-	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): shape the COMBINED
-	// alpha once, after the overrides, so every partial band commits by grain
-	// whatever produced it. Shaping components individually leaves an override's
-	// own edge unshaped. Shaping preserves 0 and 1, so overrides still win. The
-	// height mip (edgeSnowMip) is taken at the top, above the prepass exit.
-	// Geometric edge contest: keep a pixel where the sheet's surface (toe'd
-	// height + grain) stands above the dirt's grain surface. Gated on our own
-	// distance fade, not EM's height-blending checkbox - keying it there let
-	// the sheet fall back to a hard cut whenever that was off. Multiplied in,
-	// so the class design and the overrides keep their word; dirt can only eat
-	// in, and the slice layer carries the outward side.
 #ifndef SNOW_SHELL_DEFERRED
-	float contestFade = 1.0 - smoothstep(1024.0, 2048.0, shellZ);
 #	ifdef SNOW_PREPASS_EARLY
-	// The land grain is drawn after this pass: the contests' snow sides are
-	// recorded and the resolve runs them. They only lower the alpha, so the
-	// cut below on the uncontested alpha discards nothing they would keep.
-	const bool edgeContest = !LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999;
-	float edgeSurf = 0.0;
-	[branch] if (edgeContest)
-		edgeSurf = pixelEffDepth + (SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip) - 0.5) * 2.0;
-	// Land-blended edges: on mixed land and on a film the snow could lose to
-	// the land's verdict wherever its side is under the odds' +16 ceiling.
+	// The land's verdict is drawn after this pass: the snow's side is recorded
+	// and the resolve runs the contest. It only lowers the alpha, so the cut
+	// below on the uncontested alpha discards nothing it would keep.
 	bool landContest = false;
 	float landSide = 0.0;
-	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
+	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
 		landSide = LandSnowSide(landRemaining, pixelCarve);
 		landContest = landSide < 16.0;
 	}
-	float floorCarve = 0.0;
-	float floorSurf = 0.0;
-	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
-	{
-		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
-		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
-		[branch] if (remaining < 4.0)
-		{
-			floorSurf = remaining + (SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip) - 0.5) * 2.0;
-			floorCarve = smoothstep(0.75, 0.95, pixelCarve);
-		}
-	}
-	const float earlyAlpha = coverageAlpha;
 #	else
-	[branch] if (LandBlendMode() && coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
+	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
 		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + LandSnowSide(landRemaining, pixelCarve) < 0.0)
 			coverageAlpha = 0.0;
 	}
-	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
-	{
-		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		// Statics behind the shell carry the recolor's weight here as
-		// 2 + w (Lighting.hlsl); only (0, 1] is a land grain height.
-		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		// Fixed amplitudes (band-scaled grain magnified the
-		// contest with the slider). The land's grain is the POM hit -
-		// view-dependent - so it weighs in at HALF strength around neutral:
-		// half the camera breathing, most of the detail; the snow-side
-		// grain is world-anchored and stays full.
-		const float kEdgeGrainAmp = 2.0;
-		const float kEdgeDirtAmp = 2.0;
-		float hLand01 = hLandRaw > 0.002 && hLandRaw < 1.5 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5;
-		float dirtSurf = (0.5 + (hLand01 - 0.5) * 0.5) * kEdgeDirtAmp;
-		float snowSurf = pixelEffDepth + (edgeSnowH - 0.5) * kEdgeGrainAmp;
-		float win = smoothstep(-0.25, 0.25, snowSurf - dirtSurf);
-		coverageAlpha *= lerp(1.0, win, contestFade);
-	}
-
-	// Trench-floor contest: trampled floors run the same geometric contest as
-	// the edge - remaining snow against the dirt's grain - so wear-through
-	// opens grain-shaped holes by design rather than by window error. The
-	// Trench Floor fraction is the dial: at the default a third of any layer
-	// over ~6 units beats the ~2-unit dirt grain; toward 0 trampling wears
-	// through. The tight carve gate keeps walls solid. Runs after the carve
-	// override, and is the one voice allowed to overrule it.
-	[branch] if (!LandBlendMode() && HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
-	{
-		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
-		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
-		[branch] if (remaining < 4.0)
-		{
-			float floorGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-			float hLandFloorRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-			float hLandFloor01 = hLandFloorRaw > 0.002 && hLandFloorRaw < 1.5 ? saturate((hLandFloorRaw - 0.004) * (1.0 / 0.996)) : 0.5;
-			float dirtSurfFloor = (0.5 + (hLandFloor01 - 0.5) * 0.5) * 2.0;
-			float snowSurfFloor = remaining + (floorGrain - 0.5) * 2.0;
-			float winFloor = smoothstep(-0.25, 0.25, snowSurfFloor - dirtSurfFloor);
-			coverageAlpha *= lerp(1.0, winFloor, contestFade * smoothstep(0.75, 0.95, pixelCarve));
-		}
-	}
 #	endif
-
-	// Hard alpha test + optional outward dust. Survivors write fully
-	// opaque, so no partial alpha reaches the deferred resolve through the
-	// .w outputs below. Border Dithering ON scatters a whisker of
-	// stochastic snow just BEYOND the cut (the 0.2..0.5 alpha tail) - dust
-	// from the intersection onto the ground, never upward into the
-	// committed sheet; off is a clean binary cut.
 #endif
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	float3 objectMeet = float3(0.0, 0.0, 0.0);
@@ -2932,20 +1826,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Only the prepass's winners reach this pass, and it already ran the cut.
 	coverageAlpha = 1.0;
 #else
-	[branch] if (ShellLODDebug == 1)
+	// Hard alpha test plus a whisker of stochastic dust just BEYOND the cut
+	// (the 0.2..0.5 alpha tail), never upward into the committed sheet.
+	// Survivors write fully opaque.
 	{
-		// Heatmap analyzes the covered snow surface only: bare/submerged
-		// shell would read as fake poke-under. Depth test is ALWAYS in this
-		// mode, so occlusion is re-created here for anything well behind the
-		// scene surface.
-		if (coverageAlpha < 0.05 || shellZ > sceneZ + 64.0)
-			discard;
-	}
-	else if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0)
-	{
-		float dust = BorderStyle.x > 0.5
-		                 ? saturate((coverageAlpha - 0.2) * (1.0 / 0.3))
-		                 : (coverageAlpha >= 0.5 ? 1.0 : 0.0);
+		float dust = saturate((coverageAlpha - 0.2) * (1.0 / 0.3));
 		if (screenNoise * screenNoise >= dust)
 			discard;
 		coverageAlpha = 1.0;
@@ -2958,9 +1843,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
-#	ifdef SNOW_SHELL_PREPASS_PATCH
-	prepassOut.PatchId = input.PatchId;
-#	endif
 #	ifdef SNOW_PREPASS_ATTR
 	prepassOut.AttrGrid = float4(input.GridLocal, normalize(input.TerrainNormalAlpha.xyz).xy);
 	prepassOut.AttrGridDeriv = attrGridDeriv;
@@ -2968,15 +1850,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	endif
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 #	ifdef SNOW_PREPASS_EARLY
-	// Pending: a contest to run, or a clamp a static behind would cancel.
-	// Marked by a negative raster depth; the claim fill skips it.
+	// Pending: the land contest to run, or a clamp a static behind would
+	// cancel. Marked by a negative raster depth; the claim fill skips it.
 	const bool clampPending = prepassOut.DepthLE < input.Position.z;
 	prepassOut.Pending = 0.0;
-	[branch] if (edgeContest || floorCarve > 0.0 || clampPending || landContest)
+	[branch] if (clampPending || landContest)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
-		prepassOut.Pending = float4(earlyAlpha, landContest ? landSide : edgeSurf, floorSurf,
-			floorCarve + (clampPending ? 2.0 : 0.0) + (edgeContest ? 4.0 : 0.0) + (landContest ? 8.0 : 0.0));
+		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0));
 	}
 #	endif
 	return prepassOut;
@@ -3062,9 +1943,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// clod heights out, so the ray is marched through them here and the point
 	// it meets is shaded. Depth-buffer work stays on the sheet.
 	float3 shadePos = input.WorldPos;
-#ifdef SNOW_SHELL_DEFERRED
 	bool gridShifted = false;
-#endif
 	[branch] if ((ShellFlags.x & 16) != 0)
 	{
 		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
@@ -3077,9 +1956,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			shadePos = input.WorldPos + dir * t;
 			worldXYPS += dir.xy * t;
 			gridLocal += dir.xy * t;
-#ifdef SNOW_SHELL_DEFERRED
 			gridShifted = true;
-#endif
 		}
 	}
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
@@ -3133,17 +2010,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	}
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-#ifdef SNOW_SHELL_DEFERRED
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXYPS);
 	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
 	snowTaps.duvdy = gDeferredGridDy / kSnowUVTile;
 	float snowHeightMip = SnowHeightMipGrad(snowTaps.duvdx, snowTaps.duvdy);
-#else
-	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
-	// Uniform flow: the parallax shadow branch below is divergent, and
-	// derivatives taken inside it would be garbage at its edges.
-	float snowHeightMip = SnowHeightMip(snowUV);
-#endif
 	// Two-plane projection: top-down uv smears down near-vertical trench walls,
 	// so steep pixels blend in a side-plane sample. Keyed on the per-pixel
 	// trench normal, captured BEFORE the normal map perturbs normalWS - the
@@ -3159,20 +2029,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// 24 tiles). SnowUVOffset compensates gridLocal's rebase, but the side
 	// plane is absolute and never rebases, so adding it slides the wall texture
 	// every time the grid advances. The fold keeps the uv small for float
-	// precision; derivatives and mip come from the UNFOLDED uv.
-	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
+	// precision.
 	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
-#ifdef SNOW_SHELL_DEFERRED
 	SnowTaps snowTapsSide = ComputeSnowTapsNoGrad(snowUVSide, snowSidePlane);
 	snowTapsSide.duvdx = (snowSideDropsX ? float2(gDeferredGridDx.y, gDeferredZDx) : float2(gDeferredGridDx.x, gDeferredZDx)) / kSnowUVTile;
 	snowTapsSide.duvdy = (snowSideDropsX ? float2(gDeferredGridDy.y, gDeferredZDy) : float2(gDeferredGridDy.x, gDeferredZDy)) / kSnowUVTile;
 	float snowHeightMipSide = SnowHeightMipGrad(snowTapsSide.duvdx, snowTapsSide.duvdy);
-#else
-	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
-	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
-	snowTapsSide.duvdy = ddy(snowUVSideUnfolded);
-	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
-#endif
 	// Tangent basis for the snow maps. The snow uv is a world-XY planar
 	// projection, so the frame is axis-aligned by construction: bumpT is
 	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
@@ -3248,14 +2110,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Snow material: the modlist's snow diffuse when available, otherwise a
 	// bright, slightly blue constant.
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
-	// Wall-material debug (ShellDebugData 5): the blended two-plane albedo
-	// exactly as sampled, before any lighting, spell mark or compaction
-	// touches it.
-	float3 dbgAlbedoRaw = kSnowAlbedo;
 	[branch] if (HasSnowTexture != 0)
 	{
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
-		dbgAlbedoRaw = kSnowAlbedo;
 		// The colour space the ground reads this texture in: TRUE_PBR's
 		// Color::Diffuse for a PBR set, ColorToLinear for a vanilla one.
 		kSnowAlbedo = SnowTextureIsLinear != 0.0 ? (ENABLE_LL ? kSnowAlbedo : Color::LinearToSrgb(kSnowAlbedo)) : Color::ColorToLinear(kSnowAlbedo);
@@ -3275,11 +2132,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bloodFresh = 0.0;
 	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
 	float4 bloodPaint;
-#ifdef SNOW_SHELL_DEFERRED
 	SampleBloodTiles(worldXYPS, gDeferredGridDx, gDeferredGridDy, blood, bloodFresh, bloodPaint);
-#else
-	SampleBloodTiles(worldXYPS, ddx(worldXYPS), ddy(worldXYPS), blood, bloodFresh, bloodPaint);
-#endif
 	// Under a tile the map's reading is zero, elsewhere the tile's.
 	blood += bloodPaint;
 	[branch] if (blood.a > 0.002)
@@ -3291,11 +2144,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	const float bloodCover = blood.a;
 	// A rune's glyph lies on the snow as the game's decal lies on the ground:
 	// its colour over the albedo by its alpha, its glow added after lighting.
-#ifdef SNOW_SHELL_DEFERRED
 	RuneGlyph rune = SampleRunes(worldXYPS, gDeferredGridDx, gDeferredGridDy);
-#else
-	RuneGlyph rune = SampleRunes(worldXYPS, ddx(worldXYPS), ddy(worldXYPS));
-#endif
 	float3 runeEmission = rune.emission;
 	[branch] if (rune.colour.a > 0.004)
 	{
@@ -3430,21 +2279,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float marchRef = surfZ;
 		{
 			float3 st0 = SampleTerrain(gridLocal);
-#ifdef SNOW_SHELL_DEFERRED
 			// Same four texels: the vertex AO below takes them from here.
 			pixelVertexAO = SampleTerrainVertexAO(gridLocal);
-#endif
 			[branch] if (st0.x > -50000.0)
 			{
 				float depth0 = max(st0.y, 0.0);
-#ifdef SNOW_SHELL_DEFERRED
 				// pixelMelt is this read at the unshifted gridLocal.
 				float melt0 = pixelMelt;
 				[branch] if (gridShifted)
 					melt0 = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
-#else
-				float melt0 = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
-#endif
 				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), melt0);
 				// Untouched: CarveProfile of a zero carve is depth0, the berm +0.
 				[branch] if (!pixelUntouched)
@@ -3516,12 +2359,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
 	}
 
-	// SSS gate diagnostics for ShellDebugData 4: x = mask darkness (what
-	// the ground-marched mask wants to print here), y = gate trust,
-	// z = the buried-caster probe fired. Stays black when the feature is
-	// off or inactive - itself a diagnostic.
-	float3 sssDebug = float3(0.0, 0.0, 0.0);
-
 	// 2: this frame's mask was marched on the snow surface; applied as
 	// Lighting.hlsl applies it, without the gates below.
 	const bool sssSeesSnow = ScreenSpaceShadowsActive > 1.5;
@@ -3533,8 +2370,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Cascades own the near field; SSS blends in only beyond them, where it
 	// carries the distant LOD tree shadows and the shell hugs the ground the
 	// march ran on.
-	// A zero handoff leaves sunShadow exactly as it is; view 4 still wants the gate.
-	[branch] if (!sssSeesSnow && ScreenSpaceShadowsActive > 0.5 && (SnowShadow::GetSssHandoff(shellZ) > 0.0 || ShellDebugData == 4))
+	// A zero handoff leaves sunShadow exactly as it is.
+	[branch] if (!sssSeesSnow && ScreenSpaceShadowsActive > 0.5 && SnowShadow::GetSssHandoff(shellZ) > 0.0)
 	{
 		// Depth agreement is the gate: trust the mask only where the shell hugs
 		// the surface the march saw. Measured VERTICALLY, not along the view
@@ -3544,7 +2381,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// range. The along-ray term survives as a backstop for steep faces seen
 		// edge-on. Thresholds cannot separate grass shadows from buried prints;
 		// their gaps overlap, so the caster discriminator below does it.
-		sssDebug.z = 0.0;
 		float sssRayGap = sceneZ - shellZ;
 		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
 		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
@@ -3576,10 +2412,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 					// Any captured surface from slightly-buried upward counts;
 					// grass is never captured, so it cannot be touched here.
 					[flatten] if (tapTop > -50000.0 && tapTop > sssSurfZ - 16.0)
-					{
 						sssBlend = 0.0;
-						sssDebug.z = 1.0;
-					}
 				}
 			}
 		}
@@ -3598,8 +2431,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sssBlend *= SnowShadow::GetSssHandoff(shellZ);
 		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
-		sssDebug.x = 1.0 - sssMask;
-		sssDebug.y = sssBlend;
 	}
 
 	// Parallax self-shadow on the snow's own grain: EM's
@@ -3713,197 +2544,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse + runeEmission * Color::PBRLightingScale;
 
-	// The deferred pass never runs with a debug view (DrawShell's deferred gate).
-#ifndef SNOW_SHELL_DEFERRED
-	[branch] if (ShellDebugData == 2)
-	{
-		// Exclusion debug: R = drift field lift (48 units = full red),
-		// G = melt fraction (fires, workspaces, shelter), B = coverage
-		// suppression - the sealed-container rectangles read here, so
-		// this is the view that shows where a sarcophagus footprint
-		// actually landed. Black = untouched by any of them.
-		float2 dbgWorldXY = GridOrigin + gridLocal;
-		float2 dbgMask = SampleExclusionMask(dbgWorldXY);
-		float dbgField = SampleObjectHeight(dbgWorldXY);
-		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
-		preLit = float3(saturate(dbgLift / 48.0), saturate(dbgMask.y), saturate(dbgMask.x) * 0.7);
-	}
-	else if (ShellDebugData == 5)
-	{
-		// Wall material view, on the REAL surface with real discards: the
-		// raw two-plane albedo, unlit - no sun, no shadows, no glints, no
-		// self-shadow march - plus a red wash showing the side-projection
-		// weight. THE strafe test: if the wall still shifts in THIS view,
-		// the texture path is guilty (taps/uv/projection); if this view is
-		// rock-solid and the normal view shifts, a LIGHTING term is guilty.
-		preLit = lerp(dbgAlbedoRaw, float3(1.0, 0.1, 0.1), snowSteepness * 0.25);
-	}
-	else if (ShellDebugData == 4)
-	{
-		// SSS gate view. RED = the mask's darkness at this shell pixel
-		// (marched on the ground BENEATH the shell), GREEN = how much the
-		// vertical hug gate trusts it, BLUE = the buried-caster probe
-		// fired and killed it. A shadow print on the snow = red together
-		// with green and NO blue. All black = the mask never reached the
-		// shell here (feature off / inactive).
-		preLit = sssDebug;
-	}
-	else if (ShellDebugData == 6)
-	{
-		// Edge height view, on the REAL surface with real discards: how far
-		// the rendered sheet stands above the terrain data at this pixel.
-		// Black < 0.5, green to 2, yellow to 4, orange to 8, red beyond;
-		// white = 1.5, the height the alpha keeps a pixel at.
-		float dbgAbove = input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x;
-		preLit = dbgAbove < 0.5 ? float3(0.0, 0.0, 0.0) :
-		         dbgAbove < 2.0 ? float3(0.1, 0.8, 0.2) :
-		         dbgAbove < 4.0 ? float3(0.9, 0.9, 0.1) :
-		         dbgAbove < 8.0 ? float3(1.0, 0.5, 0.05) :
-		                          float3(0.9, 0.05, 0.05);
-		[flatten] if (abs(dbgAbove - 1.5) < 0.1)
-			preLit = float3(1.0, 1.0, 1.0);
-	}
-	else if (ShellDebugData == 7)
-	{
-		// Trampled-area view, real surface: blue -> red = raw extent 0 -> 1,
-		// green = the field factor CarveProfile applies, white lines = the
-		// two ends of the bracket.
-		float dbgExtent = TrampleExtent(GridOrigin + gridLocal);
-		preLit = float3(dbgExtent, TrampleField(GridOrigin + gridLocal) * 0.8, 1.0 - dbgExtent) * 0.6;
-		[flatten] if (abs(dbgExtent - TrampleStyle.z) < 0.006 || abs(dbgExtent - TrampleStyle.w) < 0.006)
-			preLit = float3(1.0, 1.0, 1.0);
-	}
-	else if (ShellDebugData == 3)
-	{
-		// Border-field debug: hue bands the shaped class depth (the field
-		// the cut and the slice ribbon key off), brightness rides the snow
-		// grain, WHITE marks the cut contour (raw ~2), and a magenta grid
-		// marks pixels whose pre-shell G-buffer carries land grain data.
-		// Reading it: how far the orange ribbon wanders from the white line
-		// IS the bleed; missing magenta explains one-sided fallbacks.
-		float dbgRaw = pixelTerrain.y;
-		float3 dbgBand =
-			dbgRaw < -0.5 ? float3(0.5, 0.05, 0.05) :
-			dbgRaw < 1.0  ? float3(0.9, 0.5, 0.1) :
-			dbgRaw < 3.0  ? float3(0.1, 0.8, 0.2) :
-			dbgRaw < 8.0  ? float3(0.1, 0.7, 0.8) :
-							float3(0.15, 0.2, 0.9);
-		float dbgGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		preLit = dbgBand * (0.4 + 0.6 * dbgGrain);
-		[flatten] if (abs(dbgRaw - 2.0) < 0.15)
-			preLit = float3(1.0, 1.0, 1.0);
-		float dbgLand = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		[flatten] if (dbgLand > 0.002 && frac(input.Position.x / 8.0) < 0.15 && frac(input.Position.y / 8.0) < 0.15)
-			preLit = lerp(preLit, float3(1.0, 0.0, 1.0), 0.7);
-	}
-	else if (ShellDebugData != 0)
-	{
-		// R = height, G = per-pixel coverage, B = ramp depth (40 units = full
-		// blue); class boundaries show as blue-intensity steps.
-		float heightNorm = saturate((input.DebugHeight + 4000.0) / 8000.0);
-		bool isSentinel = input.DebugHeight < -50000.0;
-		preLit = isSentinel ? float3(0.0, 0.0, 0.5) : float3(heightNorm * 0.25, pixelCoverage * 0.5, saturate(pixelTerrain.y / 40.0));
-	}
-
-	[branch] if (ShellLODDebug == 1)
-	{
-		// Signed vertical gap between the shell surface and whatever the
-		// scene rendered along this pixel's ray (positive = shell above the
-		// ground; approximate at grazing angles). Buckets feed the histogram
-		// and the color bands: reds = shell buried under the rendered
-		// ground, yellow = inside z-fight range, greens/blues = clearance.
-		// Slope correction: project the ray gap onto the terrain normal, so
-		// steep faces stop misreading horizontal offset as burial depth.
-		float3 gapVec = input.WorldPos * (1.0 - sceneZ / max(shellZ, 1e-3));
-		float deltaUp = dot(gapVec, normalize(input.TerrainNormalAlpha.xyz));
-		float camDist = length(gridLocal - WarpedHalfSpan);
-		uint band = camDist < 4000.0 ? 0u : (camDist < 8000.0 ? 1u : (camDist < 16000.0 ? 2u : 3u));
-		uint bucket = deltaUp < -32.0 ? 0u : deltaUp < -8.0 ? 1u :
-		                                 deltaUp < -2.0     ? 2u :
-		                                 deltaUp < 2.0      ? 3u :
-		                                 deltaUp < 8.0      ? 4u :
-		                                 deltaUp < 32.0     ? 5u :
-		                                 deltaUp < 128.0    ? 6u :
-		                                                      7u;
-#	ifdef SNOW_LOD_HISTOGRAM
-		InterlockedAdd(LODHistogram[band * 8u + bucket], 1u);
-#	endif
-		static const float3 kBucketColors[8] = {
-			float3(0.55, 0.0, 0.0), float3(1.0, 0.2, 0.0), float3(1.0, 0.55, 0.0), float3(1.0, 1.0, 0.15),
-			float3(0.2, 0.85, 0.2), float3(0.0, 0.7, 0.9), float3(0.15, 0.3, 1.0), float3(0.55, 0.15, 0.85)
-		};
-		preLit = kBucketColors[bucket];
-	}
-	else if (ShellLODDebug == 2)
-	{
-		// Warp-band view: one color per power-of-two band, brightening across
-		// the band so the data morph's hand-off is visible. Band 0 (the 8-unit
-		// linear zone) stays gray. Bands are world-anchored now, so these
-		// stripes must hold still on the ground as the camera moves - stripes
-		// that crawl mean the band table has lost its lattice alignment.
-		float2 uAxis = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
-		float3 band = WarpBand(max(abs(uAxis.x), abs(uAxis.y)));
-		[flatten] if (band.z < 0.5)
-			preLit = float3(0.15, 0.15, 0.15);
-		else
-		{
-			static const float3 kRingColors[6] = {
-				float3(1.0, 0.2, 0.2), float3(1.0, 0.8, 0.2), float3(0.3, 1.0, 0.3),
-				float3(0.2, 0.9, 0.9), float3(0.3, 0.4, 1.0), float3(0.9, 0.3, 0.9)
-			};
-			preLit = kRingColors[(uint)band.z % 6u] * lerp(0.35, 1.0, band.y);
-		}
-	}
-	else if (ShellLODDebug == 3)
-	{
-		// Provenance: green = baked cell data; LOD-classified far texels
-		// (w = 2 + score) grade brown (classified bare) -> blue-white
-		// (classified snow) so the classification itself is inspectable;
-		// cyan = no LOD tile (filled bare); red = no data at all
-		// (outside the worldspace; the VS raises these to eye level so the
-		// gap reads as a sheet).
-		float2 provT = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-		float4 provTexel = TerrainWindow.Load(int3((int2)clamp(provT, 0.0, (float)(TerrainDim - 1)), 0));
-		[flatten] if (provTexel.x <= -50000.0)
-			preLit = float3(0.9, 0.1, 0.1);
-		else if (provTexel.w > 1.5)
-			preLit = lerp(float3(0.45, 0.2, 0.08), float3(0.55, 0.75, 1.0), saturate(provTexel.w - 2.0));
-		else if (provTexel.w > 0.5)
-			preLit = float3(0.1, 0.7, 0.7) * (0.4 + 0.6 * pixelCoverage);
-		else preLit = float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1);
-	}
-	else if (ShellLODDebug == 4)
-	{
-		// Land-exact delta: the vertex-interpolated terrain height against the
-		// fine layer at this pixel. Green within 2 units, amber -> red = shell
-		// terrain above the land (red at 64+), teal -> blue = below, gray = no
-		// fine data here.
-		float land = LandHeightFine(gridLocal);
-		float d = input.DebugHeight - land;
-		[flatten] if (land < -50000.0)
-			preLit = float3(0.3, 0.3, 0.3);
-		else if (abs(d) < 2.0)
-			preLit = float3(0.1, 0.8, 0.1);
-		else if (d > 0.0)
-			preLit = lerp(float3(0.7, 0.55, 0.0), float3(1.0, 0.0, 0.0), saturate((d - 2.0) / 62.0));
-		else
-			preLit = lerp(float3(0.0, 0.55, 0.6), float3(0.0, 0.0, 1.0), saturate((-d - 2.0) / 62.0));
-	}
-#endif
-
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
 	// blend mask goes to NormalGlossiness.w, exactly as Lighting.hlsl's
 	// deferred tail encodes it for the temporal resolve.
-#ifdef SNOW_SHELL_DEFERRED
 	float alpha = coverageAlpha;
-#else
-	float alpha = ((ShellDebugData != 0 && ShellDebugData < 4) || ShellLODDebug != 0) ? 1.0 : coverageAlpha;
-#endif
 	float stochasticBlend = (screenNoise * screenNoise) < alpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
 	psout.Diffuse = float4(preLit, alpha);
-#	ifndef SNOW_LOD_HISTOGRAM
 	psout.MotionVectors = float4(motionVector, 0.0, alpha);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
 	// Albedo carries the diffuse lobe (Lighting's PBR tail writes the same),
@@ -3918,17 +2566,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
-#	endif
-
-	// Conservative depth clamp: where the shell falls just behind the rendered
-	// ground, pull its depth to just in front, so the z-fight/pinhole class
-	// loses at the source without moving geometry. Fires only within a short
-	// window behind the surface, and is skipped in debug views.
-	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
-	// terrain surface, so anything standing in the snow would be overdrawn.
-#	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
-#	endif
 
 	return psout;
 #endif  // !SNOW_SHELL_DEPTH_PREPASS
@@ -3978,51 +2615,14 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	return ShellShade(input);
 }
 #endif
-#endif  // !SNOW_LANE_CENSUS
+#endif  // !SNOW_S1_RESOLVE
 #endif
 
 #ifdef COMPUTESHADER
-// LOD shimmer probes: evaluates the ACTUAL mesh surface (warp, snapping,
-// ShellSurfaceZ) at world-anchored points. Probing the field at the probe XY
-// would miss the vertex hops entirely, since the pops come from vertices
-// resampling the field at snapped positions - so quad corners are rebuilt
-// exactly as the VS builds them. Anchored to a 512-unit-quantised camera XY,
-// which the CPU mirrors.
-RWStructuredBuffer<float> ProbeHeights : register(u0);
-
-// Per-vertex surface bake: one ShellVertexZ per base-grid vertex, placed
-// exactly as the tessellation VS places it, read back by the domain shader
-// at patch corners (SNOW_DS_BAKE). Rebuilt every frame - the surface depends
-// on the camera (descent and relief fade with distance) and on the bow
-// waves, so nothing here is worth tracking dirty.
-RWTexture2D<float4> ShellVertexBakeOut : register(u1);
-RWTexture2D<float2> ShellVertexBakeSlopeOut : register(u2);
-// ShellSurfaceZ before the descent and relief: the sun caster's height (SNOW_CAST_BAKED).
-RWTexture2D<float> ShellCastBakeOut : register(u3);
-
-#ifdef SNOW_BAKE_CS
-[numthreads(8, 8, 1)] void BakeCS(uint3 id : SV_DispatchThreadID)
-{
-	if (any(id.xy > GridDim))
-		return;
-	float2 gridLocal = ShellGridVertexLocal(id.xy);
-	float coverage;
-	float terrainHeight;
-	float surfaceZ = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
-	float z = ShellVertexZFrom(gridLocal, surfaceZ, coverage, terrainHeight);
-	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, gBakeDeformationTap);
-	// ShellFlags.y bit 1: the slope's inputs match its last store.
-	[branch] if ((ShellFlags.y & 2) == 0)
-		ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
-	ShellCastBakeOut[id.xy] = surfaceZ;
-}
-#endif
-
 #ifdef SNOW_TERRAIN_CUT_CS
 // TerrainWindowWet's builder: one WaterBareTexel per texel, run when the
 // terrain or the water window changes rather than in every terrain tap.
 RWTexture2D<float4> TerrainWetOut : register(u4);
-RWTexture2D<uint> TerrainPlainOut : register(u5);
 
 [numthreads(8, 8, 1)] void TerrainCutCS(uint3 id : SV_DispatchThreadID)
 {
@@ -4031,86 +2631,6 @@ RWTexture2D<uint> TerrainPlainOut : register(u5);
 	float4 texel = TerrainWindow.Load(int3(id.xy, 0));
 	texel.xyz = WaterBareTexel(texel.xyz, int2(id.xy));
 	TerrainWetOut[id.xy] = texel;
-
-	// The 4x4 block [t-1, t+2] holds every quad a tap within one texel of
-	// this quad reads; window-edge texels stay off.
-	uint plain = 0;
-	[branch] if (all(id.xy >= 1) && all(id.xy + 2 < TerrainDim))
-	{
-		int2 b = int2(id.xy) - 1;
-		float2 ref = WaterBareTexel(TerrainWindow.Load(int3(b, 0)).xyz, b).yz;
-		bool same = all(abs(ref) < 1e30);
-		[unroll] for (int j = 0; j < 4; j++)
-		{
-			[unroll] for (int i = 0; i < 4; i++)
-			{
-				int2 t = b + int2(i, j);
-				float2 yz = WaterBareTexel(TerrainWindow.Load(int3(t, 0)).xyz, t).yz;
-				same = same && all(asuint(yz) == asuint(ref));
-			}
-		}
-		plain = same ? 1 : 0;
-	}
-	TerrainPlainOut[id.xy] = plain;
 }
 #endif
-
-static const uint kProbeAzimuths = 24;
-static const uint kProbeRadii = 12;
-// Must match SnowDeformation.h kLODProbeRadius.
-static const float kProbeRadius[12] = { 1500, 2500, 3500, 5000, 6500, 8000, 10000, 12500, 15000, 18000, 21000, 24000 };
-static const float kProbeInvalid = 3.0e38;
-
-float2 SnappedVertexXY(float2 u)
-{
-	float2 centered = float2(WarpAxis(u.x), WarpAxis(u.y));
-	return GridOrigin + WarpedHalfSpan + GeomorphVertexXY(centered, u);
-}
-
-[numthreads(64, 1, 1)] void main(uint3 id : SV_DispatchThreadID) {
-	if (id.x >= kProbeAzimuths * kProbeRadii)
-		return;
-	uint az = id.x % kProbeAzimuths;
-	uint ri = id.x / kProbeAzimuths;
-
-	float2 anchor = floor(ShellCameraPosAdjust.xy / 512.0) * 512.0;
-	float ang = (float)az * (6.28318530 / kProbeAzimuths);
-	float2 probeXY = anchor + float2(cos(ang), sin(ang)) * kProbeRadius[ri];
-
-	// Locate the quad by unsnapped vertex units, then rebuild its corners
-	// exactly as the VS does (snapping moves them by up to half a ring step).
-	float2 center = GridOrigin + WarpedHalfSpan;
-	float2 u = float2(InverseWarpAxis(probeXY.x - center.x), InverseWarpAxis(probeXY.y - center.y));
-	float2 q = floor(u);
-	if (max(abs(q.x), abs(q.y)) >= (float)GridDim * 0.5 - 1.0) {
-		ProbeHeights[id.x] = kProbeInvalid;
-		return;
-	}
-
-	float2 p00 = SnappedVertexXY(q);
-	float2 p10 = SnappedVertexXY(q + float2(1, 0));
-	float2 p01 = SnappedVertexXY(q + float2(0, 1));
-	float2 p11 = SnappedVertexXY(q + float2(1, 1));
-
-	float cov, th;
-	float z00 = ShellSurfaceZ(p00 - GridOrigin, cov, th);
-	bool valid = th > -50000.0;
-	float z10 = ShellSurfaceZ(p10 - GridOrigin, cov, th);
-	valid = valid && th > -50000.0;
-	float z01 = ShellSurfaceZ(p01 - GridOrigin, cov, th);
-	valid = valid && th > -50000.0;
-	float z11 = ShellSurfaceZ(p11 - GridOrigin, cov, th);
-	valid = valid && th > -50000.0;
-	if (!valid) {
-		ProbeHeights[id.x] = kProbeInvalid;
-		return;
-	}
-
-	// Bilinear over the snapped quad. The rasterizer splits it into two
-	// triangles, but bilinear tracks every corner hop the same way; the
-	// temporal delta is what the meter measures, not the absolute surface.
-	float2 span = max(p11 - p00, 1.0);
-	float2 f = saturate((probeXY - p00) / span);
-	ProbeHeights[id.x] = lerp(lerp(z00, z10, f.x), lerp(z01, z11, f.x), f.y);
-}
 #endif

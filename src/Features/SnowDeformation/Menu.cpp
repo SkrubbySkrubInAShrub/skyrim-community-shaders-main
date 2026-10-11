@@ -297,9 +297,13 @@ void SnowDeformation::DrawSettings()
 			ImGui::EndDisabled();
 			if (auto _ttShelterAngle = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shelter_drift_angle_tooltip"), "How far from straight down the snow blows in, which sets how much cover a spot needs around it to count as enclosed. Higher = snow reaches further in, so only deep cover shelters; lower = a smaller roof is enough. Default 30."));
-			ImGui::Checkbox(T(TKEY("shell_bare_ground_cull"), "Bare-Ground Cull"), &settings.ShellBareGroundCull);
-			if (auto _ttBare = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_bare_ground_cull_tooltip"), "Stops drawing the snow layer over ground that has no snow class under it at all - sand, riverbed, road, seafloor. There the layer sits below the terrain and cannot produce a pixel, so skipping it is free. The test is the -8 floor, the depth ground reaches only when every texture under it is a non-snow class, so the ramp that climbs into a snow layer is never cut and edges are unaffected. Leave on."));
+			ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
+			if (auto _ttWcs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second."));
+
+			ImGui::SliderFloat(T(TKEY("workspace_clearing_height"), "Workspace Clearing Height"), &settings.TrampleZoneHeight, 0.0f, 100.0f, "%.0f%%");
+			if (auto _ttWch = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("workspace_clearing_height_tooltip"), "Snow height remaining in a workspace bowl, as a percent of the surrounding depth. 0 melts to the floor, 100 disables the clearing. Applies within a second."));
 
 			ImGui::SliderFloat(T(TKEY("object_meet_band"), "Object Meeting Blend"), &settings.ObjectMeetBand, 0.0f, 64.0f, "%.0f units");
 			if (auto _ttMeet = Util::HoverTooltipWrapper())
@@ -760,42 +764,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("snow_borders"), "Snow Borders"), ImGuiTreeNodeFlags_Framed)) {
-		if (auto _ttBorders = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
-		ImGui::Checkbox(T(TKEY("border_dithering"), "Border Dithering"), &settings.SnowBorderDithering);
-		if (auto _ttBd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("border_dithering_tooltip"), "Scatters a thin dusting of snow just beyond the committed edge onto the ground, like windblown spill. Off = a clean binary cut. Border Fade controls how far the dust reaches."));
-
-		ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
-		if (auto _ttWcs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second."));
-
-		ImGui::SliderFloat(T(TKEY("workspace_clearing_height"), "Workspace Clearing Height"), &settings.TrampleZoneHeight, 0.0f, 100.0f, "%.0f%%");
-		if (auto _ttWch = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("workspace_clearing_height_tooltip"), "Snow height remaining in a workspace bowl, as a percent of the surrounding depth. 0 melts to the floor, 100 disables the clearing. Applies within a second."));
-
-		ImGui::PushID("snow_borders");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("border_noise"), "Border Noise"), &settings.SnowBorderNoise, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttBn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_noise_tooltip"), "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam."));
-
-			ImGui::SliderFloat(T(TKEY("border_smoothness"), "Border Smoothness"), &settings.SnowBorderSmoothness, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttBs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_smoothness_tooltip"), "Widens the depth ramp between neighboring classes so deep snow meets shallow ground in a slope instead of a ravine wall."));
-
-			ImGui::SliderFloat(T(TKEY("border_fade"), "Border Fade"), &settings.SnowBorderFade, 0.0f, 100.0f, "%.0f%%");
-			if (auto _ttBf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_fade_tooltip"), "How much of the snow's edge takes part in the height contest against the ground - higher values make the scattered dust past the edge broader and more visible. Border Dithering must be on for the dust itself."));
-
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
-
-		ImGui::TreePop();
-	}
-
 	if (ImGui::TreeNodeEx(T(TKEY("snow_trenches"), "Snow Trenches"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttTd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_trenches_tooltip"), "Everything about the ground being walked through: how long a trench is remembered, how wide and how sharply it cuts, and the look of the disturbed snow around it. Untouched snow is never affected."));
@@ -817,7 +785,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 		if (auto _ttTess = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on. Off costs nothing but leaves every trench as angular as the grid beneath it."));
+			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow and the road trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
 
 		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
 			ClearTrenchStore("the Remember Trenches toggle");
@@ -933,10 +901,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
 			if (auto _ttSharp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
-
-			ImGui::SliderFloat(T(TKEY("trench_floor"), "Trench Floor"), &settings.TrenchFloorFraction, 0.0f, 1.0f, "%.2fx");
-			if (auto _ttTf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_floor_tooltip"), "Snow left under a fully trampled trench, as a fraction of the snow depth there: 0.33 keeps a third, so walking through 30 units of snow leaves 10 around your foot instead of a canyon to the ground, and road snow never wears through to the road. 0 carves to the terrain."));
 
 			ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
 			if (auto _ttFloat = Util::HoverTooltipWrapper())
@@ -1670,110 +1634,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_lod"), "Distant Snow & LOD"))) {
-			{
-				std::string lodModes;
-				lodModes += T(TKEY("lod_debug_off"), "Off");
-				lodModes += '\0';
-				lodModes += T(TKEY("lod_debug_heatmap"), "Depth Delta Heatmap");
-				lodModes += '\0';
-				lodModes += T(TKEY("lod_debug_rings"), "Vertex Spacing Bands");
-				lodModes += '\0';
-				lodModes += T(TKEY("lod_debug_provenance"), "Terrain Data Provenance");
-				lodModes += '\0';
-				lodModes += T(TKEY("lod_debug_fine_delta"), "Land-Exact Delta");
-				lodModes += '\0';
-				ImGui::Combo(T(TKEY("lod_debug_view"), "Debug View"), &lodDebugView, lodModes.c_str());
-				if (auto _ttLod = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("lod_debug_view_tooltip"), "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Band View: the shell's VERTEX SPACING, not its depth - gray 8 units, yellow 16, green 32, cyan 64, blue 128 (the landscape's own vertex spacing), magenta coarser still. Each band brightens toward its outer edge. The bands are world-anchored: they must sit still on the ground as you move, and stripes that crawl mean the band table has lost its lattice alignment. Provenance: green = baked terrain data, red sheet = no data (unvisited cells)."));
-
-				// Diagnostics below use plain text by existing convention (no i18n).
-				if (lodDebugView == 1) {
-					static const char* kBandLabels[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
-					static const char* kBucketLabels[kLODHistBuckets] = { "<-32", "-32..-8", "-8..-2", "+-2", "2..8", "8..32", "32..128", ">128" };
-					if (ImGui::BeginTable("##lodhist", kLODHistBuckets + 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
-						ImGui::TableNextRow();
-						ImGui::TableNextColumn();
-						ImGui::Text("units");
-						ImGui::TableNextColumn();
-						ImGui::Text("pixels");
-						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
-							ImGui::TableNextColumn();
-							if (bucketI == 3)
-								ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%s", kBucketLabels[bucketI]);
-							else
-								ImGui::Text("%s", kBucketLabels[bucketI]);
-						}
-						for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
-							ImGui::TableNextRow();
-							ImGui::TableNextColumn();
-							ImGui::Text("%s", kBandLabels[bandI]);
-							uint64_t bandTotal = 0;
-							for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI)
-								bandTotal += lodHistData[bandI * kLODHistBuckets + bucketI];
-							// Raw sample size: percent-only misleads when a band
-							// holds a handful of pixels.
-							ImGui::TableNextColumn();
-							ImGui::Text("%llu", (unsigned long long)bandTotal);
-							for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
-								ImGui::TableNextColumn();
-								const float pct = bandTotal ? 100.0f * lodHistData[bandI * kLODHistBuckets + bucketI] / bandTotal : 0.0f;
-								if (bucketI == 3 && pct >= 0.05f)
-									ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%.1f%%", pct);
-								else
-									ImGui::Text("%.1f%%", pct);
-							}
-						}
-						ImGui::EndTable();
-					}
-					WrapTextF("Rows: camera distance bands. Columns: shell minus rendered ground, world units (share of band pixels).");
-				}
-
-				ImGui::Checkbox(T(TKEY("lod_no_far_pad"), "A/B: No Far Height Pad"), &lodDebugNoFarPad);
-				if (auto _ttNoPad = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("lod_no_far_pad_tooltip"), "Disables the far-field height pad (the neighbour-max plus ridge pad past 3000 units), which scales with VIEWING DISTANCE and so moves distant ground as you walk toward it. Off is the shipped behaviour. Expect pinholes to come back if the pad was the thing hiding them - read the shimmer meter, not the holes."));
-
-				ImGui::Checkbox(T(TKEY("lod_no_data_morph"), "A/B: No Data Morph"), &lodDebugNoDataMorph);
-				if (auto _ttNoMorph = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("lod_no_data_morph_tooltip"), "Disables the coarse-lattice data morph, so every shell vertex reads its own fine-lattice terrain height. Off is the shipped behaviour. The morph blends height by ring index, which is a camera-distance term, so this is the other half of the distant up/down test."));
-
-				ImGui::Checkbox(T(TKEY("lod_shimmer"), "Far-Field Shimmer Meter"), &lodShimmerMeter);
-				if (auto _ttShimmer = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("lod_shimmer_tooltip"), "Evaluates the shell mesh surface at fixed world-anchored probe rings each frame and plots the frame-to-frame height change per distance band. Move the camera: spikes are vertex hops (the distant up/down shifting). Near-zero everywhere = stable far field."));
-				if (lodShimmerMeter) {
-					static const char* kShimmerBands[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
-					if (ImGui::Button("Reset Shimmer Window")) {
-						for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
-							lodShimmerRunMax[bandI] = 0.0f;
-							lodShimmerRunSum[bandI] = 0.0;
-							lodShimmerRunCnt[bandI] = 0;
-							lodShimmerRunHops[bandI] = 0;
-						}
-						lodShimmerRunFrames = 0;
-						lodSeamChanges = 0;
-						lodWindowRebuilds = 0;
-					}
-					ImGui::SameLine();
-					WrapTextF("%u frames measured", lodShimmerRunFrames);
-					for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
-						const double runAvg = lodShimmerRunCnt[bandI] ? lodShimmerRunSum[bandI] / (double)lodShimmerRunCnt[bandI] : 0.0;
-						char overlay[128];
-						snprintf(overlay, sizeof(overlay), "%s: PEAK %.2f  mean %.3f  hops %u  (now %.2f, %u valid)",
-							kShimmerBands[bandI], lodShimmerRunMax[bandI], runAvg, lodShimmerRunHops[bandI],
-							lodShimmerMax[bandI], lodShimmerValid[bandI]);
-						char plotId[16];
-						snprintf(plotId, sizeof(plotId), "##shim%u", bandI);
-						ImGui::PlotLines(plotId, lodShimmerHistoryBuf[bandI], kLODShimmerHistory, lodShimmerHistoryIdx,
-							overlay, 0.0f, 25.0f, ImVec2(0.0f, 40.0f));
-					}
-					WrapTextF("PEAK/mean/hops accumulate since Reset - screenshot THOSE, not 'now'. Pause frames publish nothing now, so an all-zero row means a still camera, never a stable shell.");
-					WrapTextF("Discrete events since reset: seam square %u, terrain window rebuilds %u", lodSeamChanges, lodWindowRebuilds);
-				}
-			}
-
-			ImGui::TreePop();
-		}
-
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell"), "Landscape Shell"))) {
 			if (effectCost.running) {
 				ImGui::BeginDisabled();
@@ -1791,38 +1651,13 @@ void SnowDeformation::DrawSettings()
 				for (uint32_t i = 0; i < EffectCostProbe::kEffects; i++)
 					WrapTextF("  %-28s %6.3f ms", EffectCostProbe::kNames[i], effectCost.withMs[i] - effectCost.withoutMs[i]);
 			}
-			ImGui::Checkbox(T(TKEY("landscape_snow"), "Landscape Snow"), &landscapeSnow);
-			if (auto _ttLandscapeSnow = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("landscape_snow_tooltip"), "Experimental: raises the game's own landscape to the ground snow's surface, trenches, berms and drifts included, in every pass that draws it, shadows too. The raised ground wears its own textures; Snow on Landscape below draws the ground snow on it instead of on the ground shell."));
-			if (landscapeSnow) {
-				ImGui::Indent();
-				ImGui::Checkbox(T(TKEY("landscape_shade"), "Snow on Landscape"), &landscapeShade);
-				if (auto _ttLandscapeShade = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("landscape_shade_tooltip"), "The ground snow is drawn on the landscape's own meshes instead of the ground shell's grid: the same snow and look, with its shadows cast by the raised landscape. Overrides Hide Ground Shell."));
-				if (landscapeShade) {
-					ImGui::Indent();
-					ImGui::Checkbox(T(TKEY("landscape_blend"), "Land-Blended Edges"), &landscapeBlend);
-					if (auto _ttLandscapeBlend = Util::HoverTooltipWrapper())
-						ImGui::Text("%s", T(TKEY("landscape_blend_tooltip"), "Where the land is painted part snow, part ground, the land's own height blend decides which shows, as when two landscape textures meet: snow in the hollows, stones through. The snow deepens only where the land is nearly all snow, and trenches reach the ground. Off: the ground shell's own edge."));
-					if (landscapeBlend) {
-						ImGui::SliderFloat(T(TKEY("landscape_blend_start"), "Deep Snow From"), &landscapeBlendStart, 0.5f, 1.0f, "%.2f");
-						if (auto _ttLandscapeBlendStart = Util::HoverTooltipWrapper())
-							ImGui::Text("%s", T(TKEY("landscape_blend_start_tooltip"), "How much of the land's paint must be snow before the snow starts to deepen (1 = all of it). Below it the snow is a thin layer the land's blend breaks up. Lower keeps deep snow on more mixed ground."));
-					}
-					ImGui::Unindent();
-				}
-				ImGui::Checkbox(T(TKEY("landscape_hide_shell"), "Hide Ground Shell"), &landscapeHideShell);
-				if (auto _ttLandscapeHide = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("landscape_hide_shell_tooltip"), "Hides the ground shell and its shadows so the raised landscape can be seen on its own. Road snow and object snow stay."));
-				WrapTextF("  %s", LandscapeSnowStatus().c_str());
-				ImGui::Unindent();
-			}
+			ImGui::SliderFloat(T(TKEY("landscape_blend_start"), "Deep Snow From"), &landscapeBlendStart, 0.5f, 1.0f, "%.2f");
+			if (auto _ttLandscapeBlendStart = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("landscape_blend_start_tooltip"), "How much of the land's paint must be snow before the snow starts to deepen (1 = all of it). Below it the snow is a thin layer the land's blend breaks up. Lower keeps deep snow on more mixed ground."));
+			WrapTextF("  %s", LandscapeSnowStatus().c_str());
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("ground_lift_debug_tooltip"), "Measurement aid: the ground snow rises onto the tops of nearby objects again, the way it did to meet the retired raised object shell - the sheets across doorways and along wall tops. Off, the ground snow keeps its own height and objects stand in it; roofs and walkways still keep the ground beneath them bare."));
-			ImGui::Checkbox(T(TKEY("shell_march_bicubic"), "Bicubic March"), &shellMarchBicubicRestored);
-			if (auto _ttMarch = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));
 
 
 			if (ImGui::Checkbox(T(TKEY("debug_log_water_planes"), "Log Water Planes"), &debugLogWaterPlanes))
@@ -1832,21 +1667,11 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("debug_water_cut_disabled"), "Disable Water Cut"), &debugWaterCutDisabled);
 			if (auto _ttWater = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_water_cut_disabled_tooltip"), "A/B: lets the landscape shell run on under the water again. Off, ground under a body of water counts as a non-snow texture class, so the shore gets the same border as any texture seam (Border Noise, Border Smoothness, dithering)."));
+				ImGui::Text("%s", T(TKEY("debug_water_cut_disabled_tooltip"), "A/B: lets the ground snow run on under the water again. Off, ground under a body of water counts as a non-snow texture class, so the shore gets the same border as any texture seam."));
 
 			ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Bilinear Terrain Height"), &shellBilinearHeight);
 			if (auto _ttBilin = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_border_debug"), "Border Debug Plane"), &shellBorderDebug);
-			if (auto _ttBdbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_border_debug_tooltip"), "False-color plane of the border fields: dark red = designed bare (below -0.5), orange = slice ribbon zone (-0.5..1), green = the cut zone (1..3, white line at the cut contour), cyan/blue = deeper snow. Brightness = snow grain; magenta grid = land grain data present at that pixel."));
-
-			ImGui::Checkbox(T(TKEY("shell_data_debug"), "Data Debug Plane"), &shellDataDebug);
-
-			if (auto _ttPlane = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_main_viewport_range_disabled"), "Decal Viewport Depth Range"), &shellMainViewportRangeDisabled);
@@ -1860,29 +1685,9 @@ void SnowDeformation::DrawSettings()
 
 
 
-			ImGui::Checkbox(T(TKEY("shell_depth_clamp_disabled"), "Disable Depth Clamp"), &shellDepthClampDisabled);
-			if (auto _ttClampDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_depth_clamp_disabled_tooltip"), "Measurement aid, demoted from a setting: drops the shell's SV_DepthLessEqual export outright - one no-export draw, early-Z everywhere, and NO far-field clamp, so distant z-fighting returns while it is on. With the split draw on by default there is no configuration where this is a good trade; it exists to A/B what the clamp costs. Recompiles the shell PS on toggle."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_depth_prepass_disabled"), "Disable Depth Prepass"), &shellDepthPrepassDisabled);
-			if (auto _ttPrepass = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_depth_prepass_disabled_tooltip"), "Measurement aid: returns the tessellated shell to its earlier near/far split draws. With the prepass on, a cheap depth-only draw decides which pixels the shell owns and the full shader then runs once per owned pixel instead of once per rasterised fragment - fragments hidden by the scene, by the shell's own slopes, or cut by the alpha test never shade. Same depth, same alpha decision, same look; hold the camera still and read the Shell row and the pipeline statistics."));
-
-
 			ImGui::Checkbox(T(TKEY("shell_distant_exclusions_disabled"), "Disable Distant Clearings"), &shellDistantExclusionsDisabled);
 			if (auto _ttExclusionField = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_distant_exclusions_disabled_tooltip"), "Comparison aid: gates the wide exclusion field off, so campfire, workspace, bedroll and doorway clearings again stop at the object height window (about 57 m) and snow closes over them beyond it. Shelter under roofs and tents is unaffected either way - it needs the near window's geometry render."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_far_tess_disabled"), "Disable Far Relief Tessellation"), &shellFarTessDisabled);
-			if (auto _ttFarTess = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_far_tess_disabled_tooltip"), "A/B: beyond about 1,900 units the shell's squares are 64 and 128 units wide and span several of the ground's own squares, so a straight span across a convex slope dips below the ground - the distant holes. With this off, the shell checks each far square against the real ground and subdivides the ones where the ground bulges above the span, so every added vertex sits exactly on the ground; flat ground costs nothing. On restores the plain squares."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_frustum_cull_disabled"), "Disable Frustum Cull"), &shellFrustumCullDisabled);
-			if (auto _ttFrustum = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_frustum_cull_disabled_tooltip"), "Measurement aid: builds the whole snow grid every frame, including the three quarters of it that lie outside the view. Snow you cannot see draws no pixels either way - the card throws those triangles away - so skipping them earlier changes nothing on screen, and it saves the subdivision and the map sampling they would have cost. Shadows are unaffected: snow behind the camera is drawn separately from the sun's point of view and is never skipped. Hold the camera still and read the Shell row and the pipeline statistics."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_land_height_disabled"), "Disable Land-Exact Height"), &shellLandHeightDisabled);
@@ -1890,33 +1695,11 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_land_height_disabled_tooltip"), "A/B: returns the snow shell to standing on a straight line between the terrain's 128-unit height samples. The game itself renders the ground as a smooth curve through those samples at four times the detail, and on steep ground the curve rises above the line by more than the snow is deep - the holes where rock shows through. With this off, the shell stands on the ground exactly as the game draws it."));
 
 
-			ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Disable Split Draw"), &shellSplitDisabled);
-			if (auto _ttSplit = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
-
-
 			ImGui::Checkbox(T(TKEY("shell_undulation_bake_disabled"), "Disable Undulation Bake"), &shellUndulationBakeDisabled);
 			if (auto _ttUndBake = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_undulation_bake_disabled_tooltip"), "Measurement aid: returns both shells to evaluating the dune field's two noise octaves live - one eval per vertex and march tap, four per shaded pixel - instead of reading the baked map. The snow looks the same; Shell and Object Snow get slower. Hold the camera still and toggle to read the trade."));
 
 
-			ImGui::Checkbox(T(TKEY("shell_vertex_bake_disabled"), "Disable Vertex Bake"), &shellVertexBakeDisabled);
-			if (auto _ttBake = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_vertex_bake_disabled_tooltip"), "Measurement aid: returns the tessellated shell to evaluating its surface live at every vertex. With the bake on, a compute pass evaluates each base-grid vertex once per frame and the domain shader reads the result by index - the same function at full float precision, so the surface is bit-identical - while vertices that tessellation adds inside a patch stay live. Hold the camera still and read the Shell row plus the ShellVertexBake row against the Shell row alone."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Exclusion Debug Plane"), &shellExclusionDebug);
-			if (auto _ttExcl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_exclusion_debug_tooltip"), "Paints the exclusion channels on the debug plane: red = drift bank lift, green = melt fraction (fires, workspaces, sheltered ground), blue = door suppression. Black = untouched. The Data Debug Plane wins when both are on."));
-
-			ImGui::Checkbox(T(TKEY("shell_flat_ds_debug"), "Flat Domain Shader"), &shellFlatDSDebug);
-			if (auto _ttFlatDS = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_flat_ds_debug_tooltip"), "Measurement aid, WRONG-LOOKING BY DESIGN: the tessellated shell's domain shader returns terrain height plus class depth with none of the field work (deformation, berms, undulation, bow wave, relief), so trenches and all surface detail vanish while it is on. Hold the camera still and read the Shell row: the drop is an upper bound on what the vertex stages cost, which decides whether evaluating the surface once per vertex is worth building. Tessellation must be on."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_tess_diagonal_unflip"), "Unflip Tessellated Diagonal"), &shellTessDiagonalUnflip);
-			if (auto _ttDiag = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_unflip_tooltip"), "A/B for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell's untessellated patches take the same split. Tick to restore the old, opposite split, which crossed the ground's; it shows as a checkerboard of sag on the 32-unit band around 1,600-1,900 units in the Depth Delta Heatmap."));
 			ImGui::SliderFloat(T(TKEY("shell_tess_target_px"), "Tessellation Target"), &shellTessTargetPx, 0.0f, 16.0f, shellTessTargetPx > 0.0f ? "%.0f px" : "off");
 			if (auto _ttTessTarget = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "Trampled snow, on the ground and on roads: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each (a road's far edges at a quarter of that). Default 16 px, paired with the churn parallax (see Disable Churn Parallax); off is the old distance-only rule. Lower keeps more real relief at a higher cost; trench and berm shapes hold at every setting. Measured on a trampled battlefield at 1720x720: 16 px with parallax took the snow shell from 3.34 to 2.11 ms."));
@@ -1925,19 +1708,9 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_churn_parallax_off_tooltip"), "A/B for trampled snow, on the ground and on roads. By default the churn lumps and berm clods are drawn by a short ray march in the pixel shader, not by geometry, so they need no small triangles; tick this to put them back into the geometry. Seen from above the two match. At low, grazing views the geometry also gives the lumps their outlines, which the march cannot; with the default 16 px Tessellation Target that detail is mostly gone either way. Trench and berm shapes are real geometry in both."));
 
 
-			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);
-			if (auto _ttGridIdx = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read Shadows - Ground (and the Ground - Shell rows with Tessellation off)."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_old_union_jack"), "Old Union-Jack Grid"), &shellOldUnionJack);
-			if (auto _ttUJ = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_old_union_jack_tooltip"), "A/B for the non-tessellated grid: draws with the previous alternating diagonals, which did not follow the ground's own split, instead of the land-matched index buffer."));
-
-
 			ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Pipeline Statistics"), &shellPipelineStatsEnabled);
 			if (auto _ttStats = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic. With a depth prepass on, a line counts all of that pass's draws - the prepass's own cheap invocations and the fullscreen fills' samples are in there - so read the Shell and StaticsShell profiler rows as the verdict and these lines as the explanation."));
+				ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the ground snow's draws (when its prepass runs late, in DrawShell) and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade. The DS/HS/VS counts check the geometry-stage arithmetic. A line counts all of that pass's draws - the prepass's own cheap invocations and the fullscreen passes' samples are in there - so read the profiler rows as the verdict and these lines as the explanation."));
 
 			if (shellPipelineStatsEnabled) {
 				auto statsLine = [](const char* a_label, const ShellStatsResult& a_r) {
@@ -1952,7 +1725,7 @@ void SnowDeformation::DrawSettings()
 						a_r.rasterizedPrimitives / 1e6,
 						a_r.vsInvocations / 1e6, a_r.hsInvocations / 1e6, a_r.dsInvocations / 1e6);
 				};
-				statsLine("Shell grid", shellStatsLast);
+				statsLine("Ground snow", shellStatsLast);
 				statsLine("Object snow", staticsStatsLast);
 				statsLine("Trench patch (in object snow)", patchStatsLast);
 			}
@@ -1971,16 +1744,12 @@ void SnowDeformation::DrawSettings()
 			if (ImGui::Button(T(TKEY("land_tri_probe"), "Probe Landscape Triangulation")))
 				landTriProbeArmed = true;
 			if (auto _ttLandProbe = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("land_tri_probe_tooltip"), "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow shell must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log."));
+				ImGui::Text("%s", T(TKEY("land_tri_probe_tooltip"), "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow's land-exact height must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log."));
 
 			if (landTriProbeArmed)
 				WrapText("probe: armed, waiting for a landscape draw");
 			else if (!landTriProbeResult.empty())
 				WrapText(landTriProbeResult.c_str());
-
-			ImGui::Checkbox(T(TKEY("shell_sss_debug"), "SSS Gate Debug"), &shellSSSDebug);
-			if (auto _ttSssDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
 
 			ImGui::Checkbox(T(TKEY("shadow_atlas_live_read_off"), "Turn Live Shadow Atlas Reading OFF"), &shadowAtlasLiveReadOff);
 			if (auto _ttAtlasLive = Util::HoverTooltipWrapper())
@@ -1988,30 +1757,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("point_shadow_live_read_off"), "Turn Live Local Shadow Reading OFF"), &pointShadowLiveReadOff);
 			if (auto _ttPointLive = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("point_shadow_live_read_off_tooltip"), "A/B: the snow normally reads the shadow maps of torches, hearths and other shadow-casting local lights where the game drew them. Tick to copy each light's map every frame instead, as older builds did (the Shadows - Local Atlas Copy row: 128 MB per light a frame at 8192, and a 512 MB copy held). If local-light shadows on snow look wrong somewhere and ticking this fixes it, something redraws those maps before the snow reads them."));
-			ImGui::Checkbox(T(TKEY("shell_caster_full_grid"), "Cast Shadows from the Whole Grid (A/B)"), &shellCasterFullGrid);
-			if (auto _ttCasterFull = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_caster_full_grid_tooltip"), "A/B: the snow's sun-shadow caster normally draws only the inner 5 km of the 17 km grid, because its shader discards everything past 4.9 km from the grid centre anyway. Tick to draw the whole grid again. Same shadows either way; the Shadows - Ground row is the difference."));
-			ImGui::Checkbox(T(TKEY("shell_shadow_cast_off"), "Skip Shell Sun Shadows (A/B)"), &shellShadowCastDebugOff);
-			if (auto _ttCastOff = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_shadow_cast_off_tooltip"), "A/B: the snow shell is not drawn into the sun shadow cascades this frame. Nothing else changes. If a shadow on an object vanishes with this on, the shell cast it."));
 			ImGui::Checkbox(T(TKEY("shell_caster_split"), "Split Caster Row"), &shellCasterSplitDebug);
 			if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the snow shadow rows (Shadows - Ground, Shadows - Trench Patch) become one row per shadow cascade, so the near and far cascades can be read apart. Their sum is the pair of rows. The profiler cannot nest passes, which is why the two rows go away while this is on."));
-			ImGui::Checkbox(T(TKEY("shell_cast_bake_off"), "Evaluate the Shadow Caster Live (A/B)"), &shellCastBakeOff);
-			if (auto _ttCastBake = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_cast_bake_off_tooltip"), "A/B: the snow's sun-shadow caster normally reads the surface height the shell's vertex bake worked out last frame, which nothing has changed since, instead of working it out again in every shadow cascade. Tick to work it out live again. Same shadows either way; the Shadows - Ground row is the difference. The live path is also taken by itself whenever the bake did not run (Tessellation off) or the grid has moved since."));
-			if (ImGui::Checkbox(T(TKEY("shell_cast_bake_check"), "Shadow Caster Bake Check"), &shellCastBakeCheck) && shellCastBakeCheck) {
-				castCheckMismatches = 0;
-				castCheckVertices = 0;
-				castCheckFrames = 0;
-				for (auto& issued : castCheckIssued)
-					issued = false;
-			}
-			if (auto _ttCastCheck = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_cast_bake_check_tooltip"), "Proof for the caster bake: the caster works the surface out live as well and counts every vertex whose numbers differ from the baked ones by a single bit. The count below must stay at zero. Needs Direct3D 11.1 hardware; costs the live work on top while on."));
-			if (shellCastBakeCheck)
-				WrapTextDisabledF("Caster bake %s; %llu mismatching of %llu vertices checked over %u frames", shellCastBakedLast ? "in use" : "not in use this frame",
-					(unsigned long long)castCheckMismatches, (unsigned long long)castCheckVertices, castCheckFrames);
+				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the road snow's shadow row (Shadows - Trench Patch) becomes one row per shadow cascade, so the near and far cascades can be read apart. Their sum is the row. The profiler cannot nest passes, which is why the row goes away while this is on."));
 			ImGui::Checkbox(T(TKEY("screen_rects_off"), "Full-Target Screen Copies (A/B)"), &screenRectsOff);
 			if (auto _ttScreenRects = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("screen_rects_off_tooltip"), "A/B: the copies of the game's Masks target and depth, and the depth sync into Terrain Blending's copies, normally cover only the rectangle the frame was rendered into (with upscaling it is a corner of the screen-sized targets) and skip the Masks copy when no snow draws. Tick to copy and sync the whole targets every frame again. Same image either way; the Ground - Masks Copy, Depth Copy and Depth Sync rows are the difference."));
@@ -2027,25 +1775,9 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
 
 
-			ImGui::Checkbox(T(TKEY("shell_vertex_bake_check"), "Vertex Bake Mismatch View"), &shellVertexBakeCheck);
-			if (auto _ttBakeChk = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_vertex_bake_check_tooltip"), "Proof view for the vertex bake: the domain shader evaluates every baked corner live as well and lifts any vertex whose bits differ by 50 units, so a mismatch shows as an unmissable spike. A clean shell everywhere is the bit-identity guarantee, verified rather than assumed. Costs the live evaluation on top of the bake while on."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_wall_debug"), "Wall Material Debug"), &shellWallDebug);
-			if (auto _ttWallDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_wall_debug_tooltip"), "Renders the shell's raw snow texture unlit, on the real geometry - no sun, shadows, glints or marches; red wash = how much the side projection owns the pixel. Strafe past a trench wall in this view: if the wall still shifts HERE the texture path is guilty; if this view is rock-solid, a lighting term is."));
-
-			ImGui::Checkbox(T(TKEY("shell_trample_debug"), "Trampled Area View"), &shellTrampleDebug);
-			if (auto _ttTrampleDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_trample_debug_tooltip"), "Landscape shell only, on the real geometry: how trampled the ground around each pixel reads. Blue = a lone trail or open snow, red = worked in every direction, green = how much of the Trampled Ground settings applies there. The two white contours are the ends of the bracket below. A single trail must stay blue with no green; the middle of a trampled area must go red and green."));
 			ImGui::Checkbox(T(TKEY("trample_freeze"), "Trampled Area: Freeze Field"), &debugTrampleFreeze);
 			if (auto _ttTrampleFz = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trample_freeze_tooltip"), "Stops rebuilding the trampled-area field, so it keeps what it last held. If the view above still flickers while this is on, the flicker is in how the view is drawn, not in the field; if it stops, the field itself is changing."));
-
-			ImGui::Checkbox(T(TKEY("shell_edge_height_debug"), "Edge Height Debug"), &shellEdgeHeightDebug);
-			if (auto _ttEdgeDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_edge_height_debug_tooltip"), "Landscape shell only, on the real geometry with the real edge cut: how far the drawn sheet stands above the ground under it. Black under 0.5 units, green to 2, yellow to 4, orange to 8, red beyond; the white line is 1.5 units, where the edge is meant to commit. Read the colour of the LAST pixels at a border: green means the edge sits on the ground, orange or red means it hovers."));
+				ImGui::Text("%s", T(TKEY("trample_freeze_tooltip"), "Stops rebuilding the trampled-area field, so it keeps what it last held. If trampled snow still flickers while this is on, the flicker is not in the field; if it stops, the field itself is changing."));
 
 			WrapTextF("Exclusion zones: %u, workspace clearings: %u, sealed containers: %u (Survival heat list %s)",
 				statExclusionCount, statTrampleCount, statSealedCount, survivalHeatSources ? "found" : "absent");
@@ -2402,14 +2134,11 @@ void SnowDeformation::DrawSettings()
 			case EarlyPrepass::NotDrawing:
 				joinState = T(TKEY("shell_join_not_drawing"), "Depth prepass join: not this frame (no ground snow or a new render size)");
 				break;
-			case EarlyPrepass::DebugView:
-				joinState = T(TKEY("shell_join_debug_view"), "Depth prepass join: off while a debug view is shown");
-				break;
 			case EarlyPrepass::NeedsTerrainBlending:
 				joinState = T(TKEY("shell_join_needs_tb"), "Depth prepass join: needs Terrain Blending");
 				break;
 			case EarlyPrepass::Unavailable:
-				joinState = T(TKEY("shell_join_unavailable"), "Depth prepass join: unavailable (tessellation, vertex bake or depth prepass off, or a shader failed)");
+				joinState = T(TKEY("shell_join_unavailable"), "Depth prepass join: unavailable (a shader failed, or no landscape capture this frame)");
 				break;
 			default:
 				break;

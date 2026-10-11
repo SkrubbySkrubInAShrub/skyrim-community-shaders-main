@@ -128,10 +128,10 @@ bool SkinSssPixel(uint2 p, out float a_depth)
 		BlendedDepth[p] = SavedDepth[p];
 }
 
-// Shell prepass fill: turns the prepass's raster-depth colour target into
-// the shading pass's private depth buffer (fullscreen triangle, depth
-// ALWAYS + write). Pixels the prepass did not win hold the clear value 0,
-// which no shell fragment can equal, so the shading pass's EQUAL test is a
+// Prepass fill: turns a prepass's raster-depth colour target into a private
+// depth buffer (fullscreen triangle, depth ALWAYS + write). Pixels the prepass
+// did not win hold the clear value 0, which no fragment can equal, so a
+// shading pass's EQUAL test (or the ground's deferred LESS at z 0) is a
 // hardware early-Z that admits exactly the pixels the prepass wrote.
 Texture2D<float> FillSource : register(t9);
 
@@ -140,14 +140,6 @@ float4 FillVS(uint vertexID : SV_VertexID) : SV_Position
 	float2 uv = float2((vertexID << 1) & 2, vertexID & 2);
 	return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 }
-
-#ifdef FILL_VISIBLE_PATCHES
-// The prepass's winning patch per pixel (+1, 0 = none; bit 31 = every hull
-// factor 1), folded into one flag per patch for the shading pass: 1 flat,
-// 2 tessellated, 0 not visible.
-Texture2D<uint> FillPatch : register(t61);
-RWStructuredBuffer<uint> VisiblePatchesOut : register(u1);
-#endif
 
 #ifdef FILL_PRE_SNOW
 // The skins' first fill also leaves the pre-snow depth for DepthSync: off the
@@ -178,11 +170,6 @@ float FillPS(float4 pos : SV_Position) : SV_Depth
 #else
 float FillPS(float4 pos : SV_Position) : SV_Depth
 {
-#	ifdef FILL_VISIBLE_PATCHES
-	const uint patch = FillPatch.Load(int3(pos.xy, 0));
-	[branch] if (patch != 0)
-		VisiblePatchesOut[(patch & 0x7FFFFFFF) - 1] = (patch >> 31) != 0 ? 1 : 2;
-#	endif
 	return FillSource.Load(int3(pos.xy, 0));
 }
 #endif
@@ -613,43 +600,6 @@ groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
 		SkinArgs.Store(argBase, total);
 		SkinArgs.Store(argBase + 4, total > 0 ? 1 : 0);
 		SkinArgs.Store(argBase + 8, b.ScratchBase);
-	}
-}
-#endif
-
-#ifdef PATCH_LIST_CS
-// The shading pass's two patch lists from the visible flags. The indirect
-// argument buffers' vertex counts are the running totals, so the returned
-// old count is the slot.
-StructuredBuffer<uint> VisibleIn : register(t60);
-RWStructuredBuffer<uint> FlatPatchesOut : register(u0);
-RWStructuredBuffer<uint> TessPatchesOut : register(u1);
-RWByteAddressBuffer FlatArgs : register(u2);
-RWByteAddressBuffer TessArgs : register(u3);
-
-[numthreads(64, 1, 1)] void PatchListCS(uint3 id : SV_DispatchThreadID)
-{
-	// DrawInstancedIndirect: one instance.
-	[branch] if (id.x == 0)
-	{
-		FlatArgs.Store(4, 1u);
-		TessArgs.Store(4, 1u);
-	}
-	uint count, stride;
-	VisibleIn.GetDimensions(count, stride);
-	if (id.x >= count)
-		return;
-	const uint visible = VisibleIn[id.x];
-	uint old;
-	[branch] if (visible == 1)
-	{
-		FlatArgs.InterlockedAdd(0, 6, old);
-		FlatPatchesOut[old / 6] = id.x;
-	}
-	else if (visible == 2)
-	{
-		TessArgs.InterlockedAdd(0, 4, old);
-		TessPatchesOut[old / 4] = id.x;
 	}
 }
 #endif
