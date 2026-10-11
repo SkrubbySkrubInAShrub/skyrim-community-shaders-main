@@ -45,6 +45,8 @@ public:
 		float NewMoonIntensity = 0.05f;
 		float CrescentMoonIntensity = 0.25f;
 		float FullMoonIntensity = 1.0f;
+		// Editor IDs; the defaults are realms whose weathers keep the same light around the clock
+		std::vector<std::string> DisabledWorldspaces = { "Blackreach", "AlftandWorld", "Sovngarde", "DLC01SoulCairn", "DLC01Boneyard", "DLC2ApocryphaWorld" };
 	};
 
 	Settings settings;
@@ -179,6 +181,7 @@ private:
 	RE::TESObjectCELL* currentCell = nullptr;
 	bool currentCellInterior = false;
 	RE::TESWorldSpace* currentCellWorldspace = nullptr;
+	bool worldspaceDisabled = false;  // currentCellWorldspace is in DisabledWorldspaces
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float lastGameHour = -1.0f;
@@ -225,6 +228,12 @@ private:
 	void SetSunAngle();
 
 	void SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell);
+
+	/** @brief Whether the worldspace's editor ID is in the disabled list. */
+	bool IsWorldspaceDisabled(const RE::TESWorldSpace* worldspace) const;
+
+	/** @brief Re-evaluates worldspaceDisabled; call whenever the current worldspace or the disabled list changes. */
+	void UpdateWorldspaceDisabled() { worldspaceDisabled = IsWorldspaceDisabled(currentCellWorldspace); }
 
 	/** @brief Midpoint hour of a climate sunrise or sunset interval, using the same float ops as Sun::Update. */
 	static float MiddleHour(const RE::TESClimate::Timing::Interval& interval);

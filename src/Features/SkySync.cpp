@@ -22,7 +22,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HorizonElevation,
 	NewMoonIntensity,
 	CrescentMoonIntensity,
-	FullMoonIntensity)
+	FullMoonIntensity,
+	DisabledWorldspaces)
 
 void SkySync::DrawSettings()
 {
@@ -110,6 +111,48 @@ void SkySync::DrawSettings()
 	ImGui::SliderFloat(T(TKEY("crescent_intensity"), "Crescent Intensity"), &settings.CrescentMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	ImGui::SliderFloat(T(TKEY("full_moon_intensity"), "Full Moon Intensity"), &settings.FullMoonIntensity, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 
+	if (ImGui::TreeNodeEx(T(TKEY("disabled_worldspaces"), "Disabled Worldspaces"), ImGuiTreeNodeFlags_None)) {
+		Util::TextUnformattedDisabled(T(TKEY("disabled_worldspaces_hint"), "Sky Sync leaves lighting to vanilla in these worldspaces."));
+
+		auto& worldspaces = settings.DisabledWorldspaces;
+		std::optional<size_t> removed;
+		if (ImGui::BeginTable("##DisabledWorldspaces", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+			ImGui::TableSetupColumn(T(TKEY("worldspace_editor_id"), "Worldspace Editor ID"), ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("##Remove", ImGuiTableColumnFlags_WidthFixed);
+			ImGui::TableHeadersRow();
+			for (size_t i = 0; i < worldspaces.size(); ++i) {
+				ImGui::PushID(worldspaces[i].c_str());
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				ImGui::TextUnformatted(worldspaces[i].c_str());
+				ImGui::TableNextColumn();
+				if (ImGui::SmallButton("X"))
+					removed = i;
+				Util::AddTooltip(T(TKEY("remove_worldspace_tooltip"), "Remove from the list"));
+				ImGui::PopID();
+			}
+			ImGui::EndTable();
+		}
+		if (removed) {
+			worldspaces.erase(worldspaces.begin() + *removed);
+			UpdateWorldspaceDisabled();
+		}
+
+		const auto player = RE::PlayerCharacter::GetSingleton();
+		const auto worldspace = player ? player->GetWorldspace() : nullptr;
+		const std::string editorID = worldspace && worldspace->GetFormEditorID() ? worldspace->GetFormEditorID() : "";
+		{
+			auto addGuard = Util::DisableGuard(editorID.empty() || IsWorldspaceDisabled(worldspace));
+			const auto addLabel = I18n::GetSingleton()->Format(TKEY("add_current_worldspace"), { { "name", editorID.empty() ? std::string("-") : editorID } }, "Add Current Worldspace ({name})");
+			if (ImGui::Button(addLabel.c_str())) {
+				worldspaces.push_back(editorID);
+				UpdateWorldspaceDisabled();
+			}
+		}
+
+		ImGui::TreePop();
+	}
+
 	if (ImGui::TreeNodeEx("Debug", ImGuiTreeNodeFlags_None)) {
 		static constexpr const char* CasterNames[] = { "Sun", "Masser", "Secunda", "Zenith" };
 		static constexpr const char* PhaseNames[] = { "Full", "Waning Gibbous", "Waning Quarter", "Waning Crescent", "New", "Waxing Crescent", "Waxing Quarter", "Waxing Gibbous" };
@@ -169,6 +212,7 @@ void SkySync::LoadSettings(json& o_json)
 	settings.HorizonFadeElevation = std::clamp(settings.HorizonFadeElevation, 0.0f, MaxHorizonFadeElevation);
 	settings.HorizonElevation = std::clamp(settings.HorizonElevation, MinHorizonElevation, 0.0f);
 	SetSunAngle();
+	UpdateWorldspaceDisabled();
 }
 
 void SkySync::SaveSettings(json& o_json)
@@ -180,6 +224,7 @@ void SkySync::RestoreDefaultSettings()
 {
 	settings = {};
 	SetSunAngle();
+	UpdateWorldspaceDisabled();
 }
 
 void SkySync::PostPostLoad()
@@ -231,7 +276,7 @@ void SkySync::DisableOnConflict(std::string_view conflictName)
 
 void SkySync::OnSkyUpdateColors(RE::Sky* sky)
 {
-	if (!settings.Enabled || !sky)
+	if (!settings.Enabled || worldspaceDisabled || !sky)
 		return;
 
 	const float transitionFactor = shadowFader.intensityFactor;
@@ -253,7 +298,7 @@ void SkySync::ApplyMoonlightColors(RE::Sky* sky)
 	moonNightWeight = 0.0f;
 	lightNightWeight = 0.0f;
 	// Only where vanilla lights from weather colours; lighting templates and rooms are left alone
-	if (!settings.Enabled || !sky || !sunBelowHorizon || !sky->currentWeather || sky->mode.get() != RE::Sky::Mode::kFull ||
+	if (!settings.Enabled || worldspaceDisabled || !sky || !sunBelowHorizon || !sky->currentWeather || sky->mode.get() != RE::Sky::Mode::kFull ||
 		sky->extLightingOverride || sky->currentRoom || sky->previousRoom)
 		return;
 
@@ -402,10 +447,11 @@ bool SkySync::Update(const RE::Sky* sky)
 			currentCell = nullptr;  // keep the cache in sync so a cell-less frame doesn't reset every frame
 		if (resetFaderForCellChange)
 			shadowFader.Reset();
+		UpdateWorldspaceDisabled();
 	}
 
-	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
-	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
+	// Exterior worldspaces run unless listed as disabled; interior cells require the sunlight-shadows flag.
+	if (worldspaceDisabled || (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows)))) {
 		currentDim = 1.0f;
 		return false;
 	}
@@ -582,6 +628,13 @@ void SkySync::SetSkyRotation(const RE::Sky* sky, RE::TESObjectCELL* cell)
 	sky->root->local.rotate = RE::NiMatrix3{ RE::NiPoint3{ 0.0f, 0.0f, -rotation } };
 	RE::NiUpdateData updateData;
 	sky->root->Update(updateData);
+}
+
+bool SkySync::IsWorldspaceDisabled(const RE::TESWorldSpace* worldspace) const
+{
+	const char* editorID = worldspace ? worldspace->GetFormEditorID() : nullptr;
+	// Editor IDs are case-insensitive in the engine
+	return editorID && std::ranges::any_of(settings.DisabledWorldspaces, [editorID](const std::string& listed) { return !_stricmp(listed.c_str(), editorID); });
 }
 
 float SkySync::MiddleHour(const RE::TESClimate::Timing::Interval& interval)
