@@ -539,7 +539,8 @@ static const float kCoatMinNz = -1.0;
 static const float kCoatSolidReal = 0.5;
 // Masks.y read-back (Lighting.hlsl, 11-bit float): 2 = known and bare,
 // [4, 32) = bare with the projection's weight, 48 = painted; x256 = an object
-// LOD the game drew. Returns 0 unknown, 2 bare, 3 painted.
+// LOD the game drew; 1.25 = a plain static (the snow foot's note), unknown
+// here. Returns 0 unknown, 2 bare, 3 painted.
 float SkinRecolorEnc(float enc)
 {
 	enc = enc >= 256.0 ? enc / 256.0 : enc;

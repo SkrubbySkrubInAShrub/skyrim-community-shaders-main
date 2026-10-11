@@ -210,7 +210,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// atlas moves them with the active-light set).
 	float4 BorderStyle;
 	// x = water cut (1 = the sheet ends at the drawn waterline); yz = the land
-	// contest's depth bonus and carve penalty; w spare.
+	// contest's depth bonus and carve penalty; w = the object blend band
+	// (0 = off).
 	float4 CompactLook;
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
@@ -1052,11 +1053,12 @@ bool LandRectNoSnow(float2 lo, float2 hi)
 	return bare >= 0.998;
 }
 
-// The land's snow odds in Masks.y; -16 where something else drew there (an
-// object's base, grass), so thin snow never claims it.
+// The land's snow odds in Masks.y, (0, 1]; -16 where something else drew
+// there (an object's base, grass, a plain static's 1.25), so thin snow never
+// claims it.
 float LandSnowOdds(float masksY)
 {
-	return masksY > 0.002 && masksY < 1.5 ? saturate((masksY - 0.004) * (1.0 / 0.996)) * 32.0 - 16.0 : -16.0;
+	return masksY > 0.002 && masksY < 1.125 ? saturate((masksY - 0.004) * (1.0 / 0.996)) * 32.0 - 16.0 : -16.0;
 }
 
 // The snow's side of the contest: remaining depth buries the land's grain
@@ -1636,6 +1638,45 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	return o;
 }
 #else
+// The scene point on a pixel's ray, camera-relative: the deferred pass's
+// solve on the scene depth.
+float3 ShellSceneRelAt(int2 px)
+{
+	const float w = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
+	const float2 ndc = float2((px.x + 0.5) / TessScreen.y - 1.0, 1.0 - (px.y + 0.5) / TessScreen.z);
+	const float3 r0 = CameraViewProj[0].xyz;
+	const float3 r1 = CameraViewProj[1].xyz;
+	const float3 r3 = CameraViewProj[3].xyz;
+	const float3 c0 = cross(r1, r3);
+	const float3 b = float3(ndc.x * w - CameraViewProj[0].w, ndc.y * w - CameraViewProj[1].w, w - CameraViewProj[3].w);
+	return (b.x * c0 + b.y * cross(r3, r0) + b.z * cross(r0, r1)) / dot(r0, c0);
+}
+
+// Where the snow meets a static, Terrain Blending's way (CompactLook.w = the
+// band, 0 = off): how deep under this snow point the scene point on its ray
+// lies, within maxBand, where that point is a steep face clear of the land -
+// a wall or a flank rising through the snow, not a slab lying under it; a
+// huge depth otherwise.
+float ShellObjectBuried(float3 worldPosRel, float sceneZ, float shellZ, int2 px, float maxBand)
+{
+	float buried = 1e6;
+	const float3 sceneRel = worldPosRel * (sceneZ / max(shellZ, 1e-3));
+	const float depthUnder = worldPosRel.z - sceneRel.z;
+	[branch] if (sceneZ > shellZ && depthUnder < maxBand)
+	{
+		const float sceneAbsZ = sceneRel.z + ShellCameraPosAdjust.z;
+		const float land = SampleTerrain(sceneRel.xy + ShellCameraPosAdjust.xy - GridOrigin).x;
+		[branch] if (land > -50000.0 && sceneAbsZ - land > 3.0)
+		{
+			const float3 o = ShellSceneRelAt(px);
+			const float3 n = cross(ShellSceneRelAt(px + int2(1, 0)) - o, ShellSceneRelAt(px + int2(0, 1)) - o);
+			[flatten] if (abs(n.z) < 0.7 * length(n))
+				buried = depthUnder;
+		}
+	}
+	return buried;
+}
+
 #if defined(SNOW_SHELL_DEFERRED)
 PS_OUTPUT ShellShade(VS_OUTPUT input)
 #else
@@ -1662,6 +1703,36 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		discard;
 		return (PS_PREPASS_OUTPUT)0;
+	}
+#endif
+#ifdef SNOW_SHELL_DEFERRED
+	// Over a static's buried face (its own pixel, which the prepass left it)
+	// the snow lets the object through up the band by the grain, cut like the
+	// snow's own edge. DebugNoFarPad > 0.5 shows the depth instead.
+	float objectBlendView = -1.0;
+	[branch] if (CompactLook.w > 0.0)
+	{
+		const float masksY = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+		[branch] if (masksY > 1.125 && masksY < 256.0)
+		{
+			const float band = CompactLook.w * (0.3 + 0.7 * ShapeNoise((input.WorldPos.xy + ShellCameraPosAdjust.xy) / 40.0));
+			const float under = saturate(ShellObjectBuried(input.WorldPos, sceneZ, shellZ, int2(input.Position.xy), CompactLook.w) / band);
+			objectBlendView = under;
+			[branch] if (under < 1.0 && DebugNoFarPad < 0.5)
+			{
+				const float2 blendUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+				float2 hDims;
+				SnowHeightMap.GetDimensions(hDims.x, hDims.y);
+				const float2 tdx = gDeferredGridDx / kSnowUVTile * hDims;
+				const float2 tdy = gDeferredGridDy / kSnowUVTile * hDims;
+				const float hMip = floor(max(0.5 * log2(max(min(dot(tdx, tdx), dot(tdy, tdy)), 1e-8)) + SharedData::MipBias, 0.0));
+				const float hSnow = HasSnowHeight > 0.5 ? SampleSnowHeight(ComputeSnowTapsNoGrad(blendUV, GridOrigin + gridLocal), 0.0.xx, hMip) : 0.5;
+				const float a = SnowHeightBlendOneSided(under, hSnow, SnowHeightBlendSharpness(shellZ));
+				const float n = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+				if (n * n >= saturate((a - 0.2) * (1.0 / 0.3)))
+					discard;
+			}
+		}
 	}
 #endif
 
@@ -1807,6 +1878,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		landSide = LandSnowSide(landRemaining, pixelCarve);
 		landContest = landSide < 16.0;
 	}
+	// A static's face just under the snow draws its own pixel; the shading
+	// lets it through the snow by the grain.
+	bool objectUnder = false;
+	[branch] if (CompactLook.w > 0.0 && coverageAlpha > 0.001)
+		objectUnder = ShellObjectBuried(input.WorldPos, sceneZ, shellZ, int2(input.Position.xy), CompactLook.w) < CompactLook.w;
 #	else
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
@@ -1850,14 +1926,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #	endif
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 #	ifdef SNOW_PREPASS_EARLY
-	// Pending: the land contest to run, or a clamp a static behind would
-	// cancel. Marked by a negative raster depth; the claim fill skips it.
+	// Pending: the land contest to run, a clamp a static behind would cancel,
+	// or a static under the snow to draw. Marked by a negative raster depth;
+	// the claim fill skips it.
 	const bool clampPending = prepassOut.DepthLE < input.Position.z;
 	prepassOut.Pending = 0.0;
-	[branch] if (clampPending || landContest)
+	[branch] if (clampPending || landContest || objectUnder)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
-		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0));
+		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0) + (objectUnder ? 32.0 : 0.0));
 	}
 #	endif
 	return prepassOut;
@@ -2566,6 +2643,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
+#ifdef SNOW_SHELL_DEFERRED
+	[branch] if (DebugNoFarPad > 0.5 && objectBlendView >= 0.0)
+	{
+		psout.Diffuse.rgb = lerp(float3(4.0, 0.0, 0.0), float3(0.0, 4.0, 0.0), objectBlendView);
+		psout.Albedo.rgb = 0.0;
+		psout.Specular.rgb = 0.0;
+		psout.Reflectance.rgb = 0.0;
+	}
+#endif
 
 	return psout;
 #endif  // !SNOW_SHELL_DEPTH_PREPASS

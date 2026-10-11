@@ -1657,9 +1657,11 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { 0.0f, 0.0f, (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	// x = the water cut (runtime A/B in Debugging Options); y, z = the land-blend
-	// contest's depth bonus and carve penalty (log2 odds); w spare.
+	// contest's depth bonus and carve penalty (log2 odds); w = the object
+	// blend band (0 = off).
 	const float2 landContest = LandBlendContest();
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, 0.0f };
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, objectBlend ? std::max(objectBlendBand, 1.0f) : 0.0f };
+	cbData.DebugNoFarPad = objectBlendView ? 1.0f : 0.0f;
 	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
 	// reads zeros, which look like fully bare ground everywhere.

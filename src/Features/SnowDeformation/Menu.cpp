@@ -1660,6 +1660,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("land_recolor_lum_lo"), "Land Snow Brightness Cut"), &landRecolorLumLo, 0.2f, 0.8f, "%.2f");
 			if (auto _ttLandRecolorLum = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("land_recolor_lum_lo_tooltip"), "How bright a land snow texel must be before it takes this mod's snow. Lower recolors more of a snowy-rocks or grass-snow texture; higher keeps more of it."));
+			ImGui::Checkbox(T(TKEY("snow_meets_objects"), "Snow Meets Objects (A/B)"), &objectBlend);
+			if (auto _ttObjectBlend = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_meets_objects_tooltip"), "Terrain Blending for the ground snow: where an object stands in the snow, the snow thins against it by its own grain, so the object's buried face shows through the snow's edge instead of meeting it at a clean line."));
+			ImGui::SliderFloat(T(TKEY("snow_meets_objects_depth"), "Snow Meets Objects Depth"), &objectBlendBand, 1.0f, 64.0f, "%.0f");
+			if (auto _ttObjectBlendBand = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_meets_objects_depth_tooltip"), "How deep under the snow an object's face may lie and still show through it, in units. Larger widens the blend around each object."));
 			WrapTextF("  %s", LandscapeSnowStatus().c_str());
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())

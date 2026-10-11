@@ -1665,7 +1665,7 @@ public:
 		float4 CrustLook2;
 		/** @brief xy layout keepers (the retired dust switch and trench floor), uploaded as 0; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w spare. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w = the object blend band (objectBlendBand, 0 = off). Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -3689,6 +3689,11 @@ public:
 	float landRecolorLumLo = 0.48f;
 	/** @brief The recolor runs this frame: the ground snow draws here and the snow set is loaded. */
 	bool LandRecolorActive() const { return landRecolor && LandBlendActive() && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
+	/** @brief Where the ground snow meets a static, Terrain Blending's way: the snow lets the object's buried face through over objectBlendBand units of depth, by the snow's grain (ShellCB CompactLook.w). Debug A/B, default on, not serialised. */
+	bool objectBlend = true;
+	float objectBlendBand = 24.0f;
+	/** @brief Debug view (DevBench objectBlendView): the snow over a static drawn red at the contact to green at the band's depth (ShellCB DebugNoFarPad). */
+	bool objectBlendView = false;
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
 	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */
