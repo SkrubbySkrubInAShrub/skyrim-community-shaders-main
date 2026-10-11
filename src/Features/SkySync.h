@@ -66,7 +66,7 @@ public:
 	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
 
-	/** @brief While the sun is below the horizon, rebuilds the sunlight colour, VL and moon glare from the weathers' night values only; runs before colour grading. */
+	/** @brief While the sun is below the horizon, rebuilds the moon glare, plus the sunlight colour and VL when they are dimmed, from the weathers' night values only; runs before colour grading. */
 	void ApplyMoonlightColors(RE::Sky* sky);
 
 	/** @brief How far this frame's moon glare was moved to the night colour, 0 to 1, so moon grading can follow it. */
@@ -93,7 +93,7 @@ public:
 		Sun,
 		Masser,
 		Secunda,
-		Zenith  // fallback when no moon is up
+		Zenith  // fallback when no moon is up: lights as a pseudo skylight, without VL
 	};
 
 	/**
@@ -127,20 +127,21 @@ private:
 		Count
 	};
 
-	const char* MoonLightSourceNames[static_cast<uint8_t>(MoonLightSource::Count)] = { "Brightest", "Masser", "Secunda" };
-	const char* SunPathNames[static_cast<uint8_t>(SunPath::Count)] = { "Southern Sky", "Northern Sky", "Vanilla", "Custom" };
-
 	struct ShadowFader
 	{
 		RE::NiPoint3 currentDir = { 0.0f, 0.0f, 1.0f };
 		RE::NiPoint3 startDir = { 0.0f, 0.0f, 1.0f };
 		Caster target = Caster::Sun;
-		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
 		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
 		float intensityFactor = 1.0f;  // scales directional light and VL while the caster changes
 		float startIntensityFactor = 1.0f;
+		float vlFade = 1.0f;  // additionally scales VL, fading it out towards the zenith fallback
+		float startVlFade = 1.0f;
+
+		/** @brief Fraction of the current transition completed, 0 to 1. */
+		float Progress(float fadeDuration) const { return fadeDuration > 0.0f ? fadeTimer / fadeDuration : 1.0f; }
 
 		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
@@ -172,6 +173,7 @@ private:
 	static constexpr float SunDiscFadeElevation = 2.0f;
 	static constexpr float SunGlareScale = 1.0f / 255.0f;  // Sun::Update's weather sun glare byte to alpha
 	static constexpr RE::NiPoint3 ZenithDirection{ 0.0f, 0.0f, 1.0f };
+	static constexpr size_t BodyCount = static_cast<size_t>(Caster::Zenith);  // the sun and both moons
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
@@ -182,13 +184,14 @@ private:
 	bool currentCellInterior = false;
 	RE::TESWorldSpace* currentCellWorldspace = nullptr;
 	bool worldspaceDisabled = false;  // currentCellWorldspace is in DisabledWorldspaces
+	bool active = false;              // the last Update steered the light, so the colour hooks may apply its state
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float lastGameHour = -1.0f;
 	bool immediateTransitionReady = false;
 
-	float4 colors[3] = {};
-	RE::NiPoint3 rawDirections[3] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
+	float4 colors[BodyCount] = {};
+	RE::NiPoint3 rawDirections[BodyCount] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
 	float moonlightFade = 0.0f;
 	float twilightCap = 0.0f;
@@ -209,6 +212,9 @@ private:
 
 	/** @brief Fades from 0 at the effective horizon to 1 at the horizon fade elevation above it. */
 	float GetHorizonDim(float heightAboveHorizon) const;
+
+	/** @brief Fraction of the moonlight fade duration that the given hours cover; 1 when the duration is zero. */
+	float GetMoonlightFadeProgress(float hours) const { return settings.HorizonFadeHours > 0.0f ? hours / settings.HorizonFadeHours : 1.0f; }
 
 	/** @brief Ramps moonlightFade in while the sun is below the horizon and out otherwise, never above twilightCap. */
 	void UpdateMoonlightFade(float advanceHours, bool immediate);
@@ -238,8 +244,8 @@ private:
 	/** @brief Midpoint hour of a climate sunrise or sunset interval, using the same float ops as Sun::Update. */
 	static float MiddleHour(const RE::TESClimate::Timing::Interval& interval);
 
-	/** @brief Hours at which the given sun path crosses the horizon, as { sunrise, sunset }. */
-	static std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing, bool alternatePath);
+	/** @brief Hours at which the active sun path crosses the horizon, as { sunrise, sunset }. */
+	std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing) const;
 
 	/** @brief The lightning flash Sky::UpdateColors adds to the directional light, 0 during weather transitions as in vanilla. */
 	static float GetDirectionalFlash(const RE::Sky* sky);
@@ -257,12 +263,17 @@ private:
 
 	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
 
-	static void CalculateSunDirectionAndDistance(const RE::Sun* sun, RE::NiPoint3& outDir, float& outDistance);
+	/** @brief Sky-local distance of the sun disc: vanilla's own, or on the alternate path nearer at the horizon than at its peak. */
+	float GetSunDistance(const RE::Sky* sky) const;
 
 	/** @brief Sun::Update's arc as a unit direction, except that the night half runs below the horizon instead of mirrored above it. */
 	static RE::NiPoint3 CalculateVanillaSunDirection(float hour, float sunrise, float sunset);
 
-	static void CalculateAlternateSunDirectionAndDistance(RE::NiPoint3& outDir, float& outDist, float time, float sunrise, float sunset, float sunAngle);
+	/** @brief Angle along the alternate path's arc, 0 at sunrise and pi at sunset. */
+	static float GetAlternateSunPhase(float hour, float sunrise, float sunset) { return DirectX::XM_PI * (hour - sunrise) / (sunset - sunrise); }
+
+	/** @brief Unit direction on the alternate path, an arc tilted by sunAngle degrees from the horizon. */
+	static RE::NiPoint3 CalculateAlternateSunDirection(float hour, float sunrise, float sunset, float sunAngle);
 
 	static void SetSunPosition(const RE::Sun* sun, const RE::NiPoint3& dir, float distance);
 };
