@@ -2,7 +2,7 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
-// Landscape tessellation shared by the raised landscape (LandscapeSnow.hlsl)
+// Landscape tessellation shared by the raised sun cascades (LandscapeSnow.hlsl)
 // and the ground snow drawn on the landscape's meshes (LandscapeSnowShell.hlsl):
 // the per-draw constants and the shell-parity edge factor. Include after
 // SnowShell.hlsl.
@@ -12,14 +12,13 @@ cbuffer LandscapeSnowCB : register(b11)
 	// xy: the draw's translate less GridOrigin, z: its translate z, w: the
 	// height the view cull lifts a patch by.
 	float4 LsGeometry;
-	// x: shell-parity factors (trench reach boost, screen cap) rather than the
-	// base lattice alone, y: max factor, z: content gate, the checks that can
+	// x: camera-pass factors (trench reach boost, screen cap) rather than the
+	// distance band alone, y: max factor, z: content gate, the checks that can
 	// call an edge detailed (0 = every edge is; 1 map tiles, 2 class borders,
 	// 4 water, 8 object lift, 16 exclusions), w: drop patches outside the view.
 	float4 LsTess;
-	// x: view cull guard band, a fraction of clip w, y: units the raised
-	// surface sits under the ground snow in camera passes, z: how many LsExcl
-	// entries are live, w spare.
+	// x: view cull guard band, a fraction of clip w, z: how many LsExcl
+	// entries are live, yw spare.
 	float4 LsCull;
 	// Exclusions over the draw small enough for the gate's point checks to miss
 	// (LandscapeSnow.cpp LsFillSmallExclusions): sealed containers and small

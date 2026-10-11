@@ -391,12 +391,6 @@ void Deferred::DeferredPasses()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		// Snow shell SSGI seam shield (t16/b7); the interior composite is
-		// compiled without the block and the exterior one runtime-gates on
-		// the CB's active flag.
-		if (!interior && globals::features::snowDeformation.loaded)
-			globals::features::snowDeformation.BindSeamShield();
-
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 

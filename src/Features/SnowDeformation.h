@@ -1895,17 +1895,6 @@ public:
 
 	ConstantBuffer* shellCB = nullptr;
 
-	/** @brief SSGI seam shield: analytic contact-fringe mask handed to the deferred composite (t16/b7) so it can lift SSGI's AO on the ground ring just beyond the shell edge, where the discarded shell cannot shield via Masks2. Bound from Deferred's composite dispatch; implemented in SnowDeformation/Shell.cpp. */
-	struct SeamShieldCB
-	{
-		float2 WindowOffset;
-		float TexelSize;
-		float Dim;
-		float4 Params;  ///< x = lift strength, w > 0.5 = active this frame
-	};
-	void BindSeamShield();
-	ConstantBuffer* seamShieldCB = nullptr;
-
 	/** @brief One live arc: where it came from, where it struck, and how far through its life it is. */
 	struct LightningArc
 	{
@@ -1971,14 +1960,6 @@ public:
 	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11ComputeShader* GetDepthSyncCS();
 	ID3D11ComputeShader* depthSyncCS = nullptr;
-	/** @brief SSGI seam shield mask (SeamShieldCS in TerrainWindowFillCS.hlsl): the window's contact-fringe band gated to real snow nearby, R8 at the window's resolution. The composite reads it at t16; seamMaskFrame says which frame wrote it. */
-	ID3D11ComputeShader* GetSeamShieldCS();
-	ID3D11ComputeShader* seamShieldCS = nullptr;
-	Texture2D* seamMaskTexture = nullptr;
-	uint32_t seamMaskFrame = ~0u;
-	/** @brief shellTerrainVersion the mask was built from; the terrain window is its only input. */
-	uint32_t seamMaskTerrainVersion = ~0u;
-	bool EnsureSeamMask();
 
 	/** @brief Skips the extent bake so the field keeps its last content: separates a field that really changes from a surface that only shimmers. */
 	bool debugTrampleFreeze = false;
@@ -3672,9 +3653,9 @@ public:
 	void InstallLandscapeTimingHook();
 	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
 	void InstallDevBenchTools();
-	/** @brief Landscape snow (LANDSCAPE-SNOW-PLAN Phase 1): hooks Lighting RestoreGeometry and Utility Setup/RestoreGeometry; Lighting's SetupGeometry side rides the statics capture hook. Implemented in LandscapeSnow.cpp. */
+	/** @brief Landscape snow (LANDSCAPE-SNOW-PLAN): hooks Lighting RestoreGeometry and Utility Setup/RestoreGeometry; Lighting's SetupGeometry side rides the statics capture hook. Implemented in LandscapeSnow.cpp. */
 	void InstallLandscapeSnow();
-	/** @brief After the game's SetupGeometry: moves a landscape draw onto LandscapeSnow.hlsl, tessellated near the camera and through the raising VS beyond. */
+	/** @brief After the game's SetupGeometry: captures a depth-prepass landscape draw for the ground snow's replay, and moves a sun-cascade one onto LandscapeSnow.hlsl, tessellated near the camera and through the raising VS beyond. */
 	void LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighting);
 	/** @brief Before the game's RestoreGeometry: puts back everything LandscapeSnowSetup changed. */
 	void LandscapeSnowRestore();

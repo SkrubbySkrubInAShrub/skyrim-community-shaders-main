@@ -2,23 +2,18 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
-// Landscape snow: the game's own landscape draws, raised onto the ground
-// shell's surface (SnowShell.hlsl in surface-only mode). CS's landscape VS
-// (Lighting.hlsl or Utility.hlsl, main renamed) runs per vertex: LS_VSRaise on
-// the draw's own vertices, LS_DS on the vertices LS_HS tessellates. Compiled
-// per (shader type, VS descriptor) with CS's defines; LS_LIGHTING selects
-// Lighting.hlsl.
+// Landscape snow: the sun cascades' landscape draws, raised onto the ground
+// snow's surface (SnowShell.hlsl in surface-only mode). CS's landscape VS
+// (Utility.hlsl, main renamed) runs per vertex: LS_VSRaise on the draw's own
+// vertices, LS_DS on the vertices LS_HS tessellates. Compiled per VS
+// descriptor with CS's defines.
 
 #ifndef VSHADER
 #	define VSHADER
 #endif
 
 #define main LS_GameVS
-#if defined(LS_LIGHTING)
-#	include "Lighting.hlsl"
-#else
-#	include "Utility.hlsl"
-#endif
+#include "Utility.hlsl"
 #undef main
 
 #if defined(SKINNED) || defined(EYE)
@@ -31,11 +26,7 @@
 
 #include "SnowDeformation/LandscapeSnowTess.hlsli"
 
-#if defined(LS_LIGHTING)
-#	define LS_POS(v) (v).Position
-#else
-#	define LS_POS(v) (v).PositionMS
-#endif
+#define LS_POS(v) (v).PositionMS
 
 #if defined(RENDER_SHADOWMAP)
 // Shadow maps cast the ground snow: its surface (no edge descent), its
@@ -56,10 +47,10 @@ float3 LsRaise(float3 p, out bool a_raised)
 #if defined(LS_CASTER)
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 	SHELL_CAST_VIS(castVis, gridLocal, z, coverage)
-	a_raised = castVis >= 0.35 && z - LsCull.y > landZ;
+	a_raised = castVis >= 0.35 && z > landZ;
 #else
 	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
-	a_raised = z - LsCull.y > landZ;
+	a_raised = z > landZ;
 #endif
 	[branch] if (a_raised)
 	{
@@ -70,7 +61,7 @@ float3 LsRaise(float3 p, out bool a_raised)
 			float3 terrainNormal = SHELL_TERRAIN_NORMAL(slope.x, slope.y);
 			SHELL_DRAPE(raised, float2(0.0, 0.0), z, terrainHeight, terrainNormal)
 		}
-		p += float3(raised.xy, raised.z - LsCull.y - landZ);
+		p += float3(raised.xy, raised.z - landZ);
 	}
 	return p;
 }
@@ -94,64 +85,32 @@ VS_OUTPUT LS_VSRaise(VS_INPUT input)
 
 struct LS_CP
 {
-#if defined(LS_LIGHTING)
-	float4 Position : LSPOS;
-	float2 TexCoord0 : LSUV;
-#	if !defined(MODELSPACENORMALS)
-	float4 Normal : LSNRM;
-	float4 Bitangent : LSBIN;
-#	endif
-#	if defined(VC)
-	float4 Color : LSCOL;
-#		if defined(LANDSCAPE)
-	float4 LandBlendWeights1 : LSLB1;
-	float4 LandBlendWeights2 : LSLB2;
-#		endif
-#	endif
-#else
 	float4 PositionMS : LSPOS;
-#	if defined(TEXTURE)
+#if defined(TEXTURE)
 	float2 TexCoord : LSUV;
-#	endif
-#	if defined(NORMALS)
+#endif
+#if defined(NORMALS)
 	float4 Normal : LSNRM;
 	float4 Bitangent : LSBIN;
-#	endif
-#	if defined(VC)
+#endif
+#if defined(VC)
 	float4 Color : LSCOL;
-#	endif
 #endif
 };
 
 LS_CP LS_VS(VS_INPUT input)
 {
 	LS_CP o;
-#if defined(LS_LIGHTING)
-	o.Position = input.Position;
-	o.TexCoord0 = input.TexCoord0;
-#	if !defined(MODELSPACENORMALS)
-	o.Normal = input.Normal;
-	o.Bitangent = input.Bitangent;
-#	endif
-#	if defined(VC)
-	o.Color = input.Color;
-#		if defined(LANDSCAPE)
-	o.LandBlendWeights1 = input.LandBlendWeights1;
-	o.LandBlendWeights2 = input.LandBlendWeights2;
-#		endif
-#	endif
-#else
 	o.PositionMS = input.PositionMS;
-#	if defined(TEXTURE)
+#if defined(TEXTURE)
 	o.TexCoord = input.TexCoord;
-#	endif
-#	if defined(NORMALS)
+#endif
+#if defined(NORMALS)
 	o.Normal = input.Normal;
 	o.Bitangent = input.Bitangent;
-#	endif
-#	if defined(VC)
+#endif
+#if defined(VC)
 	o.Color = input.Color;
-#	endif
 #endif
 	return o;
 }
@@ -165,11 +124,7 @@ struct LS_HSConst
 // Clip position through the drawing pass's own constants (the copied VS b2/b12).
 float4 LsClip(float3 p)
 {
-#if defined(LS_LIGHTING)
-	return mul(ViewProj, float4(mul(World, float4(p, 1.0)), 1.0));
-#else
 	return mul(mul(FrameBuffer::CameraViewProj, World), float4(p, 1.0));
-#endif
 }
 
 // Outside one clip plane at the land and at the fully raised height. Shadow
@@ -236,32 +191,16 @@ LS_CP LS_HS(InputPatch<LS_CP, 3> p, uint i : SV_OutputControlPointID)
 VS_OUTPUT LS_DS(LS_HSConst c, float3 uvw : SV_DomainLocation, const OutputPatch<LS_CP, 3> p)
 {
 	VS_INPUT vin;
-#if defined(LS_LIGHTING)
-	vin.Position = LS_LERP(Position);
-	vin.TexCoord0 = LS_LERP(TexCoord0);
-#	if !defined(MODELSPACENORMALS)
-	vin.Normal = LS_LERP(Normal);
-	vin.Bitangent = LS_LERP(Bitangent);
-#	endif
-#	if defined(VC)
-	vin.Color = LS_LERP(Color);
-#		if defined(LANDSCAPE)
-	vin.LandBlendWeights1 = LS_LERP(LandBlendWeights1);
-	vin.LandBlendWeights2 = LS_LERP(LandBlendWeights2);
-#		endif
-#	endif
-#else
 	vin.PositionMS = LS_LERP(PositionMS);
-#	if defined(TEXTURE)
+#if defined(TEXTURE)
 	vin.TexCoord = LS_LERP(TexCoord);
-#	endif
-#	if defined(NORMALS)
+#endif
+#if defined(NORMALS)
 	vin.Normal = LS_LERP(Normal);
 	vin.Bitangent = LS_LERP(Bitangent);
-#	endif
-#	if defined(VC)
+#endif
+#if defined(VC)
 	vin.Color = LS_LERP(Color);
-#	endif
 #endif
 	bool raised;
 	LS_POS(vin).xyz = LsRaise(LS_POS(vin).xyz, raised);

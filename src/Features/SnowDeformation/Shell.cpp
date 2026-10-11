@@ -957,70 +957,6 @@ ID3D11ComputeShader* SnowDeformation::GetSkinSssRestoreCS()
 	return skinSssRestoreCS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetSeamShieldCS()
-{
-	if (!seamShieldCS) {
-		logger::debug("Compiling SeamShieldCS");
-		seamShieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", {}, "cs_5_0", "SeamShieldCS"));
-	}
-	return seamShieldCS;
-}
-
-bool SnowDeformation::EnsureSeamMask()
-{
-	if (seamMaskTexture)
-		return seamMaskTexture->srv && seamMaskTexture->uav;
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = kShellWindowDim;
-	desc.Height = kShellWindowDim;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R8_UNORM;
-	desc.SampleDesc.Count = 1;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-	srvDesc.Format = desc.Format;
-	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-	srvDesc.Texture2D.MipLevels = 1;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-	uavDesc.Format = desc.Format;
-	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-	seamMaskTexture = new Texture2D(desc, "SnowDeformation::SeamShieldMask");
-	seamMaskTexture->CreateSRV(srvDesc);
-	seamMaskTexture->CreateUAV(uavDesc);
-	seamMaskTerrainVersion = ~0u;
-	return seamMaskTexture->srv && seamMaskTexture->uav;
-}
-
-void SnowDeformation::BindSeamShield()
-{
-	// Called from Deferred's exterior composite dispatch. Inactive frames
-	// still need the CB bound with the flag off once the define exists, but
-	// skipping the bind entirely is also safe: the shader gates on
-	// SnowSeamParams.w, and an unbound b7 reads zeros = inactive.
-	const bool active = settings.EnableSnowDeformation && globals::state->inWorld &&
-	                    seamMaskTexture && seamMaskTexture->srv && seamMaskFrame == globals::state->frameCount &&
-	                    lastShellCBData != nullptr;
-	if (!active)
-		return;
-	if (!seamShieldCB)
-		seamShieldCB = new ConstantBuffer(ConstantBufferDesc<SeamShieldCB>(), "SnowDeformation::SeamShieldCB");
-	SeamShieldCB data{};
-	data.WindowOffset = { lastShellCBData->GridToTerrainOffset.x - lastShellCBData->GridOrigin.x,
-		lastShellCBData->GridToTerrainOffset.y - lastShellCBData->GridOrigin.y };
-	data.TexelSize = lastShellCBData->TerrainTexelSize;
-	data.Dim = (float)lastShellCBData->TerrainDim;
-	data.Params = { 0.75f, 0.0f, 0.0f, 1.0f };
-	seamShieldCB->Update(data);
-
-	auto context = globals::d3d::context;
-	ID3D11ShaderResourceView* srv = seamMaskTexture->srv.get();
-	context->CSSetShaderResources(16, 1, &srv);
-	ID3D11Buffer* cb = seamShieldCB->CB();
-	context->CSSetConstantBuffers(7, 1, &cb);
-}
-
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
 {
 	// Grid placement re-derived from THIS frame's camera; shared by
@@ -2490,33 +2426,6 @@ void SnowDeformation::DrawShell()
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	spanClock.Lap(CpuCensus::kSpanShellRestore);
-
-	// SSGI seam shield mask for the composite: the window's fringe band,
-	// gated to real snow nearby (see SeamShieldCS). Its only input is the
-	// terrain window, so it is rebuilt when the window is.
-	if (shellGround && shellTerrainTexture && shellTerrainTexture->srv && EnsureSeamMask()) {
-		if (auto cs = GetSeamShieldCS()) {
-			if (seamMaskTerrainVersion != shellTerrainVersion) {
-				ID3D11ShaderResourceView* maskSRV = shellTerrainTexture->srv.get();
-				ID3D11UnorderedAccessView* maskUAV = seamMaskTexture->uav.get();
-				context->CSSetShaderResources(5, 1, &maskSRV);
-				context->CSSetUnorderedAccessViews(1, 1, &maskUAV, nullptr);
-				context->CSSetShader(cs, nullptr, 0);
-				globals::profiler->BeginPass("SnowDeformation::Ground - Seam Shield");
-				context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
-				globals::profiler->EndPass();
-				ID3D11ShaderResourceView* nullMaskSRV = nullptr;
-				ID3D11UnorderedAccessView* nullMaskUAV = nullptr;
-				context->CSSetShaderResources(5, 1, &nullMaskSRV);
-				context->CSSetUnorderedAccessViews(1, 1, &nullMaskUAV, nullptr);
-				context->CSSetShader(nullptr, nullptr, 0);
-				seamMaskTerrainVersion = shellTerrainVersion;
-			} else {
-				globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Seam Shield");
-			}
-			seamMaskFrame = globals::state->frameCount;
-		}
-	}
 
 	// Screen-space passes running after us (SSGI, SSS, the shadow mask) read
 	// Terrain Blending's blended depth, finalized during opaque rendering;

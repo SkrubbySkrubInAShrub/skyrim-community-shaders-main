@@ -11,12 +11,14 @@
 
 #include <future>
 
-// Landscape snow (LANDSCAPE-SNOW-PLAN Phase 1): the game's own landscape
-// draws, raised onto the ground shell's surface. After the game's
-// SetupGeometry a landscape draw is moved onto LandscapeSnow.hlsl, which
-// reruns CS's landscape VS per vertex: near draws through the hull and
-// domain stages, the rest through a raising VS. RestoreGeometry puts the
-// pipeline back. See CODE-NOTES.md (LandscapeSnow.cpp).
+// Landscape snow (LANDSCAPE-SNOW-PLAN): the ground snow on the landscape's
+// own meshes. The depth prepass's landscape draws are captured for the ground
+// snow's replay (DrawLandscapeSnowPrepass), and the sun cascades' landscape
+// draws are raised onto the snow's surface: after the game's SetupGeometry
+// such a draw is moved onto LandscapeSnow.hlsl, which reruns CS's landscape VS
+// per vertex, near draws through the hull and domain stages, the rest through
+// a raising VS. RestoreGeometry puts the pipeline back. See CODE-NOTES.md
+// (LandscapeSnow.cpp).
 
 namespace
 {
@@ -38,29 +40,24 @@ namespace
 	// Every SRV slot the surface reads, t0..t58.
 	constexpr uint32_t kLsSRVCount = 59;
 
-	bool LsCameraPass(uint32_t a_cat) { return a_cat == kLsMain || a_cat == kLsDepth; }
 	bool LsShadowPass(uint32_t a_cat) { return a_cat == kLsShadowSun || a_cat == kLsShadowLocal || a_cat == kLsSkyOcclusion; }
 
 	struct LsConfig
 	{
-		bool attach[kLsCategories]{ true, true, true, true, true, true, true };
+		// The sun cascades' landscape draws are raised onto the snow.
+		bool raiseSun = true;
 		bool tessellate = true;
 		bool gate = true;
 		// LandscapeSnow.hlsl's content-gate checks: 1 map tiles, 2 class borders, 4 water, 8 object lift, 16 exclusions.
 		int gateMask = 31;
 		bool cull = true;
-		// Terrain Blending's near-terrain depth draws (its keepVertexShader): 0 never raised, 1 while
-		// the ground shell is hidden, 2 always. Under a drawn shell, raising them only adds overdraw.
-		int tbNear = 1;
 		bool measure = false;
 		bool stats = false;
 		float maxFactor = 64.0f;
 		float guard = 0.05f;
 		float lift = 512.0f;
-		// Camera passes put the raised surface this far under the ground shell while it draws, so the shell wins the depth test.
-		float shellSink = 2.0f;
 		// Past these the base lattice outruns the land's own triangles: the
-		// raising VS alone, no hull.
+		// raising VS alone, no hull (the replay, the sun cascades).
 		float tessReach = 2600.0f;
 		float shadowTessReach = 2000.0f;
 		// Shadow maps draw with their cascade's camera in the per-frame buffer: place their
@@ -293,7 +290,6 @@ namespace
 
 		// The draw in flight.
 		LsMode mode = LsMode::kNone;
-		bool tbKeep = false;
 		winrt::com_ptr<ID3D11VertexShader> savedVS;
 		ID3D11ShaderResourceView* savedVSSRVs[kLsSRVCount]{};
 		ID3D11Buffer* savedVSCB[2]{};
@@ -319,7 +315,7 @@ namespace
 	SnowDeformation::ShellCB lsCB{};
 	std::mutex lsMutex;
 
-	LsShaders LsCompile(bool a_lighting, bool a_offset, std::string a_defines)
+	LsShaders LsCompile(std::string a_defines)
 	{
 		LsShaders out;
 		out.defines = a_defines;
@@ -331,11 +327,6 @@ namespace
 			const auto eq = tok.find('=');
 			parsed.emplace_back(tok.substr(0, eq), eq == std::string::npos ? std::string() : tok.substr(eq + 1));
 		}
-		if (a_lighting)
-			parsed.emplace_back("LS_LIGHTING", "");
-		// Terrain Blending's second near-terrain draw: its own depth-offset VS (Utility.hlsl OFFSET_DEPTH).
-		if (a_offset)
-			parsed.emplace_back("OFFSET_DEPTH", "");
 		std::vector<std::pair<const char*, const char*>> defs;
 		for (const auto& [k, v] : parsed)
 			defs.emplace_back(k.c_str(), v.c_str());
@@ -868,8 +859,8 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	ls.capturePending = false;
 	const auto& cfg = ls.cfg;
 	// Not in the walled cities while their ground snow is off: no snow layer there to stand for.
-	const bool raiseOn = settings.EnableSnowDeformation && !SnowShadersPending(1) && !GroundShellsSuspended();
-	if (!raiseOn && !cfg.measure)
+	const bool snowOn = settings.EnableSnowDeformation && !SnowShadersPending(1) && !GroundShellsSuspended();
+	if (!snowOn && !cfg.measure)
 		return;
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
@@ -905,8 +896,7 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	auto& slot = ls.slots[ls.slotIndex];
 	// The ground snow's prepass draws this frame's depth-prepass landscape; only
 	// the sun cascades are raised.
-	const bool shadeOn = raiseOn;
-	if (shadeOn && (cat == kLsDepth || cat == kLsMain) && LssPoll())
+	if (snowOn && (cat == kLsDepth || cat == kLsMain) && LssPoll())
 		LsShadeTrack(a_pass, cat, frame);
 	slot.draws[cat]++;
 	auto* triShape = a_pass->geometry->AsTriShape();
@@ -914,21 +904,8 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		slot.tris[cat] += triShape->GetTrishapeRuntimeData().triangleCount;
 
 	LsMode want = LsMode::kNone;
-	bool tbDraw = false;
-	bool tbOffset = false;
-	if (raiseOn && cfg.attach[cat] && (!shadeOn || cat == kLsShadowSun) && (cat != kLsShadowSun || settings.SnowCastsShadows)) {
+	if (snowOn && cat == kLsShadowSun && cfg.raiseSun && settings.SnowCastsShadows) {
 		want = LsMode::kRaise;
-		// Terrain Blending draws near terrain twice in the depth prepass and binds its own VS at the
-		// draw: first its terrain depth, then the main depth with OFFSET_DEPTH (renderAltTerrain).
-		if (cat == kLsDepth) {
-			const auto& tb = globals::features::terrainBlending;
-			if (tb.loaded && tb.renderDepth && tb.renderTerrainDepth) {
-				tbDraw = true;
-				tbOffset = tb.renderAltTerrain;
-				if (cfg.tbNear == 0 || (cfg.tbNear == 1 && !GroundShellsSuspended()))
-					want = LsMode::kNone;
-			}
-		}
 		// The raise works in model space less a translate.
 		const auto& world = a_pass->geometry->world;
 		if (std::abs(world.scale - 1.0f) > 1e-4f)
@@ -955,20 +932,18 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		if (boundXY.x + boundRadius < r.x || boundXY.y + boundRadius < r.y || boundXY.x - boundRadius > r.z || boundXY.y - boundRadius > r.w)
 			want = LsMode::kNone;
 	}
-	if (want == LsMode::kRaise && cfg.tessellate && settings.Tessellation && (LsCameraPass(cat) || LsShadowPass(cat))) {
-		const float reach = LsCameraPass(cat) ? cfg.tessReach : cfg.shadowTessReach;
+	if (want == LsMode::kRaise && cfg.tessellate && settings.Tessellation) {
 		const auto& cam = lsCB.CameraPosAdjust;
 		const float dx = boundXY.x - cam.x;
 		const float dy = boundXY.y - cam.y;
-		if (std::sqrt(dx * dx + dy * dy) - boundRadius < reach)
+		if (std::sqrt(dx * dx + dy * dy) - boundRadius < cfg.shadowTessReach)
 			want = LsMode::kTess;
 	}
 	LsEntry* entry = nullptr;
 	if (want != LsMode::kNone) {
-		const uint64_t key = (uint64_t(a_lighting ? 1 : (tbOffset ? 3 : 2)) << 32) | state->modifiedVertexDescriptor;
-		entry = &ls.entries[key];
+		entry = &ls.entries[state->modifiedVertexDescriptor];
 		if (entry->state == 0) {
-			entry->pending = std::async(std::launch::async, LsCompile, a_lighting, tbOffset, SIE::ShaderCache::GetDefinesString(*shader, state->modifiedVertexDescriptor));
+			entry->pending = std::async(std::launch::async, LsCompile, SIE::ShaderCache::GetDefinesString(*shader, state->modifiedVertexDescriptor));
 			entry->state = 1;
 		}
 		if (entry->state == 1 && entry->pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -976,9 +951,9 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			const auto& sh = entry->shaders;
 			entry->state = (sh.vsRaise && sh.vs && sh.hs && sh.ds) ? 2 : 3;
 			if (entry->state == 2)
-				logger::info("[SNOW DEFORMATION] Landscape snow {}{} {:X}: ready in {:.0f} ms", a_lighting ? "Lighting" : "Utility", tbOffset ? " (depth offset)" : "", state->modifiedVertexDescriptor, sh.compileMs);
+				logger::info("[SNOW DEFORMATION] Landscape snow {:X}: ready in {:.0f} ms", state->modifiedVertexDescriptor, sh.compileMs);
 			else
-				logger::warn("[SNOW DEFORMATION] Landscape snow {}{} {:X}: shader compile FAILED, those draws stay unraised; defines: {}", a_lighting ? "Lighting" : "Utility", tbOffset ? " (depth offset)" : "", state->modifiedVertexDescriptor, sh.defines);
+				logger::warn("[SNOW DEFORMATION] Landscape snow {:X}: shader compile FAILED, those draws stay unraised; defines: {}", state->modifiedVertexDescriptor, sh.defines);
 		}
 		if (entry->state != 2)
 			want = LsMode::kNone;
@@ -989,12 +964,10 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			ls.drawCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<LsCBData>(), "SnowDeformation::LandscapeSnowCB");
 		const auto& t = a_pass->geometry->world.translate;
 		const auto& grid = lsCB.GridOrigin;
-		const bool parity = LsCameraPass(cat);
-		const float sink = (parity && !GroundShellsSuspended()) ? std::max(cfg.shellSink, 0.0f) : 0.0f;
 		LsCBData data{
 			{ float(double(t.x) - double(grid.x)), float(double(t.y) - double(grid.y)), t.z, std::max(cfg.lift, 0.0f) },
-			{ parity ? 1.0f : 0.0f, std::clamp(cfg.maxFactor, 1.0f, 64.0f), cfg.gate ? float(std::clamp(cfg.gateMask, 0, 31)) : 0.0f, cfg.cull ? 1.0f : 0.0f },
-			{ std::max(cfg.guard, 0.0f), sink, 0.0f, 0.0f }
+			{ 0.0f, std::clamp(cfg.maxFactor, 1.0f, 64.0f), cfg.gate ? float(std::clamp(cfg.gateMask, 0, 31)) : 0.0f, cfg.cull ? 1.0f : 0.0f },
+			{ std::max(cfg.guard, 0.0f), 0.0f, 0.0f, 0.0f }
 		};
 		if (want == LsMode::kTess && (uint32_t(data.tess[2]) & 16) != 0)
 			ls.shadeFrame.raiseExcl.Add(LsFillSmallExclusions(data, staticExclusions, boundXY, boundRadius, grid));
@@ -1046,10 +1019,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			entry->raiseAttaches++;
 		}
 		ls.mode = want;
-		if (tbDraw) {
-			globals::features::terrainBlending.keepVertexShader = true;
-			ls.tbKeep = true;
-		}
 	}
 
 	if (!cfg.measure || !slot.open)
@@ -1108,11 +1077,6 @@ void SnowDeformation::LandscapeSnowRestore()
 			context->End(slot.stats[i].get());
 		ls.curDraw = -1;
 	}
-	// Normally TerrainShaderHacks consumed it at the draw; a draw it skipped must not hand it on.
-	if (ls.tbKeep) {
-		globals::features::terrainBlending.keepVertexShader = false;
-		ls.tbKeep = false;
-	}
 	if (ls.mode != LsMode::kNone)
 		LsDetach();
 }
@@ -1147,15 +1111,10 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		if (a_args.contains(k) && a_args[k].is_number())
 			v = a_args[k].get<float>();
 	};
-	for (uint32_t i = 0; i < kLsCategories; i++)
-		rdb(kLsNames[i], c.attach[i]);
+	rdb("shadowSun", c.raiseSun);
 	rdb("tessellate", c.tessellate);
 	rdb("gate", c.gate);
 	rdb("cull", c.cull);
-	if (a_args.contains("tbNear") && a_args["tbNear"].is_boolean())
-		c.tbNear = a_args["tbNear"].get<bool>() ? 2 : 0;
-	else if (a_args.contains("tbNear") && a_args["tbNear"].is_number_integer())
-		c.tbNear = std::clamp(a_args["tbNear"].get<int>(), 0, 2);
 	rdb("measure", c.measure);
 	rdb("stats", c.stats);
 	rdf("maxFactor", c.maxFactor);
@@ -1163,7 +1122,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("lift", c.lift);
 	rdf("tessReach", c.tessReach);
 	rdf("shadowTessReach", c.shadowTessReach);
-	rdf("shellSink", c.shellSink);
 	rdb("shadowMainCamera", c.shadowMainCamera);
 	rdf("blendStart", landscapeBlendStart);
 	rdf("blendBonus", c.blendBonus);
@@ -1203,15 +1161,12 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		out["targets"] = targets;
 		out["totals"] = { { "frames", t.frames }, { "statFrames", t.statFrames }, { "lost", t.lost }, { "disjoint", t.disjoint }, { "overflow", t.overflow }, { "categories", cats } };
 	}
-	json attach = json::object();
-	for (uint32_t i = 0; i < kLsCategories; i++)
-		attach[kLsNames[i]] = c.attach[i];
-	out["config"] = { { "attach", attach }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull }, { "tbNear", c.tbNear },
-		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shellSink", c.shellSink }, { "shadowMainCamera", c.shadowMainCamera },
+	out["config"] = { { "shadowSun", c.raiseSun }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
+		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shadowMainCamera", c.shadowMainCamera },
 		{ "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
-		entries.push_back({ { "type", (key >> 32) == 1 ? "Lighting" : ((key >> 32) == 3 ? "Utility (depth offset)" : "Utility") }, { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
+		entries.push_back({ { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
 			{ "tessAttaches", e.tessAttaches }, { "raiseAttaches", e.raiseAttaches }, { "compileMs", e.shaders.compileMs }, { "defines", e.shaders.defines } });
 	out["shaders"] = entries;
 	out["surface"] = { { "valid", ls.cbValid }, { "gridOrigin", { lsCB.GridOrigin.x, lsCB.GridOrigin.y } },

@@ -75,10 +75,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	ao *= 1 - hq_spec.a;
 	il += hq_spec.rgb;
 }
-
-#	if defined(SNOW_DEFORMATION)
-#		include "SnowDeformation/SnowSeamShield.hlsli"
-#	endif
 #endif
 
 #if defined(IBL)
@@ -128,10 +124,6 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	// pixels with no vertex AO contribution, so vertexAO defaults to 1.
 	float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
 	ssgiAo = saturate(ssgiAo / max(vertexAO, EPSILON_DIVISION));
-
-#	if defined(SNOW_DEFORMATION)
-	ssgiAo = SnowSeamLiftAO(ssgiAo, positionWS.xy);
-#	endif
 
 	float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
 	float3 multiBounceSSGIAo = MultiBounceAO(linAlbedo, ssgiAo);
