@@ -2744,10 +2744,12 @@ void SnowDeformation::DrawShell()
 	// S1: the early prepass already put this frame's ground snow into the main
 	// depth, so the shell must shade it even on the frame the gate closes.
 	const bool early = shellEarlyFrame == globals::state->frameCount;
-	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellHidden();
 	const bool shellGround = shellDrawGroundGated || early;
+	// The raised landscape reads the same object fields as the ground shell.
+	const bool landscapeReads = landscapeSnow && !GroundShellsSuspended();
 	// Off the ground, the captures feed only their own skins (and the volume).
-	if (!shellGround && !settings.VolumeSnow)
+	if (!shellGround && !landscapeReads && !settings.VolumeSnow)
 		CullUnseenCaptures(cbData);
 	else {
 		captureViewCulled = 0;
@@ -2761,7 +2763,7 @@ void SnowDeformation::DrawShell()
 	// Every reader of these fields (shell, skins, trench patch, caster,
 	// volume) is off in a bare square with nothing captured.
 	spanClock.Lap(CpuCensus::kSpanShellSetup);
-	const bool nothingDraws = !shellGround && capturedStatics.empty() && !settings.VolumeSnow;
+	const bool nothingDraws = !shellGround && !landscapeReads && capturedStatics.empty() && !settings.VolumeSnow;
 	if (nothingDraws)
 		SkipObjectHeightMap();
 	else if (!SnowShadersPending(2) && EnsureStaticsShaders())
@@ -3592,8 +3594,12 @@ void SnowDeformation::DrawShell()
 		// before its CopyResource.
 		context->OMSetRenderTargets(8, rtvs, dsv);
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
-		context->CopyResource(lodHistogramStaging[lodReadbackRing].get(), lodHistogram.get());
-		lodHistStagingValid[lodReadbackRing] = true;
+		// A slot the GPU has not finished is left alone: re-copied every frame,
+		// a GPU-bound frame never let it map.
+		if (!lodHistStagingValid[lodReadbackRing]) {
+			context->CopyResource(lodHistogramStaging[lodReadbackRing].get(), lodHistogram.get());
+			lodHistStagingValid[lodReadbackRing] = true;
+		}
 	}
 
 	// The post-shell depth copy that used to run here went with the seam

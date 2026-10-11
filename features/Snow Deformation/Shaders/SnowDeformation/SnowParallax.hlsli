@@ -18,8 +18,9 @@
 #define SNOW_DEFORMATION_SNOWPARALLAX_HLSLI
 
 // COMPUTESHADER: the shell's per-vertex bake runs the domain shader's
-// surface evaluation (descent + relief taps) in compute.
-#if defined(DOMAINSHADER) || defined(PSHADER) || defined(COMPUTESHADER)
+// surface evaluation (descent + relief taps) in compute; SNOW_SURFACE_ONLY:
+// so does the raised landscape, in its vertex and domain shaders.
+#if defined(DOMAINSHADER) || defined(PSHADER) || defined(COMPUTESHADER) || defined(SNOW_SURFACE_ONLY)
 // Cheap 2D cell hash for stochastic tiling offsets.
 float2 StochasticHash(float2 cell)
 {
@@ -99,7 +100,7 @@ float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
 	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
 	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
 }
-#endif  // DOMAINSHADER || PSHADER
+#endif  // DOMAINSHADER || PSHADER || COMPUTESHADER || SNOW_SURFACE_ONLY
 
 #ifdef PSHADER
 

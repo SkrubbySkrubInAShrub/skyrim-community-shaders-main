@@ -990,7 +990,7 @@ void SnowDeformation::PrepassSimulation()
 	// Copy A/B gate for both shadow copies. Prepass runs after the shadow
 	// mask passes, so this is read at next frame's; the hold keeps a coat
 	// popping in and out from flapping between the crisp and fallback paths.
-	const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
+	const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellHidden();
 	if (shellMayDraw || !capturedStatics.empty())
 		shadowCopyWantedFrames = kShellGateBareFrames;
 	else if (shadowCopyWantedFrames > 0)

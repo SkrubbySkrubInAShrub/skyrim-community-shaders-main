@@ -68,7 +68,12 @@ static float gDeferredZDy;
 static float gDeferredRampDepth;
 #endif
 
-cbuffer ShellCB : register(b0)
+// SNOW_SURFACE_ONLY: included for its surface recipe alone (LandscapeSnow.hlsl),
+// with ShellCB moved off b0 and no entry points or stage structs.
+#ifndef SNOW_SHELL_CB_REGISTER
+#	define SNOW_SHELL_CB_REGISTER b0
+#endif
+cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 {
 	// row_major matches the game's FrameBuffer.hlsli declarations; the CPU
 	// side copies the b12 bytes verbatim, which are row-major packed.
@@ -427,6 +432,7 @@ bool ShellBeyondSeam(float2 a, float2 b, float2 c, float2 d)
 	       ShellEdgeFade(mid) <= 0.0;
 }
 
+#ifndef SNOW_SURFACE_ONLY
 struct VS_OUTPUT
 {
 	// noperspective centroid: required interpolation for SV_Position when
@@ -440,11 +446,12 @@ struct VS_OUTPUT
 	float DebugHeight : TEXCOORD5;
 	// xyz: smooth per-vertex terrain normal, w: coverage alpha (taper*fade).
 	float4 TerrainNormalAlpha : TEXCOORD6;
-#ifdef SNOW_SHELL_PATCH_ID
+#	ifdef SNOW_SHELL_PATCH_ID
 	// Prepass draw only: the patch (+1) for the visible-patch cull, from the DS.
 	nointerpolation uint PatchId : TEXCOORD7;
-#endif
+#	endif
 };
+#endif
 
 // Manual bilinear over the terrain window (Load-based, deterministic).
 // Returns (height, rampDepth, coverage): rampDepth is the per-texture-class
@@ -1453,13 +1460,34 @@ float2 ShellVertexSlope(float2 gridLocal)
 	return float2(hxp - hxn, hyp - hyn);
 }
 
+// Shared with the raised landscape (LandscapeSnow.hlsl). Macros: as called
+// functions fxc schedules the shell's vertex stages differently.
+#define SHELL_TERRAIN_NORMAL(slopeX, slopeY) normalize(float3(-(slopeX) / 64.0, -(slopeY) / 64.0, 1.0))
+
+// Slope drape (Josef's sketch, 2026-09-05): on steep ground the layer
+// stands off along the surface normal instead of straight up, so a
+// near-vertical face keeps the full depth of cover in front of it. A
+// vertical-only offset thins to depth*cos(slope) and the face shows
+// through. The foot stays on the lattice; only the output position moves,
+// so every sample still reads the vertex's own ground. footXY is the
+// foot in position's frame (absolute world for the shell).
+#define SHELL_DRAPE(position, footXY, z, terrainHeight, terrainNormal)                                      \
+	[branch] if (SlopeDrape.x > 0.001 && (z) > (terrainHeight))                                             \
+	{                                                                                                       \
+		float drapeAbove = (z) - (terrainHeight);                                                           \
+		float drapeTilt = SlopeDrape.x * (1.0 - smoothstep(SlopeDrape.y, SlopeDrape.z, (terrainNormal).z)); \
+		float3 drapeDir = normalize(lerp(float3(0.0, 0.0, 1.0), (terrainNormal), drapeTilt));               \
+		position = float3((footXY), (terrainHeight)) + drapeDir * drapeAbove;                               \
+	}
+
+#ifndef SNOW_SURFACE_ONLY
 // The two height differences arrive as separate scalars, exactly as the four
 // taps used to leave them: as a float2 the compiler vectorises the normalize
 // below, which is the same arithmetic but not the same bytecode, and the
 // untouched paths have to stay provably identical.
 VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, float terrainHeight, float slopeX, float slopeY)
 {
-	float3 terrainNormal = normalize(float3(-slopeX / 64.0, -slopeY / 64.0, 1.0));
+	float3 terrainNormal = SHELL_TERRAIN_NORMAL(slopeX, slopeY);
 
 	// Coverage alpha drives both geometry taper and edge dithering in the PS.
 	float taper = smoothstep(0.0, 0.6, coverage);
@@ -1478,19 +1506,7 @@ VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, flo
 		z = ShellCameraPosAdjust.z;
 
 	float3 absolutePos = float3(GridOrigin + gridLocal, z);
-	// Slope drape (Josef's sketch, 2026-09-05): on steep ground the layer
-	// stands off along the surface normal instead of straight up, so a
-	// near-vertical face keeps the full depth of cover in front of it. A
-	// vertical-only offset thins to depth*cos(slope) and the face shows
-	// through. The foot (gridLocal) stays on the lattice; only the output
-	// position moves, so every sample still reads the vertex's own ground.
-	[branch] if (SlopeDrape.x > 0.001 && z > terrainHeight)
-	{
-		float above = z - terrainHeight;
-		float tilt = SlopeDrape.x * (1.0 - smoothstep(SlopeDrape.y, SlopeDrape.z, terrainNormal.z));
-		float3 dir = normalize(lerp(float3(0.0, 0.0, 1.0), terrainNormal, tilt));
-		absolutePos = float3(GridOrigin + gridLocal, terrainHeight) + dir * above;
-	}
+	SHELL_DRAPE(absolutePos, GridOrigin + gridLocal, z, terrainHeight, terrainNormal)
 
 	// Shader world space is camera-relative; previous frame uses its own adjust.
 	float3 rel = absolutePos - ShellCameraPosAdjust.xyz;
@@ -1500,20 +1516,20 @@ VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, flo
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
 	vsout.WorldPos = rel;
 	vsout.GridLocal = gridLocal;
-#ifdef SNOW_DS_LEAN
+#	ifdef SNOW_DS_LEAN
 	// The prepass PS reads CurrentClip.w and the normal's xyz of the rest.
 	vsout.CurrentClip = float4(0.0, 0.0, 0.0, mul(CameraViewProjUnjittered, float4(rel, 1.0)).w);
 	vsout.PreviousClip = 0.0;
 	vsout.Snowness = 0.0;
 	vsout.DebugHeight = 0.0;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, 0.0);
-#else
+#	else
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.Snowness = coverage;
 	vsout.DebugHeight = terrainHeight;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
-#endif
+#	endif
 	return vsout;
 }
 
@@ -1525,8 +1541,9 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
 	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, hxp - hxn, hyp - hyn);
 }
+#endif
 
-#if defined(VSHADER) && !defined(SNOW_TESS) && !defined(SNOW_VS_FLAT)
+#if defined(VSHADER) && !defined(SNOW_TESS) && !defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY)
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
 #ifdef SNOW_GRID_NONINDEXED
@@ -1702,7 +1719,7 @@ TessControlPoint ShellPatchControlPoint(uint2 quadXY, uint corner)
 	return cp;
 }
 
-#if defined(VSHADER) && defined(SNOW_TESS)
+#if defined(VSHADER) && defined(SNOW_TESS) && !defined(SNOW_SURFACE_ONLY)
 #ifdef SNOW_TESS_LIST
 // The shading pass's tessellated patches (PatchListCS), drawn indirect.
 StructuredBuffer<uint> TessPatches : register(t62);
@@ -1720,7 +1737,7 @@ TessControlPoint main(uint vertexID : SV_VertexID)
 }
 #endif
 
-#if defined(VSHADER) && defined(SNOW_VS_FLAT)
+#if defined(VSHADER) && defined(SNOW_VS_FLAT) && !defined(SNOW_SURFACE_ONLY)
 // The shading pass's flat patches (every hull factor 1 in the prepass): the
 // two triangles the tessellator emits for them, on its (1,0)-(0,1) domain
 // diagonal, corners read from the bake exactly as the domain shader's
@@ -1740,13 +1757,15 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 }
 #endif
 
-#if defined(HULLSHADER) || defined(DOMAINSHADER)
+#if (defined(HULLSHADER) || defined(DOMAINSHADER)) && !defined(SNOW_SURFACE_ONLY)
 struct TessFactors
 {
 	float Edge[4] : SV_TessFactor;
 	float Inside[2] : SV_InsideTessFactor;
 };
+#endif
 
+#if defined(HULLSHADER) || defined(DOMAINSHADER) || defined(SNOW_SURFACE_ONLY)
 // Detail reach: full kTessMax within kTessNear/kTessMax units, factor 1 by
 // kTessNear. Matches the relief fade band so tessellation is never spent
 // where the displacement has already faded out.
@@ -1754,12 +1773,15 @@ static const float kTessNear = 1600.0;
 static const float kTessMax = 8.0;
 #endif
 
-#ifdef HULLSHADER
+#if defined(HULLSHADER) || defined(SNOW_SURFACE_ONLY)
 // Deformed edges stretch the detail reach by this much (see EdgeTessFactor).
 static const float kTessReachBoost = 3.0;
 // Past the BOOSTED reach the factor clamps to 1 for every deformation value,
 // so the map taps cannot change the answer.
 static const float kTessCutoff = kTessNear * kTessReachBoost;
+#endif
+
+#if defined(HULLSHADER) && !defined(SNOW_SURFACE_ONLY)
 
 // Edge factor from the edge midpoint's camera distance, computed from the
 // shared corners only, so both patches on an edge agree (crack-free).
@@ -2075,10 +2097,11 @@ TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputC
 
 #include "SnowDeformation/SnowParallax.hlsli"
 
-#if defined(DOMAINSHADER) || defined(COMPUTESHADER)
+#if defined(DOMAINSHADER) || defined(COMPUTESHADER) || defined(SNOW_SURFACE_ONLY)
 // The vertex surface: ShellSurfaceZ plus the skirt descent and the
-// displacement relief. One function for the domain shader's live path and
-// for BakeCS, so a baked corner and a live vertex are the same bits.
+// displacement relief. One function for the domain shader's live path, for
+// BakeCS and for the raised landscape, so a baked corner, a live vertex and
+// a landscape vertex are the same bits.
 float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainHeight)
 {
 	float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
@@ -2154,9 +2177,9 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 	return ShellVertexZFrom(gridLocal, z, coverage, terrainHeight);
 }
-#endif  // DOMAINSHADER || COMPUTESHADER
+#endif  // DOMAINSHADER || COMPUTESHADER || SNOW_SURFACE_ONLY
 
-#ifdef DOMAINSHADER
+#if defined(DOMAINSHADER) && !defined(SNOW_SURFACE_ONLY)
 [domain("quad")]
 VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
 {

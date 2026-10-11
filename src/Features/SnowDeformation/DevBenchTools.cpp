@@ -105,6 +105,19 @@ namespace
 		a_write(a_sink, dumped.c_str());
 	}
 
+	void LandscapeTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		json out;
+		try {
+			const json args = a_argsJson && *a_argsJson ? json::parse(a_argsJson) : json::object();
+			out = globals::features::snowDeformation.LandscapeSnowTool(args);
+		} catch (const std::exception& e) {
+			out = { { "error", e.what() } };
+		}
+		const std::string dumped = out.dump();
+		a_write(a_sink, dumped.c_str());
+	}
+
 	void TrenchProbeTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		json out;
@@ -365,6 +378,9 @@ void SnowDeformation::InstallDevBenchTools()
 	static constexpr const char* volumeDesc =
 		R"({"description":"Volume snow measurement switches (runtime-only, not serialised). memorySeconds: Volume Memory, 0.5-30 s. showRings: Colour Rings. forceRebuild: rebuild every ring on its cadence (the idle gate's A/B; false = gate on). stats: pipeline statistics + occlusion around the volume draw, returned in stats (PS invocations over samples passed = marches per written pixel; read two frames late). Returns the volume's state: shader failure, level-0 occupancy count, capture count, and per level valid/rebuilds/voxel size/dims/origin. No args = read state.","inputSchema":{"type":"object","properties":{"memorySeconds":{"type":"number"},"showRings":{"type":"boolean"},"forceRebuild":{"type":"boolean"},"stats":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.volume", volumeDesc, &VolumeTool, nullptr);
+	static constexpr const char* landscapeDesc =
+		R"({"description":"Landscape snow (runtime-only, not serialised): the game's landscape raised onto the ground shell's surface. landscapeSnow: the Debugging toggle. hideShell: hide the ground shell and its caster (the A/B). Per pass (mainDeferred, lightingOther, shadowSun, shadowLocal, depthPrepass, utilityOther, skyOcclusion: bool) whether landscape draws there are raised. tessellate: near draws go through the hull (tessReach for camera passes, shadowTessReach for shadow maps, world units from the draw's bound); the rest take the raising VS. gate: tessellate only edges carrying sub-triangle surface detail; gateMask picks the checks (1 map tiles, 2 class borders, 4 water, 8 object lift, 16 exclusions; default 31). shellSink: units the raised surface sits under the ground shell in camera passes while the shell draws (default 2). cull: drop off-view patches (lift: units each corner is raised for the test, guard: clip-w fraction). maxFactor 1-64. measure: per-draw GPU timestamps of every landscape draw, averaged per frame since reset (categories and Utility depth targets); stats: pipeline statistics per draw. recompile: drop compiled shader sets. Returns config, totals, targets, shader sets (state 1 compiling, 2 ready, 3 failed) and the surface placement.","inputSchema":{"type":"object"}})";
+	dvb->RegisterTool("snowdeformation.landscape", landscapeDesc, &LandscapeTool, nullptr);
 	logger::info("[SNOW DEFORMATION] DevBench tools registered: snowdeformation.shadertypes, snowdeformation.cpucensus");
 #endif
 }

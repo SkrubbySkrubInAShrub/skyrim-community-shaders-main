@@ -1254,8 +1254,10 @@ struct SD_BSLightingShader_SetupGeometry
 
 		func(shader, a_pass, a_flags);
 
-		if (snowDeformation.loaded)
+		if (snowDeformation.loaded) {
 			snowDeformation.BSLightingShader_SetupGeometry(a_pass);
+			snowDeformation.LandscapeSnowSetup(a_pass, true);
+		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

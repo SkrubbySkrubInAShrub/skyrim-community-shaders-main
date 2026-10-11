@@ -2994,6 +2994,8 @@ public:
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
+	/** @brief The ground shell and its caster draw nothing: suspended, or hidden for the landscape snow A/B (the road class and patch stay). */
+	bool GroundShellHidden() const { return GroundShellsSuspended() || (landscapeSnow && landscapeHideShell); }
 	/** @brief 2^(1 - Berm Steepness): the berm tap reach both the bake and the shells use. Exactly 1 at the default. */
 	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
 	/** @brief 1 - Snow Resistance: the share of a body's reach into the layer that carves. */
@@ -3973,6 +3975,22 @@ public:
 	void InstallLandscapeTimingHook();
 	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
 	void InstallDevBenchTools();
+	/** @brief Landscape snow (LANDSCAPE-SNOW-PLAN Phase 1): hooks Lighting RestoreGeometry and Utility Setup/RestoreGeometry; Lighting's SetupGeometry side rides the statics capture hook. Implemented in LandscapeSnow.cpp. */
+	void InstallLandscapeSnow();
+	/** @brief After the game's SetupGeometry: moves a landscape draw onto LandscapeSnow.hlsl, tessellated near the camera and through the raising VS beyond. */
+	void LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighting);
+	/** @brief Before the game's RestoreGeometry: puts back everything LandscapeSnowSetup changed. */
+	void LandscapeSnowRestore();
+	/** @brief Rebuilds the landscape's ShellCB copy and SRV set from the live fields; false while one is missing or the footprint holds no snow. */
+	bool LandscapeSnowRefresh();
+	/** @brief One-line status for the Debugging menu. */
+	std::string LandscapeSnowStatus() const;
+	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */
+	json LandscapeSnowTool(const json& a_args);
+	/** @brief Debug, not serialised: raise the game's landscape onto the ground shell's surface. */
+	bool landscapeSnow = false;
+	/** @brief Debug, not serialised: hide the ground shell and its caster (GroundShellHidden). */
+	bool landscapeHideShell = false;
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
 	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */

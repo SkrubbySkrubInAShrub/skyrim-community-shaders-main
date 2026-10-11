@@ -1791,6 +1791,17 @@ void SnowDeformation::DrawSettings()
 				for (uint32_t i = 0; i < EffectCostProbe::kEffects; i++)
 					WrapTextF("  %-28s %6.3f ms", EffectCostProbe::kNames[i], effectCost.withMs[i] - effectCost.withoutMs[i]);
 			}
+			ImGui::Checkbox(T(TKEY("landscape_snow"), "Landscape Snow"), &landscapeSnow);
+			if (auto _ttLandscapeSnow = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("landscape_snow_tooltip"), "Experimental: raises the game's own landscape to the ground snow's surface, trenches, berms and drifts included, in every pass that draws it, shadows too. Only the shape so far: the raised ground still wears its own textures, so leave the ground shell on to see snow. Terrain Blending's near ground stays unraised for now."));
+			if (landscapeSnow) {
+				ImGui::Indent();
+				ImGui::Checkbox(T(TKEY("landscape_hide_shell"), "Hide Ground Shell"), &landscapeHideShell);
+				if (auto _ttLandscapeHide = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("landscape_hide_shell_tooltip"), "Hides the ground shell and its shadows so the raised landscape can be seen on its own. Road snow and object snow stay."));
+				WrapTextF("  %s", LandscapeSnowStatus().c_str());
+				ImGui::Unindent();
+			}
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("ground_lift_debug_tooltip"), "Measurement aid: the ground snow rises onto the tops of nearby objects again, the way it did to meet the retired raised object shell - the sheets across doorways and along wall tops. Off, the ground snow keeps its own height and objects stand in it; roofs and walkways still keep the ground beneath them bare."));
