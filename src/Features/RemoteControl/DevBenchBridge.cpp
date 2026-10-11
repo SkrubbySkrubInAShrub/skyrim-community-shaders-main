@@ -32,10 +32,13 @@
 #	include <memory>
 #	include <optional>
 #	include <stdexcept>
+#	include <unordered_set>
 
 namespace
 {
 	using json = nlohmann::json;
+
+	std::unordered_set<Feature*> g_bootLoadedFeatures;
 
 	// Current render frame, used as a coarse "enqueued at" stamp so callers can poll
 	// inspect(kind=state) until frame_count advances past it (i.e. a queued main-thread
@@ -240,6 +243,8 @@ namespace
 			const bool explicitVal = a_args.value("enabled", false);
 			task->AddTask([target, hasExplicit, explicitVal, shortName]() {
 				const bool applied = hasExplicit ? explicitVal : !target->loaded;
+				if (applied && !g_bootLoadedFeatures.contains(target))
+					return;
 				target->loaded = applied;
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
@@ -351,7 +356,7 @@ namespace
 				if (!profiler)
 					return json{ { "error", "profiler unavailable" } };
 				json passes = json::array();
-				for (const auto& r : profiler->GetResults()) {
+				for (const auto& r : profiler->GetStatistics()) {
 					if (!r.valid)
 						continue;
 					if (!filter.empty() && r.name.find(filter) == std::string::npos)
@@ -624,6 +629,10 @@ namespace DevBenchBridge
 	 */
 	void Install()
 	{
+		for (auto* feature : Feature::GetFeatureList())
+			if (feature->loaded)
+				g_bootLoadedFeatures.insert(feature);
+
 		auto* dvb = DevBenchAPI::GetDevBenchInterface001();
 		if (!dvb) {
 			logger::info("DevBenchBridge: devbench not present; CS tools not registered");
@@ -669,7 +678,7 @@ namespace DevBenchBridge
  * inspection, shader caching, capture operations, and settings persistence.
  * If DevBench is unavailable, no action is taken.
  */
-void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
+	void Install() {}  // inert until built with DEVBENCH_BRIDGE_ENABLED
 }
 
 #endif
