@@ -148,14 +148,18 @@ void TerrainBlending::TerrainShaderHacks()
 		if (renderAltTerrain) {
 			auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			context->VSSetShader(GetTerrainOffsetVertexShader(), NULL, NULL);
+			if (!keepVertexShader)
+				context->VSSetShader(GetTerrainOffsetVertexShader(), NULL, NULL);
 		} else {
 			auto dsv = terrainDepth.views[0];
 			context->OMSetRenderTargets(0, nullptr, dsv);
-			auto shadowState = globals::game::shadowState;
-			auto& currentVertexShader = shadowState->GetRuntimeData().currentVertexShader;
-			context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
+			if (!keepVertexShader) {
+				auto shadowState = globals::game::shadowState;
+				auto& currentVertexShader = shadowState->GetRuntimeData().currentVertexShader;
+				context->VSSetShader((ID3D11VertexShader*)currentVertexShader->shader, NULL, NULL);
+			}
 		}
+		keepVertexShader = false;
 		renderAltTerrain = !renderAltTerrain;
 	}
 }
