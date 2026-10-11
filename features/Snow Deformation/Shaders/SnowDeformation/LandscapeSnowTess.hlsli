@@ -18,8 +18,16 @@ cbuffer LandscapeSnowCB : register(b11)
 	// 4 water, 8 object lift, 16 exclusions), w: drop patches outside the view.
 	float4 LsTess;
 	// x: view cull guard band, a fraction of clip w, y: units the raised
-	// surface sits under the ground shell while the shell still draws.
+	// surface sits under the ground shell while the shell still draws, z: how
+	// many LsExcl entries are live, w: shadow maps read the shell caster's bake
+	// (LandscapeSnow.hlsl LsCastBaked).
 	float4 LsCull;
+	// Exclusions over the draw small enough for the gate's point checks to miss
+	// (LandscapeSnow.cpp LsFillSmallExclusions): sealed containers and small
+	// clearings, grid-local, xy centre, zw half extents along the rectangle's
+	// own axes; the matching LsExclAxis.xy is its x axis.
+	float4 LsExcl[16];
+	float4 LsExclAxis[16];
 };
 
 // The hull's checks; the tessellation constants they read are hull-only.
@@ -137,42 +145,119 @@ bool LsEdgeDetail(float2 a, float2 b, uint gate)
 	return detail;
 }
 
+// The segment ab meets exclusion rectangle i, by a slab test in its own
+// frame, grown by the near mask's texel. The endpoints are put in one
+// order first, so both patches on an edge get the same answer.
+bool LsSegmentMeetsExcl(float2 a, float2 b, uint i)
+{
+	[flatten] if (a.x > b.x || (a.x == b.x && a.y > b.y))
+	{
+		float2 t = a;
+		a = b;
+		b = t;
+	}
+	float2 ax = LsExclAxis[i].xy;
+	float2 ay = float2(-ax.y, ax.x);
+	float2 h = LsExcl[i].zw + 4.0;
+	float2 pa = float2(dot(a - LsExcl[i].xy, ax), dot(a - LsExcl[i].xy, ay));
+	float2 d = float2(dot(b - a, ax), dot(b - a, ay));
+	float t0 = 0.0;
+	float t1 = 1.0;
+	bool meets = true;
+	[unroll] for (uint k = 0; k < 2; k++)
+	{
+		[flatten] if (abs(d[k]) < 1e-6)
+		{
+			meets = meets && abs(pa[k]) <= h[k];
+		}
+		else
+		{
+			float u0 = (-h[k] - pa[k]) / d[k];
+			float u1 = (h[k] - pa[k]) / d[k];
+			t0 = max(t0, min(u0, u1));
+			t1 = min(t1, max(u0, u1));
+		}
+	}
+	return meets && t0 <= t1;
+}
+
+bool LsEdgeMeetsExcl(float2 a, float2 b)
+{
+	bool meets = false;
+	[loop] for (uint i = 0; i < (uint)LsCull.z && !meets; i++)
+		meets = LsSegmentMeetsExcl(a, b, i);
+	return meets;
+}
+
+// An exclusion rectangle whose centre is inside the triangle: one no edge
+// meets lies wholly inside it.
+bool LsTriangleHoldsExcl(float2 p0, float2 p1, float2 p2)
+{
+	bool holds = false;
+	[loop] for (uint i = 0; i < (uint)LsCull.z && !holds; i++)
+	{
+		float2 c = LsExcl[i].xy;
+		float d0 = (p1.x - p0.x) * (c.y - p0.y) - (p1.y - p0.y) * (c.x - p0.x);
+		float d1 = (p2.x - p1.x) * (c.y - p1.y) - (p2.y - p1.y) * (c.x - p1.x);
+		float d2 = (p0.x - p2.x) * (c.y - p2.y) - (p0.y - p2.y) * (c.x - p2.x);
+		holds = (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0);
+	}
+	return holds;
+}
+
 // The shell's vertex spacing along the edge: its base lattice step, divided
 // in camera passes by its hull's trench factor (EdgeTessFactor) and capped
 // at TessScreen.x pixels per segment. Reads the edge's endpoints only, so
 // both patches on an edge agree.
+float LsDetailFactor(float3 a, float3 b)
+{
+	float2 mid = 0.5 * (a.xy + b.xy);
+	float dist = length(mid - (ShellCameraPosAdjust.xy - GridOrigin));
+	float spacing = ShellBandStep(mid);
+	[branch] if (LsTess.x > 0.5)
+	{
+		float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
+		float reach = kTessNear * reliefBase;
+		[branch] if (dist < kTessCutoff)
+		{
+			float deform = max(max(SampleDeformationFast(a.xy), SampleDeformationFast(b.xy)), SampleDeformationFast(mid));
+			reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
+		}
+		spacing /= clamp(reach / max(dist, 32.0), 1.0, kTessMax);
+	}
+	float factor = clamp(distance(a.xy, b.xy) / spacing, 1.0, LsTess.y);
+	[branch] if (LsTess.x > 0.5 && TessScreen.x > 0.0 && factor > 1.0)
+	{
+		float3 camLocal = float3(GridOrigin, 0.0) - ShellCameraPosAdjust.xyz;
+		float4 clipA = mul(CameraViewProj, float4(a + camLocal, 1.0));
+		float4 clipB = mul(CameraViewProj, float4(b + camLocal, 1.0));
+		[flatten] if (min(clipA.w, clipB.w) > 16.0)
+			factor = min(factor, max(length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz) / TessScreen.x, 1.0));
+	}
+	return factor;
+}
+
+// LsDetailFactor where the edge carries detail inside the shell's span; 1 elsewhere.
 float LsEdgeFactor(float3 a, float3 b)
 {
 	float2 mid = 0.5 * (a.xy + b.xy);
 	float factor = 1.0;
 	bool live = ShellEdgeFade(a.xy) > 0.0 || ShellEdgeFade(b.xy) > 0.0 || ShellEdgeFade(mid) > 0.0;
 	[branch] if (live && LsTess.z > 0.5)
-		live = LsEdgeDetail(a.xy, b.xy, (uint)LsTess.z);
+		live = LsEdgeDetail(a.xy, b.xy, (uint)LsTess.z) || (((uint)LsTess.z & 16) != 0 && LsEdgeMeetsExcl(a.xy, b.xy));
 	[branch] if (live)
-	{
-		float dist = length(mid - (ShellCameraPosAdjust.xy - GridOrigin));
-		float spacing = ShellBandStep(mid);
-		[branch] if (LsTess.x > 0.5)
-		{
-			float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
-			float reach = kTessNear * reliefBase;
-			[branch] if (dist < kTessCutoff)
-			{
-				float deform = max(max(SampleDeformationFast(a.xy), SampleDeformationFast(b.xy)), SampleDeformationFast(mid));
-				reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
-			}
-			spacing /= clamp(reach / max(dist, 32.0), 1.0, kTessMax);
-		}
-		factor = clamp(distance(a.xy, b.xy) / spacing, 1.0, LsTess.y);
-		[branch] if (LsTess.x > 0.5 && TessScreen.x > 0.0 && factor > 1.0)
-		{
-			float3 camLocal = float3(GridOrigin, 0.0) - ShellCameraPosAdjust.xyz;
-			float4 clipA = mul(CameraViewProj, float4(a + camLocal, 1.0));
-			float4 clipB = mul(CameraViewProj, float4(b + camLocal, 1.0));
-			[flatten] if (min(clipA.w, clipB.w) > 16.0)
-				factor = min(factor, max(length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz) / TessScreen.x, 1.0));
-		}
-	}
+		factor = LsDetailFactor(a, b);
 	return factor;
+}
+
+// The inside factor: the largest edge's, or the detailed one where an
+// exclusion rectangle lies wholly inside the patch (its edges stay as they
+// are, so no crack).
+float LsInsideFactor(float3 g0, float3 g1, float3 g2, float a_edges)
+{
+	float inside = a_edges;
+	[branch] if (LsCull.z > 0.5 && ((uint)LsTess.z & 16) != 0 && LsTriangleHoldsExcl(g0.xy, g1.xy, g2.xy))
+		inside = max(inside, max(LsDetailFactor(g1, g2), max(LsDetailFactor(g2, g0), LsDetailFactor(g0, g1))));
+	return inside;
 }
 #endif

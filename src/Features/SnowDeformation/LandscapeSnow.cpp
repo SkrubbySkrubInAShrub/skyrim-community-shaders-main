@@ -35,8 +35,8 @@ namespace
 	constexpr uint32_t kLsMaxTargets = 8;
 	constexpr uint32_t kLsSlots = 6;
 	constexpr uint32_t kLsMaxDraws = 1024;
-	// Every SRV slot the surface reads, t0..t59.
-	constexpr uint32_t kLsSRVCount = 60;
+	// Every SRV slot the surface reads, t0..t63 (t9, t23 and t63: the shell caster's bake).
+	constexpr uint32_t kLsSRVCount = 64;
 
 	bool LsCameraPass(uint32_t a_cat) { return a_cat == kLsMain || a_cat == kLsDepth; }
 	bool LsShadowPass(uint32_t a_cat) { return a_cat == kLsShadowSun || a_cat == kLsShadowLocal || a_cat == kLsSkyOcclusion; }
@@ -63,15 +63,74 @@ namespace
 		// raising VS alone, no hull.
 		float tessReach = 2600.0f;
 		float shadowTessReach = 2000.0f;
+		// Shadow maps draw with their cascade's camera in the per-frame buffer: place their
+		// surface (grid, distance terms, tessellation reach) by the player's camera instead.
+		bool shadowMainCamera = true;
+		// Shadow maps read the shell caster's per-frame bake (on its own grid) instead of
+		// evaluating the surface per vertex in every cascade.
+		bool shadowBake = true;
 	};
+
+	// Mirrors LandscapeSnowTess.hlsli LsExcl / LsExclAxis.
+	constexpr uint32_t kLsMaxSmallExclusions = 16;
 
 	struct alignas(16) LsCBData
 	{
 		float geometry[4];
 		float tess[4];
 		float cull[4];
+		float exclusion[kLsMaxSmallExclusions][4];
+		float exclusionAxis[kLsMaxSmallExclusions][4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(LsCBData);
+
+	// Clearings this small can fall between the gate's point checks (a land
+	// triangle's interior lies up to ~45 units from its corners and edge
+	// midpoints); larger ones always cover one.
+	constexpr float kLsSmallExclusionReach = 100.0f;
+
+	// The exclusions a tessellated draw's bound reaches that the gate's point
+	// checks can miss, grid-local, into its CB: every sealed container as its
+	// rectangle, every small clearing as the square of its reach. More than
+	// the CB holds: the draw drops its content gate, so every edge is detailed.
+	int LsFillSmallExclusions(LsCBData& a_data, const std::vector<std::pair<float4, float4>>& a_exclusions, float2 a_boundXY, float a_boundRadius, float2 a_gridOrigin)
+	{
+		uint32_t n = 0;
+		bool overflow = false;
+		for (const auto& [posRadius, dirExtType] : a_exclusions) {
+			const bool sealed = dirExtType.w > 2.5f;
+			// SnowExclusions.hlsli ExclusionReach.
+			const float reach = 1.4f * std::max(posRadius.w, 1.0f) * (1.0f + std::sqrt(dirExtType.x * dirExtType.x + dirExtType.y * dirExtType.y)) +
+			                    1.2f * std::max(std::abs(dirExtType.z), 1.0f);
+			if (!sealed && reach >= kLsSmallExclusionReach)
+				continue;
+			const float dx = posRadius.x - a_boundXY.x;
+			const float dy = posRadius.y - a_boundXY.y;
+			const float r = reach + a_boundRadius + 8.0f;
+			if (dx * dx + dy * dy > r * r)
+				continue;
+			if (n == kLsMaxSmallExclusions) {
+				a_data.tess[2] = 0.0f;
+				n = 0;
+				overflow = true;
+				break;
+			}
+			auto& c = a_data.exclusion[n];
+			auto& axis = a_data.exclusionAxis[n];
+			c[0] = float(double(posRadius.x) - double(a_gridOrigin.x));
+			c[1] = float(double(posRadius.y) - double(a_gridOrigin.y));
+			// A sealed rectangle's x axis is (cos, -sin) of its angle (Statics.cpp).
+			c[2] = sealed ? posRadius.w : reach;
+			c[3] = sealed ? dirExtType.z : reach;
+			axis[0] = sealed ? dirExtType.y : 1.0f;
+			axis[1] = sealed ? -dirExtType.x : 0.0f;
+			axis[2] = 0.0f;
+			axis[3] = 0.0f;
+			n++;
+		}
+		a_data.cull[2] = float(n);
+		return overflow ? -1 : int(n);
+	}
 
 	struct LsShaders
 	{
@@ -177,6 +236,23 @@ namespace
 		double compileMs = 0.0;
 	};
 
+	// Per frame: draws that carried small exclusions (and how many), and the ones that overflowed the CB.
+	struct LsExclCounts
+	{
+		uint32_t draws = 0;
+		uint32_t rects = 0;
+		uint32_t overflow = 0;
+		void Add(int a_filled)
+		{
+			if (a_filled < 0)
+				overflow++;
+			else if (a_filled > 0) {
+				draws++;
+				rects += uint32_t(a_filled);
+			}
+		}
+	};
+
 	struct LsShadeCounts
 	{
 		uint32_t captures = 0;
@@ -185,6 +261,8 @@ namespace
 		uint32_t replayCalls = 0;
 		uint32_t replayDraws = 0;
 		uint32_t replayTess = 0;
+		LsExclCounts replayExcl;
+		LsExclCounts raiseExcl;
 	};
 
 	struct LsState
@@ -208,6 +286,12 @@ namespace
 		ID3D11ShaderResourceView* srvs[kLsSRVCount]{};
 		ID3D11SamplerState* sampler = nullptr;
 		float4 liveRect{};
+		// Per category, the last refresh's camera adjust and the per-frame buffer's, and
+		// whether its shadow draws read the caster's bake.
+		float4 camUsed[kLsCategories]{};
+		float4 camFrame[kLsCategories]{};
+		bool castBaked = false;
+		bool castBakedCat[kLsCategories]{};
 
 		// The draw in flight.
 		LsMode mode = LsMode::kNone;
@@ -303,9 +387,6 @@ namespace
 	void LsShadeTrack(RE::BSRenderPass* a_pass, uint32_t a_cat, uint32_t a_frame)
 	{
 		if (a_frame != ls.captureFrame) {
-			ls.shadeLast = ls.shadeFrame;
-			ls.shadeLast.captures = uint32_t(ls.captures.size());
-			ls.shadeFrame = {};
 			ls.captures.clear();
 			ls.captured.clear();
 			ls.captureFrame = a_frame;
@@ -469,6 +550,9 @@ namespace
 	void LsNewFrame(uint32_t a_frame)
 	{
 		ls.lastFrame = a_frame;
+		ls.shadeLast = ls.shadeFrame;
+		ls.shadeLast.captures = ls.captureFrame + 1 == a_frame ? uint32_t(ls.captures.size()) : 0;
+		ls.shadeFrame = {};
 		auto* context = globals::d3d::context;
 		auto& cur = ls.slots[ls.slotIndex];
 		if (cur.open) {
@@ -594,13 +678,30 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	// frame's camera and paired with the fields as they stand now.
 	auto& fb = globals::game::frameBufferCached;
 	ShellCB cb = *lastShellCBData;
-	cb.CameraViewProj = fb.GetCameraViewProj();
-	cb.CameraViewProjUnjittered = fb.GetCameraViewProjUnjittered();
-	cb.CameraPreviousViewProjUnjittered = fb.GetCameraPreviousViewProjUnjittered();
-	cb.CameraView = fb.GetCameraView();
-	cb.CameraPosAdjust = fb.GetCameraPosAdjust();
-	cb.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
-	RefreshShellGridPlacement(cb);
+	const uint32_t cat = std::min(ls.cbCategory, kLsCategories - 1);
+	ls.camFrame[cat] = fb.GetCameraPosAdjust();
+	// The caster's bake was made on last DrawShell's grid and holds until Prepass
+	// rewrites the fields: shadow maps keep that grid and read it.
+	ls.castBaked = LsShadowPass(ls.cbCategory) && ls.cfg.shadowBake && shellCastBakeValid && shellVertexBake && shellVertexBake->srv &&
+	               shellVertexBakeSlope && shellVertexBakeSlope->srv && shellCastBake && shellCastBake->srv;
+	ls.castBakedCat[cat] = ls.castBaked;
+	if (!ls.castBaked) {
+		cb.CameraViewProj = fb.GetCameraViewProj();
+		cb.CameraViewProjUnjittered = fb.GetCameraViewProjUnjittered();
+		cb.CameraPreviousViewProjUnjittered = fb.GetCameraPreviousViewProjUnjittered();
+		cb.CameraView = fb.GetCameraView();
+		cb.CameraPosAdjust = fb.GetCameraPosAdjust();
+		cb.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
+		if (LsShadowPass(ls.cbCategory) && ls.cfg.shadowMainCamera) {
+			if (auto* camera = RE::Main::WorldRootCamera()) {
+				const auto& eye = camera->world.translate;
+				cb.CameraPosAdjust = { eye.x, eye.y, eye.z, 0.0f };
+				cb.CameraPreviousPosAdjust = cb.CameraPosAdjust;
+			}
+		}
+		RefreshShellGridPlacement(cb, &cb.CameraPosAdjust);
+	}
+	ls.camUsed[cat] = cb.CameraPosAdjust;
 	cb.SeamRampInv = 0.0f;
 	int seamMinX, seamMinY, seamMaxX, seamMaxY;
 	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY))
@@ -653,6 +754,9 @@ void SnowDeformation::LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderReso
 	s[kUntouchedTilesSlot] = untouchedTilesSRV.get();
 	s[kTerrainWetSlot] = TerrainWetSRV(a_cb.CompactLook.x > 0.5f);
 	s[kTerrainPlainSlot] = TerrainPlainSRV(a_cb);
+	s[9] = shellVertexBake ? shellVertexBake->srv.get() : nullptr;
+	s[23] = shellVertexBakeSlope ? shellVertexBakeSlope->srv.get() : nullptr;
+	s[63] = shellCastBake ? shellCastBake->srv.get() : nullptr;
 }
 
 bool SnowDeformation::LandscapeShadeReady()
@@ -663,6 +767,11 @@ bool SnowDeformation::LandscapeShadeReady()
 	if (!ready)
 		ls.shadeFallbacks++;
 	return ready;
+}
+
+bool SnowDeformation::LandscapeShadowsReadBake() const
+{
+	return LandscapeCastsGroundSnow() && ls.cfg.shadowBake;
 }
 
 bool SnowDeformation::LandscapeCastsGroundSnow() const
@@ -731,6 +840,8 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 			{ 1.0f, tessNear ? std::clamp(cfg.maxFactor, 1.0f, 64.0f) : 1.0f, cfg.gate ? float(std::clamp(cfg.gateMask, 0, 31)) : 0.0f, cfg.cull ? 1.0f : 0.0f },
 			{ std::max(cfg.guard, 0.0f), 0.0f, 0.0f, 0.0f }
 		};
+		if (tessNear && (uint32_t(data.tess[2]) & 16) != 0)
+			counts.replayExcl.Add(LsFillSmallExclusions(data, staticExclusions, cap.boundXY, cap.boundRadius, a_cb.GridOrigin));
 		ls.drawCB->Update(data);
 		if (cap.layout.get() != boundLayout) {
 			boundLayout = cap.layout.get();
@@ -892,8 +1003,10 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		LsCBData data{
 			{ float(double(t.x) - double(grid.x)), float(double(t.y) - double(grid.y)), t.z, std::max(cfg.lift, 0.0f) },
 			{ parity ? 1.0f : 0.0f, std::clamp(cfg.maxFactor, 1.0f, 64.0f), cfg.gate ? float(std::clamp(cfg.gateMask, 0, 31)) : 0.0f, cfg.cull ? 1.0f : 0.0f },
-			{ std::max(cfg.guard, 0.0f), sink, 0.0f, 0.0f }
+			{ std::max(cfg.guard, 0.0f), sink, 0.0f, LsShadowPass(cat) && ls.castBaked ? 1.0f : 0.0f }
 		};
+		if (want == LsMode::kTess && (uint32_t(data.tess[2]) & 16) != 0)
+			ls.shadeFrame.raiseExcl.Add(LsFillSmallExclusions(data, staticExclusions, boundXY, boundRadius, grid));
 		ls.drawCB->Update(data);
 		ID3D11Buffer* own[2] = { ls.drawCB->CB(), ls.shellCB->CB() };
 
@@ -1066,6 +1179,8 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("tessReach", c.tessReach);
 	rdf("shadowTessReach", c.shadowTessReach);
 	rdf("shellSink", c.shellSink);
+	rdb("shadowMainCamera", c.shadowMainCamera);
+	rdb("shadowBake", c.shadowBake);
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
@@ -1105,7 +1220,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	for (uint32_t i = 0; i < kLsCategories; i++)
 		attach[kLsNames[i]] = c.attach[i];
 	out["config"] = { { "landscapeSnow", landscapeSnow }, { "hideShell", landscapeHideShell }, { "landscapeShade", landscapeShade }, { "attach", attach }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull }, { "tbNear", c.tbNear },
-		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shellSink", c.shellSink } };
+		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shellSink", c.shellSink }, { "shadowMainCamera", c.shadowMainCamera }, { "shadowBake", c.shadowBake } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
 		entries.push_back({ { "type", (key >> 32) == 1 ? "Lighting" : ((key >> 32) == 3 ? "Utility (depth offset)" : "Utility") }, { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
@@ -1114,8 +1229,20 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	out["surface"] = { { "valid", ls.cbValid }, { "gridOrigin", { lsCB.GridOrigin.x, lsCB.GridOrigin.y } },
 		{ "liveRect", { ls.liveRect.x, ls.liveRect.y, ls.liveRect.z, ls.liveRect.w } }, { "camera", { lsCB.CameraPosAdjust.x, lsCB.CameraPosAdjust.y, lsCB.CameraPosAdjust.z } } };
 	const auto& sc = ls.shadeLast;
+	const auto excl = [](const LsExclCounts& a_c) { return json{ { "draws", a_c.draws }, { "rects", a_c.rects }, { "overflow", a_c.overflow } }; };
 	out["shade"] = { { "replayState", ls.shadeState }, { "compileMs", ls.shade.compileMs }, { "fallbackFrames", ls.shadeFallbacks },
-		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess } } } };
+		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess },
+						   { "replaySmallExclusions", excl(sc.replayExcl) }, { "raiseSmallExclusions", excl(sc.raiseExcl) } } } };
+	// The sealed containers the gate tests: centre, half extents, facing (radians).
+	json sealed = json::array();
+	for (const auto& [posRadius, dirExtType] : staticExclusions)
+		if (dirExtType.w > 2.5f && sealed.size() < 32)
+			sealed.push_back({ posRadius.x, posRadius.y, posRadius.z, posRadius.w, dirExtType.z, std::atan2(dirExtType.x, dirExtType.y) });
+	out["sealed"] = sealed;
+	json cams = json::object();
+	for (uint32_t i = 0; i < kLsCategories; i++)
+		cams[kLsNames[i]] = { { "used", { ls.camUsed[i].x, ls.camUsed[i].y, ls.camUsed[i].z } }, { "perFrameBuffer", { ls.camFrame[i].x, ls.camFrame[i].y, ls.camFrame[i].z } }, { "castBaked", ls.castBakedCat[i] } };
+	out["cameras"] = cams;
 	out["status"] = LandscapeSnowStatus();
 	return out;
 }

@@ -2591,7 +2591,7 @@ public:
 	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
 
 	/** @brief Re-derives the camera-anchored grid placement fields of a ShellCB from THIS frame's camera. Shared by DrawShell and the shadow-caster injection so the caster geometry never lags the visible surface by a frame (a stale grid slides a crisp shadow during camera motion). Implemented in SnowDeformation/Shell.cpp. */
-	void RefreshShellGridPlacement(ShellCB& a_cb);
+	void RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust = nullptr);
 
 	/** @brief Shadow-source diagnostics for the settings UI (kept permanently; they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
 	uint32_t dbgLodDescriptorCount = 0;
@@ -3989,6 +3989,8 @@ public:
 	bool LandscapeShadeReady();
 	/** @brief The raised landscape casts the ground snow into the sun cascades under Snow on Landscape, so the shell caster stands down. */
 	bool LandscapeCastsGroundSnow() const;
+	/** @brief Under Snow on Landscape the sun cascades read the shell caster's per-frame bake, so the early prepass keeps baking. */
+	bool LandscapeShadowsReadBake() const;
 	/** @brief Snow on Landscape: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl where the shell prepass draws its grid. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
 	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB);
 	/** @brief One-line status for the Debugging menu. */

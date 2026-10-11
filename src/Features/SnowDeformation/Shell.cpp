@@ -1780,7 +1780,7 @@ void SnowDeformation::BindSeamShield()
 	context->CSSetConstantBuffers(7, 1, &cb);
 }
 
-void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
+void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
 {
 	// Grid placement re-derived from THIS frame's camera; shared by
 	// DrawShell and the shadow-caster injection: a one-frame-stale grid slides a
@@ -1794,7 +1794,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// actually bound - correct even when the window scrolls later in the
 	// frame.
 	auto& fb = globals::game::frameBufferCached;
-	const auto camAdjust = fb.GetCameraPosAdjust();
+	const auto camAdjust = a_camAdjust ? *a_camAdjust : fb.GetCameraPosAdjust();
 	const float shellSpacing = kShellGridSpacing;
 	a_cb.GridSpacing = shellSpacing;
 	a_cb.GridDim = kShellGridDim;
@@ -2079,9 +2079,10 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	if (cb.CompactLook.x > 0.5f)
 		UpdateTerrainWet();
 
-	// Snow on Landscape: the landscape's own meshes replace the grid, which
-	// is all the bake serves (the shell caster stands down with it).
+	// Snow on Landscape: the landscape's own meshes replace the grid; the bake
+	// then serves only the raised landscape's sun cascades.
 	const bool shade = LandscapeShadeReady();
+	const bool bake = !shade || LandscapeShadowsReadBake();
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
@@ -2102,7 +2103,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
 
 	// DrawShell's bake, on this CB: the prepass hull and domain read it.
-	if (shade)
+	if (!bake)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Vertex Bake");
 	else
 		globals::profiler->BeginPass("SnowDeformation::Ground - Vertex Bake");
@@ -2126,11 +2127,11 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->CSSetUnorderedAccessViews(1, 3, bakeUAVs, nullptr);
 	context->CSSetShader(bakeCS, nullptr, 0);
 	constexpr UINT bakeGroups = (kShellGridDim + 1 + 7) / 8;
-	if (!shade)
+	if (bake)
 		context->Dispatch(bakeGroups, bakeGroups, 1);
 	ID3D11UnorderedAccessView* nullBakeUAVs[3] = {};
 	context->CSSetUnorderedAccessViews(1, 3, nullBakeUAVs, nullptr);
-	if (!shade)
+	if (bake)
 		globals::profiler->EndPass();
 
 	globals::profiler->BeginPass("SnowDeformation::Ground - Shell Depth Prepass");
@@ -2280,8 +2281,8 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	shellEarlyState = EarlyPrepass::Drawing;
 	// Every field the bake read is final here and is next written in the
 	// next Prepass, after the next frame's shadow mask.
-	shellCastBakeValid = !shade;
-	if (!shade) {
+	shellCastBakeValid = bake;
+	if (bake) {
 		shellSlopeKey = shellSlopeKeyPending;
 		shellSlopeKeyValid = true;
 	}

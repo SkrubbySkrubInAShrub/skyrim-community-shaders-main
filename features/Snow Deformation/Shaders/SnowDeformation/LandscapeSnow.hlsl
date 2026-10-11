@@ -43,6 +43,26 @@
 // away from the light (Shadows.cpp kCasterDepthPush).
 #	define LS_CASTER
 static const float kLsCasterPush = 0.0008;
+
+// The caster's own bake (SnowShell.hlsl BakeCS: its surface, coverage, terrain
+// height and slope at every base-grid vertex), bilinear between the four
+// vertices around a landscape point. LsCull.w: the bake holds for ShellCB.
+void LsCastBaked(float2 gridLocal, out float a_z, out float a_coverage, out float a_terrainHeight, out float2 a_slope)
+{
+	float2 u = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan)) + 0.5 * (float)GridDim;
+	u = clamp(u, 0.0, (float)GridDim - 0.001);
+	int2 i0 = (int2)u;
+	float2 f = u - (float2)i0;
+	int3 t00 = int3(i0, 0);
+	int3 t10 = int3(i0.x + 1, i0.y, 0);
+	int3 t01 = int3(i0.x, i0.y + 1, 0);
+	int3 t11 = int3(i0 + 1, 0);
+	a_z = lerp(lerp(ShellCastBake.Load(t00), ShellCastBake.Load(t10), f.x), lerp(ShellCastBake.Load(t01), ShellCastBake.Load(t11), f.x), f.y);
+	float2 b = lerp(lerp(ShellVertexBake.Load(t00).yz, ShellVertexBake.Load(t10).yz, f.x), lerp(ShellVertexBake.Load(t01).yz, ShellVertexBake.Load(t11).yz, f.x), f.y);
+	a_coverage = b.x;
+	a_terrainHeight = b.y;
+	a_slope = lerp(lerp(ShellVertexBakeSlope.Load(t00), ShellVertexBakeSlope.Load(t10), f.x), lerp(ShellVertexBakeSlope.Load(t01), ShellVertexBakeSlope.Load(t11), f.x), f.y);
+}
 #endif
 
 // Model space is the draw's translate away from absolute world (landscape
@@ -54,7 +74,12 @@ float3 LsRaise(float3 p, out bool a_raised)
 	float coverage;
 	float terrainHeight;
 #if defined(LS_CASTER)
-	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+	float z;
+	float2 bakedSlope = 0.0;
+	[branch] if (LsCull.w > 0.5)
+		LsCastBaked(gridLocal, z, coverage, terrainHeight, bakedSlope);
+	else
+		z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 	SHELL_CAST_VIS(castVis, gridLocal, z, coverage)
 	a_raised = castVis >= 0.35 && z - LsCull.y > landZ;
 #else
@@ -66,7 +91,11 @@ float3 LsRaise(float3 p, out bool a_raised)
 		float3 raised = float3(0.0, 0.0, z);
 		[branch] if (SlopeDrape.x > 0.001 && z > terrainHeight)
 		{
+#if defined(LS_CASTER)
+			float2 slope = LsCull.w > 0.5 ? bakedSlope : ShellVertexSlope(gridLocal);
+#else
 			float2 slope = ShellVertexSlope(gridLocal);
+#endif
 			float3 terrainNormal = SHELL_TERRAIN_NORMAL(slope.x, slope.y);
 			SHELL_DRAPE(raised, float2(0.0, 0.0), z, terrainHeight, terrainNormal)
 		}
@@ -214,7 +243,7 @@ LS_HSConst LS_PatchConst(InputPatch<LS_CP, 3> p)
 		o.Edges[0] = LsEdgeFactor(g1, g2);
 		o.Edges[1] = LsEdgeFactor(g2, g0);
 		o.Edges[2] = LsEdgeFactor(g0, g1);
-		o.Inside = max(o.Edges[0], max(o.Edges[1], o.Edges[2]));
+		o.Inside = LsInsideFactor(g0, g1, g2, max(o.Edges[0], max(o.Edges[1], o.Edges[2])));
 	}
 	return o;
 }

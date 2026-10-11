@@ -110,7 +110,7 @@ LSS_Const LSS_PatchConst(InputPatch<LSS_CP, 3> p)
 			o.Edges[1] = LsEdgeFactor(g2, g0);
 			o.Edges[2] = LsEdgeFactor(g0, g1);
 		}
-		o.Inside = max(o.Edges[0], max(o.Edges[1], o.Edges[2]));
+		o.Inside = LsInsideFactor(g0, g1, g2, max(o.Edges[0], max(o.Edges[1], o.Edges[2])));
 	}
 	return o;
 }
