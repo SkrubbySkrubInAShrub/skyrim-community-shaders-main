@@ -2597,6 +2597,8 @@ public:
 
 	/** @brief Depth-renders the terrain shell into both live cascade slices so the world receives snow-mound shadows. The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
 	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
+	/** @brief The sun cascades' real atlas slices into sunCascadeSlice every frame (the snow's shadow reads), whether or not anything casts. */
+	void RecordSunCascadeSlices(uint32_t a_atlasSlices);
 
 	/** @brief Re-derives the camera-anchored grid placement fields of a ShellCB from THIS frame's camera. Shared by DrawShell and the shadow-caster injection so the caster geometry never lags the visible surface by a frame (a stale grid slides a crisp shadow during camera motion). Implemented in SnowDeformation/Shell.cpp. */
 	void RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust = nullptr);

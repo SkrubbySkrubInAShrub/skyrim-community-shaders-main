@@ -945,7 +945,7 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	LsMode want = LsMode::kNone;
 	bool tbDraw = false;
 	bool tbOffset = false;
-	if (raiseOn && cfg.attach[cat] && (!shadeOn || cat == kLsShadowSun)) {
+	if (raiseOn && cfg.attach[cat] && (!shadeOn || cat == kLsShadowSun) && (cat != kLsShadowSun || settings.SnowCastsShadows)) {
 		want = LsMode::kRaise;
 		// Terrain Blending draws near terrain twice in the depth prepass and binds its own VS at the
 		// draw: first its terrain depth, then the main depth with OFFSET_DEPTH (renderAltTerrain).

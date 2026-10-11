@@ -23,7 +23,14 @@ void SnowDeformation::CaptureShadowAtlas()
 
 	D3D11_TEXTURE2D_DESC atlasDesc{};
 	if (liveAtlasSRV) {
-		// Before the snow reads the atlas, so the snowfield receives its own casters.
+		winrt::com_ptr<ID3D11Resource> liveRes;
+		liveAtlasSRV->GetResource(liveRes.put());
+		if (auto liveTex = liveRes.try_as<ID3D11Texture2D>()) {
+			liveTex->GetDesc(&atlasDesc);
+			dbgLodAtlasSlices = atlasDesc.ArraySize;
+		}
+		RecordSunCascadeSlices(atlasDesc.ArraySize);
+		// Before the snow reads the atlas, so the snow receives its own casters.
 		if (!shellShadowCastDebugOff && settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
@@ -39,13 +46,6 @@ void SnowDeformation::CaptureShadowAtlas()
 				globals::profiler->EndPass();
 			} else
 				globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
-		}
-
-		winrt::com_ptr<ID3D11Resource> liveRes;
-		liveAtlasSRV->GetResource(liveRes.put());
-		if (auto liveTex = liveRes.try_as<ID3D11Texture2D>()) {
-			liveTex->GetDesc(&atlasDesc);
-			dbgLodAtlasSlices = atlasDesc.ArraySize;
 		}
 	}
 
@@ -233,9 +233,48 @@ void SnowDeformation::UpdatePointShadowLights()
 	}
 }
 
+// The sun cascades' atlas slices for the snow's shadow reads (ShellCB.BorderStyle.zw): the atlas
+// is shared with local shadow lights, and the sun's cascades move slices as the active-light set
+// changes with the view. Recorded every frame, whether or not anything casts.
+void SnowDeformation::RecordSunCascadeSlices(uint32_t a_atlasSlices)
+{
+	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
+	auto* sunShadowLight = shadowSceneNode ? shadowSceneNode->GetRuntimeData().sunShadowDirLight : nullptr;
+	if (!sunShadowLight || a_atlasSlices == 0)
+		return;
+	const auto& descriptors = sunShadowLight->GetRuntimeData().shadowmapDescriptors;
+	const uint32_t count = std::min<uint32_t>((uint32_t)descriptors.size(), 2u);
+	bool fallback = false;
+	for (uint32_t i = 0; i < count; i++) {
+		// An out-of-range shadowmapIndex means the descriptor is not live this
+		// instant: cascade == slice, a possibly offset shadow over a missing one.
+		uint32_t slice = descriptors[i].shadowmapIndex;
+		if (slice >= a_atlasSlices) {
+			slice = i;
+			fallback = true;
+		}
+		if (slice < a_atlasSlices)
+			sunCascadeSlice[i] = slice;
+	}
+	// One line per change of the slice pair, the raw indices or the fallback.
+	const uint32_t raw0 = count > 0 ? descriptors[0].shadowmapIndex : 0xFFu;
+	const uint32_t raw1 = count > 1 ? descriptors[1].shadowmapIndex : 0xFFu;
+	const uint32_t packed = (sunCascadeSlice[0] & 0xFF) | ((sunCascadeSlice[1] & 0xFF) << 8) | ((raw0 & 0xFF) << 16) | ((raw1 & 0xFF) << 24);
+	static uint32_t lastPacked = 0xFFFFFFFFu;
+	static uint32_t changeLogCount = 0;
+	if (packed != lastPacked && changeLogCount < 200) {
+		lastPacked = packed;
+		changeLogCount++;
+		logger::info("[SNOW DEFORMATION] Sun cascades: slices used = {}, {} (raw shadowmapIndex = {}, {}; descriptors = {}; atlas has {}; fallback = {})",
+			sunCascadeSlice[0], sunCascadeSlice[1], raw0, raw1, (uint32_t)descriptors.size(), a_atlasSlices, fallback);
+	}
+}
+
+// The road trench patch into the sun cascades; the ground snow casts through
+// the raised landscape (LandscapeSnow.cpp).
 void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV)
 {
-	if (SnowShadersPending(1))
+	if (SnowShadersPending(2))
 		return;
 	// One-shot diagnostics: name the exit taken, so a missing shadow points
 	// straight at its gate.
@@ -244,55 +283,42 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (injectLogged.size() < 12 && injectLogged.insert(a_msg).second)
 			logger::info("[SNOW DEFORMATION] ShadowInject: {}", a_msg);
 	};
+	const bool splitRow = shellCasterSplitDebug;
+	auto skipPatch = [&](const char* a_msg) {
+		logOnce(a_msg);
+		if (!splitRow)
+			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Trench Patch");
+	};
 
-	if (!settings.EnableSnowDeformation || !lastShellCBData) {
-		logOnce("skip: disabled or no ShellCB snapshot yet");
-		return;
-	}
-
-	// Nothing within the shell's own footprint carries positive depth, so every
-	// caster vertex is below ground and casts nothing. Measured over the shell's
-	// half-span rather than the deformation window: the shell reaches far past
-	// the window, and snow at 200 m still casts into view.
-	if (!ShellFootprintHasSnow() || GroundShellHidden()) {
-		logOnce("skip: no snow depth within the shell footprint");
-		return;
-	}
-	// Snow on Landscape: the raised landscape casts the layer itself.
-	if (LandscapeCastsGroundSnow()) {
-		logOnce("skip: the raised landscape casts the ground snow");
-		return;
-	}
-	// Off-view snow alone: the vertex bake is skipped with the grid, so the
-	// caster would evaluate live for a layer whose shadow stays off screen.
-	if (!shellDrawGroundGated && !shellViewGateOff) {
-		logOnce("skip: no snow in view");
-		return;
-	}
-
-	auto* vs = GetShellShadowVS();
-	if (!vs) {
-		logOnce("skip: shell shadow VS unavailable");
-		return;
-	}
+	if (!settings.EnableSnowDeformation || !lastShellCBData)
+		return skipPatch("skip: disabled or no ShellCB snapshot yet");
+	// Same gate as the visible patch draw, one frame stale like the skins:
+	// capturedRoads is last frame's count here (Prepass resets it after the
+	// mask passes), the frame whose rasters this VS reads.
+	if (settings.RoadMeshesDepth <= 0.5f || capturedRoads == 0 || !heightSkinDepth || !heightSkinDepth->srv ||
+		!heightTopRaw[heightCurrent] || !heightTopRaw[heightCurrent]->srv)
+		return skipPatch("skip: no road meshes captured");
+	if (!ShellFootprintHasSnow() || GroundShellsSuspended())
+		return skipPatch("skip: no snow depth within the footprint");
+	if (!shellDrawGroundGated && !shellViewGateOff)
+		return skipPatch("skip: no snow in view");
+	// Indexed over the shared lattice: one VS invocation per vertex, the same
+	// triangles in the same order, minus those past the fade band.
+	const bool patchIndexed = !patchCasterNonIndexed && GetPatchShadowVS(true) && EnsurePatchCasterIB();
+	auto* patchCastVS = GetPatchShadowVS(patchIndexed);
+	if (!patchCastVS)
+		return skipPatch("skip: patch shadow VS unavailable");
 
 	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
 	auto* sunShadowLight = shadowSceneNode ? shadowSceneNode->GetRuntimeData().sunShadowDirLight : nullptr;
-	if (!sunShadowLight) {
-		logOnce("skip: no sun shadow light");
-		return;
-	}
+	if (!sunShadowLight)
+		return skipPatch("skip: no sun shadow light");
 	auto& lightRuntime = sunShadowLight->GetRuntimeData();
-	// Every sun shadowmap gets the shell: the descriptor list is
-	// larger than the two cascades (the focus map is in the family) and its
-	// order is not guaranteed - the old min(2) assumption left whichever
-	// real cascade sat past index 1 shell-less, presenting as a shadow
-	// truncated at the cascade boundary, the cut sweeping with the view.
+	// Every sun shadowmap: the descriptor list is larger than the two cascades
+	// (the focus map is in the family) and its order is not guaranteed.
 	const uint32_t cascadeCount = std::min<uint32_t>((uint32_t)lightRuntime.shadowmapDescriptors.size(), 4u);
-	if (cascadeCount == 0) {
-		logOnce("skip: zero cascades");
-		return;
-	}
+	if (cascadeCount == 0)
+		return skipPatch("skip: zero cascades");
 
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
@@ -302,14 +328,12 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	a_atlasSRV->GetResource(atlasRes.put());
 	auto atlasTex = atlasRes.try_as<ID3D11Texture2D>();
 	if (!atlasTex) {
-		logOnce("skip: atlas SRV resource is not a Texture2D");
-		return;
+		return skipPatch("skip: atlas SRV resource is not a Texture2D");
 	}
 	D3D11_TEXTURE2D_DESC atlasDesc;
 	atlasTex->GetDesc(&atlasDesc);
 	if (!(atlasDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL)) {
-		logOnce("skip: atlas lacks DEPTH_STENCIL bind");
-		return;
+		return skipPatch("skip: atlas lacks DEPTH_STENCIL bind");
 	}
 	DXGI_FORMAT dsvFormat;
 	switch (atlasDesc.Format) {
@@ -326,17 +350,12 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		dsvFormat = DXGI_FORMAT_D32_FLOAT;
 		break;
 	default:
-		return;
+		return skipPatch("skip: atlas format");
 	}
 	// Per-cascade DSVs on the REAL slice each descriptor renders to
 	// (desc.shadowmapIndex): the atlas is SHARED with local shadow lights,
 	// and the sun's cascades move slices as the active-light set changes
-	// with the view. Assuming slices 0/1 made the shell's shadow vanish at
-	// some camera angles while stamping into other lights' maps; the
-	// point-light path at the top of this file always honoured
-	// shadowmapIndex. The slices are also recorded for the PS receiving
-	// path, which had the same assumption.
-	bool sliceFallback = false;
+	// with the view.
 	for (uint32_t i = 0; i < cascadeCount; i++) {
 		uint32_t slice = lightRuntime.shadowmapDescriptors[i].shadowmapIndex;
 		// Fail-safe: an out-of-range shadowmapIndex means the
@@ -347,14 +366,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// the change-driven log below records every occurrence.
 		if (slice >= atlasDesc.ArraySize) {
 			slice = i;
-			sliceFallback = true;
 			if (slice >= atlasDesc.ArraySize)
 				continue;
 		}
-		// The PS receiving path only follows the first two (the cascades it
-		// blends); the extra descriptors are inject-only.
-		if (i < 2)
-			sunCascadeSlice[i] = slice;
 		if (shadowAtlasDSVTexture == atlasTex.get() && shadowAtlasDSVSlice[i] == slice && shadowAtlasDSV[i])
 			continue;
 		shadowAtlasDSV[i] = nullptr;
@@ -371,29 +385,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	}
 	shadowAtlasDSVTexture = atlasTex.get();
 	if (!shadowAtlasDSV[0]) {
-		logOnce("skip: DSV creation failed");
-		return;
+		return skipPatch("skip: DSV creation failed");
 	}
-	// Change-driven layout log: a one-shot version stops after startup and
-	// misses view-dependent reallocation. One line per change of the slice
-	// pair, raw descriptor indices or fallback state - reproduce the
-	// disappearing shadow and the
-	// log names the moment.
-	{
-		const uint32_t raw0 = lightRuntime.shadowmapDescriptors[0].shadowmapIndex;
-		const uint32_t raw1 = cascadeCount > 1 ? lightRuntime.shadowmapDescriptors[1].shadowmapIndex : 0xFFu;
-		const uint32_t packed = (sunCascadeSlice[0] & 0xFF) | ((sunCascadeSlice[1] & 0xFF) << 8) |
-		                        ((raw0 & 0xFF) << 16) | ((raw1 & 0xFF) << 24);
-		static uint32_t lastPacked = 0xFFFFFFFFu;
-		static uint32_t changeLogCount = 0;
-		if (packed != lastPacked && changeLogCount < 200) {
-			lastPacked = packed;
-			changeLogCount++;
-			logger::info("[SNOW DEFORMATION] ShadowInject: slices used = {}, {} (raw shadowmapIndex = {}, {}; descriptors = {}; atlas has {}; fallback = {})",
-				sunCascadeSlice[0], sunCascadeSlice[1], raw0, raw1, (uint32_t)lightRuntime.shadowmapDescriptors.size(), atlasDesc.ArraySize, sliceFallback);
-		}
-	}
-
 	if (!shadowCastRS) {
 		D3D11_RASTERIZER_DESC rsDesc{};
 		rsDesc.FillMode = D3D11_FILL_SOLID;
@@ -411,10 +404,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		Util::SetResourceName(shadowCastDSS.get(), "SnowDeformation::ShadowCastDSS");
 	}
 	if (!shadowCastRS || !shadowCastDSS) {
-		logOnce("skip: RS/DSS creation failed");
-		return;
+		return skipPatch("skip: RS/DSS creation failed");
 	}
-	logOnce("injecting: shell grid into both cascades");
+	logOnce("injecting: trench patch into the sun cascades");
 
 	// ---- Save every piece of state we touch: we are inside the game's setup
 	// for the shadow-mask draw and must hand it back byte-identical.
@@ -487,10 +479,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->PSGetShaderResources(4, 1, &srv);
 		prevPSSRV4.attach(srv);
 	}
-	// The vertex bake (t9, t23, t63) and the water windows (t19, t27, t28).
-	static constexpr UINT kCasterExtraSlots[6] = { 9, 19, 23, 27, 28, 63 };
-	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsExtra[6];
-	for (uint32_t i = 0; i < 6; i++)
+	// The water windows (t19, t27, t28).
+	static constexpr UINT kCasterExtraSlots[3] = { 19, 27, 28 };
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsExtra[3];
+	for (uint32_t i = 0; i < 3; i++)
 		context->VSGetShaderResources(kCasterExtraSlots[i], 1, prevVSSRVsExtra[i].put());
 
 	// ---- Common caster state.
@@ -504,8 +496,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	ID3D11ShaderResourceView* nullPSSRV = nullptr;
 	context->PSSetShaderResources(4, 1, &nullPSSRV);
 
-	// Shell field textures for the VS (ShellSurfaceZ): terrain window,
-	// deformation, height field. Snow diffuse / scene depth are PS-only.
+	// Snow field textures for the patch VS: terrain window, deformation,
+	// height field.
 	ID3D11ShaderResourceView* vsSRVs[6] = { shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
 		GetDeformationSRV(), nullptr, nullptr,
 		heightTopFiltered ? heightTopFiltered->srv.get() : nullptr,
@@ -516,26 +508,21 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	context->VSSetShaderResources(kTerrainWetSlot, 1, &casterWetSRV);
 	ID3D11ShaderResourceView* casterPlainSRV = TerrainPlainSRV(*lastShellCBData);
 	context->VSSetShaderResources(kTerrainPlainSlot, 1, &casterPlainSRV);
-	// The land-exact height layer (t13): the caster must stand on the same
-	// ground as the visible shell or it shadows its own snow.
+	// The land-exact height layer (t13).
 	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &casterFineSRV);
-	// ShellSurfaceZ's berm term reads the bake at t14; without it the caster
-	// geometry would lose its berms and undercut the shadows of the shell it
-	// is meant to match.
+	// The berm field (t14) and trample extent (t56).
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
 	context->VSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
-	// Same for the wide exclusion field at t15: caster geometry must sink into
-	// the clearings, or a melted camp still casts full-depth snow shadows.
+	// The wide exclusion field (t15).
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
 	context->VSSetShaderResources(15, 1, &exclusionSRV);
-	// And the baked undulation at t29, or the caster's dunes read zero and
-	// its geometry parts company with the drawn shell's.
+	// The baked undulation (t29).
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
-	// The shore cap's water windows, as DrawShell binds them.
+	// The shore cap's water windows.
 	ID3D11ShaderResourceView* waterSRV = waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
 	ID3D11ShaderResourceView* waterSRVs[2] = { waterSRV, waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
 	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
@@ -545,49 +532,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	// Last frame's bake stands in for the surface evaluation while nothing it
-	// read has been written since and this frame's placement is the one it
-	// baked. With S1 the bake predates DrawShell's object, water and exclusion
-	// maps, as the drawn ground does. ObjectLiftCap > 1 reads t11/t12, which
-	// the grid caster leaves as it finds them.
-	ID3D11VertexShader* casterVS = vs;
-	bool castCheckLive = false;
-	shellCastBakedLast = false;
-	if (shellCastBakeValid && !shellCastBakeOff && !shellGridNonIndexed && lastShellCBData->ObjectLiftCap <= 1.0f &&
-		shellVertexBake && shellVertexBakeSlope && shellCastBake) {
-		ShellCB placed = *lastShellCBData;
-		RefreshShellGridPlacement(placed);
-		if (std::memcmp(&placed, lastShellCBData.get(), sizeof(ShellCB)) == 0) {
-			ID3D11VertexShader* bakedVS = nullptr;
-			if (shellCastBakeCheck && EnsureCastCheckResources()) {
-				ReadCastCheck(context);
-				bakedVS = GetShellShadowVSBaked(true);
-				castCheckLive = bakedVS != nullptr;
-			}
-			if (!bakedVS)
-				bakedVS = GetShellShadowVSBaked(false);
-			if (bakedVS) {
-				casterVS = bakedVS;
-				shellCastBakedLast = true;
-				ID3D11ShaderResourceView* bakeSRVs[3] = { shellVertexBake->srv.get(), shellVertexBakeSlope->srv.get(), shellCastBake->srv.get() };
-				context->VSSetShaderResources(9, 1, &bakeSRVs[0]);
-				context->VSSetShaderResources(23, 1, &bakeSRVs[1]);
-				context->VSSetShaderResources(63, 1, &bakeSRVs[2]);
-			}
-		}
-	}
-	if (castCheckLive) {
-		const UINT zero[4] = {};
-		context->ClearUnorderedAccessViewUint(castCheckUAV.get(), zero);
-	}
-
-	// Stage-major: every cascade's ground, then every cascade's trench patch,
-	// one row each. Both are depth-only into the cascade, so the order cannot
-	// change what lands there. The debug split names each cascade instead:
-	// the profiler cannot nest and folds repeated names into per-call samples.
-	static const char* const kCasterGridRow[4] = { "SnowDeformation::Shadows - Ground Cascade 0", "SnowDeformation::Shadows - Ground Cascade 1", "SnowDeformation::Shadows - Ground Cascade 2", "SnowDeformation::Shadows - Ground Cascade 3" };
+	// The debug split names each cascade: the profiler cannot nest and folds
+	// repeated names into per-call samples.
 	static const char* const kCasterPatchRow[4] = { "SnowDeformation::Shadows - Trench Patch Cascade 0", "SnowDeformation::Shadows - Trench Patch Cascade 1", "SnowDeformation::Shadows - Trench Patch Cascade 2", "SnowDeformation::Shadows - Trench Patch Cascade 3" };
-	const bool splitRow = shellCasterSplitDebug;
 
 	// Points shellCB and the depth target at one cascade.
 	auto bindCascade = [&](uint32_t a_cascade) {
@@ -608,9 +555,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 
 		// ShellCB matrices are row_major with mul(M, v): store the transpose.
 		ShellCB shadowCB = *lastShellCBData;
-		// Re-anchor the grid to this frame's camera: the snapshot
-		// is last frame's, and a one-frame-stale grid slides a crisp
-		// full-surface shadow whenever the camera moves.
+		// Re-anchor the placement to this frame's camera: the snapshot is
+		// last frame's, and a one-frame-stale field slides the shadow
+		// whenever the camera moves.
 		RefreshShellGridPlacement(shadowCB);
 		shadowCB.CameraViewProj = DirectX::XMMatrixTranspose(clip);
 		// Absolute-world rendering: zero the camera-relative adjust.
@@ -623,13 +570,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		return shadowCB;
 	};
 
-	// Terrain shell: vertex-buffer-less grid with the excess-height caster
-	// VS. b1 is cleared for the grid: it declared a b1 of its own until the
-	// bow wave was retired, and a stale StaticsCB there once read the patch
-	// fill's world-space centre as wave params - phantom trail geometry in
-	// the far cascades (Josef's giant trench wedges). The grid reads no b1
-	// now, so this only keeps a stale buffer from being visible to it if
-	// one is ever added back.
+	// The trench patch's caster VS (PATCH + SNOW_SHADOW_CAST) measures its
+	// precision pad from the snapped patch centre and fades out over the
+	// landscape caster's 40-70 m band. SV_VertexID grid, no IA state; t12
+	// (skin-depth raster) is the patch's own addition.
 	{
 		ID3D11Buffer* nullCB1 = nullptr;
 		context->VSSetConstantBuffers(1, 1, &nullCB1);
@@ -637,64 +581,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		ID3D11Buffer* nullVB = nullptr;
 		UINT zero = 0;
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
-		context->VSSetShader(casterVS, nullptr, 0);
 	}
-	// Every cell the grid can sample bare: castVis kills every vertex.
-	const bool gridMayCast = CasterDiscMayCast();
-	if (!gridMayCast) {
-		if (!splitRow)
-			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Ground");
-		castCheckLive = false;
-	} else {
-		if (!splitRow)
-			globals::profiler->BeginPass("SnowDeformation::Shadows - Ground");
-		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
-			if (!shadowAtlasDSV[cascade])
-				continue;
-			if (splitRow)
-				globals::profiler->BeginPass(kCasterGridRow[cascade]);
-			const ShellCB shadowCB = bindCascade(cascade);
-			if (castCheckLive) {
-				ID3D11UnorderedAccessView* checkUAV = castCheckUAV.get();
-				context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, shadowAtlasDSV[cascade].get(), 1, 1, &checkUAV, nullptr);
-			}
-			DrawShellCasterGrid(context, shadowCB);
-			if (splitRow)
-				globals::profiler->EndPass();
-		}
-		if (!splitRow)
-			globals::profiler->EndPass();
-	}
-	if (castCheckLive) {
-		ID3D11UnorderedAccessView* nullUAV = nullptr;
-		context->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &nullUAV, nullptr);
-		context->CopyResource(castCheckStaging[castCheckRing].get(), castCheckBuffer.get());
-		castCheckIssued[castCheckRing] = true;
-		castCheckRing = (castCheckRing + 1) % kCastCheckRing;
-	}
-
-	// The TRENCH PATCH casts too - attempt two of "road snow casts
-	// shadows" (Josef: trench walls throw no shadow onto their own
-	// floor). Attempt one stretched shadows across the surface because
-	// the caster pass zeroes the camera adjust and the distance-based
-	// precision pad ballooned to full depth - an uncarved slab. The
-	// PATCH+SNOW_SHADOW_CAST VS measures the pad from the snapped patch
-	// centre instead and fades out over the landscape caster's 40-70 m
-	// band. SV_VertexID grid, no IA state; t0 terrain,
-	// t1 deformation and t14 berm bake are already bound above for the
-	// shell grid, t11/t13 by the skin block; t12 (skin-depth raster,
-	// inside the saved t10-t13 range) is the patch's own addition.
-	// Same gate as the visible patch draw, one frame stale like the
-	// skins: capturedRoads is last frame's count here (Prepass resets it
-	// after the mask passes), the frame whose rasters this VS reads, and
-	// with none the VS kills every vertex.
-	// Indexed over the shared lattice: one VS invocation per vertex, the
-	// same triangles in the same order, minus those past the fade band.
-	const bool patchIndexed = !patchCasterNonIndexed && !SnowShadersPending(2) && GetPatchShadowVS(true) && EnsurePatchCasterIB();
-	if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS(patchIndexed);
-		patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
-		heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
-		settings.RoadMeshesDepth > 0.5f && capturedRoads > 0) {
+	{
 		if (!splitRow)
 			globals::profiler->BeginPass("SnowDeformation::Shadows - Trench Patch");
 		context->VSSetShader(patchCastVS, nullptr, 0);
@@ -730,8 +618,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		}
 		if (!splitRow)
 			globals::profiler->EndPass();
-	} else if (!splitRow) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Trench Patch");
 	}
 
 	// ---- Restore everything.
@@ -782,7 +668,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		for (uint32_t i = 0; i < 4; i++)
 			skinSrvs[i] = prevVSSRVsSkin[i].get();
 		context->VSSetShaderResources(10, 4, skinSrvs);
-		for (uint32_t i = 0; i < 6; i++) {
+		for (uint32_t i = 0; i < 3; i++) {
 			ID3D11ShaderResourceView* srv = prevVSSRVsExtra[i].get();
 			context->VSSetShaderResources(kCasterExtraSlots[i], 1, &srv);
 		}
@@ -795,64 +681,5 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	{
 		ID3D11ShaderResourceView* srv = prevPSSRV4.get();
 		context->PSSetShaderResources(4, 1, &srv);
-	}
-}
-
-bool SnowDeformation::EnsureCastCheckResources()
-{
-	if (castCheckBuffer && castCheckUAV && castCheckStaging[kCastCheckRing - 1])
-		return true;
-	auto device = globals::d3d::device;
-	// The counter is written from the vertex shader.
-	if (device->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_1)
-		return false;
-	castCheckBuffer = nullptr;
-	castCheckUAV = nullptr;
-	for (auto& staging : castCheckStaging)
-		staging = nullptr;
-	D3D11_BUFFER_DESC desc{};
-	desc.ByteWidth = 16;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-	desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-	if (FAILED(device->CreateBuffer(&desc, nullptr, castCheckBuffer.put())))
-		return false;
-	Util::SetResourceName(castCheckBuffer.get(), "SnowDeformation::CastCheck");
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-	uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-	uavDesc.Buffer.NumElements = 4;
-	uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-	if (FAILED(device->CreateUnorderedAccessView(castCheckBuffer.get(), &uavDesc, castCheckUAV.put())))
-		return false;
-	Util::SetResourceName(castCheckUAV.get(), "SnowDeformation::CastCheck UAV");
-	D3D11_BUFFER_DESC stagingDesc{};
-	stagingDesc.ByteWidth = 16;
-	stagingDesc.Usage = D3D11_USAGE_STAGING;
-	stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-	for (auto& staging : castCheckStaging) {
-		if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, staging.put())))
-			return false;
-		Util::SetResourceName(staging.get(), "SnowDeformation::CastCheck Staging");
-	}
-	for (auto& issued : castCheckIssued)
-		issued = false;
-	return true;
-}
-
-void SnowDeformation::ReadCastCheck(ID3D11DeviceContext* a_context)
-{
-	for (int i = 0; i < kCastCheckRing; i++) {
-		if (!castCheckIssued[i] || !castCheckStaging[i])
-			continue;
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		if (a_context->Map(castCheckStaging[i].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped) != S_OK)
-			continue;
-		const auto* counts = static_cast<const uint32_t*>(mapped.pData);
-		castCheckMismatches += counts[0];
-		castCheckVertices += counts[1];
-		castCheckFrames++;
-		a_context->Unmap(castCheckStaging[i].get(), 0);
-		castCheckIssued[i] = false;
 	}
 }
