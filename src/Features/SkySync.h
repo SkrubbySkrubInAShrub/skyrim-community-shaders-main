@@ -39,7 +39,7 @@ public:
 		float ShadowTransitionDuration = 300.0f;
 		bool DimSunlightUnderHorizon = true;
 		bool DimVolumetricLighting = true;
-		float HorizonFadeHours = 0.5f;
+		float HorizonFadeHours = 0.7f;
 		float HorizonFadeElevation = 7.0f;
 		float HorizonElevation = -1.0f;
 		float NewMoonIntensity = 0.05f;
@@ -59,7 +59,7 @@ public:
 	virtual bool IsCore() const override { return true; }
 
 	/**
-	 * @brief Dims sunlight color when the sun is below the horizon during sky color updates.
+	 * @brief Dims sunlight color when the sun is below the horizon during sky color updates, leaving lightning undimmed.
 	 * @param sky The sky object whose directional light color may be modified.
 	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
@@ -91,13 +91,13 @@ public:
 		Sun,
 		Masser,
 		Secunda,
-		None
+		Zenith  // fallback when no moon is up
 	};
 
 	/**
 	 * @brief Gets the world-space direction towards a sun or moon, preferring the one Sky Sync computed this frame.
 	 * @param sky The sky whose root rotation maps Sky Sync's directions into world space.
-	 * @param caster The celestial body to query; must not be Caster::None.
+	 * @param caster The celestial body to query; must not be Caster::Zenith.
 	 * @return The unit direction, or straight up (0,0,1) if none is available.
 	 */
 	RE::NiPoint3 GetCelestialDirection(const RE::Sky* sky, Caster caster) const;
@@ -169,6 +169,7 @@ private:
 	static constexpr float SunDiscFadeStartElevation = -2.0f;  // relative to the effective horizon
 	static constexpr float SunDiscFadeElevation = 2.0f;
 	static constexpr float SunGlareScale = 1.0f / 255.0f;  // Sun::Update's weather sun glare byte to alpha
+	static constexpr RE::NiPoint3 ZenithDirection{ 0.0f, 0.0f, 1.0f };
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
@@ -190,6 +191,7 @@ private:
 	float twilightCap = 0.0f;
 	float moonNightWeight = 0.0f;
 	float lightNightWeight = 0.0f;
+	float flashWeight = 0.0f;  // lightning's share of this frame's directional light
 	bool sunBelowHorizon = false;
 	ShadowFader shadowFader;
 
@@ -205,7 +207,7 @@ private:
 	/** @brief Fades from 0 at the effective horizon to 1 at the horizon fade elevation above it. */
 	float GetHorizonDim(float heightAboveHorizon) const;
 
-	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, never above twilightCap. */
+	/** @brief Ramps moonlightFade in while the sun is below the horizon and out otherwise, never above twilightCap. */
 	void UpdateMoonlightFade(float advanceHours, bool immediate);
 
 	/** @brief Upper bound on moonlight: zero at the sun's handover, rising over the moonlight fade duration after sunset and falling with the sun's depth before sunrise. */
@@ -229,6 +231,9 @@ private:
 
 	/** @brief Hours at which the given sun path crosses the horizon, as { sunrise, sunset }. */
 	static std::pair<float, float> GetSunHorizonHours(const RE::TESClimate::Timing& timing, bool alternatePath);
+
+	/** @brief The lightning flash Sky::UpdateColors adds to the directional light, 0 during weather transitions as in vanilla. */
+	static float GetDirectionalFlash(const RE::Sky* sky);
 
 	/** @brief The engine's VL fallback for weathers without a VL form, read from the fVolumetricLighting*:Display INI settings. */
 	static RE::BSVolumetricLightingRenderData GetDefaultVolumetricLighting();
