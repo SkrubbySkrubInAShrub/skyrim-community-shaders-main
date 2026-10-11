@@ -64,7 +64,7 @@ public:
 	 */
 	void OnSkyUpdateColors(RE::Sky* sky);
 
-	/** @brief While the sun is below the horizon, rebuilds the sunlight colour and VL from the weathers' night values only; runs before colour grading. */
+	/** @brief While the sun is below the horizon, rebuilds the sunlight colour, VL and moon glare from the weathers' night values only; runs before colour grading. */
 	void ApplyMoonlightColors(RE::Sky* sky);
 
 	/** @brief Installs rendering hooks and detects conflicting mods after plugin load. */
@@ -160,6 +160,9 @@ private:
 	static constexpr float HoursPerDay = 24.0f;
 	static constexpr float VanillaSunOffsetY = 25.0f;  // Sun::Update's fixed sideways offset of the sun's arc
 	static constexpr int SunCrossingSearchIterations = 16;
+	static constexpr float SunDiscFadeStartElevation = -2.0f;  // relative to the effective horizon
+	static constexpr float SunDiscFadeElevation = 2.0f;
+	static constexpr float SunGlareScale = 1.0f / 255.0f;  // Sun::Update's weather sun glare byte to alpha
 
 	inline static RE::NiPoint3* gSunPosition = nullptr;
 	inline static RE::BSVolumetricLightingRenderData* gVolumetricLighting = nullptr;
@@ -178,6 +181,7 @@ private:
 	RE::NiPoint3 rawDirections[3] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
 	float moonlightFade = 0.0f;
+	float twilightCap = 0.0f;
 	bool sunBelowHorizon = false;
 	ShadowFader shadowFader;
 
@@ -194,7 +198,7 @@ private:
 	float GetHorizonDim(float heightAboveHorizon) const;
 
 	/** @brief Ramps moonlightFade in while a moon casts shadows and out otherwise, never above twilightCap. */
-	void UpdateMoonlightFade(float twilightCap, float advanceHours, bool immediate);
+	void UpdateMoonlightFade(float advanceHours, bool immediate);
 
 	/** @brief Upper bound on moonlight: zero at the sun's handover, rising over the moonlight fade duration after sunset and falling with the sun's depth before sunrise. */
 	float GetTwilightCap(const RE::TESClimate::Timing& timing, float hour, float sunHeight) const;
@@ -224,10 +228,10 @@ private:
 	/** @brief Blends the current and last weathers' night VL with the given weights, as vanilla's time-of-day VL blend does. */
 	static RE::BSVolumetricLightingRenderData BlendNightVolumetricLighting(const RE::Sky* sky, float currentWeight, float lastWeight);
 
-	void ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[]);
+	void ProcessSun(const RE::Sky* sky, const RE::NiPoint3& sunDir, float sunHeight, RE::NiPoint3 dirs[], float intensities[]);
 
-	/** @brief Zeroes the sun disc and glare alpha outside vanilla's sun fade window, whose exclusive bounds leave them opaque at the exact end hours. */
-	static void HideSunOutsideFadeWindow(const RE::Sky* sky);
+	/** @brief Fades the sun disc and glare in from the effective horizon, replacing Sun::Update's clock-based fade that runs on well after sunrise. */
+	static void FadeSunAtHorizon(const RE::Sky* sky, float sunHeight);
 
 	void ProcessMoon(const RE::Sky* sky, Caster type, RE::NiPoint3 dirs[], float intensities[]);
 

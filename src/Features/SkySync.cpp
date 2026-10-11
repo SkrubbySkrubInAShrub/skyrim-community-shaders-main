@@ -258,13 +258,24 @@ void SkySync::ApplyMoonlightColors(RE::Sky* sky)
 	const float currentWeight = sky->currentWeatherPct;
 	const float lastWeight = sky->lastWeather ? 1.0f - currentWeight : 0.0f;
 
-	auto nightSunlight = [](const RE::TESWeather* weather) {
-		return weather ? weather->colorData[RE::TESWeather::ColorTypes::kSunlight][RE::TESWeather::ColorTime::kNight] : RE::Color{};
+	auto nightBlend = [&](RE::TESWeather::ColorType type) {
+		auto nightColor = [type](const RE::TESWeather* weather) {
+			return weather ? weather->colorData[type][RE::TESWeather::ColorTime::kNight] : RE::Color{};
+		};
+		return RE::Sky::COLOR_BLEND{ { nightColor(sky->currentWeather), {}, nightColor(sky->lastWeather), {} }, { currentWeight, 0.0f, lastWeight, 0.0f } };
 	};
-	RE::Sky::COLOR_BLEND blend{ { nightSunlight(sky->currentWeather), {}, nightSunlight(sky->lastWeather), {} }, { currentWeight, 0.0f, lastWeight, 0.0f } };
+
+	auto sunlightBlend = nightBlend(RE::TESWeather::ColorTypes::kSunlight);
 	// Vanilla only flashes the directional light outside weather transitions
 	const float flash = !sky->lastWeather && gWeatherFlashDirectional ? gWeatherFlashDirectional->GetFloat() * sky->flash : 0.0f;
-	sky->SetColor(sky->skyColor[RE::TESWeather::ColorTypes::kSunlight], &blend, flash);
+	sky->SetColor(sky->skyColor[RE::TESWeather::ColorTypes::kSunlight], &sunlightBlend, flash);
+
+	// Moon::Update tints the discs with this; ease it in with the moonlight, as the moons stay visible through the handover
+	auto moonGlareBlend = nightBlend(RE::TESWeather::ColorTypes::kMoonGlare);
+	RE::NiColor nightMoonGlare;
+	sky->SetColor(nightMoonGlare, &moonGlareBlend, 0.0f);
+	auto& moonGlare = sky->skyColor[RE::TESWeather::ColorTypes::kMoonGlare];
+	moonGlare += (nightMoonGlare - moonGlare) * twilightCap;
 
 	if (gVolumetricLighting)
 		*gVolumetricLighting = BlendNightVolumetricLighting(sky, currentWeight, lastWeight);
@@ -394,13 +405,14 @@ bool SkySync::Update(const RE::Sky* sky)
 	RE::NiPoint3 directions[3] = {};
 	float intensities[3] = {};
 
-	ProcessSun(sky, directions, intensities);
+	const RE::NiPoint3 sunDir = GetSunDirectionAtHour(climate->timing, hour);
+	const float sunHeight = GetHeightAboveHorizon(sunDir);
+
+	ProcessSun(sky, sunDir, sunHeight, directions, intensities);
 	ProcessMoon(sky, Caster::Masser, directions, intensities);
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 
-	const RE::NiPoint3 sunDir = GetSunDirectionAtHour(climate->timing, hour);
-	const float sunHeight = GetHeightAboveHorizon(sunDir);
 	sunBelowHorizon = sunHeight < 0.0f;
 	currentDim = GetHorizonDim(sunHeight);
 	// A sun below the horizon never casts, so skip the search
@@ -426,7 +438,8 @@ bool SkySync::Update(const RE::Sky* sky)
 	const bool transitionCompleted = immediateTransitionReady;
 	shadowFader.Update(sky, directions, intensities, settings.ShadowTransitionDuration, fadeAdvance, transitionCompleted || resetTransition);
 
-	UpdateMoonlightFade(GetTwilightCap(climate->timing, hour, sunHeight), fadeAdvance / SecondsPerGameHour, transitionCompleted);
+	twilightCap = GetTwilightCap(climate->timing, hour, sunHeight);
+	UpdateMoonlightFade(fadeAdvance / SecondsPerGameHour, transitionCompleted);
 	// Follow the light's own direction so the dim stays continuous while it swings between moons
 	if (sunBelowHorizon)
 		currentDim = moonlightFade * GetHorizonDim(GetHeightAboveHorizon(shadowFader.currentDir));
@@ -447,7 +460,7 @@ float SkySync::GetHorizonDim(float heightAboveHorizon) const
 	return std::clamp(heightAboveHorizon / fadeRadians, 0.0f, 1.0f);
 }
 
-void SkySync::UpdateMoonlightFade(float twilightCap, float advanceHours, bool immediate)
+void SkySync::UpdateMoonlightFade(float advanceHours, bool immediate)
 {
 	const bool moonCasting = shadowFader.target == Caster::Masser || shadowFader.target == Caster::Secunda;
 	const float target = sunBelowHorizon && moonCasting ? 1.0f : 0.0f;
@@ -575,7 +588,7 @@ std::pair<float, float> SkySync::GetSunHorizonHours(const RE::TESClimate::Timing
 	return { MiddleHour(timing.sunrise) - halfTransition, MiddleHour(timing.sunset) + halfTransition };
 }
 
-void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[])
+void SkySync::ProcessSun(const RE::Sky* sky, const RE::NiPoint3& sunDir, float sunHeight, RE::NiPoint3 dirs[], float intensities[])
 {
 	const auto sun = sky->sun;
 	RE::NiPoint3 dir;
@@ -584,11 +597,14 @@ void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensit
 	if (settings.UseAlternateSunPath) {
 		const auto [sunrise, sunset] = GetSunHorizonHours(sky->currentClimate->timing, true);
 		CalculateAlternateSunDirectionAndDistance(dir, dist, sky->currentGameHour, sunrise, sunset, sunAngle);
-	} else
+	} else {
 		CalculateSunDirectionAndDistance(sun, dir, dist);
+		// Sun::Update mirrors its night arc above the horizon, where a lowered effective horizon would reveal the disc
+		dir = sunDir;
+	}
 
 	SetSunPosition(sun, dir, dist);
-	HideSunOutsideFadeWindow(sky);
+	FadeSunAtHorizon(sky, sunHeight);
 
 	dirs[static_cast<int>(Caster::Sun)] = dir;
 
@@ -596,20 +612,19 @@ void SkySync::ProcessSun(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensit
 		intensities[static_cast<int>(Caster::Sun)] = prop->kBlendColor.alpha;
 }
 
-void SkySync::HideSunOutsideFadeWindow(const RE::Sky* sky)
+void SkySync::FadeSunAtHorizon(const RE::Sky* sky, float sunHeight)
 {
-	if (!gSunAlphaTransTime)
-		return;
+	const float fade = std::clamp((sunHeight - DirectX::XMConvertToRadians(SunDiscFadeStartElevation)) / DirectX::XMConvertToRadians(SunDiscFadeElevation), 0.0f, 1.0f);
+	// Rebuilt the way Sun::Update blends it, since its own glare alpha already carries the clock-based fade
+	const auto weatherGlare = [](const RE::TESWeather* weather, float weight) {
+		return weather ? weather->data.sunGlare * SunGlareScale * weight : 0.0f;
+	};
+	const float glare = weatherGlare(sky->currentWeather, sky->currentWeatherPct) + weatherGlare(sky->lastWeather, 1.0f - sky->currentWeatherPct);
 
-	// Same bounds as Sun::Update's fade, but made inclusive
-	const auto [fadeInStart, fadeOutEnd] = GetSunHorizonHours(sky->currentClimate->timing, false);
-	const float hour = sky->currentGameHour;
-	if (hour > fadeInStart && hour < fadeOutEnd)
-		return;
-
-	for (const auto& geometry : { sky->sun->sunBase, sky->sun->sunGlare }) {
+	const std::pair<RE::BSTriShape*, float> alphas[] = { { sky->sun->sunBase.get(), fade }, { sky->sun->sunGlare.get(), glare * fade } };
+	for (const auto& [geometry, alpha] : alphas) {
 		if (const auto prop = geometry ? skyrim_cast<RE::BSSkyShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get()) : nullptr)
-			prop->kBlendColor.alpha = 0.0f;
+			prop->kBlendColor.alpha = alpha;
 	}
 }
 
