@@ -79,7 +79,7 @@ void SkySync::DrawSettings()
 		ImGui::Text("%s", T(TKEY("shadow_transition_duration_tooltip"), "How long (in game-time units) the shadow direction takes to fade between sources. 300 = ~15 seconds at timescale 20."));
 	}
 
-	ImGui::SliderFloat(T(TKEY("horizon_elevation"), "Effective Horizon"), &settings.HorizonElevation, -MaxHorizonElevation, MaxHorizonElevation, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T(TKEY("horizon_elevation"), "Effective Horizon"), &settings.HorizonElevation, MinHorizonElevation, 0.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::TextUnformatted(T(TKEY("horizon_elevation_tooltip"), "Elevation treated as the horizon, where light fades to zero and the sun and moons hand over. Lower it to let the light fade out slightly below the visible horizon."));
 	}
@@ -167,7 +167,7 @@ void SkySync::LoadSettings(json& o_json)
 	settings.MinShadowElevation = std::clamp(settings.MinShadowElevation, 0.0f, 45.0f);
 	settings.HorizonFadeHours = std::clamp(settings.HorizonFadeHours, 0.0f, MaxHorizonFadeHours);
 	settings.HorizonFadeElevation = std::clamp(settings.HorizonFadeElevation, 0.0f, MaxHorizonFadeElevation);
-	settings.HorizonElevation = std::clamp(settings.HorizonElevation, -MaxHorizonElevation, MaxHorizonElevation);
+	settings.HorizonElevation = std::clamp(settings.HorizonElevation, MinHorizonElevation, 0.0f);
 	SetSunAngle();
 }
 
