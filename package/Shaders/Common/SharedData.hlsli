@@ -84,7 +84,7 @@ namespace SharedData
 		uint LightsVisualisationMode;
 		float2 pad0;
 		uint4 ClusterSize;
-		uint pad1;
+		uint EnableLocalShadows;
 		uint LocalShadowSamples;
 		float LocalShadowFilterRadius;
 		float LocalShadowTexelSize;

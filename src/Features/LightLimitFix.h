@@ -153,8 +153,6 @@ public:
 	static constexpr uint32_t LOCAL_SHADOW_LOG_INTERVAL_FRAMES = 600;
 	/** @brief Must match numthreads in LocalShadowCopyCS.hlsl. */
 	static constexpr uint32_t LOCAL_SHADOW_COPY_GROUP_SIZE = 8;
-	/** @brief Squared eye offset above which the pass is treated as the rebased first-person pass. */
-	static constexpr float FIRST_PERSON_EYE_OFFSET_SQUARED = 1.0f;
 
 	struct alignas(16) LocalShadowData
 	{
@@ -242,7 +240,7 @@ public:
 		uint LightsVisualisationMode;
 		float pad0[2];
 		uint ClusterSize[4];
-		uint pad1;
+		uint EnableLocalShadows;
 		uint LocalShadowSamples;
 		float LocalShadowFilterRadius;
 		float LocalShadowTexelSize;
@@ -354,6 +352,9 @@ public:
 	ankerl::unordered_dense::map<RE::FormID, RE::NiPoint3> localShadowActorHistory;
 	ankerl::unordered_dense::map<RE::FormID, RE::NiPoint3> localShadowActorHistoryNext;
 	bool localShadowSelecting = false;
+	bool localShadowHooksInstalled = false;
+	/** @brief True inside the first-person pass, which rebases posAdjust, so shaders take the world eye from WorldEyePosition. */
+	bool localShadowFirstPersonPass = false;
 	bool shadowDistanceRaised = false;
 	uint32_t localShadowFrame = 0;
 	uint32_t localShadowEngineBudget = SHADOW_MASK_CHANNEL_COUNT - 1;
@@ -363,6 +364,7 @@ public:
 	eastl::unique_ptr<Buffer> localShadowBuffer = nullptr;
 	ConstantBuffer* localShadowCopyCB = nullptr;
 	ID3D11ComputeShader* localShadowCopyCS = nullptr;
+	bool localShadowCopyCSCompiled = false;
 	uint32_t localShadowCacheSlots = 0;
 	uint32_t localShadowRequestedSlots = 0;
 	uint32_t localShadowCacheResolution = 0;
@@ -379,8 +381,14 @@ public:
 	uint32_t localShadowStatCached = 0;
 	uint32_t localShadowStatRendered = 0;
 
+	/** @brief True when local shadows are enabled and their hooks were installed at startup. */
+	bool IsLocalShadowsEnabled() const { return settings.EnableLocalShadows && localShadowHooksInstalled; }
 	/** @brief True when local shadows are enabled and the cache texture exists. */
-	bool IsLocalShadowCacheActive() const { return settings.EnableLocalShadows && localShadowCache; }
+	bool IsLocalShadowCacheActive() const { return IsLocalShadowsEnabled() && localShadowCache; }
+	/** @brief Draws the experimental local shadow settings. */
+	void DrawLocalShadowSettings();
+	/** @brief Compiles LocalShadowCopyCS and its constant buffer on first use; false when compilation failed. */
+	bool EnsureLocalShadowCopyShader();
 	/** @brief True when the engine found the caster in range within the camera hold window. */
 	static bool IsLocalShadowCasterInView(const LocalShadowCaster& a_caster, uint32_t a_frame);
 	/** @brief Texel size of the cache format, which is always R16_UNORM or R32_FLOAT. */
@@ -444,7 +452,7 @@ public:
 		bool EnableParticleLightsCulling = true;
 		bool EnableLightsVisualisation = false;
 		uint LightsVisualisationMode = 0;
-		bool EnableLocalShadows = true;
+		bool EnableLocalShadows = false;
 		uint LocalShadowSlots = 16;
 		uint LocalShadowResolution = 0;
 		uint LocalShadowSamples = 8;
@@ -524,6 +532,12 @@ public:
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct Main_RenderFirstPersonView
+		{
+			static void thunk(bool a1, bool a2);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		struct BSShadowParabolicLight_UpdateCamera
 		{
 			static bool thunk(RE::BSShadowLight* This, const RE::NiCamera* a_camera);
@@ -537,6 +551,8 @@ public:
 		};
 
 		static void Install();
+		/** @brief Installs the shadow caster rotation hooks; only called when local shadows are enabled at startup. */
+		static void InstallLocalShadows();
 	};
 
 	virtual bool IsCore() const override { return true; }
