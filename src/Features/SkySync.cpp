@@ -249,6 +249,8 @@ void SkySync::OnSkyUpdateColors(RE::Sky* sky)
 
 void SkySync::ApplyMoonlightColors(RE::Sky* sky)
 {
+	moonNightWeight = 0.0f;
+	lightNightWeight = 0.0f;
 	// Only where vanilla lights from weather colours; lighting templates and rooms are left alone
 	if (!settings.Enabled || !sky || !sunBelowHorizon || !sky->currentWeather || sky->mode.get() != RE::Sky::Mode::kFull ||
 		sky->extLightingOverride || sky->currentRoom || sky->previousRoom)
@@ -269,13 +271,16 @@ void SkySync::ApplyMoonlightColors(RE::Sky* sky)
 	// Vanilla only flashes the directional light outside weather transitions
 	const float flash = !sky->lastWeather && gWeatherFlashDirectional ? gWeatherFlashDirectional->GetFloat() * sky->flash : 0.0f;
 	sky->SetColor(sky->skyColor[RE::TESWeather::ColorTypes::kSunlight], &sunlightBlend, flash);
+	// Full night at once, since the light is dimmed out at the handover
+	lightNightWeight = 1.0f;
 
 	// Moon::Update tints the discs with this; ease it in with the moonlight, as the moons stay visible through the handover
 	auto moonGlareBlend = nightBlend(RE::TESWeather::ColorTypes::kMoonGlare);
 	RE::NiColor nightMoonGlare;
 	sky->SetColor(nightMoonGlare, &moonGlareBlend, 0.0f);
 	auto& moonGlare = sky->skyColor[RE::TESWeather::ColorTypes::kMoonGlare];
-	moonGlare += (nightMoonGlare - moonGlare) * twilightCap;
+	moonNightWeight = twilightCap;
+	moonGlare += (nightMoonGlare - moonGlare) * moonNightWeight;
 
 	if (gVolumetricLighting)
 		*gVolumetricLighting = BlendNightVolumetricLighting(sky, currentWeight, lastWeight);

@@ -67,6 +67,12 @@ public:
 	/** @brief While the sun is below the horizon, rebuilds the sunlight colour, VL and moon glare from the weathers' night values only; runs before colour grading. */
 	void ApplyMoonlightColors(RE::Sky* sky);
 
+	/** @brief How far this frame's moon glare was moved to the night colour, 0 to 1, so moon grading can follow it. */
+	float GetMoonNightWeight() const { return moonNightWeight; }
+
+	/** @brief 1 when this frame's sunlight was rebuilt from night colours, else 0, so light grading can follow it. */
+	float GetLightNightWeight() const { return lightNightWeight; }
+
 	/** @brief Installs rendering hooks and detects conflicting mods after plugin load. */
 	virtual void PostPostLoad() override;
 	/** @brief Checks for conflicting ESP files after game data is loaded. */
@@ -182,6 +188,8 @@ private:
 	float currentDim = 1.0f;
 	float moonlightFade = 0.0f;
 	float twilightCap = 0.0f;
+	float moonNightWeight = 0.0f;
+	float lightNightWeight = 0.0f;
 	bool sunBelowHorizon = false;
 	ShadowFader shadowFader;
 
