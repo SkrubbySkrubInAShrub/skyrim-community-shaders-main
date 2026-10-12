@@ -3526,6 +3526,22 @@ public:
 	ID3D11HullShader* patchHS = nullptr;
 	ID3D11DomainShader* patchDS = nullptr;
 	ID3D11PixelShader* patchPS = nullptr;
+	/** @brief Runtime-only A/B "Deferred Trench Patch": the patch draws its geometry once with the coverage cut alone (SNOW_PATCH_ATTR, into the ground's deferred targets), and one full-screen pass shades the pixels it kept (SNOW_PATCH_DEFERRED). Off = the forward patch. */
+	bool patchDeferredEnabled = false;
+	/** @brief [attribute pass, shading pass], compiled off the render thread on first use. */
+	ID3D11PixelShader* patchDeferredPS[2] = {};
+	std::future<ID3D11PixelShader*> patchDeferredJob[2];
+	bool patchDeferredTried[2] = {};
+	winrt::com_ptr<ID3D11DepthStencilState> patchDeferredDepthState;
+	/** @brief R8, screen-sized: 1 where the attribute pass kept a pixel, cleared per frame; the shading pass tests it before reading the attributes. */
+	Texture2D* patchDeferredMark = nullptr;
+	/** @brief The mark target and the shading pass's depth-off state; false leaves the patch forward. */
+	bool EnsurePatchDeferredResources();
+	/** @brief Both deferred patch shaders, once compiled (the first call starts their compiles). */
+	bool PatchDeferredReady();
+	/** @brief A deferred patch shader is compiling. */
+	bool PatchDeferredCompiling() const;
+	void ReleasePatchDeferred();
 	/** @brief Retained VS bytecode: input layouts are created against it, one per vertex descriptor. */
 	winrt::com_ptr<ID3DBlob> staticsVSBlob;
 	bool staticsShadersFailed = false;

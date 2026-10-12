@@ -699,7 +699,7 @@ FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
 	float2 tileUV = worldXY / max(tileSize, 4.0);
 	// Derivatives from the UNWRAPPED coordinate: the wrap below is a cliff one
 	// pixel wide, and a mip level chosen across it would band there.
-#ifdef SNOW_SHELL_DEFERRED
+#if defined(SNOW_SHELL_DEFERRED) || defined(SNOW_PATCH_DEFERRED)
 	// ComputeTerrainStochasticLodBase's rule on the handed-in derivatives.
 	const float2 tileDx = gDeferredGridDx / max(tileSize, 4.0);
 	const float2 tileDy = gDeferredGridDy / max(tileSize, 4.0);

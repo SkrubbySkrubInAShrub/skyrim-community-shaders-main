@@ -2277,6 +2277,7 @@ void SnowDeformation::ClearShaderCache()
 	if (patchPS)
 		patchPS->Release();
 	patchPS = nullptr;
+	ReleasePatchDeferred();
 	staticsVSBlob = nullptr;
 	staticsILCache.clear();
 	staticsShadersFailed = false;

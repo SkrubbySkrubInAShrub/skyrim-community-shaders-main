@@ -1515,6 +1515,95 @@ bool SnowDeformation::EnsurePatchCasterIB()
 	return true;
 }
 
+bool SnowDeformation::EnsurePatchDeferredResources()
+{
+	if (!EnsureDeferredResources())
+		return false;
+	const auto& base = shellRasterDepth->desc;
+	if (patchDeferredMark && (patchDeferredMark->desc.Width != base.Width || patchDeferredMark->desc.Height != base.Height)) {
+		delete patchDeferredMark;
+		patchDeferredMark = nullptr;
+	}
+	if (!patchDeferredMark) {
+		D3D11_TEXTURE2D_DESC desc = base;
+		desc.Format = DXGI_FORMAT_R8_UNORM;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		patchDeferredMark = new Texture2D(desc, "SnowDeformation::TrenchPatchDeferredMark");
+		patchDeferredMark->CreateSRV(srvDesc);
+		patchDeferredMark->CreateRTV(rtvDesc);
+	}
+	if (!patchDeferredDepthState) {
+		D3D11_DEPTH_STENCIL_DESC dsDesc{};
+		dsDesc.DepthEnable = FALSE;
+		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
+		if (FAILED(globals::d3d::device->CreateDepthStencilState(&dsDesc, patchDeferredDepthState.put())))
+			return false;
+		Util::SetResourceName(patchDeferredDepthState.get(), "SnowDeformation::TrenchPatchDeferredDepthState");
+	}
+	return patchDeferredMark->srv && patchDeferredMark->rtv;
+}
+
+bool SnowDeformation::PatchDeferredReady()
+{
+	static constexpr const char* kDefine[2] = { "SNOW_PATCH_ATTR", "SNOW_PATCH_DEFERRED" };
+	static constexpr const char* kName[2] = { "SnowDeformation::TrenchPatchPS Attributes", "SnowDeformation::TrenchPatchPS Deferred" };
+	for (int i = 0; i < 2; i++) {
+		if (patchDeferredPS[i])
+			continue;
+		if (patchDeferredJob[i].valid()) {
+			if (patchDeferredJob[i].wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+				continue;
+			patchDeferredPS[i] = patchDeferredJob[i].get();
+			if (!patchDeferredPS[i])
+				logger::warn("[SNOW DEFORMATION] Deferred Trench Patch: the {} variant failed to compile, the patch stays forward", kDefine[i]);
+		} else if (!patchDeferredTried[i]) {
+			patchDeferredTried[i] = true;
+			const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
+			const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
+			patchDeferredJob[i] = std::async(std::launch::async, [ehfDefine, iblDefine, i]() -> ID3D11PixelShader* {
+				winrt::com_ptr<ID3DBlob> blob;
+				blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine, kDefine[i]));
+				ID3D11PixelShader* ps = nullptr;
+				if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &ps)))
+					Util::SetResourceName(ps, kName[i]);
+				return ps;
+			});
+		}
+	}
+	return patchDeferredPS[0] && patchDeferredPS[1];
+}
+
+bool SnowDeformation::PatchDeferredCompiling() const
+{
+	return patchDeferredJob[0].valid() || patchDeferredJob[1].valid();
+}
+
+void SnowDeformation::ReleasePatchDeferred()
+{
+	for (int i = 0; i < 2; i++) {
+		// A compile in flight finishes first; its shader is dropped with the rest.
+		if (patchDeferredJob[i].valid()) {
+			if (auto* ps = patchDeferredJob[i].get())
+				ps->Release();
+		}
+		if (patchDeferredPS[i])
+			patchDeferredPS[i]->Release();
+		patchDeferredPS[i] = nullptr;
+		patchDeferredTried[i] = false;
+	}
+}
+
 ID3D11PixelShader* SnowDeformation::GetStaticsPSPrepassKeepHidden()
 {
 	if (!staticsPSPrepassKeepHidden) {
@@ -4226,7 +4315,13 @@ void SnowDeformation::DrawCapturedStatics()
 		} else {
 			context->VSSetShader(patchVS, nullptr, 0);
 		}
-		context->PSSetShader(patchPS, nullptr, 0);
+		// Deferred (A/B): the geometry keeps the coverage cut alone, into the
+		// ground's deferred targets, which are free once the ground has shaded;
+		// one full-screen pass then shades each kept pixel once.
+		bool deferredPatch = patchDeferredEnabled && staticsDebugView == 0 && PatchDeferredReady() && EnsurePatchDeferredResources();
+		ID3D11VertexShader* patchFillVS = deferredPatch ? GetShellFillVS() : nullptr;
+		deferredPatch = deferredPatch && patchFillVS;
+		context->PSSetShader(deferredPatch ? patchDeferredPS[0] : patchPS, nullptr, 0);
 		// Object top raster (PS t11): the patch's self-shadow march needs the
 		// same footprint test as the skins - inside a footprint the tap
 		// surface is the object top, not the terrain window's class ramp.
@@ -4285,6 +4380,27 @@ void SnowDeformation::DrawCapturedStatics()
 			// The hull's screen-size cap stands corners off any road on the terrain.
 			context->HSSetShaderResources(0, 1, &patchTerrainSRV);
 		}
+		// The targets, depth and raster state the forward draw would have used;
+		// the deferred passes borrow and restore them.
+		winrt::com_ptr<ID3D11RenderTargetView> patchRTVs[8];
+		ID3D11RenderTargetView* patchRTVPtrs[8] = {};
+		winrt::com_ptr<ID3D11DepthStencilView> patchDSV;
+		winrt::com_ptr<ID3D11DepthStencilState> patchDepthState;
+		UINT patchStencilRef = 0;
+		winrt::com_ptr<ID3D11RasterizerState> patchRaster;
+		if (deferredPatch) {
+			ID3D11DepthStencilView* rawPatchDSV = nullptr;
+			context->OMGetRenderTargets(8, patchRTVPtrs, &rawPatchDSV);
+			for (uint32_t i = 0; i < 8; i++)
+				patchRTVs[i].attach(patchRTVPtrs[i]);
+			patchDSV.attach(rawPatchDSV);
+			context->OMGetDepthStencilState(patchDepthState.put(), &patchStencilRef);
+			context->RSGetState(patchRaster.put());
+			const float markClear[4] = {};
+			context->ClearRenderTargetView(patchDeferredMark->rtv.get(), markClear);
+			ID3D11RenderTargetView* attrRTVs[4] = { shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(), patchDeferredMark->rtv.get() };
+			context->OMSetRenderTargets(4, attrRTVs, patchDSV.get());
+		}
 		if (patchStatsArmed) {
 			context->Begin(patchStatsQuery[shellStatsRing][0].get());
 			context->Begin(patchStatsQuery[shellStatsRing][1].get());
@@ -4293,17 +4409,39 @@ void SnowDeformation::DrawCapturedStatics()
 			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
 		else
 			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
-		if (patchStatsArmed) {
-			context->End(patchStatsQuery[shellStatsRing][1].get());
-			context->End(patchStatsQuery[shellStatsRing][0].get());
-			patchStatsArmed = false;
-		}
 		if (tessellatePatch) {
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			ID3D11Buffer* nullCullCB = nullptr;
 			context->HSSetConstantBuffers(11, 1, &nullCullCB);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		}
+		if (deferredPatch) {
+			// Shading: every pixel the mark kept, against the forward draw's
+			// bindings (b0, b1, the same SRVs and samplers).
+			context->OMSetRenderTargets(8, patchRTVPtrs, nullptr);
+			context->OMSetDepthStencilState(patchDeferredDepthState.get(), 0);
+			context->RSSetState(shellRasterState.get());
+			context->VSSetShader(patchFillVS, nullptr, 0);
+			context->PSSetShader(patchDeferredPS[1], nullptr, 0);
+			ID3D11ShaderResourceView* savedAttrSRVs[4] = {};
+			context->PSGetShaderResources(91, 4, savedAttrSRVs);
+			ID3D11ShaderResourceView* attrSRVs[4] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get(), patchDeferredMark->srv.get() };
+			context->PSSetShaderResources(91, 4, attrSRVs);
+			context->Draw(3, 0);
+			context->PSSetShaderResources(91, 4, savedAttrSRVs);
+			for (auto* srv : savedAttrSRVs) {
+				if (srv)
+					srv->Release();
+			}
+			context->OMSetRenderTargets(8, patchRTVPtrs, patchDSV.get());
+			context->OMSetDepthStencilState(patchDepthState.get(), patchStencilRef);
+			context->RSSetState(patchRaster.get());
+		}
+		if (patchStatsArmed) {
+			context->End(patchStatsQuery[shellStatsRing][1].get());
+			context->End(patchStatsQuery[shellStatsRing][0].get());
+			patchStatsArmed = false;
 		}
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };

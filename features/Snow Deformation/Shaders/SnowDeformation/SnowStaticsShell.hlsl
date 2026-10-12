@@ -450,6 +450,15 @@ SamplerState SnowSampler : register(s0);
 #ifdef PATCH
 #	define SNOW_RUNE_GLYPHS
 #endif
+#if defined(PSHADER) && defined(SNOW_PATCH_DEFERRED)
+// Deferred trench patch: the attribute pass's coarse derivatives of GridLocal
+// and of WorldPos.z, read back per pixel (the ground's deferred pass, same
+// names). A full-screen pass has no triangle to take them from.
+static float2 gDeferredGridDx;
+static float2 gDeferredGridDy;
+static float gDeferredZDx;
+static float gDeferredZDy;
+#endif
 #include "SnowDeformation/SnowFields.hlsli"
 
 // Warped band grid, shared with the landscape shell.
@@ -2605,6 +2614,20 @@ struct PS_OUTPUT
 #	endif
 };
 
+#ifdef SNOW_PATCH_ATTR
+// The deferred trench patch's attribute pass, into the ground's deferred
+// targets: GridLocal + the shading normal's xy; GridLocal's coarse
+// derivatives; view depth + WorldPos.z's coarse derivatives. Mark: 1 on every
+// pixel the cut kept, in a cleared R8 target the shading pass tests first.
+struct PATCH_ATTR_OUTPUT
+{
+	float4 Grid : SV_Target0;
+	float4 Deriv : SV_Target1;
+	float4 Depth : SV_Target2;
+	float Mark : SV_Target3;
+};
+#endif
+
 // Smooth value noise (~24-unit cells) modulating the coverage edge, standing
 // in for the projection's noise texture so snow extent looks organic rather
 // than a hard slope threshold.
@@ -2809,6 +2832,18 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// position for the fetch (round-31 lesson).
 	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
 	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
+#ifdef SNOW_PATCH_DEFERRED
+	// The attribute pass's derivatives (the churn-parallax shift's own is
+	// dropped, as on the ground).
+	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXY);
+	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
+	snowTaps.duvdy = gDeferredGridDy / kSnowUVTile;
+	SnowTaps snowTapsSide = ComputeSnowTapsNoGrad(snowUVSide, snowSidePlane);
+	snowTapsSide.duvdx = (snowSideDropsX ? float2(gDeferredGridDx.y, gDeferredZDx) : float2(gDeferredGridDx.x, gDeferredZDx)) / kSnowUVTile;
+	snowTapsSide.duvdy = (snowSideDropsX ? float2(gDeferredGridDy.y, gDeferredZDy) : float2(gDeferredGridDy.x, gDeferredZDy)) / kSnowUVTile;
+	float snowHeightMip = SnowHeightMipGrad(snowTaps.duvdx, snowTaps.duvdy);
+	float snowHeightMipSide = SnowHeightMipGrad(snowTapsSide.duvdx, snowTapsSide.duvdy);
+#else
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
 	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
 	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
@@ -2817,6 +2852,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// derivatives taken inside it would be garbage at its edges.
 	float snowHeightMip = SnowHeightMip(snowUV);
 	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
+#endif
 
 	// Object trench detail: shading-only berm ridge along trails. Geometry
 	// berm waits for the skin rework.
@@ -2972,9 +3008,17 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float e = 1.5 / texDims.x;
 		float2 detailUV = worldXY / kBumpTile;
 		const float3 kLum = float3(0.30, 0.45, 0.25);
+#ifdef SNOW_PATCH_DEFERRED
+		const float2 detailDx = gDeferredGridDx / kBumpTile;
+		const float2 detailDy = gDeferredGridDy / kBumpTile;
+		float h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
+		float hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
+		float hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
+#else
 		float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
 		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
+#endif
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
@@ -2995,7 +3039,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 
 #ifdef SNOW_RUNE_GLYPHS
 	// A rune's glyph on the road's snow; the landscape shell's recipe.
+#ifdef SNOW_PATCH_DEFERRED
+	RuneGlyph rune = SampleRunes(worldXY, gDeferredGridDx, gDeferredGridDy);
+#else
 	RuneGlyph rune = SampleRunes(worldXY, ddx(worldXY), ddy(worldXY));
+#endif
 	[branch] if (rune.colour.a > 0.004)
 	{
 		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
@@ -3679,7 +3727,7 @@ float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixel
 }
 #endif
 
-#if !defined(VOXEL)
+#if !defined(VOXEL) && !defined(SNOW_PATCH_DEFERRED)
 #if defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_STATICS_KEEP_HIDDEN)
 // Every lane of the quad lies behind the depth the private buffer started
 // from, even pulled by the most the skin raster state's bias can (r at its
@@ -3704,6 +3752,8 @@ bool SkinQuadHidden(float z, float2 pixel)
 // prepass copy of themselves.
 #ifdef SNOW_STATICS_DEPTH_PREPASS
 void main(VS_OUTPUT input)
+#elif defined(SNOW_PATCH_ATTR)
+PATCH_ATTR_OUTPUT main(VS_OUTPUT input)
 #else
 PS_OUTPUT main(VS_OUTPUT input)
 #endif
@@ -3715,6 +3765,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		discard;
 		return;
 	}
+#endif
+#ifdef SNOW_PATCH_ATTR
+	// The deferred pass's only derivatives, taken before any discard.
+	const float4 attrGridDeriv = float4(ddx_coarse(input.GridLocal), ddy_coarse(input.GridLocal));
+	const float2 attrZDeriv = float2(ddx_coarse(input.WorldPos.z), ddy_coarse(input.WorldPos.z));
 #endif
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
@@ -4523,7 +4578,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef SNOW_STATICS_DEPTH_PREPASS
 	return;
 #endif
-#ifndef SNOW_STATICS_DEPTH_PREPASS
+#ifdef SNOW_PATCH_ATTR
+	PATCH_ATTR_OUTPUT attr;
+	attr.Grid = float4(input.GridLocal, normalWS.xy);
+	attr.Deriv = attrGridDeriv;
+	attr.Depth = float4(input.CurrentClip.w, attrZDeriv, 1.0);
+	attr.Mark = 1.0;
+	return attr;
+#endif
+#if !defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_PATCH_ATTR)
 	SkinShadeInput ssi;
 	ssi.WorldPos = input.WorldPos;
 	ssi.Position = input.Position;
@@ -4974,9 +5037,75 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
 	return psout;
-#endif  // !SNOW_STATICS_DEPTH_PREPASS
+#endif  // !SNOW_STATICS_DEPTH_PREPASS && !SNOW_PATCH_ATTR
 }
-#endif  // !VOXEL
+#endif  // !VOXEL && !SNOW_PATCH_DEFERRED
+
+#if defined(SNOW_PATCH_DEFERRED) && defined(PATCH)
+// The deferred trench patch: one full-screen triangle shades the pixels the
+// attribute pass kept, from what it wrote (the ground's deferred targets).
+Texture2D<float4> PatchAttrGrid : register(t91);
+Texture2D<float4> PatchAttrDeriv : register(t92);
+Texture2D<float4> PatchAttrDepth : register(t93);
+Texture2D<float> PatchAttrMark : register(t94);
+
+PS_OUTPUT main(float4 pos : SV_Position)
+{
+	const int3 px = int3(pos.xy, 0);
+	if (PatchAttrMark.Load(px) < 0.5)
+		discard;
+	const float4 depth = PatchAttrDepth.Load(px);
+	const float4 grid = PatchAttrGrid.Load(px);
+	const float4 deriv = PatchAttrDeriv.Load(px);
+	gDeferredGridDx = deriv.xy;
+	gDeferredGridDy = deriv.zw;
+	gDeferredZDx = depth.y;
+	gDeferredZDy = depth.z;
+	// The point at view depth depth.x on the view ray through this pixel: rows
+	// 0, 1 and 3 of the jittered view-projection solved for it (SnowShell.hlsl
+	// SHELL_DEFERRED_REL).
+	const float2 ndc = float2(pos.x / TessScreen.y - 1.0, 1.0 - pos.y / TessScreen.z);
+	const float3 r0 = CameraViewProj[0].xyz;
+	const float3 r1 = CameraViewProj[1].xyz;
+	const float3 r3 = CameraViewProj[3].xyz;
+	const float3 b = float3(ndc.x * depth.x - CameraViewProj[0].w, ndc.y * depth.x - CameraViewProj[1].w, depth.x - CameraViewProj[3].w);
+	const float3 c0 = cross(r1, r3);
+	const float3 rel = (b.x * c0 + b.y * cross(r3, r0) + b.z * cross(r0, r1)) / dot(r0, c0);
+	const float4 currentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	const float4 previousClip = mul(CameraPreviousViewProjUnjittered, float4(rel + ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz, 1.0));
+	const float2 motionVector = float2(-0.5, 0.5) * (currentClip.xy / currentClip.w - previousClip.xy / previousClip.w);
+
+	SkinShadeInput ssi;
+	ssi.WorldPos = rel;
+	ssi.Position = float4(pos.xy, 0.0, 1.0);
+	ssi.CurrentClip = currentClip;
+	ssi.Flat = 0.0;
+	ssi.GridLocal = grid.xy;
+	ssi.trenchGridLocal = grid.xy;
+	ssi.worldXY = GridOrigin + grid.xy;
+	ssi.pixelDist = length(rel);
+	ssi.pixelDeform = saturate(SampleDeformation(grid.xy));
+	ssi.screenNoise = Random::InterleavedGradientNoise(pos.xy, SharedData::FrameCount);
+	ssi.selfShadowReject = 0.0;
+	ssi.onObject = 0.0;
+	ssi.detail = 1.0;
+	ssi.pom = 1.0;
+	ssi.geoNz = -1.0;
+	// A heightfield's normal faces up: z from the stored xy.
+	const SkinShadeResult ssr = SkinShadeSurface(ssi, float3(grid.zw, sqrt(saturate(1.0 - dot(grid.zw, grid.zw)))));
+
+	PS_OUTPUT psout;
+	psout.Diffuse = float4(ssr.preLit, 1.0);
+	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(ssr.viewNormal), 1.0 - ssr.snowRoughness, 1.0);
+	psout.Albedo = float4(ssr.diffuseLobe, 1.0);
+	psout.Specular = float4(ssr.directSpecular, 1.0);
+	psout.Reflectance = float4(ssr.specularLobe, 1.0);
+	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ssr.ambientPart).x, 1.0);
+	psout.Masks2 = float4(1.0 - ssr.landVertexAO, 0.0, 0.0, 1.0);
+	return psout;
+}
+#endif
 #endif
 
 #if defined(COMPUTESHADER) && defined(SNOW_ROAD_MARCH_CS)
