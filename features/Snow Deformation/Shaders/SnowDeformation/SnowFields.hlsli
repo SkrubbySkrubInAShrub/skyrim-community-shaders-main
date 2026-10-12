@@ -104,24 +104,28 @@ float BermFieldBaked(float2 gridLocal)
 
 	SNOW_BERM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
+#ifdef SNOW_RELIEF_HW
+	return BermFieldMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0);
+#else
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
-#ifdef SNOW_DEFORM_GATHER
+#	ifdef SNOW_DEFORM_GATHER
 	const float4 g = BermFieldMap.GatherRed(SnowSampler, (float2(t0 + DeformMapOrigin) + 1.0) / dims);
 	float s00 = g.w;
 	float s10 = g.z;
 	float s01 = g.x;
 	float s11 = g.y;
-#else
+#	else
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
 	float s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
 	float s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
 	float s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
 	float s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
-#endif
+#	endif
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+#endif
 }
 
 // Every map and berm read within 8 units of here returns exactly zero, so the

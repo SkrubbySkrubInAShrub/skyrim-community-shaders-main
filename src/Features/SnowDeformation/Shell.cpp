@@ -752,6 +752,58 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred(bool a_parallax)
 	return slot;
 }
 
+ID3D11PixelShader* SnowDeformation::GetShellPSDeferredAB(bool a_parallax)
+{
+	const uint32_t ab = (shellReliefHW ? 1u : 0u) | (shellChurnNoMarch ? 2u : 0u);
+	const int p = a_parallax ? 1 : 0;
+	ID3D11PixelShader* fallback = shellPSDeferred[p];
+	if (ab == 0)
+		return fallback;
+	auto*& slot = shellPSDeferredAB[ab][p];
+	auto& job = shellPSDeferredABJob[ab][p];
+	if (job.valid()) {
+		if (job.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+			return fallback;
+		if (slot)
+			slot->Release();
+		slot = job.get();
+		shellPSDeferredABLegacyBits[ab][p] = shellPSDeferredABJobBits[ab][p];
+		shellPSDeferredABTried[ab][p] = true;
+		if (!slot)
+			logger::warn("[SNOW DEFORMATION] Shading A/B variant {} failed to compile; the default shading stays", ab);
+	}
+	if (shellPSDeferredABTried[ab][p] && shellPSDeferredABLegacyBits[ab][p] == shellPSLegacyBits)
+		return slot ? slot : fallback;
+	// Off the render thread: seconds cold, a disk-cache hit after that.
+	const uint32_t legacy = shellPSLegacyBits;
+	shellPSDeferredABJobBits[ab][p] = legacy;
+	job = std::async(std::launch::async, [this, ab, a_parallax, legacy]() -> ID3D11PixelShader* {
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
+		if (legacy & 1)
+			defines.emplace_back("SNOW_TEETH_UNGATED", "");
+		if (legacy & 4)
+			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
+		if (a_parallax)
+			defines.emplace_back("SNOW_TRENCH_PARALLAX", "");
+		if (ab & 1)
+			defines.emplace_back("SNOW_RELIEF_HW", "");
+		if (ab & 2)
+			defines.emplace_back("SNOW_CHURN_NO_MARCH", "");
+		return static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	});
+	return fallback;
+}
+
+bool SnowDeformation::ShellDeferredABCompiling() const
+{
+	for (const auto& row : shellPSDeferredABJob)
+		for (const auto& job : row)
+			if (job.valid() && job.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+				return true;
+	return false;
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden, bool a_parallax)
 {
 	auto*& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0][a_parallax ? 1 : 0];
@@ -2413,7 +2465,7 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(91, 3, attrSRVs);
 		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
 		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
-		context->PSSetShader(shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
+		context->PSSetShader(GetShellPSDeferredAB(parallax), nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);

@@ -1727,6 +1727,14 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_churn_parallax_off"), "Disable Churn Parallax"), &shellChurnParallaxOff);
 			if (auto _ttChurnParallax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_churn_parallax_off_tooltip"), "A/B for trampled snow, on the ground and on roads. By default the churn lumps and berm clods are drawn by a short ray march in the pixel shader, not by geometry, so they need no small triangles; tick this to put them back into the geometry. Seen from above the two match. At low, grazing views the geometry also gives the lumps their outlines, which the march cannot; with the default 16 px Tessellation Target that detail is mostly gone either way. Trench and berm shapes are real geometry in both."));
+			ImGui::Checkbox(T(TKEY("shell_relief_hw"), "Hardware-Filtered Relief (A/B)"), &shellReliefHW);
+			if (auto _ttReliefHW = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_relief_hw_tooltip"), "The ground snow's shading reads the trail map and the berm field through the GPU's own bilinear filter instead of exact taps. Measured on trampled snow: about 3 % less Ground - Shell Shading. Its coarser sub-texel weights tilt some normals on trench rims (more than 5 degrees on 0.2-0.4 % of the snow). The first switch compiles in the background; the default shading stays until it is ready."));
+			ImGui::Checkbox(T(TKEY("shell_churn_no_march"), "Churn Without Parallax (A/B)"), &shellChurnNoMarch);
+			if (auto _ttChurnNoMarch = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_churn_no_march_tooltip"), "The ground snow's shading skips the churn's parallax march: the lumps and clods shade by their normals alone and lose their depth. Measured on trampled snow: about 12 % less Ground - Shell Shading. The first switch compiles in the background; the default shading stays until it is ready."));
+			if (ShellDeferredABCompiling())
+				ImGui::TextDisabled("%s", T(TKEY("shell_ab_compiling"), "Compiling the shading variant..."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Pipeline Statistics"), &shellPipelineStatsEnabled);

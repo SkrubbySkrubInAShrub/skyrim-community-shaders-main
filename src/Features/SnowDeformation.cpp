@@ -2076,7 +2076,7 @@ void SnowDeformation::ClearShaderCache()
 	// The prime worker owns these members while it runs, and the trench
 	// parallax worker its variants; a debug toggle in that window no-ops
 	// rather than racing them.
-	if (snowPrimeState.load(std::memory_order_acquire) == 1 || trenchParallaxShaderState.load(std::memory_order_acquire) == 1)
+	if (snowPrimeState.load(std::memory_order_acquire) == 1 || trenchParallaxShaderState.load(std::memory_order_acquire) == 1 || ShellDeferredABCompiling())
 		return;
 	// Rehash the sources on the next compile, so a recompile after a live
 	// shader edit cannot serve stale cached bytecode.
@@ -2128,6 +2128,17 @@ void SnowDeformation::ClearShaderCache()
 		if (deferredPS)
 			deferredPS->Release();
 		deferredPS = nullptr;
+	}
+	for (int ab = 0; ab < 4; ab++) {
+		for (int p = 0; p < 2; p++) {
+			if (shellPSDeferredABJob[ab][p].valid())
+				if (auto* done = shellPSDeferredABJob[ab][p].get())
+					done->Release();
+			if (shellPSDeferredAB[ab][p])
+				shellPSDeferredAB[ab][p]->Release();
+			shellPSDeferredAB[ab][p] = nullptr;
+			shellPSDeferredABTried[ab][p] = false;
+		}
 	}
 	for (auto& attrPair : shellPSPrepassAttr) {
 		for (auto& attrPS : attrPair) {

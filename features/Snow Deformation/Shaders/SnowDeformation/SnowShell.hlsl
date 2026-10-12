@@ -568,6 +568,10 @@ float SampleTerrainBilinearHeight(float2 gridLocal)
 float SampleDeformationBilinear(float2 t, float2 dims)
 {
 	t = clamp(t, 0.0, dims - 1.001);
+#ifdef SNOW_RELIEF_HW
+	// A/B: the sampler's bilinear, whose sub-texel weights are coarser.
+	return saturate(DeformationMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0).x);
+#else
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 #ifdef SNOW_DEFORM_GATHER
@@ -590,6 +594,7 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 	// through (bicubic, fast, and the berm field's 17 taps). The B-spline
 	// weights are a convex combination, so clamping here bounds them all.
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
+#endif
 }
 
 
@@ -2291,13 +2296,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// it meets is shaded. Depth-buffer work stays on the sheet.
 	float3 shadePos = input.WorldPos;
 	bool gridShifted = false;
-#ifdef SNOW_TRENCH_PARALLAX
+	// A/B SNOW_CHURN_NO_MARCH: the lumps shade by their normals alone.
+#ifndef SNOW_CHURN_NO_MARCH
+#	ifdef SNOW_TRENCH_PARALLAX
 	// The parallax replay leaves churn and clods out of the geometry either way.
 	{
-#else
+#	else
 	[branch] if ((ShellFlags.x & 16) != 0)
 	{
-#endif
+#	endif
 		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
 		float churnAmp = (ChurnHeightAmp > 0.01 ? ChurnHeightAmp * churnW : 0.0) * fade;
 		float clodAmp = RimStyle.z * clodW * fade;
@@ -2311,6 +2318,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			gridShifted = true;
 		}
 	}
+#endif
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
 	{
 		const float cStep = 3.0;
