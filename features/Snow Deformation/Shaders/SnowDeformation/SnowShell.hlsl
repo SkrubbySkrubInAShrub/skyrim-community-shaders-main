@@ -1933,11 +1933,13 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 // band, 0 = off): how deep under this snow point the scene point on its ray
 // lies, within maxBand; a huge depth otherwise. Whether that point is a
 // static's is the caller's: Terrain Blending's depths in the early prepass,
-// Lighting's note in the shading.
+// Lighting's note in the shading. The depth is at least a quarter of the
+// run between the two points: on a low ray a far object drops only a little.
 float ShellSceneBuried(float3 worldPosRel, float sceneZ, float shellZ, float maxBand)
 {
-	const float depthUnder = worldPosRel.z * (1.0 - sceneZ / max(shellZ, 1e-3));
-	return (sceneZ > shellZ && depthUnder < maxBand) ? depthUnder : 1e6;
+	const float behind = sceneZ / max(shellZ, 1e-3) - 1.0;
+	const float depthUnder = max(-worldPosRel.z, 0.25 * length(worldPosRel.xy)) * behind;
+	return (behind > 0.0 && depthUnder < maxBand) ? depthUnder : 1e6;
 }
 
 #if defined(SNOW_PREPASS_EARLY) || defined(SNOW_SHELL_DEFERRED)
