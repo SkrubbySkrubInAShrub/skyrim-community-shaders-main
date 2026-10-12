@@ -728,55 +728,136 @@ bool SnowDeformation::EnsureDeferredResources()
 	return shellDeferredAttr[0]->rtv && shellDeferredAttr[1]->rtv && shellDeferredAttr[2]->rtv;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
+ID3D11PixelShader* SnowDeformation::GetShellPSDeferred(bool a_parallax)
 {
-	if (shellPSDeferred && shellPSDeferredLegacyBits != shellPSLegacyBits) {
-		shellPSDeferred->Release();
-		shellPSDeferred = nullptr;
+	auto*& slot = shellPSDeferred[a_parallax ? 1 : 0];
+	auto& slotBits = shellPSDeferredLegacyBits[a_parallax ? 1 : 0];
+	if (slot && slotBits != shellPSLegacyBits) {
+		slot->Release();
+		slot = nullptr;
 	}
-	if (!shellPSDeferred) {
-		logger::debug("Compiling SnowShell PS (deferred)");
+	if (!slot) {
+		logger::debug("Compiling SnowShell PS (deferred{})", a_parallax ? ", trench parallax" : "");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
 		if (shellPSLegacyBits & 1)
 			defines.emplace_back("SNOW_TEETH_UNGATED", "");
 		if (shellPSLegacyBits & 4)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
-		shellPSDeferredLegacyBits = shellPSLegacyBits;
-		shellPSDeferred = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
-	}
-	return shellPSDeferred;
-}
-
-ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
-{
-	auto*& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0];
-	if (!slot) {
-		logger::debug("Compiling SnowShell PS (depth prepass, deferred attributes{})", a_keepHidden ? ", hidden kept" : "");
-		auto defines = ShellPSDefines();
-		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
-		defines.emplace_back("SNOW_PREPASS_ATTR", "");
-		if (a_keepHidden)
-			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
+		if (a_parallax)
+			defines.emplace_back("SNOW_TRENCH_PARALLAX", "");
+		slotBits = shellPSLegacyBits;
 		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return slot;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSPrepassEarly(bool a_keepHidden)
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden, bool a_parallax)
 {
-	auto*& slot = shellPSPrepassEarly[a_keepHidden ? 1 : 0];
+	auto*& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0][a_parallax ? 1 : 0];
 	if (!slot) {
-		logger::debug("Compiling SnowShell PS (early depth prepass{})", a_keepHidden ? ", hidden kept" : "");
+		logger::debug("Compiling SnowShell PS (depth prepass, deferred attributes{}{})", a_keepHidden ? ", hidden kept" : "", a_parallax ? ", trench parallax" : "");
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
+		defines.emplace_back("SNOW_PREPASS_ATTR", "");
+		if (a_keepHidden)
+			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
+		if (a_parallax)
+			defines.emplace_back("SNOW_TRENCH_PARALLAX", "");
+		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	}
+	return slot;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepassEarly(bool a_keepHidden, bool a_parallax)
+{
+	auto*& slot = shellPSPrepassEarly[a_keepHidden ? 1 : 0][a_parallax ? 1 : 0];
+	if (!slot) {
+		logger::debug("Compiling SnowShell PS (early depth prepass{}{})", a_keepHidden ? ", hidden kept" : "", a_parallax ? ", trench parallax" : "");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
 		defines.emplace_back("SNOW_PREPASS_ATTR", "");
 		defines.emplace_back("SNOW_PREPASS_EARLY", "");
 		if (a_keepHidden)
 			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
+		if (a_parallax)
+			defines.emplace_back("SNOW_TRENCH_PARALLAX", "");
 		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return slot;
+}
+
+bool SnowDeformation::TrenchParallaxActive()
+{
+	const uint32_t frame = globals::state->frameCount;
+	if (frame == trenchParallaxFrame)
+		return trenchParallaxLatched;
+	trenchParallaxFrame = frame;
+	trenchParallaxLatched = false;
+	if (!settings.TrenchParallax || SnowShadersPending(1))
+		return false;
+	int state = trenchParallaxShaderState.load(std::memory_order_acquire);
+	if (state == 0) {
+		// Off the render thread (seconds cold); it reads none of these slots
+		// until the state says ready.
+		const uint32_t legacy = shellPSLegacyBits;
+		trenchParallaxShaderState.store(1, std::memory_order_release);
+		trenchParallaxCompile = std::async(std::launch::async, [this, legacy] {
+			bool ok = true;
+			for (int hidden = 0; hidden < 2; hidden++) {
+				ok = GetShellPSPrepassEarly(hidden != 0, true) && ok;
+				ok = GetShellPSPrepassAttr(hidden != 0, true) && ok;
+			}
+			// Legacy bits as captured; a later change recompiles on the render thread.
+			if (legacy == shellPSLegacyBits)
+				ok = GetShellPSDeferred(true) && ok;
+			return ok;
+		});
+		return false;
+	}
+	if (state == 1) {
+		if (trenchParallaxCompile.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+			return false;
+		const bool ok = trenchParallaxCompile.get();
+		state = ok ? 2 : 3;
+		trenchParallaxShaderState.store(state, std::memory_order_release);
+		if (ok)
+			logger::info("[SNOW DEFORMATION] Screen-Space Parallax Trenches: shaders ready");
+		else
+			logger::warn("[SNOW DEFORMATION] Screen-Space Parallax Trenches: SnowShell.hlsl failed to compile, the trenches stay tessellated");
+	}
+	trenchParallaxLatched = state == 2 && LandscapeShadeParallaxReady() && GetShellPSDeferred(true);
+	return trenchParallaxLatched;
+}
+
+bool SnowDeformation::EnsureParallaxOffset()
+{
+	if (!shellRasterDepth)
+		return false;
+	const auto& base = shellRasterDepth->desc;
+	if (shellParallaxOffset && (shellParallaxOffset->desc.Width != base.Width || shellParallaxOffset->desc.Height != base.Height)) {
+		delete shellParallaxOffset;
+		shellParallaxOffset = nullptr;
+	}
+	if (!shellParallaxOffset) {
+		D3D11_TEXTURE2D_DESC desc = base;
+		desc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		shellParallaxOffset = new Texture2D(desc, "SnowDeformation::ShellParallaxOffset");
+		shellParallaxOffset->CreateSRV(srvDesc);
+		shellParallaxOffset->CreateRTV(rtvDesc);
+	}
+	return shellParallaxOffset->srv && shellParallaxOffset->rtv;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSEarlyResolve()
@@ -1097,12 +1178,13 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	shellEarlyState = EarlyPrepass::Unavailable;
 	auto renderer = globals::game::renderer;
 	const auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto* psEarly = GetShellPSPrepassEarly(shellPrepassExitOff);
+	const bool parallax = TrenchParallaxActive();
+	auto* psEarly = GetShellPSPrepassEarly(shellPrepassExitOff, parallax);
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto* fillClaim = fillVS ? GetShellFillPSClaim() : nullptr;
 	// The replay draws the ground; without this frame's capture it is DrawShell's.
-	if (!psEarly || !fillPS || !fillClaim || !GetShellPSEarlyResolve() || !GetShellPSDeferred() || !mainDepth.views[0] || !mainDepth.texture ||
+	if (!psEarly || !fillPS || !fillClaim || !GetShellPSEarlyResolve() || !GetShellPSDeferred(parallax) || !mainDepth.views[0] || !mainDepth.texture ||
 		!shellFillDepthState || !LandscapeShadeReady())
 		return;
 	// DrawShell sizes the prepass targets from the main depth; checked here only
@@ -1110,7 +1192,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	D3D11_TEXTURE2D_DESC mainDesc{};
 	mainDepth.texture->GetDesc(&mainDesc);
 	if (!shellRasterDepth || shellRasterDepth->desc.Width != mainDesc.Width || shellRasterDepth->desc.Height != mainDesc.Height || !shellTestDepthDSV ||
-		!EnsureDeferredResources() || !EnsureEarlyPrepassResources() || !shellTerrainTexture || !shellTerrainTexture->srv ||
+		!EnsureDeferredResources() || !EnsureEarlyPrepassResources() || (parallax && !EnsureParallaxOffset()) || !shellTerrainTexture || !shellTerrainTexture->srv ||
 		!heightTopFiltered || !heightBottomFiltered || !heightTopRaw[heightCurrent] || !heightSkinDepth)
 		return;
 
@@ -1140,7 +1222,8 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
-	cb.TessScreen = { std::max(shellTessTargetPx, 0.0f), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
+	cb.TessScreen = { std::max(shellTessTargetPx, 0.0f), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
+	cb.SnowParallax.w = parallax ? std::max(trenchParallaxReach, 0.0f) : 0.0f;
 	shellCB->Update(cb);
 
 	// The game re-binds only what its state cache believes changed: every slot
@@ -1280,8 +1363,9 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	// attributes and the pending inputs, against the private depth.
 	const float rasterClear[4] = {};
 	context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
-	ID3D11RenderTargetView* prepassRTVs[5] = { shellRasterDepth->rtv.get(), shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(), shellEarlyPending->rtv.get() };
-	context->OMSetRenderTargets(5, prepassRTVs, shellTestDepthDSV.get());
+	ID3D11RenderTargetView* prepassRTVs[6] = { shellRasterDepth->rtv.get(), shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(), shellEarlyPending->rtv.get(),
+		parallax ? shellParallaxOffset->rtv.get() : nullptr };
+	context->OMSetRenderTargets(parallax ? 6 : 5, prepassRTVs, shellTestDepthDSV.get());
 	context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	context->RSSetViewports(1, &shellDrawViewport);
 	context->PSSetShader(psEarly, nullptr, 0);
@@ -1297,6 +1381,12 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->PSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 	ID3D11ShaderResourceView* bareSRV = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
 	context->PSSetShaderResources(kTerrainBareSlot, 1, &bareSRV);
+	// The parallax march reads the berm and undulation fields (inside the saved slots).
+	if (parallax) {
+		ID3D11ShaderResourceView* marchSRVs[2] = { GetBermFieldSRV(), GetUndulationFieldSRV() };
+		context->PSSetShaderResources(14, 1, &marchSRVs[0]);
+		context->PSSetShaderResources(29, 1, &marchSRVs[1]);
+	}
 	context->PSSetSamplers(0, 1, &snowSampler);
 	// Terrain Blending's main-depth copy (t94): objects against the land, for
 	// Snow Meets Objects. Outside the saved slots, so restored here.
@@ -1304,7 +1394,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->PSGetShaderResources(94, 1, &prevTBMain);
 	ID3D11ShaderResourceView* tbMainSRV = tb.terrainDepth.depthSRV;
 	context->PSSetShaderResources(94, 1, &tbMainSRV);
-	DrawLandscapeSnowPrepass(context, cb, cbs[0]);
+	DrawLandscapeSnowPrepass(context, cb, cbs[0], parallax);
 	context->PSSetShaderResources(94, 1, &prevTBMain);
 	if (prevTBMain)
 		prevTBMain->Release();
@@ -1552,6 +1642,9 @@ void SnowDeformation::DrawShell()
 	auto renderer = globals::game::renderer;
 	auto& fb = globals::game::frameBufferCached;
 
+	// Latched per frame: the early prepass's choice when it drew.
+	const bool parallax = TrenchParallaxActive();
+
 	ShellCB cbData{};
 	cbData.CameraViewProj = fb.GetCameraViewProj();
 	cbData.CameraViewProjUnjittered = fb.GetCameraViewProjUnjittered();
@@ -1605,7 +1698,7 @@ void SnowDeformation::DrawShell()
 		snowDisplacementScale,
 		std::clamp(settings.ParallaxShadowStrength, 0.0f, 2.0f),
 		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
-		0.0f
+		parallax ? std::max(trenchParallaxReach, 0.0f) : 0.0f
 	};
 	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f),
 		std::clamp(settings.CrustGloss, 0.0f, 1.0f),
@@ -1671,6 +1764,7 @@ void SnowDeformation::DrawShell()
 	const float2 landContest = LandBlendContest();
 	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, objectBlend ? std::max(objectBlendBand, 1.0f) : 0.0f };
 	cbData.DebugNoFarPad = float(objectBlendView);
+	cbData.DebugParallaxView = (parallax && trenchParallaxView) ? 1.0f : 0.0f;
 	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
 	// reads zeros, which look like fully bare ground everywhere.
@@ -1894,7 +1988,7 @@ void SnowDeformation::DrawShell()
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	if (prevViewportCount)
-		cbData.TessScreen = { std::max(shellTessTargetPx, 0.0f), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, 0.0f };
+		cbData.TessScreen = { std::max(shellTessTargetPx, 0.0f), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	// GetDimensions of the field maps every landscape-shell pass binds from here
 	// on; they change size only in Prepass, so they hold for the next frame's
 	// caster too.
@@ -1957,9 +2051,9 @@ void SnowDeformation::DrawShell()
 	const bool keepHidden = shellPrepassExitOff || !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
 	auto* fillVS = shellGround ? GetShellFillVS() : nullptr;
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
-	auto* psPrepass = (fillPS && !early) ? GetShellPSPrepassAttr(keepHidden) : nullptr;
-	const bool ground = fillPS && (early || (psPrepass && LandscapeShadeReady())) && GetShellPSDeferred() &&
-	                    EnsurePrepassResources(mainDepth.depthSRV) && EnsureDeferredResources();
+	auto* psPrepass = (fillPS && !early) ? GetShellPSPrepassAttr(keepHidden, parallax) : nullptr;
+	const bool ground = fillPS && (early || (psPrepass && LandscapeShadeReady())) && GetShellPSDeferred(parallax) &&
+	                    EnsurePrepassResources(mainDepth.depthSRV) && EnsureDeferredResources() && (!parallax || EnsureParallaxOffset());
 
 	// Main depth before any snow draw: DepthSync syncs the pixels the snow
 	// passes (shell, skins, patch) move nearer than this copy. Targets are
@@ -2257,10 +2351,11 @@ void SnowDeformation::DrawShell()
 			splitRow("SnowDeformation::Ground - Shell Depth Prepass");
 			const float rasterClear[4] = {};
 			context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
-			ID3D11RenderTargetView* prepassRTVs[4] = { shellRasterDepth->rtv.get(), shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get() };
-			context->OMSetRenderTargets(4, prepassRTVs, dsv);
+			ID3D11RenderTargetView* prepassRTVs[5] = { shellRasterDepth->rtv.get(), shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(),
+				parallax ? shellParallaxOffset->rtv.get() : nullptr };
+			context->OMSetRenderTargets(parallax ? 5 : 4, prepassRTVs, dsv);
 			context->PSSetShader(psPrepass, nullptr, 0);
-			DrawLandscapeSnowPrepass(context, cbData, cbs[0]);
+			DrawLandscapeSnowPrepass(context, cbData, cbs[0], parallax);
 			context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2324,11 +2419,14 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(95, 2, debugEarlySRVs);
 		ID3D11ShaderResourceView* debugTBMain = objectBlendView == 2 ? globals::features::terrainBlending.terrainDepth.depthSRV : nullptr;
 		context->PSSetShaderResources(94, 1, &debugTBMain);
-		context->PSSetShader(shellPSDeferred, nullptr, 0);
+		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
+		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
+		context->PSSetShader(shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);
 		context->PSSetShaderResources(94, 3, nullAttrSRVs);
+		context->PSSetShaderResources(99, 1, nullAttrSRVs);
 		context->OMSetRenderTargets(8, rtvs, dsv);
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		globals::profiler->EndPass();

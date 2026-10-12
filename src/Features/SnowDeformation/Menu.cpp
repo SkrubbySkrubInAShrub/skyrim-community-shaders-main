@@ -787,6 +787,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow and the road trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
 
+		ImGui::Checkbox(T(TKEY("trench_parallax"), "Screen-Space Parallax Trenches"), &settings.TrenchParallax);
+		if (auto _ttTrenchParallax = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_parallax_tooltip"), "An A/B against tessellated trenches on the ground snow. The snow is drawn as its untouched top, and in the snow's depth prepass each pixel follows its view ray down into the trenches and over the berms to the snow surface it meets. That point is what the snow's shading, the depth buffer and the blood and rune marks use, so feet and items still stand in the trench. Trench shadows still come from the carved shadow geometry, and road snow keeps its own trench patch. The first time it is turned on its shaders take a few seconds to compile, and the trenches stay tessellated until then."));
+
 		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
 			ClearTrenchStore("the Remember Trenches toggle");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
@@ -1666,6 +1670,17 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("snow_meets_objects_depth"), "Snow Meets Objects Depth"), &objectBlendBand, 1.0f, 64.0f, "%.0f");
 			if (auto _ttObjectBlendBand = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_meets_objects_depth_tooltip"), "How deep under the snow an object's face may lie and still show through it, in units. Larger widens the blend around each object."));
+			ImGui::SliderFloat(T(TKEY("trench_parallax_reach"), "Parallax Trench Reach"), &trenchParallaxReach, 500.0f, 8000.0f, "%.0f");
+			if (auto _ttTrenchParallaxReach = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_parallax_reach_tooltip"), "How far from the camera Screen-Space Parallax Trenches runs, in units of view depth. The trenches flatten over the last fifth. 2600 is where tessellated trenches stop getting extra vertices."));
+			ImGui::Checkbox(T(TKEY("trench_parallax_view"), "Show Parallax Offset"), &trenchParallaxView);
+			if (auto _ttTrenchParallaxView = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_parallax_view_tooltip"), "Screen-Space Parallax Trenches only: paints the ground snow by how far the parallax moved each pixel's point across the ground, red at 4 units, yellow at 16, white at 64. Black is not moved."));
+			{
+				static constexpr const char* kStates[] = { "not compiled", "compiling", "ready", "failed" };
+				WrapTextF("  Screen-Space Parallax Trenches: %s, shaders %s", TrenchParallaxActive() ? "drawing" : (settings.TrenchParallax ? "waiting" : "off"),
+					kStates[std::clamp(trenchParallaxShaderState.load(std::memory_order_acquire), 0, 3)]);
+			}
 			WrapTextF("  %s", LandscapeSnowStatus().c_str());
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())

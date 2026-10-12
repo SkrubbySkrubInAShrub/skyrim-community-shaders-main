@@ -142,7 +142,7 @@ cbuffer ShellCB : register(b0)
 	float ChurnSizeScale;
 	// Landscape-shell C3 A/B flags; declared so ShellCB's layout matches.
 	float DebugNoFarPad;
-	float DebugNoDataMorph;
+	float DebugParallaxView;
 
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;

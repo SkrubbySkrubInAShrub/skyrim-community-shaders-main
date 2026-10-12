@@ -119,6 +119,7 @@
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
 	X(Tessellation) \
+	X(TrenchParallax) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
@@ -2072,9 +2073,10 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 
 void SnowDeformation::ClearShaderCache()
 {
-	// The prime worker owns these members while it runs; a debug toggle in
-	// that window no-ops rather than racing it.
-	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+	// The prime worker owns these members while it runs, and the trench
+	// parallax worker its variants; a debug toggle in that window no-ops
+	// rather than racing them.
+	if (snowPrimeState.load(std::memory_order_acquire) == 1 || trenchParallaxShaderState.load(std::memory_order_acquire) == 1)
 		return;
 	// Rehash the sources on the next compile, so a recompile after a live
 	// shader edit cannot serve stale cached bytecode.
@@ -2122,19 +2124,26 @@ void SnowDeformation::ClearShaderCache()
 	if (exclusionFieldCS)
 		exclusionFieldCS->Release();
 	exclusionFieldCS = nullptr;
-	if (shellPSDeferred)
-		shellPSDeferred->Release();
-	shellPSDeferred = nullptr;
-	for (auto& attrPS : shellPSPrepassAttr) {
-		if (attrPS)
-			attrPS->Release();
-		attrPS = nullptr;
+	for (auto& deferredPS : shellPSDeferred) {
+		if (deferredPS)
+			deferredPS->Release();
+		deferredPS = nullptr;
 	}
-	for (auto& earlyPS : shellPSPrepassEarly) {
-		if (earlyPS)
-			earlyPS->Release();
-		earlyPS = nullptr;
+	for (auto& attrPair : shellPSPrepassAttr) {
+		for (auto& attrPS : attrPair) {
+			if (attrPS)
+				attrPS->Release();
+			attrPS = nullptr;
+		}
 	}
+	for (auto& earlyPair : shellPSPrepassEarly) {
+		for (auto& earlyPS : earlyPair) {
+			if (earlyPS)
+				earlyPS->Release();
+			earlyPS = nullptr;
+		}
+	}
+	trenchParallaxShaderState.store(0, std::memory_order_release);
 	if (shellPSEarlyResolve)
 		shellPSEarlyResolve->Release();
 	shellPSEarlyResolve = nullptr;

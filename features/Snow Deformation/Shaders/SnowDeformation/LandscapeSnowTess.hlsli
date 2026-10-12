@@ -212,11 +212,14 @@ float LsDetailFactor(float3 a, float3 b)
 	{
 		float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
 		float reach = kTessNear * reliefBase;
+		// The parallax replay draws no carve: nothing for the trench boost to resolve.
+#ifndef SNOW_TRENCH_PARALLAX
 		[branch] if (dist < kTessCutoff)
 		{
 			float deform = max(max(SampleDeformationFast(a.xy), SampleDeformationFast(b.xy)), SampleDeformationFast(mid));
 			reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
 		}
+#endif
 		spacing /= clamp(reach / max(dist, 32.0), 1.0, kTessMax);
 	}
 	float factor = clamp(distance(a.xy, b.xy) / spacing, 1.0, LsTess.y);
