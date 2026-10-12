@@ -373,6 +373,10 @@ Texture2D<float4> FrostPatternDiffuse : register(t17);
 Texture2D<float4> UndulationFieldMap : register(t29);
 
 SamplerState SnowSampler : register(s0);
+#if defined(PSHADER) && defined(SNOW_SHELL_DEFERRED)
+// s0 wraps like DeformTexel: one Gather fetches a bilinear's four texels.
+#	define SNOW_DEFORM_GATHER
+#endif
 
 // Shared trench-detail shaping, spell-mark readers, field surfaces and the
 // frost pattern - the verbatim-identical pieces of both shells live in one
@@ -566,12 +570,20 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 	t = clamp(t, 0.0, dims - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
+#ifdef SNOW_DEFORM_GATHER
+	const float4 g = DeformationMap.GatherRed(SnowSampler, (float2(t0 + DeformMapOrigin) + 1.0) / dims);
+	float s00 = g.w;
+	float s10 = g.z;
+	float s01 = g.x;
+	float s11 = g.y;
+#else
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
 	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
 	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
 	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
 	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
+#endif
 
 	// Clamped here rather than at each call site: melt writes past 1.0 into
 	// the refill headroom, and this is the single tap every consumer goes
@@ -2634,7 +2646,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 				{
 					float deform0 = SampleDeformationMarch(gridLocal);
 					float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
-					depth0 = CarveProfile(deform0, depth0, GridOrigin + gridLocal) +
+					depth0 = CarveProfileNoTeeth(deform0, depth0) +
 					         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
 				}
 				marchRef = st0.x + depth0 + Undulation(GridOrigin + gridLocal) * saturate(depth0 / 8.0);
@@ -2668,7 +2680,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 				// bilinear tap when the bake is live; the unbaked A/B path skips
 				// the term rather than paying 17 taps per march step.
 				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-				sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
+				sampleDepth = CarveProfileNoTeeth(sampleDeform, sampleDepth) +
 				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 			}
 			// Live undulation ON PURPOSE: in the march, ALU is free and loads

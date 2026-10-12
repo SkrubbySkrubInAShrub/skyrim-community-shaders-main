@@ -106,12 +106,20 @@ float BermFieldBaked(float2 gridLocal)
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
+#ifdef SNOW_DEFORM_GATHER
+	const float4 g = BermFieldMap.GatherRed(SnowSampler, (float2(t0 + DeformMapOrigin) + 1.0) / dims);
+	float s00 = g.w;
+	float s10 = g.z;
+	float s01 = g.x;
+	float s11 = g.y;
+#else
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
 	float s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
 	float s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
 	float s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
 	float s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+#endif
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
@@ -545,6 +553,23 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	// reads as the rim rolling into the berm rather than a second ridge -
 	// RimStyle.x is the dial if it ever stacks. Faded by depthT with the
 	// rest of the cut-wall vocabulary.
+	[branch] if (RimStyle.x > 0.001)
+	{
+		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
+		profile += RimStyle.x * uncarvedDepth * hump * depthT;
+	}
+	return profile;
+}
+
+// CarveProfile without the rim teeth, for the sun march's occluders. The tail
+// mirrors CarveProfile's: keep the two in step.
+float CarveProfileNoTeeth(float deformation, float uncarvedDepth)
+{
+	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
+	float d = saturate(deformation);
+	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
+	d = lerp(soft, d, depthT);
+	float profile = uncarvedDepth * (1.0 - d);
 	[branch] if (RimStyle.x > 0.001)
 	{
 		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
