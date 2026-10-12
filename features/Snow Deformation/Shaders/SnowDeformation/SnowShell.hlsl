@@ -2288,7 +2288,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// clod heights out, so the ray is marched through them here and the point
 	// it meets is shaded. Depth-buffer work stays on the sheet.
 	float3 shadePos = input.WorldPos;
-	bool gridShifted = false;
 #ifdef SNOW_TRENCH_PARALLAX
 	// The parallax replay leaves churn and clods out of the geometry either way.
 	{
@@ -2306,7 +2305,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			shadePos = input.WorldPos + dir * t;
 			worldXYPS += dir.xy * t;
 			gridLocal += dir.xy * t;
-			gridShifted = true;
 		}
 	}
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
@@ -2610,129 +2608,49 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// hold. Geometric growth in the tap distances gives sharp close shadows
 	// and long soft ones at low sun angles.
 	float pixelVertexAO = -1.0;
-#ifdef SNOW_MARCH_CACHE
-	// The same march on the cached tap heights (MarchHeightCS); a march that
-	// would leave the cache takes the live one below.
-	const float2 cachedStepDir = L.xy / max(length(L.xy), 1e-4);
-	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && MarchCacheCovers(gridLocal, cachedStepDir, 1000.0))
-	{
-		static const float kCachedMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
-		const float sunTan = L.z / max(length(L.xy), 1e-4);
-		const float surfZ = shadePos.z + ShellCameraPosAdjust.z;
-		float2 f0;
-		const float h0 = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, gridLocal, f0), f0);
-		const float marchRef = max(h0 > -50000.0 ? h0 : surfZ, surfZ - 2.0);
-		float horizonTan = -10.0;
-		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
-		{
-			const float d = kCachedMarchDist[marchI];
-			float2 f;
-			const float sh = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, gridLocal + cachedStepDir * d, f), f);
-			horizonTan = max(horizonTan, (sh - marchRef - 1.0) / d);
-		}
-		const float soft = lerp(0.03, 0.35, farShadowT);
-		const float lowSun = smoothstep(0.04, 0.12, sunTan);
-		sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
-	}
-	else
-#endif
 	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
-		// Redistributed toward the NEAR field. The first tap set the finest
-		// boundary the horizon can resolve, so at 28 units every shadow edge
-		// was smeared over at least that distance and the softness below had
-		// to be wide enough to hide it. Same tap COUNT, same 1000-unit reach.
-		static const float kMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
-		float sunLen2D = max(length(L.xy), 1e-4);
-		float sunTan = L.z / sunLen2D;
-		float2 stepDir = L.xy / sunLen2D;
-		float surfZ = shadePos.z + ShellCameraPosAdjust.z;
-		// The receiver REBUILT the way the taps are, so what the reconstruction
-		// gets wrong - bilinear terrain against the triangulated mesh, the
-		// max-of-four object raster - cancels instead of standing as a false
-		// rise over the nearest tap: flat snow shadowed itself in texel-sized
-		// blotches at a low sun. One unit of bias absorbs the residue.
-		float marchRef = surfZ;
+		// Redistributed toward the NEAR field (kSunMarchDist). The first tap set
+		// the finest boundary the horizon can resolve, so at 28 units every
+		// shadow edge was smeared over at least that distance and the softness
+		// below had to be wide enough to hide it. Same tap COUNT, same 1000-unit
+		// reach.
+		const float sunLen2D = max(length(L.xy), 1e-4);
+		const float sunTan = L.z / sunLen2D;
+		const float2 stepDir = L.xy / sunLen2D;
+		const float surfZ = shadePos.z + ShellCameraPosAdjust.z;
+		// The occluder heights are baked (MarchHeightCS: this march's own tap
+		// recipe, carve, berm, melt and dunes included): per trail-map texel
+		// near, per land-layer vertex past the trail map. A march that leaves
+		// both casts nothing.
+		const bool nearCache = MarchCacheCovers(gridLocal, stepDir, kSunMarchDist[4]);
+		[branch] if (nearCache || MarchFarCovers(gridLocal, stepDir, kSunMarchDist[4]))
 		{
-			float3 st0 = SampleTerrain(gridLocal);
-			// Same four texels: the vertex AO below takes them from here.
-			pixelVertexAO = SampleTerrainVertexAO(gridLocal);
-			[branch] if (st0.x > -50000.0)
-			{
-				float depth0 = max(st0.y, 0.0);
-				// pixelMelt is this read at the unshifted gridLocal.
-				float melt0 = pixelMelt;
-				[branch] if (gridShifted)
-					melt0 = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
-				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), melt0);
-				// Untouched: CarveProfile of a zero carve is depth0, the berm +0.
-				[branch] if (!pixelUntouched)
-				{
-					float deform0 = SampleDeformationMarch(gridLocal);
-					float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
-					depth0 = CarveProfileNoTeeth(deform0, depth0) +
-					         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
-				}
-				marchRef = st0.x + depth0 + Undulation(GridOrigin + gridLocal) * saturate(depth0 / 8.0);
-			}
+			float h[6];
+			MarchCachedHeights(gridLocal, stepDir, nearCache, h);
+			// The receiver comes from the same cache as the taps, so what the
+			// resampling gets wrong cancels instead of standing as a false rise
+			// over the nearest tap; one unit of bias absorbs the residue.
+			const float marchRef = max(h[0] > -50000.0 ? h[0] : surfZ, surfZ - 2.0);
+			float horizonTan = -10.0;
+			[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+				horizonTan = max(horizonTan, (h[marchI + 1] - marchRef - 1.0) / kSunMarchDist[marchI]);
+			// Near: a crisp penumbra band. Far: a much wider penumbra plus
+			// attenuated strength; the march's per-texel horizon steps stop
+			// reading as hard-edged blocks on distant snow.
+			const float soft = lerp(0.03, 0.35, farShadowT);
+			// Penumbra CENTRED on the horizon: the old band was the same total
+			// width (3*soft) but sat entirely on the LIT side of
+			// sunTan == horizonTan, so the shadow always over-reached its
+			// geometric edge - worse the lower the sun. Kept identical to the
+			// statics march; the two shells must agree across the seam.
+			// Fades out toward the horizon: a 4-unit raster and a 32-unit terrain
+			// texel cannot resolve contact shadows at a grazing sun, every bump
+			// and draped stone became a blotch at sunset, and the cascades own
+			// the long shadows there anyway. Same gate on the statics march.
+			const float lowSun = smoothstep(0.04, 0.12, sunTan);
+			sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
 		}
-		marchRef = max(marchRef, surfZ - 2.0);
-		float horizonTan = -10.0;
-		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
-		{
-			float d = kMarchDist[marchI];
-			float2 sampleLocal = gridLocal + stepDir * d;
-			float3 st = SampleTerrain(sampleLocal);
-			float sampleDepth = max(st.y, 0.0);
-			// The march must see the CARVED surface (same floor rule as the
-			// geometry): without the carve, a wide trench reads as ringed by
-			// full-height snow and sits in permanent shadow even facing the
-			// sun. Same rule for MELT bowls (fires, workspace clearings):
-			// without the melt, every bowl-floor pixel reads as ringed by
-			// full-height snow and the whole bowl darkens.
-			float2 sampleMask = SampleExclusionMask(GridOrigin + sampleLocal);
-			{
-				float sampleMelt = saturate(sampleMask.y);
-				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
-			}
-			[branch] if (!ShellUntouched(sampleLocal))
-			{
-				float sampleDeform = SampleDeformationMarch(sampleLocal);
-				// The berm occluder reads the berm FIELD, as the geometry does.
-				// BermShape of a raw deformation value peaks across the trench's
-				// sloping wall, which rings every trail with a phantom ridge. One
-				// bilinear tap when the bake is live; the unbaked A/B path skips
-				// the term rather than paying 17 taps per march step.
-				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-				sampleDepth = CarveProfileNoTeeth(sampleDeform, sampleDepth) +
-				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
-			}
-			// Live undulation ON PURPOSE: in the march, ALU is free and loads
-			// are the bottleneck, so the bake's 4 loads per tap were a
-			// regression here (2026-08-30). Geometry and shading keep the bake.
-			// No object term: every object under the shell is geometry the
-			// cascades already shadow with its real silhouette, and the shell
-			// draped over it casts through its own caster.
-			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
-			horizonTan = max(horizonTan, (sh - marchRef - 1.0) / d);
-		}
-		// Near: a crisp penumbra band. Far: a much wider penumbra plus
-		// attenuated strength; the march's per-texel horizon steps stop
-		// reading as hard-edged blocks on distant snow.
-		// Near softness halved: it existed to hide the tap quantisation the
-		// finer first taps now resolve. Far end untouched.
-		float soft = lerp(0.03, 0.35, farShadowT);
-		// Penumbra CENTRED on the horizon: the old band was the same total
-		// width (3*soft) but sat entirely on the LIT side of
-		// sunTan == horizonTan, so the shadow always over-reached its
-		// geometric edge - worse the lower the sun. Kept identical to the
-		// statics march; the two shells must agree across the seam.
-		// Fades out toward the horizon: a 4-unit raster and a 32-unit terrain
-		// texel cannot resolve contact shadows at a grazing sun, every bump
-		// and draped stone became a blotch at sunset, and the cascades own
-		// the long shadows there anyway. Same gate on the statics march.
-		float lowSun = smoothstep(0.04, 0.12, sunTan);
-		sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
 	}
 
 	// 2: this frame's mask was marched on the snow surface; applied as
@@ -3013,9 +2931,10 @@ RWTexture2D<float4> TerrainWetOut : register(u4);
 #endif
 
 #ifdef SNOW_MARCH_HEIGHT_CS
-// MarchHeightGround's builder: the sun march's tap height at each deformation
-// texel's centre, in the map's torus. Over the berm bake's tile list (the map
-// or the berm field changed there), or a band of rows.
+// The sun march's occluder heights (SnowFields.hlsli MarchHeightGround and
+// MarchHeightFar): at each deformation texel's centre in the map's torus, over
+// the berm bake's tile list (the map or the berm field changed there) or a
+// band of rows; and at each land-layer vertex over the FineWindow.
 RWTexture2D<float> MarchHeightOut : register(u0);
 StructuredBuffer<uint> MarchTilesIn : register(t63);
 cbuffer MarchCacheCB : register(b2)
@@ -3025,8 +2944,15 @@ cbuffer MarchCacheCB : register(b2)
 	uint2 MarchCachePad;
 }
 
-// The deferred shading's march tap: keep the two in step. The untouched skip
-// is left out (it changes nothing).
+// The surface the march must see: the CARVED surface (same floor rule as the
+// geometry - without the carve a wide trench reads as ringed by full-height
+// snow and sits in permanent shadow even facing the sun), the MELT bowls
+// (fires, clearings) for the same reason, the berm FIELD (a raw deformation
+// value's BermShape would ring every trail with a phantom ridge across its
+// wall; the unbaked A/B path leaves the term out), and the dunes. No object
+// term: every object under the shell is geometry the cascades already shadow
+// with its real silhouette, and the shell draped over it casts through its
+// own caster.
 float MarchTapHeight(float2 gridLocal)
 {
 	const float3 st = SampleTerrain(gridLocal);
@@ -3062,6 +2988,17 @@ void MarchHeightTexel(uint2 phys)
 	if (DTid.y >= MarchRowCount)
 		return;
 	MarchHeightTexel(uint2(DTid.x, (MarchRowStart + DTid.y) % (uint)dims.y));
+}
+
+// The far cache: texel i on land-layer vertex i, no torus.
+[numthreads(8, 8, 1)] void MarchHeightFarRowsCS(uint3 DTid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	MarchHeightOut.GetDimensions(dims.x, dims.y);
+	if (DTid.x >= dims.x || DTid.y >= MarchRowCount)
+		return;
+	const uint2 t = uint2(DTid.x, (MarchRowStart + DTid.y) % dims.y);
+	MarchHeightOut[t] = MarchTapHeight(float2(t) * FineWindow.w - FineWindow.xy);
 }
 #endif
 #endif

@@ -1702,7 +1702,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("shell_berm_bake_disabled"), "Disable Berm Bake"), &shellBermBakeDisabled);
 			if (auto _ttBerm = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
+				ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. With no tile list to follow, the sun march's height caches then rebuild whole every frame (Ground - March Cache). Hold the camera still and toggle to read the trade."));
 
 
 
@@ -1727,11 +1727,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_churn_parallax_off"), "Disable Churn Parallax"), &shellChurnParallaxOff);
 			if (auto _ttChurnParallax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_churn_parallax_off_tooltip"), "A/B for trampled snow, on the ground and on roads. By default the churn lumps and berm clods are drawn by a short ray march in the pixel shader, not by geometry, so they need no small triangles; tick this to put them back into the geometry. Seen from above the two match. At low, grazing views the geometry also gives the lumps their outlines, which the march cannot; with the default 16 px Tessellation Target that detail is mostly gone either way. Trench and berm shapes are real geometry in both."));
-			ImGui::Checkbox(T(TKEY("march_cache"), "Cached Sun March (A/B)"), &marchCacheEnabled);
-			if (auto _ttMarchCache = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("march_cache_tooltip"), "The sun's self-shadow march on the ground, road and object snow reads its occluder heights from two maps baked once per trail-map texel (the Ground - March Cache row) instead of rebuilding them at every tap. Estimated with a stand-in on test captures: Ground - Shell Shading about a third less on trampled, night and combat snow, road snow up to 18 % less, object snow 6-11 % less. Shadow edges can move slightly on steep trench walls: the heights are resampled at the trail map's 7-unit texels. Snow whose march would leave the trail map keeps the live march. The first switch compiles in the background; the live march stays until it is ready."));
-			if (MarchCacheCompiling())
-				ImGui::TextDisabled("%s", T(TKEY("march_cache_compiling"), "Compiling the cached-march shaders..."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Pipeline Statistics"), &shellPipelineStatsEnabled);

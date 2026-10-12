@@ -120,12 +120,18 @@ float BermFieldBaked(float2 gridLocal)
 #endif
 }
 
-#if defined(PSHADER) && defined(SNOW_MARCH_CACHE)
-// The sun marches' occluder heights per deformation-map texel, in the map's
-// own torus (MarchHeightCS, RoadMarchHeightCS): the ground's tap height, and
-// the road's where the statics march takes a road tap (sentinel elsewhere).
+// The sun heightfield march's tap distances, both shells.
+static const float kSunMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
+
+#if defined(PSHADER)
+// The sun marches' occluder heights, baked (MarchCache.cpp): per deformation
+// texel in the map's own torus, the ground's tap height (MarchHeightCS) and
+// the road's where the statics march takes a road tap, sentinel elsewhere
+// (RoadMarchHeightCS); past the trail map, the ground's per land-layer
+// vertex over the FineWindow (MarchHeightFarCS).
 Texture2D<float> MarchHeightGround : register(t106);
 Texture2D<float> MarchHeightRoad : register(t107);
+Texture2D<float> MarchHeightFar : register(t108);
 
 // A cache's four texels around a grid-local point (s00, s10, s01, s11), one
 // gather on s0 (it wraps like DeformTexel); a_f = the bilinear weights.
@@ -152,6 +158,45 @@ bool MarchCacheCovers(float2 a_gridLocal, float2 a_stepDir, float a_reach)
 	const float2 uv0 = (GridToDeformOffset + a_gridLocal) * DeformInvWorldSize;
 	const float2 uv1 = uv0 + a_stepDir * (a_reach * DeformInvWorldSize);
 	return all(min(uv0, uv1) >= margin) && all(max(uv0, uv1) <= 1.0 - margin);
+}
+
+// The same for the far cache, whose texel i lies on land-layer vertex i.
+bool MarchFarCovers(float2 a_gridLocal, float2 a_stepDir, float a_reach)
+{
+	const float2 t0 = (FineWindow.xy + a_gridLocal) / FineWindow.w;
+	const float2 t1 = t0 + a_stepDir * (a_reach / FineWindow.w);
+	return FineWindow.z > 0.5 && all(min(t0, t1) >= 1.0) && all(max(t0, t1) <= FineWindow.z - 2.0);
+}
+
+float MarchHeightNear(float2 a_gridLocal)
+{
+	float2 f;
+	return MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, a_gridLocal, f), f);
+}
+
+float MarchHeightFarAt(float2 a_gridLocal)
+{
+	const float2 t = (FineWindow.xy + a_gridLocal) / FineWindow.w;
+	const float2 t0 = floor(t);
+	return MarchCacheBilinear(MarchHeightFar.GatherRed(SnowSampler, (t0 + 1.0) / FineWindow.z).wzxy, t - t0);
+}
+
+// The receiver's height and the five taps', all from one cache, so the six
+// gathers issue together.
+void MarchCachedHeights(float2 a_gridLocal, float2 a_stepDir, bool a_near, out float a_h[6])
+{
+	[branch] if (a_near)
+	{
+		a_h[0] = MarchHeightNear(a_gridLocal);
+		[unroll] for (uint i = 0; i < 5; i++)
+			a_h[i + 1] = MarchHeightNear(a_gridLocal + a_stepDir * kSunMarchDist[i]);
+	}
+	else
+	{
+		a_h[0] = MarchHeightFarAt(a_gridLocal);
+		[unroll] for (uint i = 0; i < 5; i++)
+			a_h[i + 1] = MarchHeightFarAt(a_gridLocal + a_stepDir * kSunMarchDist[i]);
+	}
 }
 #endif
 

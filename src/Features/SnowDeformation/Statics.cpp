@@ -4008,8 +4008,6 @@ void SnowDeformation::DrawCapturedStatics()
 				wantPS = (drapePS && staticsPSDrapeNoDepth) ? staticsPSDrapeNoDepth : staticsPSNoDepth;
 			else
 				wantPS = staticsPS;
-			if (!a_prepass)
-				wantPS = MarchCachePS(wantPS);
 			if (wantPS != boundStaticsPS) {
 				context->PSSetShader(wantPS, nullptr, 0);
 				boundStaticsPS = wantPS;
@@ -4228,7 +4226,7 @@ void SnowDeformation::DrawCapturedStatics()
 		} else {
 			context->VSSetShader(patchVS, nullptr, 0);
 		}
-		context->PSSetShader(MarchCachePS(patchPS), nullptr, 0);
+		context->PSSetShader(patchPS, nullptr, 0);
 		// Object top raster (PS t11): the patch's self-shadow march needs the
 		// same footprint test as the skins - inside a footprint the tap
 		// surface is the object top, not the terrain window's class ramp.

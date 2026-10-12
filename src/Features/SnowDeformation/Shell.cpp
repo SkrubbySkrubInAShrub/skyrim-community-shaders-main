@@ -2000,8 +2000,14 @@ void SnowDeformation::DrawShell()
 		lastShellCBData = std::make_unique<ShellCB>();
 	*lastShellCBData = cbData;
 
+	// The sun marches read only the baked heights: without them this frame,
+	// no march.
 	UnbindMarchCaches();
-	UpdateMarchCaches(cbData);
+	if ((cbData.ShellFlags.x & 1) != 0 && !UpdateMarchCaches(cbData)) {
+		cbData.ShellFlags.x &= ~1;
+		shellCB->Update(cbData);
+		*lastShellCBData = cbData;
+	}
 
 	// Pre-shell copy of MASKS: Masks.y carries the land's EM grain height
 	// (Lighting.hlsl LANDSCAPE; 0 = no data), and the land under the shell
@@ -2416,7 +2422,7 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(91, 3, attrSRVs);
 		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
 		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
-		context->PSSetShader(GetShellPSDeferredMC(parallax), nullptr, 0);
+		context->PSSetShader(shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);

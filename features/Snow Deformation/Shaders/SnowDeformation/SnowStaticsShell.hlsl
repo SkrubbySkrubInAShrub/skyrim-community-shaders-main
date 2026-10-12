@@ -3105,288 +3105,97 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Heightfield self-shadowing, the landscape shell's 5-tap horizon march
 	//: hills, berms and drift rims cast the same soft shadows onto
 	// object snow as onto the ground beside it, and a trench's own rim
-	// darkens its interior. Same tap ring, same carved-surface rule; the
-	// melt term reads the wide exclusion field alone (no near mask bound
-	// here). Object tops from the skin's own raster window join the horizon.
+	// darkens its interior. The same baked heights as the landscape march;
+	// road tops from the skin's own raster window join the horizon.
 	// March diagnostics for debug view 4: x = how much the march darkened
-	// this pixel, y = fraction of taps that rebuilt the road's carved
-	// surface, z = fraction that used the flat dusting. Ran = the guard
-	// below passed at all (a pixel the cascades already darkened, or a sun
-	// too low, never marches - the view paints those dim magenta so "march
-	// skipped" cannot be misread as "march found nothing").
+	// this pixel, y = fraction of taps that took the road's carved surface,
+	// z unused. Ran = the guard below passed at all (a pixel the cascades
+	// already darkened, a sun too low, or a march past both caches never
+	// marches - the view paints those dim magenta so "march skipped" cannot
+	// be misread as "march found nothing").
 	float3 dbgMarch = float3(0.0, 0.0, 0.0);
 	float dbgMarchRan = 0.0;
-#ifdef SNOW_MARCH_CACHE
-	// The same march on the cached tap heights (MarchHeightCS for the ground,
-	// RoadMarchHeightCS for road taps); a march that would leave the cache
-	// takes the live one below.
-	const float2 cachedStepDir = L.xy / max(length(L.xy), 1e-4);
-	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && input.detail > 0.001 &&
-				 MarchCacheCovers(input.GridLocal, cachedStepDir, 1000.0))
-	{
-		static const float kCachedMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
-		const float sunTan = L.z / max(length(L.xy), 1e-4);
-		const float surfZ = shadePos.z + ShellCameraPosAdjust.z;
-		float2 f0;
-		const float h0 = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, input.GridLocal, f0), f0);
-		const float refTer = max(h0 > -50000.0 ? h0 : surfZ, surfZ - 2.0);
-		const float soft = lerp(0.03, 0.35, farShadowT);
-		bool objectTopUsable = HasObjectTop > 0.5 && (ShellFlags.y & 1) != 0;
-		[branch] if (objectTopUsable)
-		{
-			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
-			[flatten] if (all(abs(selfLocal) < 0.98))
-			{
-				float2 topDims;
-				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
-				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
-				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
-				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
-					objectTopUsable = false;
-			}
-		}
-		float horizonTan = -10.0;
-		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
-		{
-			const float d = kCachedMarchDist[marchI];
-			const float2 sampleLocal = input.GridLocal + cachedStepDir * d;
-			float2 f;
-			float sh = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, sampleLocal, f), f);
-			float ref = refTer;
-			[branch] if (objectTopUsable)
-			{
-				const float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
-				float2 fRoad;
-				const float4 road = MarchCacheTexels(MarchHeightRoad, sampleLocal, fRoad);
-				[flatten] if (all(abs(topLocal) < 0.98) && all(road > -50000.0))
-				{
-					sh = MarchCacheBilinear(road, fRoad);
-					ref = surfZ;
-					dbgMarch.y += 0.2;
-				}
-			}
-			horizonTan = max(horizonTan, (sh - ref - 1.0) / d);
-		}
-		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
-		marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
-		sunShadow *= marchFactor;
-		dbgMarch.x = 1.0 - marchFactor;
-		dbgMarchRan = 1.0;
-	}
-	else
-#endif
 	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && input.detail > 0.001)
 	{
-		// Redistributed toward the NEAR field. The first tap set the finest
-		// boundary the horizon can resolve, so at 28 units every shadow edge
-		// was smeared over at least that distance and the softness below had
-		// to be wide enough to hide it. Same tap COUNT, same 1000-unit reach.
-		static const float kMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
-		float sunLen2D = max(length(L.xy), 1e-4);
-		float sunTan = L.z / sunLen2D;
-		float2 stepDir = L.xy / sunLen2D;
-		float surfZ = shadePos.z + ShellCameraPosAdjust.z;
-		// Receivers rebuilt the way the taps are (see SnowShell.hlsl): one
-		// reference for terrain taps, one for object taps.
-		float refTer = surfZ;
+		const float sunLen2D = max(length(L.xy), 1e-4);
+		const float sunTan = L.z / sunLen2D;
+		const float2 stepDir = L.xy / sunLen2D;
+		const float surfZ = shadePos.z + ShellCameraPosAdjust.z;
+		// The ground's occluder heights are the landscape march's own, baked
+		// (MarchHeightCS): per trail-map texel near, per land-layer vertex past
+		// the trail map. A march that leaves both casts nothing.
+		const bool nearCache = MarchCacheCovers(input.GridLocal, stepDir, kSunMarchDist[4]);
+		[branch] if (nearCache || MarchFarCovers(input.GridLocal, stepDir, kSunMarchDist[4]))
 		{
-			float3 st0 = SampleTerrainStatics(input.GridLocal);
-			[branch] if (st0.x > -50000.0)
-			{
-				float depth0 = max(st0.y, 0.0);
-				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(SampleExclusionField(GridOrigin + input.GridLocal).y));
-				// Untouched: deformation and berm read 0, CarveProfileNoTeeth(0, d) is d.
-				[branch] if (!ShellUntouched(input.GridLocal))
-				{
-					float deform0 = SampleDeformation(input.GridLocal);
-					float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(input.GridLocal) : 0.0;
-					depth0 = CarveProfileNoTeeth(deform0, depth0) +
-					         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
-				}
-				refTer = st0.x + depth0 + Undulation(GridOrigin + input.GridLocal) * saturate(depth0 / 8.0);
-			}
-		}
-		// Never below the drawn surface by more than the reconstruction's own
-		// slack: a skin standing on a rock or a glacier is far above the
-		// terrain the taps read, and terrain relief must not shadow it.
-		refTer = max(refTer, surfZ - 2.0);
-		float horizonTan = -10.0;
-		// Near softness halved: it existed to hide the tap quantisation the
-		// finer first taps now resolve. Far end untouched.
-		float soft = lerp(0.03, 0.35, farShadowT);
-		// A tap below this tangent cannot move the result: either a steeper
-		// tap sets the horizon, or every tap is under it and the smoothstep
-		// below is exactly 1. Taps are skipped on an upper bound of their
-		// height (carve <= depth, lip, berm, dunes); margins cover rounding.
-		const float skipTan = sunTan - 1.5 * soft - 1e-4;
-		const float lipGain = max(RimStyle.x, 0.0);
-		const float undBound = abs(UndulationAmp);
-		// The top raster stores only the HIGHEST surface per texel, so under
-		// a multi-level object's overhang it records the deck ABOVE the
-		// receiver and every tap reads "inside a hill" — full shadow in
-		// raster-texel steps on surfaces plainly in the sun. The raster
-		// cannot see under
-		// roofs: where it stands well above the surface being shaded, drop
-		// its term and let the cascades/SSS own the shading here.
-		// The S4 skip is LIFTED. With the object taps off, skins took no
-		// heightfield occlusion at all (Josef, debug view 4: every skin black,
-		// the road patch green) while the landscape march occluded the ground
-		// beside them at full depth - so objects read brighter than the snow
-		// around them. The blockiness that motivated the skip was the POINT
-		// load, fixed below, not the taps.
-		// ShellFlags.y bit 0: a road wrote road tops into the skin-depth raster this
-		// frame. Without one no tap can take the road branch below.
-		bool objectTopUsable = HasObjectTop > 0.5 && (ShellFlags.y & 1) != 0;
-		[branch] if (objectTopUsable)
-		{
-			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
-			[flatten] if (all(abs(selfLocal) < 0.98))
-			{
-				float2 topDims;
-				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
-				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
-				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
-				// 6 units: about one raster texel above the floor.
-				// On normal tops the raster sits at or below the lifted skin
-				// surface (selfTop - surfZ is negative by the skin depth),
-				// so a small positive margin only fires under genuine upper
-				// decks; 32 missed low ledges, 12 still missed some.
-				// FLOOR: the raster is 4-unit texels holding the HIGHEST
-				// surface per texel, so on a steep facet a tap can legitimately
-				// read a few units above its receiver. Below ~5 the guard
-				// starts firing on that quantisation alone and object tops
-				// stop shadowing themselves at all — do not go lower without
-				// a finer raster.
-				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
-					objectTopUsable = false;
-			}
-		}
-		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
-		{
-			float d = kMarchDist[marchI];
-			float2 sampleLocal = input.GridLocal + stepDir * d;
-			float sh = -100000.0;
-			bool tapOnObject = false;
+			float h[6];
+			MarchCachedHeights(input.GridLocal, stepDir, nearCache, h);
+			// Never below the drawn surface by more than the reconstruction's own
+			// slack: a skin standing on a rock or a glacier is far above the
+			// terrain the taps read, and terrain relief must not shadow it.
+			const float refTer = max(h[0] > -50000.0 ? h[0] : surfZ, surfZ - 2.0);
+			// Near softness halved: it existed to hide the tap quantisation the
+			// finer first taps now resolve. Far end untouched.
+			const float soft = lerp(0.03, 0.35, farShadowT);
+			// Object taps exist for ROAD columns only: the road's carved surface
+			// is a snow shape the cascades cannot see. Any other object's top is
+			// geometry the cascades already shadow with its real silhouette, and
+			// a 4-unit raster copy of that shadow never lined up with it (the
+			// statue, the distant glaciers). Baked per trail-map texel
+			// (RoadMarchHeightCS: the sentinel where a point is no road tap), so
+			// near the camera only. ShellFlags.y bit 0: a road wrote road tops
+			// into the skin-depth raster this frame.
+			bool objectTopUsable = nearCache && HasObjectTop > 0.5 && (ShellFlags.y & 1) != 0;
+			// The top raster stores only the HIGHEST surface per texel, so under
+			// a multi-level object's overhang it records the deck ABOVE the
+			// receiver and every tap reads "inside a hill". Where it stands well
+			// above the surface being shaded, drop the object taps and let the
+			// cascades/SSS own the shading here. 6 units: about one raster texel
+			// above the floor (below ~5 the guard fires on the 4-unit raster's
+			// quantisation alone and object tops stop shadowing themselves).
 			[branch] if (objectTopUsable)
 			{
-				float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
-				[flatten] if (all(abs(topLocal) < 0.98))
+				float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
+				[flatten] if (all(abs(selfLocal) < 0.98))
 				{
 					float2 topDims;
 					ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
-					// No point read of the top first: its texel is one of the
-					// four below, which must all be real.
-					{
-						// Inside an object's footprint the surface is its top
-						// plus a skin dusting. The terrain window's class-ramp
-						// surface does not exist here: marching against it
-						// fabricated a snow slab a class depth above every
-						// skin, and the round-35 top term then stacked the
-						// ramp on the top as well - object snow fell into
-						// shadow at any low sun.
-						//
-						// Occluder = the CONE field, not a fixed dusting. A flat 2.0
-						// modelled every dome as 2 units tall, so skins never
-						// self-shadowed at their real height while the landscape march
-						// occluded the ground beside them at FULL depth. ObjectSkinDepth
-						// is unusable here (the capture parks it at 0 for every non-road
-						// object); the cone is the same angle-of-repose field the dome's
-						// own taper reads.
-						float2 tapWorld = GridOrigin + sampleLocal;
-						// Object taps exist for ROAD columns only: the road's carved
-						// surface is a snow shape the cascades cannot see. Any other
-						// object's top is geometry the cascades already shadow with
-						// its real silhouette, and a 4-unit raster copy of that shadow
-						// never lined up with it (the statue, the distant glaciers).
-						float2 bt = PatchTexel(tapWorld, topDims);
-						int2 bt0 = (int2)bt;
-						float2 btf = bt - bt0;
-						// One gather per raster fetches the bilinear's four texels
-						// (bt0 <= dims - 2). Road tops first: off a road nothing
-						// else is read.
-						const float2 tapGatherUV = (float2(bt0) + 1.0) / topDims;
-						const float4 tapRoadTops = ObjectSkinDepth.GatherGreen(ShellLinearSampler, tapGatherUV);
-						float tapRoadTop = max(max(tapRoadTops.x, tapRoadTops.y), max(tapRoadTops.z, tapRoadTops.w));
-						float4 tapTops = -100000.0;
-						float4 tapSkinDepths = 0.0;
-						[branch] if (tapRoadTop > kNoRoadTop * 0.5)
-						{
-							tapTops = ObjectTopRaw.GatherRed(ShellLinearSampler, tapGatherUV).wzxy;
-							tapSkinDepths = ObjectSkinDepth.GatherRed(ShellLinearSampler, tapGatherUV).wzxy;
-						}
-						[branch] if (all(tapTops > -50000.0))
-						{
-							float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
-							float depthSmooth = lerp(lerp(tapSkinDepths.x, tapSkinDepths.y, btf.x), lerp(tapSkinDepths.z, tapSkinDepths.w, btf.x), btf.y);
-							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && depthSmooth >= 1.0)
-							{
-								float roadBound = max(max(tapTops.x, tapTops.y), max(tapTops.z, tapTops.w)) +
-								                  max(max(tapSkinDepths.x, tapSkinDepths.y), max(tapSkinDepths.z, tapSkinDepths.w)) * (1.0 + lipGain + max(ObjBermHeightAmp, 0.0)) + undBound;
-								roadBound += 0.01 + 1e-6 * abs(roadBound);
-								[branch] if ((roadBound - surfZ - 1.0) / d >= skipTan)
-								{
-									// The road's own top where something taller stands over it.
-									float topRoad = (topSmooth - tapRoadTop) >= kRoadOwnsTop ? tapRoadTop : topSmooth;
-									float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
-									float tapCone = ObjectConeDepth(tapWorld);
-									depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
-									float tapDepth = depthSmooth;
-									[branch] if (!ShellUntouched(sampleLocal))
-									{
-										float tapDeform = SampleDeformation(sampleLocal);
-										float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-										tapDepth = CarveProfileNoTeeth(tapDeform, depthSmooth) +
-										           BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
-									}
-									sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
-								}
-								dbgMarch.y += 0.2;
-								tapOnObject = true;
-							}
-						}
-					}
+					float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
+					float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
+					if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
+						objectTopUsable = false;
 				}
 			}
-			[branch] if (!tapOnObject)
+			float horizonTan = -10.0;
+			[unroll] for (uint marchI = 0; marchI < 5; marchI++)
 			{
-				float3 st = SampleTerrainStatics(sampleLocal);
-				float sampleDepth = max(st.y, 0.0);
-				float terBound = st.x + sampleDepth * (1.0 + lipGain + max(BermHeightAmp, 0.0)) + undBound;
-				terBound += 0.01 + 1e-6 * abs(terBound);
-				[branch] if ((terBound - refTer - 1.0) / d >= skipTan)
+				const float d = kSunMarchDist[marchI];
+				float sh = h[marchI + 1];
+				float ref = refTer;
+				[branch] if (objectTopUsable)
 				{
+					const float2 sampleLocal = input.GridLocal + stepDir * d;
+					const float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
+					float2 fRoad;
+					const float4 road = MarchCacheTexels(MarchHeightRoad, sampleLocal, fRoad);
+					[flatten] if (all(abs(topLocal) < 0.98) && all(road > -50000.0))
 					{
-						float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
-						sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+						sh = MarchCacheBilinear(road, fRoad);
+						ref = surfZ;
+						dbgMarch.y += 0.2;
 					}
-					[branch] if (!ShellUntouched(sampleLocal))
-					{
-						float sampleDeform = SampleDeformation(sampleLocal);
-						float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-						sampleDepth = CarveProfileNoTeeth(sampleDeform, sampleDepth) +
-						              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
-					}
-					// Sentinel terrain contributes a hugely negative horizon: a
-					// no-op through the max below, same as the landscape's edge.
-					sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 				}
+				horizonTan = max(horizonTan, (sh - ref - 1.0) / d);
 			}
-			horizonTan = max(horizonTan, (sh - (tapOnObject ? surfZ : refTer) - 1.0) / d);
+			// Penumbra CENTRED on the horizon (see SnowShell.hlsl): same width,
+			// no bias toward the lit side.
+			float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+			// Fades out toward the horizon, as the terrain march does.
+			marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
+			sunShadow *= marchFactor;
+			dbgMarch.x = 1.0 - marchFactor;
+			dbgMarchRan = 1.0;
 		}
-		// Penumbra CENTRED on the horizon. The old band ran
-		// [-0.12 - (soft-0.06)*2, +soft]: the same total width (3*soft) but
-		// entirely on the LIT side of sunTan == horizonTan, so the shadow always
-		// over-reached its geometric edge by h/(sunTan-soft) - h/sunTan on the
-		// ground. That grows fast as the sun drops - the low-sun bleed past
-		// drift crests. Width preserved exactly; the bias is gone.
-		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
-		// Fades out toward the horizon, as the terrain march does.
-		marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
-		sunShadow *= marchFactor;
-		dbgMarch.x = 1.0 - marchFactor;
-		dbgMarchRan = 1.0;
-	}
-	// A mask marched with the object snow in the depth applies as
+	}	// A mask marched with the object snow in the depth applies as
 	// Lighting.hlsl applies it, without the gates below.
 	const bool sssSeesSkin = SkinSssSeen > 0.5;
 	[branch] if (ScreenSpaceShadowsActive > 0.5 && sssSeesSkin && !SharedData::InInterior && dot(normalWS, L) >= 0.0)
@@ -5183,8 +4992,13 @@ cbuffer MarchCacheCB : register(b2)
 	uint2 MarchCachePad;
 }
 
-// The statics march's road tap (SkinShadeSurface): keep the two in step. The
-// skip bound is left out: a tap under it cannot move the march's result.
+// The statics march's road occluder at a point. Inside an object's footprint
+// the surface is its top plus the road's snow: the terrain window's class-ramp
+// surface does not exist there (marching against it fabricated a slab a class
+// depth above every skin). Depth = the column's skin depth, held under the
+// angle-of-repose cone and the land's own class depth, then carved, bermed
+// and undulated like the ground's. Only where all four texels are real and a
+// road owns the column; the sentinel elsewhere.
 float RoadTapHeight(float2 sampleLocal)
 {
 	float sh = -100000.0;
