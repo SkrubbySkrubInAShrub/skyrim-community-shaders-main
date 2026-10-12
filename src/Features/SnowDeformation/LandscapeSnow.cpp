@@ -1130,7 +1130,10 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("landRecolorLumLo", landRecolorLumLo);
 	rdb("objectBlend", objectBlend);
 	rdf("objectBlendBand", objectBlendBand);
-	rdb("objectBlendView", objectBlendView);
+	if (a_args.contains("objectBlendView") && a_args["objectBlendView"].is_number_integer())
+		objectBlendView = uint32_t(std::clamp(a_args["objectBlendView"].get<int>(), 0, 2));
+	else if (a_args.contains("objectBlendView") && a_args["objectBlendView"].is_boolean())
+		objectBlendView = a_args["objectBlendView"].get<bool>() ? 1u : 0u;
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);

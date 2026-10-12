@@ -1465,7 +1465,8 @@ struct PS_PREPASS_OUTPUT
 	float4 AttrDepth : SV_Target3;
 #		ifdef SNOW_PREPASS_EARLY
 	// A pending pixel's inputs for the resolve: y = the snow's side of the land
-	// contest; w = 2 if the export clamped + 8 if the land contest runs.
+	// contest; w = 2 if the export clamped + 8 if the land contest runs + 32
+	// if a static under the snow draws its own pixel.
 	float4 Pending : SV_Target4;
 #		endif
 #	endif
@@ -1638,44 +1639,29 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	return o;
 }
 #else
-// The scene point on a pixel's ray, camera-relative: the deferred pass's
-// solve on the scene depth.
-float3 ShellSceneRelAt(int2 px)
-{
-	const float w = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
-	const float2 ndc = float2((px.x + 0.5) / TessScreen.y - 1.0, 1.0 - (px.y + 0.5) / TessScreen.z);
-	const float3 r0 = CameraViewProj[0].xyz;
-	const float3 r1 = CameraViewProj[1].xyz;
-	const float3 r3 = CameraViewProj[3].xyz;
-	const float3 c0 = cross(r1, r3);
-	const float3 b = float3(ndc.x * w - CameraViewProj[0].w, ndc.y * w - CameraViewProj[1].w, w - CameraViewProj[3].w);
-	return (b.x * c0 + b.y * cross(r3, r0) + b.z * cross(r0, r1)) / dot(r0, c0);
-}
-
 // Where the snow meets a static, Terrain Blending's way (CompactLook.w = the
 // band, 0 = off): how deep under this snow point the scene point on its ray
-// lies, within maxBand, where that point is a steep face clear of the land -
-// a wall or a flank rising through the snow, not a slab lying under it; a
-// huge depth otherwise.
-float ShellObjectBuried(float3 worldPosRel, float sceneZ, float shellZ, int2 px, float maxBand)
+// lies, within maxBand; a huge depth otherwise. Whether that point is a
+// static's is the caller's: Terrain Blending's depths in the early prepass,
+// Lighting's note in the shading.
+float ShellSceneBuried(float3 worldPosRel, float sceneZ, float shellZ, float maxBand)
 {
-	float buried = 1e6;
-	const float3 sceneRel = worldPosRel * (sceneZ / max(shellZ, 1e-3));
-	const float depthUnder = worldPosRel.z - sceneRel.z;
-	[branch] if (sceneZ > shellZ && depthUnder < maxBand)
-	{
-		const float sceneAbsZ = sceneRel.z + ShellCameraPosAdjust.z;
-		const float land = SampleTerrain(sceneRel.xy + ShellCameraPosAdjust.xy - GridOrigin).x;
-		[branch] if (land > -50000.0 && sceneAbsZ - land > 3.0)
-		{
-			const float3 o = ShellSceneRelAt(px);
-			const float3 n = cross(ShellSceneRelAt(px + int2(1, 0)) - o, ShellSceneRelAt(px + int2(0, 1)) - o);
-			[flatten] if (abs(n.z) < 0.7 * length(n))
-				buried = depthUnder;
-		}
-	}
-	return buried;
+	const float depthUnder = worldPosRel.z * (1.0 - sceneZ / max(shellZ, 1e-3));
+	return (sceneZ > shellZ && depthUnder < maxBand) ? depthUnder : 1e6;
 }
+
+#if defined(SNOW_PREPASS_EARLY) || defined(SNOW_SHELL_DEFERRED)
+// Terrain Blending's copy of the main depth after the depth prepass: near
+// terrain (within 1024 units) drew pushed back, objects at their own depth.
+// The shading pass binds it for the debug view only.
+Texture2D<float> TBMainDepth : register(t94);
+#endif
+#ifdef SNOW_SHELL_DEFERRED
+// Debug view only: the early prepass's raster depth (negative = pending) and
+// pending inputs, unbound on the late path.
+Texture2D<float> DebugEarlyRaster : register(t95);
+Texture2D<float4> DebugEarlyPending : register(t96);
+#endif
 
 #if defined(SNOW_SHELL_DEFERRED)
 PS_OUTPUT ShellShade(VS_OUTPUT input)
@@ -1716,7 +1702,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (masksY > 1.125 && masksY < 256.0)
 		{
 			const float band = CompactLook.w * (0.3 + 0.7 * ShapeNoise((input.WorldPos.xy + ShellCameraPosAdjust.xy) / 40.0));
-			const float under = saturate(ShellObjectBuried(input.WorldPos, sceneZ, shellZ, int2(input.Position.xy), CompactLook.w) / band);
+			const float under = saturate(ShellSceneBuried(input.WorldPos, sceneZ, shellZ, CompactLook.w) / band);
 			objectBlendView = under;
 			[branch] if (under < 1.0 && DebugNoFarPad < 0.5)
 			{
@@ -1879,10 +1865,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		landContest = landSide < 16.0;
 	}
 	// A static's face just under the snow draws its own pixel; the shading
-	// lets it through the snow by the grain.
+	// lets it through the snow by the grain. The scene point is an object's
+	// where the main-depth copy agrees with the blended depth (land there
+	// sits pushed back), in Terrain Blending's near range only.
 	bool objectUnder = false;
-	[branch] if (CompactLook.w > 0.0 && coverageAlpha > 0.001)
-		objectUnder = ShellObjectBuried(input.WorldPos, sceneZ, shellZ, int2(input.Position.xy), CompactLook.w) < CompactLook.w;
+	[branch] if (CompactLook.w > 0.0 && coverageAlpha > 0.001 && shellZ < 900.0 &&
+				 ShellSceneBuried(input.WorldPos, sceneZ, shellZ, CompactLook.w) < CompactLook.w)
+		objectUnder = SharedData::GetScreenDepth(TBMainDepth.Load(int3(input.Position.xy, 0))) < sceneZ * 1.002 + 0.25;
 #	else
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
@@ -2644,12 +2633,28 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
 #ifdef SNOW_SHELL_DEFERRED
-	[branch] if (DebugNoFarPad > 0.5 && objectBlendView >= 0.0)
+	[branch] if (DebugNoFarPad > 1.5)
 	{
-		psout.Diffuse.rgb = lerp(float3(4.0, 0.0, 0.0), float3(0.0, 4.0, 0.0), objectBlendView);
+		// Mode 2: the early prepass's tests - red object behind, green within
+		// the band, blue within 900 units.
+		const float du = ShellSceneBuried(input.WorldPos, sceneZ, shellZ, max(CompactLook.w, 1.0));
+		const bool tbObject = SharedData::GetScreenDepth(TBMainDepth.Load(int3(input.Position.xy, 0))) < sceneZ * 1.002 + 0.25;
+		psout.Diffuse.rgb = float3(tbObject ? 4.0 : 0.0, du < max(CompactLook.w, 1.0) ? 4.0 : 0.0, shellZ < 900.0 ? 1.5 : 0.0);
 		psout.Albedo.rgb = 0.0;
 		psout.Specular.rgb = 0.0;
 		psout.Reflectance.rgb = 0.0;
+	}
+	else [branch] if (DebugNoFarPad > 0.5)
+	{
+		const int3 dpx = int3(input.Position.xy, 0);
+		const bool leftToStatic = DebugEarlyRaster.Load(dpx) < 0.0 && (((uint)(DebugEarlyPending.Load(dpx).w * 0.5)) & 16u) != 0;
+		[branch] if (objectBlendView >= 0.0 || leftToStatic)
+		{
+			psout.Diffuse.rgb = objectBlendView >= 0.0 ? lerp(float3(4.0, 0.0, 0.0), float3(0.0, 4.0, 0.0), objectBlendView) : float3(0.0, 0.5, 4.0);
+			psout.Albedo.rgb = 0.0;
+			psout.Specular.rgb = 0.0;
+			psout.Reflectance.rgb = 0.0;
+		}
 	}
 #endif
 

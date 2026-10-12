@@ -3682,7 +3682,7 @@ public:
 	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */
 	json LandscapeSnowTool(const json& a_args);
 	/** @brief Debug, not serialised: the land's snow-texture weight from which the snow deepens; below it the snow is a film the land's blend cuts. */
-	float landscapeBlendStart = 0.85f;
+	float landscapeBlendStart = 0.50f;
 	/** @brief Land Snow Recolor (LANDSCAPE-SNOW-PLAN 7.4): the land's snow layers wear the shell's snow set texel by texel wherever the land shows (DebugTerrainOverlay bit 256; 512 = the set's RMAOS is bound). Debug A/B, default on, not serialised. */
 	bool landRecolor = true;
 	/** @brief Land Snow Recolor: gamma luminance where a snow layer's texel starts to read as snow (full 0.18 above). Debug, not serialised. */
@@ -3692,8 +3692,8 @@ public:
 	/** @brief Where the ground snow meets a static, Terrain Blending's way: the snow lets the object's buried face through over objectBlendBand units of depth, by the snow's grain (ShellCB CompactLook.w). Debug A/B, default on, not serialised. */
 	bool objectBlend = true;
 	float objectBlendBand = 24.0f;
-	/** @brief Debug view (DevBench objectBlendView): the snow over a static drawn red at the contact to green at the band's depth (ShellCB DebugNoFarPad). */
-	bool objectBlendView = false;
+	/** @brief Debug view (DevBench objectBlendView, ShellCB DebugNoFarPad): 1 = the snow over a static red at the contact to green at the band's depth, blue where the prepass left a pixel to a static that carried no note; 2 = the early prepass's three tests per snow pixel. */
+	uint32_t objectBlendView = 0;
 	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
 	bool debugContactRowMarks = true;
 	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */

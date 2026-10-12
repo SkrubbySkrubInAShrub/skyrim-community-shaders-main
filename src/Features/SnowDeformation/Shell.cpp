@@ -1298,7 +1298,16 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11ShaderResourceView* bareSRV = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
 	context->PSSetShaderResources(kTerrainBareSlot, 1, &bareSRV);
 	context->PSSetSamplers(0, 1, &snowSampler);
+	// Terrain Blending's main-depth copy (t94): objects against the land, for
+	// Snow Meets Objects. Outside the saved slots, so restored here.
+	ID3D11ShaderResourceView* prevTBMain = nullptr;
+	context->PSGetShaderResources(94, 1, &prevTBMain);
+	ID3D11ShaderResourceView* tbMainSRV = tb.terrainDepth.depthSRV;
+	context->PSSetShaderResources(94, 1, &tbMainSRV);
 	DrawLandscapeSnowPrepass(context, cb, cbs[0]);
+	context->PSSetShaderResources(94, 1, &prevTBMain);
+	if (prevTBMain)
+		prevTBMain->Release();
 
 	// The settled pixels into the main depth: the game's opaque draws, the
 	// terrain replay among them, now test against the snow.
@@ -1661,7 +1670,7 @@ void SnowDeformation::DrawShell()
 	// blend band (0 = off).
 	const float2 landContest = LandBlendContest();
 	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, objectBlend ? std::max(objectBlendBand, 1.0f) : 0.0f };
-	cbData.DebugNoFarPad = objectBlendView ? 1.0f : 0.0f;
+	cbData.DebugNoFarPad = float(objectBlendView);
 	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
 	// reads zeros, which look like fully bare ground everywhere.
@@ -2309,10 +2318,17 @@ void SnowDeformation::DrawShell()
 		context->DSSetShader(nullptr, nullptr, 0);
 		ID3D11ShaderResourceView* attrSRVs[3] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get() };
 		context->PSSetShaderResources(91, 3, attrSRVs);
+		// Debug view only: the early prepass's raster and pending inputs.
+		ID3D11ShaderResourceView* debugEarlySRVs[2] = { (earlyMarks && objectBlendView) ? shellRasterDepth->srv.get() : nullptr,
+			(earlyMarks && objectBlendView) ? shellEarlyPending->srv.get() : nullptr };
+		context->PSSetShaderResources(95, 2, debugEarlySRVs);
+		ID3D11ShaderResourceView* debugTBMain = objectBlendView == 2 ? globals::features::terrainBlending.terrainDepth.depthSRV : nullptr;
+		context->PSSetShaderResources(94, 1, &debugTBMain);
 		context->PSSetShader(shellPSDeferred, nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);
+		context->PSSetShaderResources(94, 3, nullAttrSRVs);
 		context->OMSetRenderTargets(8, rtvs, dsv);
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		globals::profiler->EndPass();

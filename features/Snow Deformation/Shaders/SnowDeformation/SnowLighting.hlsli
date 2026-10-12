@@ -88,8 +88,14 @@ namespace SnowLighting
 			float snow = dot(blendWeights1, float4(bits & 1, (bits >> 1) & 1, (bits >> 2) & 1, (bits >> 3) & 1)) + dot(blendWeights2, float2((bits >> 4) & 1, (bits >> 5) & 1));
 			float rest = max(dot(blendWeights1, 1.0) + blendWeights2.x + blendWeights2.y - snow, 0.0);
 			float odds = clamp(log2(max(snow, 1e-12)) - log2(max(rest, 1e-12)), -16.0, 16.0);
+			// Where Terrain Blending fades the land over an object's base (.w),
+			// the land writes Masks only where it owns the pixel, whole, so a
+			// verdict never mixes with the object's note; and its verdict counts
+			// as much as it shows: snow painted under a rock must not claim the
+			// rock's edge.
+			odds = lerp(-16.0, odds, smoothstep(0.5, 1.0, masks.w));
 			masks.y = 0.004 + 0.996 * (odds + 16.0) * (1.0 / 32.0);
-			masks.w = 1.0;
+			masks.w = masks.w >= 0.5 ? 1.0 : 0.0;
 		}
 	}
 
@@ -628,7 +634,8 @@ namespace SnowLighting
 #	if !defined(SKINNED) && !defined(SKIN) && !defined(HAIR) && !defined(EYE) && !defined(FACEGEN) && !defined(FACEGEN_RGB_TINT) && !defined(TREE_ANIM) && \
 		!defined(DO_ALPHA_TEST) && !defined(WORLD_MAP) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
 		// Nothing above wrote: a plain static, not an actor, tree, card or LOD.
-		[flatten] if (masksY == 0.0)
+		// Skinning is the vertex shader's flag, so the pixel shader reads it there.
+		[flatten] if (masksY == 0.0 && (Permutation::VertexShaderDescriptor & Permutation::LightingFlags::Skinned) == 0)
 			masksY = 1.25;
 #	endif
 	}
