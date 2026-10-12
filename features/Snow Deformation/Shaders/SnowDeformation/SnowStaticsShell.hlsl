@@ -399,7 +399,7 @@ Texture2D<float3> PreDecalMasks : register(t53);
 
 // The terrain window also reaches the patch VS: the road-verge depth blend
 // needs the landscape class depth per vertex.
-#if defined(PSHADER) || defined(DOMAINSHADER) || ((defined(VSHADER) || defined(HULLSHADER)) && defined(PATCH))
+#if defined(PSHADER) || defined(DOMAINSHADER) || ((defined(VSHADER) || defined(HULLSHADER)) && defined(PATCH)) || defined(SNOW_ROAD_MARCH_CS)
 Texture2D<float4> TerrainWindow : register(t0);
 
 // Terrain window sample (height, rampDepth, coverage), matching the terrain
@@ -738,7 +738,7 @@ struct VS_OUTPUT
 
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
 // cone field to size tessellation against rim proximity.
-#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
+#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER) || defined(SNOW_ROAD_MARCH_CS)
 // Top-down object top-surface raster. The patch drapes over it (the VS places
 // geometry, the PS clips the silhouette overhang); the skin PS uses it to
 // separate its own rim wall from a bare object face.
@@ -762,7 +762,7 @@ Texture2D<float> ObjectSkyOpen : register(t25);
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
 // aside exactly where the patch draws and nowhere else.
-#if defined(PATCH) || defined(PSHADER)
+#if defined(PATCH) || defined(PSHADER) || defined(SNOW_ROAD_MARCH_CS)
 // x = class layer depth, y = the highest ROAD surface in the column
 // (kNoRoadTop where no road drew).
 Texture2D<float2> ObjectSkinDepth : register(t12);
@@ -775,7 +775,7 @@ static const float kNoRoadTop = -1000000.0;
 static const float kRoadOwnsTop = 8.0;
 #endif
 
-#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
+#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER) || defined(SNOW_ROAD_MARCH_CS)
 
 // One texel of the object height raster in world units; must match
 // kHeightMapHalfExtent * 2 / kHeightMapDim (SnowDeformation.h).
@@ -3116,6 +3116,65 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// skipped" cannot be misread as "march found nothing").
 	float3 dbgMarch = float3(0.0, 0.0, 0.0);
 	float dbgMarchRan = 0.0;
+#ifdef SNOW_MARCH_CACHE
+	// The same march on the cached tap heights (MarchHeightCS for the ground,
+	// RoadMarchHeightCS for road taps); a march that would leave the cache
+	// takes the live one below.
+	const float2 cachedStepDir = L.xy / max(length(L.xy), 1e-4);
+	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && input.detail > 0.001 &&
+				 MarchCacheCovers(input.GridLocal, cachedStepDir, 1000.0))
+	{
+		static const float kCachedMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
+		const float sunTan = L.z / max(length(L.xy), 1e-4);
+		const float surfZ = shadePos.z + ShellCameraPosAdjust.z;
+		float2 f0;
+		const float h0 = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, input.GridLocal, f0), f0);
+		const float refTer = max(h0 > -50000.0 ? h0 : surfZ, surfZ - 2.0);
+		const float soft = lerp(0.03, 0.35, farShadowT);
+		bool objectTopUsable = HasObjectTop > 0.5 && (ShellFlags.y & 1) != 0;
+		[branch] if (objectTopUsable)
+		{
+			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
+			[flatten] if (all(abs(selfLocal) < 0.98))
+			{
+				float2 topDims;
+				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
+				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
+				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
+				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
+					objectTopUsable = false;
+			}
+		}
+		float horizonTan = -10.0;
+		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+		{
+			const float d = kCachedMarchDist[marchI];
+			const float2 sampleLocal = input.GridLocal + cachedStepDir * d;
+			float2 f;
+			float sh = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, sampleLocal, f), f);
+			float ref = refTer;
+			[branch] if (objectTopUsable)
+			{
+				const float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
+				float2 fRoad;
+				const float4 road = MarchCacheTexels(MarchHeightRoad, sampleLocal, fRoad);
+				[flatten] if (all(abs(topLocal) < 0.98) && all(road > -50000.0))
+				{
+					sh = MarchCacheBilinear(road, fRoad);
+					ref = surfZ;
+					dbgMarch.y += 0.2;
+				}
+			}
+			horizonTan = max(horizonTan, (sh - ref - 1.0) / d);
+		}
+		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
+		sunShadow *= marchFactor;
+		dbgMarch.x = 1.0 - marchFactor;
+		dbgMarchRan = 1.0;
+	}
+	else
+#endif
 	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && input.detail > 0.001)
 	{
 		// Redistributed toward the NEAR field. The first tap set the finest
@@ -5109,4 +5168,90 @@ PS_OUTPUT main(VS_OUTPUT input)
 #endif  // !SNOW_STATICS_DEPTH_PREPASS
 }
 #endif  // !VOXEL
+#endif
+
+#if defined(COMPUTESHADER) && defined(SNOW_ROAD_MARCH_CS)
+// MarchHeightRoad's builder: the statics march's road tap at each deformation
+// texel's centre, in the map's torus; the sentinel where that tap is not a
+// road tap. Over the berm bake's tile list, or a band of rows.
+RWTexture2D<float> RoadMarchOut : register(u0);
+StructuredBuffer<uint> MarchTilesIn : register(t63);
+cbuffer MarchCacheCB : register(b2)
+{
+	uint MarchRowStart;
+	uint MarchRowCount;
+	uint2 MarchCachePad;
+}
+
+// The statics march's road tap (SkinShadeSurface): keep the two in step. The
+// skip bound is left out: a tap under it cannot move the march's result.
+float RoadTapHeight(float2 sampleLocal)
+{
+	float sh = -100000.0;
+	const float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
+	[branch] if (all(abs(topLocal) < 0.98))
+	{
+		float2 topDims;
+		ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
+		const float2 tapWorld = GridOrigin + sampleLocal;
+		const float2 bt = PatchTexel(tapWorld, topDims);
+		const int2 bt0 = (int2)bt;
+		const float2 btf = bt - bt0;
+		const int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
+		const float4 tapTops = float4(
+			ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
+			ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
+		[branch] if (all(tapTops > -50000.0))
+		{
+			const float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
+			const float2 sd10 = ObjectSkinDepth.Load(int3(bt1.x, bt0.y, 0));
+			const float2 sd01 = ObjectSkinDepth.Load(int3(bt0.x, bt1.y, 0));
+			const float2 sd11 = ObjectSkinDepth.Load(int3(bt1.x, bt1.y, 0));
+			const float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
+			float depthSmooth = lerp(lerp(sd00.x, sd10.x, btf.x), lerp(sd01.x, sd11.x, btf.x), btf.y);
+			const float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
+			[branch] if (tapRoadTop > kNoRoadTop * 0.5 && depthSmooth >= 1.0)
+			{
+				const float topRoad = (topSmooth - tapRoadTop) >= kRoadOwnsTop ? tapRoadTop : topSmooth;
+				const float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
+				const float tapCone = ObjectConeDepth(tapWorld);
+				depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
+				const float tapDeform = SampleDeformation(sampleLocal);
+				const float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+				const float tapDepth = CarveProfileNoTeeth(tapDeform, depthSmooth) +
+				                       BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+				sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+			}
+		}
+	}
+	return sh;
+}
+
+void RoadMarchTexel(uint2 phys)
+{
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	if (any(float2(phys) >= dims))
+		return;
+	const float2 logical = float2((int2(phys) - DeformMapOrigin) & (int2(dims) - 1));
+	RoadMarchOut[phys] = RoadTapHeight((logical + 0.5) / dims / DeformInvWorldSize - GridToDeformOffset);
+}
+
+[numthreads(8, 8, 1)] void RoadMarchTilesCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint listIndex = Gid.y * 1024u + Gid.x;
+	if (listIndex >= MarchTilesIn[0])
+		return;
+	const uint packed = MarchTilesIn[1 + listIndex];
+	RoadMarchTexel(uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy);
+}
+
+[numthreads(8, 8, 1)] void RoadMarchRowsCS(uint3 DTid : SV_DispatchThreadID)
+{
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	if (DTid.y >= MarchRowCount)
+		return;
+	RoadMarchTexel(uint2(DTid.x, (MarchRowStart + DTid.y) % (uint)dims.y));
+}
 #endif

@@ -1776,6 +1776,55 @@ public:
 	ID3D11PixelShader* shellPSDeferred[2] = {};
 	uint32_t shellPSDeferredLegacyBits[2] = {};
 	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false);
+
+	/** @brief Runtime-only A/B "Cached Sun March": the sun heightfield marches of the ground, the trench patch and the object snow read their occluder heights from two caches baked per deformation texel instead of rebuilding them per tap (MarchCache.cpp). Off = the live marches. */
+	bool marchCacheEnabled = false;
+	/** @brief The marches' tap heights, R32F over the deformation map's own torus: [0] the ground march's (SnowShell.hlsl MarchHeightCS), [1] the statics march's road taps (SnowStaticsShell.hlsl RoadMarchHeightCS; the sentinel where a tap is no road tap). */
+	Texture2D* marchHeight[2] = {};
+	/** @brief [ground, road][tile list, row band]. */
+	ID3D11ComputeShader* marchHeightCS[2][2] = {};
+	ID3D11ComputeShader* GetMarchHeightCS(bool a_road, bool a_rows);
+	struct alignas(16) MarchCacheCB
+	{
+		uint32_t RowStart;
+		uint32_t RowCount;
+		uint32_t pad[2];
+	};
+	STATIC_ASSERT_ALIGNAS_16(MarchCacheCB);
+	ConstantBuffer* marchCacheCB = nullptr;
+	/** @brief Both caches hold every texel for the current inputs. Cleared by the toggle, a resize, a settings change, or a berm bake the caches missed. */
+	bool marchCacheValid = false;
+	/** @brief The caches were brought up to date this frame and are bound at PS t106/t107: the cached-march variants may draw. */
+	bool marchCacheReady = false;
+	uint64_t marchCacheKey = 0;
+	uint32_t marchCacheTerrainVersion = 0;
+	float marchCacheFineOrigin[2] = {};
+	uint32_t marchCacheRowCursor = 0;
+	/** @brief Rows still to refresh at the fast rate after a terrain or land-layer rebuild. */
+	uint32_t marchCacheFastRows = 0;
+	/** @brief Berm bakes run, and the last one the caches applied: the tile list holds only the latest bake's tiles. */
+	uint64_t bermBakeSeq = 0;
+	uint64_t marchCacheBermSeq = 0;
+	/** @brief Brings both caches up to date and binds them at PS t106/t107 (DrawShell, after the shell CB upload). */
+	void UpdateMarchCaches(const ShellCB& a_cb);
+	void UnbindMarchCaches();
+	void ReleaseMarchCache();
+	/** @brief The deferred PS with SNOW_MARCH_CACHE [parallax], compiled off the render thread on first use. */
+	ID3D11PixelShader* shellPSDeferredMC[2] = {};
+	uint32_t shellPSDeferredMCBits[2] = {};
+	std::future<ID3D11PixelShader*> shellPSDeferredMCJob[2];
+	uint32_t shellPSDeferredMCJobBits[2] = {};
+	bool shellPSDeferredMCTried[2] = {};
+	/** @brief The deferred PS to draw: its cached-march twin while the caches are ready and the twin has compiled, else shellPSDeferred. */
+	ID3D11PixelShader* GetShellPSDeferredMC(bool a_parallax);
+	/** @brief The statics PS twins with SNOW_MARCH_CACHE [plain, no depth export, drape, trench patch], compiled off the render thread on first use. */
+	ID3D11PixelShader* staticsPSMC[4] = {};
+	std::future<ID3D11PixelShader*> staticsPSMCJob[4];
+	bool staticsPSMCTried[4] = {};
+	/** @brief a_ps, or its cached-march twin while the caches are ready and the twin has compiled. */
+	ID3D11PixelShader* MarchCachePS(ID3D11PixelShader* a_ps);
+	/** @brief A cached-march variant is compiling. */
+	bool MarchCacheCompiling() const;
 	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept][tessellated, parallax]. */
 	ID3D11PixelShader* shellPSPrepassAttr[2][2] = {};
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden, bool a_parallax = false);

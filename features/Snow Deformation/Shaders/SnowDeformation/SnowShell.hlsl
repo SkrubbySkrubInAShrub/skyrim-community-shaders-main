@@ -2610,6 +2610,32 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// hold. Geometric growth in the tap distances gives sharp close shadows
 	// and long soft ones at low sun angles.
 	float pixelVertexAO = -1.0;
+#ifdef SNOW_MARCH_CACHE
+	// The same march on the cached tap heights (MarchHeightCS); a march that
+	// would leave the cache takes the live one below.
+	const float2 cachedStepDir = L.xy / max(length(L.xy), 1e-4);
+	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && MarchCacheCovers(gridLocal, cachedStepDir, 1000.0))
+	{
+		static const float kCachedMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
+		const float sunTan = L.z / max(length(L.xy), 1e-4);
+		const float surfZ = shadePos.z + ShellCameraPosAdjust.z;
+		float2 f0;
+		const float h0 = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, gridLocal, f0), f0);
+		const float marchRef = max(h0 > -50000.0 ? h0 : surfZ, surfZ - 2.0);
+		float horizonTan = -10.0;
+		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+		{
+			const float d = kCachedMarchDist[marchI];
+			float2 f;
+			const float sh = MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, gridLocal + cachedStepDir * d, f), f);
+			horizonTan = max(horizonTan, (sh - marchRef - 1.0) / d);
+		}
+		const float soft = lerp(0.03, 0.35, farShadowT);
+		const float lowSun = smoothstep(0.04, 0.12, sunTan);
+		sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
+	}
+	else
+#endif
 	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Redistributed toward the NEAR field. The first tap set the finest
@@ -2983,6 +3009,59 @@ RWTexture2D<float4> TerrainWetOut : register(u4);
 	float4 texel = TerrainWindow.Load(int3(id.xy, 0));
 	texel.xyz = WaterBareTexel(texel.xyz, int2(id.xy));
 	TerrainWetOut[id.xy] = texel;
+}
+#endif
+
+#ifdef SNOW_MARCH_HEIGHT_CS
+// MarchHeightGround's builder: the sun march's tap height at each deformation
+// texel's centre, in the map's torus. Over the berm bake's tile list (the map
+// or the berm field changed there), or a band of rows.
+RWTexture2D<float> MarchHeightOut : register(u0);
+StructuredBuffer<uint> MarchTilesIn : register(t63);
+cbuffer MarchCacheCB : register(b2)
+{
+	uint MarchRowStart;
+	uint MarchRowCount;
+	uint2 MarchCachePad;
+}
+
+// The deferred shading's march tap: keep the two in step. The untouched skip
+// is left out (it changes nothing).
+float MarchTapHeight(float2 gridLocal)
+{
+	const float3 st = SampleTerrain(gridLocal);
+	float depth = max(st.y, 0.0);
+	depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionMask(GridOrigin + gridLocal).y));
+	const float deform = SampleDeformationMarch(gridLocal);
+	const float berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
+	depth = CarveProfileNoTeeth(deform, depth) + BermShape(berm) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+	return st.x + depth + Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
+}
+
+void MarchHeightTexel(uint2 phys)
+{
+	SNOW_DEFORM_DIMS(dims);
+	if (any(float2(phys) >= dims))
+		return;
+	const float2 logical = float2((int2(phys) - DeformMapOrigin) & (int2(dims) - 1));
+	MarchHeightOut[phys] = MarchTapHeight((logical + 0.5) / dims / DeformInvWorldSize - GridToDeformOffset);
+}
+
+[numthreads(8, 8, 1)] void MarchHeightTilesCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint listIndex = Gid.y * 1024u + Gid.x;
+	if (listIndex >= MarchTilesIn[0])
+		return;
+	const uint packed = MarchTilesIn[1 + listIndex];
+	MarchHeightTexel(uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy);
+}
+
+[numthreads(8, 8, 1)] void MarchHeightRowsCS(uint3 DTid : SV_DispatchThreadID)
+{
+	SNOW_DEFORM_DIMS(dims);
+	if (DTid.y >= MarchRowCount)
+		return;
+	MarchHeightTexel(uint2(DTid.x, (MarchRowStart + DTid.y) % (uint)dims.y));
 }
 #endif
 #endif

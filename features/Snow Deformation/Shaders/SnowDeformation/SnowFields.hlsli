@@ -120,6 +120,41 @@ float BermFieldBaked(float2 gridLocal)
 #endif
 }
 
+#if defined(PSHADER) && defined(SNOW_MARCH_CACHE)
+// The sun marches' occluder heights per deformation-map texel, in the map's
+// own torus (MarchHeightCS, RoadMarchHeightCS): the ground's tap height, and
+// the road's where the statics march takes a road tap (sentinel elsewhere).
+Texture2D<float> MarchHeightGround : register(t106);
+Texture2D<float> MarchHeightRoad : register(t107);
+
+// A cache's four texels around a grid-local point (s00, s10, s01, s11), one
+// gather on s0 (it wraps like DeformTexel); a_f = the bilinear weights.
+float4 MarchCacheTexels(Texture2D<float> a_map, float2 a_gridLocal, out float2 a_f)
+{
+	SNOW_DEFORM_DIMS(dims);
+	const float2 t = (GridToDeformOffset + a_gridLocal) * DeformInvWorldSize * dims - 0.5;
+	const float2 t0 = floor(t);
+	a_f = t - t0;
+	return a_map.GatherRed(SnowSampler, (t0 + float2(DeformMapOrigin) + 1.0) / dims).wzxy;
+}
+
+float MarchCacheBilinear(float4 a_s, float2 a_f)
+{
+	return lerp(lerp(a_s.x, a_s.y, a_f.x), lerp(a_s.z, a_s.w, a_f.x), a_f.y);
+}
+
+// Every tap of a march from a_gridLocal along a_stepDir, out to a_reach, lies
+// at least a texel inside the map's window.
+bool MarchCacheCovers(float2 a_gridLocal, float2 a_stepDir, float a_reach)
+{
+	SNOW_DEFORM_DIMS(dims);
+	const float2 margin = 1.5 / dims;
+	const float2 uv0 = (GridToDeformOffset + a_gridLocal) * DeformInvWorldSize;
+	const float2 uv1 = uv0 + a_stepDir * (a_reach * DeformInvWorldSize);
+	return all(min(uv0, uv1) >= margin) && all(max(uv0, uv1) <= 1.0 - margin);
+}
+#endif
+
 // Every map and berm read within 8 units of here returns exactly zero, so the
 // carve, berm and surface-state terms equal their zero-input results. Just
 // outside the window a tap can still reach in, so only far outside skips.

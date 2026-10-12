@@ -1683,6 +1683,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetUnorderedAccessViews(6, 1, &dirtyUAV, nullptr);
 				context->CSSetShader(bermCS, nullptr, 0);
 				context->DispatchIndirect(bermArgsBuffer.get(), 0);
+				bermBakeSeq++;
 				context->CSSetUnorderedAccessViews(2, 1, &nullUav, nullptr);
 				context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
 			} else {
@@ -2129,6 +2130,7 @@ void SnowDeformation::ClearShaderCache()
 			deferredPS->Release();
 		deferredPS = nullptr;
 	}
+	ReleaseMarchCache();
 	for (auto& attrPair : shellPSPrepassAttr) {
 		for (auto& attrPS : attrPair) {
 			if (attrPS)

@@ -2000,6 +2000,9 @@ void SnowDeformation::DrawShell()
 		lastShellCBData = std::make_unique<ShellCB>();
 	*lastShellCBData = cbData;
 
+	UnbindMarchCaches();
+	UpdateMarchCaches(cbData);
+
 	// Pre-shell copy of MASKS: Masks.y carries the land's EM grain height
 	// (Lighting.hlsl LANDSCAPE; 0 = no data), and the land under the shell
 	// is only readable before the shell overwrites the G-buffer. Unbind
@@ -2413,7 +2416,7 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(91, 3, attrSRVs);
 		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
 		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
-		context->PSSetShader(shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
+		context->PSSetShader(GetShellPSDeferredMC(parallax), nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);
@@ -2519,6 +2522,7 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
 	context->DSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
+	UnbindMarchCaches();
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
 	ID3D11SamplerState* nullCmpSampler = nullptr;
