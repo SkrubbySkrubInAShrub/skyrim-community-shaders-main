@@ -173,7 +173,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float ChurnHeightAmp;
 	float ChurnSizeScale;
-	// Debug views: the object blend, the trench parallax offset.
+	// DebugNoFarPad: layout keeper, 0. DebugParallaxView: the trench parallax
+	// offset view.
 	float DebugNoFarPad;
 	float DebugParallaxView;
 
@@ -226,8 +227,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// atlas moves them with the active-light set).
 	float4 BorderStyle;
 	// x = water cut (1 = the sheet ends at the drawn waterline); yz = the land
-	// contest's depth bonus and carve penalty; w = the object blend band
-	// (0 = off).
+	// contest's depth bonus and carve penalty; w spare.
 	float4 CompactLook;
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
@@ -1069,12 +1069,11 @@ bool LandRectNoSnow(float2 lo, float2 hi)
 	return bare >= 0.998;
 }
 
-// The land's snow odds in Masks.y, (0, 1]; -16 where something else drew
-// there (an object's base, grass, a plain static's 1.25), so thin snow never
-// claims it.
+// The land's snow odds in Masks.y; -16 where something else drew there (an
+// object's base, grass), so thin snow never claims it.
 float LandSnowOdds(float masksY)
 {
-	return masksY > 0.002 && masksY < 1.125 ? saturate((masksY - 0.004) * (1.0 / 0.996)) * 32.0 - 16.0 : -16.0;
+	return masksY > 0.002 && masksY < 1.5 ? saturate((masksY - 0.004) * (1.0 / 0.996)) * 32.0 - 16.0 : -16.0;
 }
 
 // The snow's side of the contest: remaining depth buries the land's grain
@@ -1929,34 +1928,9 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	return o;
 }
 #else
-// Where the snow meets a static, Terrain Blending's way (CompactLook.w = the
-// band, 0 = off): how deep under this snow point the scene point on its ray
-// lies, within maxBand; a huge depth otherwise. Whether that point is a
-// static's is the caller's: Terrain Blending's depths in the early prepass,
-// Lighting's note in the shading. The depth is at least a quarter of the
-// run between the two points: on a low ray a far object drops only a little.
-float ShellSceneBuried(float3 worldPosRel, float sceneZ, float shellZ, float maxBand)
-{
-	const float behind = sceneZ / max(shellZ, 1e-3) - 1.0;
-	const float depthUnder = max(-worldPosRel.z, 0.25 * length(worldPosRel.xy)) * behind;
-	return (behind > 0.0 && depthUnder < maxBand) ? depthUnder : 1e6;
-}
-
-#if defined(SNOW_PREPASS_EARLY) || defined(SNOW_SHELL_DEFERRED)
-// Terrain Blending's copy of the main depth after the depth prepass: near
-// terrain (within 1024 units) drew pushed back, objects at their own depth.
-// The shading pass binds it for the debug view only.
-Texture2D<float> TBMainDepth : register(t94);
-#endif
-#ifdef SNOW_SHELL_DEFERRED
-// Debug view only: the early prepass's raster depth (negative = pending) and
-// pending inputs, unbound on the late path.
-Texture2D<float> DebugEarlyRaster : register(t95);
-Texture2D<float4> DebugEarlyPending : register(t96);
-#	ifdef SNOW_TRENCH_PARALLAX
+#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_TRENCH_PARALLAX)
 // Debug view only: the prepass's parallax offset.
 Texture2D<float2> DebugParallaxOffset : register(t99);
-#	endif
 #endif
 
 #if defined(SNOW_SHELL_DEFERRED)
@@ -1993,36 +1967,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	const float2 parallaxMove = TrenchParallaxMove(input);
 	gridLocal = input.GridLocal;
 	shellZ = input.CurrentClip.w;
-#endif
-#ifdef SNOW_SHELL_DEFERRED
-	// Over a static's buried face (its own pixel, which the prepass left it)
-	// the snow lets the object through up the band by the grain, cut like the
-	// snow's own edge. DebugNoFarPad > 0.5 shows the depth instead.
-	float objectBlendView = -1.0;
-	[branch] if (CompactLook.w > 0.0)
-	{
-		const float masksY = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		[branch] if (masksY > 1.125 && masksY < 256.0)
-		{
-			const float band = CompactLook.w * (0.3 + 0.7 * ShapeNoise((input.WorldPos.xy + ShellCameraPosAdjust.xy) / 40.0));
-			const float under = saturate(ShellSceneBuried(input.WorldPos, sceneZ, shellZ, CompactLook.w) / band);
-			objectBlendView = under;
-			[branch] if (under < 1.0 && DebugNoFarPad < 0.5)
-			{
-				const float2 blendUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-				float2 hDims;
-				SnowHeightMap.GetDimensions(hDims.x, hDims.y);
-				const float2 tdx = gDeferredGridDx / kSnowUVTile * hDims;
-				const float2 tdy = gDeferredGridDy / kSnowUVTile * hDims;
-				const float hMip = floor(max(0.5 * log2(max(min(dot(tdx, tdx), dot(tdy, tdy)), 1e-8)) + SharedData::MipBias, 0.0));
-				const float hSnow = HasSnowHeight > 0.5 ? SampleSnowHeight(ComputeSnowTapsNoGrad(blendUV, GridOrigin + gridLocal), 0.0.xx, hMip) : 0.5;
-				const float a = SnowHeightBlendOneSided(under, hSnow, SnowHeightBlendSharpness(shellZ));
-				const float n = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-				if (n * n >= saturate((a - 0.2) * (1.0 / 0.3)))
-					discard;
-			}
-		}
-	}
 #endif
 
 	// The terrain field per PIXEL: the ramp the deferred attributes carry and
@@ -2167,14 +2111,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		landSide = LandSnowSide(landRemaining, pixelCarve);
 		landContest = landSide < 16.0;
 	}
-	// A static's face just under the snow draws its own pixel; the shading
-	// lets it through the snow by the grain. The scene point is an object's
-	// where the main-depth copy agrees with the blended depth (land there
-	// sits pushed back), in Terrain Blending's near range only.
-	bool objectUnder = false;
-	[branch] if (CompactLook.w > 0.0 && coverageAlpha > 0.001 && shellZ < 900.0 &&
-				 ShellSceneBuried(input.WorldPos, sceneZ, shellZ, CompactLook.w) < CompactLook.w)
-		objectUnder = SharedData::GetScreenDepth(TBMainDepth.Load(int3(input.Position.xy, 0))) < sceneZ * 1.002 + 0.25;
 #	else
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
@@ -2221,15 +2157,14 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #	endif
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 #	ifdef SNOW_PREPASS_EARLY
-	// Pending: the land contest to run, a clamp a static behind would cancel,
-	// or a static under the snow to draw. Marked by a negative raster depth;
-	// the claim fill skips it.
+	// Pending: the land contest to run, or a clamp a static behind would
+	// cancel. Marked by a negative raster depth; the claim fill skips it.
 	const bool clampPending = prepassOut.DepthLE < input.Position.z;
 	prepassOut.Pending = 0.0;
-	[branch] if (clampPending || landContest || objectUnder)
+	[branch] if (clampPending || landContest)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
-		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0) + (objectUnder ? 32.0 : 0.0));
+		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0));
 	}
 #	endif
 	return prepassOut;
@@ -2971,31 +2906,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
-#ifdef SNOW_SHELL_DEFERRED
-	[branch] if (DebugNoFarPad > 1.5)
-	{
-		// Mode 2: the early prepass's tests - red object behind, green within
-		// the band, blue within 900 units.
-		const float du = ShellSceneBuried(input.WorldPos, sceneZ, shellZ, max(CompactLook.w, 1.0));
-		const bool tbObject = SharedData::GetScreenDepth(TBMainDepth.Load(int3(input.Position.xy, 0))) < sceneZ * 1.002 + 0.25;
-		psout.Diffuse.rgb = float3(tbObject ? 4.0 : 0.0, du < max(CompactLook.w, 1.0) ? 4.0 : 0.0, shellZ < 900.0 ? 1.5 : 0.0);
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
-	else [branch] if (DebugNoFarPad > 0.5)
-	{
-		const int3 dpx = int3(input.Position.xy, 0);
-		const bool leftToStatic = DebugEarlyRaster.Load(dpx) < 0.0 && (((uint)(DebugEarlyPending.Load(dpx).w * 0.5)) & 16u) != 0;
-		[branch] if (objectBlendView >= 0.0 || leftToStatic)
-		{
-			psout.Diffuse.rgb = objectBlendView >= 0.0 ? lerp(float3(4.0, 0.0, 0.0), float3(0.0, 4.0, 0.0), objectBlendView) : float3(0.0, 0.5, 4.0);
-			psout.Albedo.rgb = 0.0;
-			psout.Specular.rgb = 0.0;
-			psout.Reflectance.rgb = 0.0;
-		}
-	}
-#	ifdef SNOW_TRENCH_PARALLAX
+#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_TRENCH_PARALLAX)
 	[branch] if (DebugParallaxView > 0.5)
 	{
 		// Red, yellow, white as the foot moved 4, 16 and 64 units.
@@ -3005,7 +2916,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		psout.Specular.rgb = 0.0;
 		psout.Reflectance.rgb = 0.0;
 	}
-#	endif
 #endif
 
 	return psout;

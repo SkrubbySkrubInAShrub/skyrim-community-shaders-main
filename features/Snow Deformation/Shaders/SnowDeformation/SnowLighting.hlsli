@@ -589,9 +589,7 @@ namespace SnowLighting
 	// target is an 11-bit float, 64 steps an octave: 2 = known and bare,
 	// [4, 32) = bare with the weight, three octaves over 0.3 below the half
 	// blend (the coat's cut sinks into it as snow accumulates), 48 = painted.
-	// 1.25 = a plain static: the snow foot's note (SnowShell.hlsl), which the
-	// coat reads as unknown. Landscape keeps (0, 1] for its grain. Mirror:
-	// SnowStaticsShell.hlsl.
+	// Landscape keeps (0, 1] for its grain. Mirror: SnowStaticsShell.hlsl.
 	void WriteMasksY(State s, float projWeight, inout float masksY)
 	{
 #	if defined(PROJECTED_UV)
@@ -630,13 +628,6 @@ namespace SnowLighting
 		// LOD the game drew alone from one hidden inside its full model.
 		[flatten] if (masksY >= 1.5)
 			masksY *= 256.0;
-#	endif
-#	if !defined(SKINNED) && !defined(SKIN) && !defined(HAIR) && !defined(EYE) && !defined(FACEGEN) && !defined(FACEGEN_RGB_TINT) && !defined(TREE_ANIM) && \
-		!defined(DO_ALPHA_TEST) && !defined(WORLD_MAP) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-		// Nothing above wrote: a plain static, not an actor, tree, card or LOD.
-		// Skinning is the vertex shader's flag, so the pixel shader reads it there.
-		[flatten] if (masksY == 0.0 && (Permutation::VertexShaderDescriptor & Permutation::LightingFlags::Skinned) == 0)
-			masksY = 1.25;
 #	endif
 	}
 #endif

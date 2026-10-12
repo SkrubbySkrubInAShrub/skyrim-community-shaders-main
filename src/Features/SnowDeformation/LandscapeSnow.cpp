@@ -1157,15 +1157,9 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("blendPenalty", c.blendPenalty);
 	rdb("landRecolor", landRecolor);
 	rdf("landRecolorLumLo", landRecolorLumLo);
-	rdb("objectBlend", objectBlend);
-	rdf("objectBlendBand", objectBlendBand);
 	rdb("trenchParallax", settings.TrenchParallax);
 	rdf("parallaxReach", trenchParallaxReach);
 	rdb("trenchParallaxView", trenchParallaxView);
-	if (a_args.contains("objectBlendView") && a_args["objectBlendView"].is_number_integer())
-		objectBlendView = uint32_t(std::clamp(a_args["objectBlendView"].get<int>(), 0, 2));
-	else if (a_args.contains("objectBlendView") && a_args["objectBlendView"].is_boolean())
-		objectBlendView = a_args["objectBlendView"].get<bool>() ? 1u : 0u;
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
@@ -1209,7 +1203,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shadowMainCamera", c.shadowMainCamera },
 		{ "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty },
 		{ "landRecolor", landRecolor }, { "landRecolorLumLo", landRecolorLumLo }, { "landRecolorActive", LandRecolorActive() },
-		{ "objectBlend", objectBlend }, { "objectBlendBand", objectBlendBand }, { "objectBlendView", objectBlendView },
 		{ "trenchParallax", settings.TrenchParallax }, { "parallaxReach", trenchParallaxReach }, { "trenchParallaxView", trenchParallaxView } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)

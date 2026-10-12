@@ -1396,16 +1396,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		context->PSSetShaderResources(29, 1, &marchSRVs[1]);
 	}
 	context->PSSetSamplers(0, 1, &snowSampler);
-	// Terrain Blending's main-depth copy (t94): objects against the land, for
-	// Snow Meets Objects. Outside the saved slots, so restored here.
-	ID3D11ShaderResourceView* prevTBMain = nullptr;
-	context->PSGetShaderResources(94, 1, &prevTBMain);
-	ID3D11ShaderResourceView* tbMainSRV = tb.terrainDepth.depthSRV;
-	context->PSSetShaderResources(94, 1, &tbMainSRV);
 	DrawLandscapeSnowPrepass(context, cb, cbs[0], parallax);
-	context->PSSetShaderResources(94, 1, &prevTBMain);
-	if (prevTBMain)
-		prevTBMain->Release();
 
 	// The settled pixels into the main depth: the game's opaque draws, the
 	// terrain replay among them, now test against the snow.
@@ -1767,11 +1758,10 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { 0.0f, 0.0f, (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	// x = the water cut (runtime A/B in Debugging Options); y, z = the land-blend
-	// contest's depth bonus and carve penalty (log2 odds); w = the object
-	// blend band (0 = off).
+	// contest's depth bonus and carve penalty (log2 odds); w spare.
 	const float2 landContest = LandBlendContest();
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, objectBlend ? std::max(objectBlendBand, 1.0f) : 0.0f };
-	cbData.DebugNoFarPad = float(objectBlendView);
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, 0.0f };
+	cbData.DebugNoFarPad = 0.0f;
 	cbData.DebugParallaxView = (parallax && trenchParallaxView) ? 1.0f : 0.0f;
 	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
@@ -2421,19 +2411,12 @@ void SnowDeformation::DrawShell()
 		context->DSSetShader(nullptr, nullptr, 0);
 		ID3D11ShaderResourceView* attrSRVs[3] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get() };
 		context->PSSetShaderResources(91, 3, attrSRVs);
-		// Debug view only: the early prepass's raster and pending inputs.
-		ID3D11ShaderResourceView* debugEarlySRVs[2] = { (earlyMarks && objectBlendView) ? shellRasterDepth->srv.get() : nullptr,
-			(earlyMarks && objectBlendView) ? shellEarlyPending->srv.get() : nullptr };
-		context->PSSetShaderResources(95, 2, debugEarlySRVs);
-		ID3D11ShaderResourceView* debugTBMain = objectBlendView == 2 ? globals::features::terrainBlending.terrainDepth.depthSRV : nullptr;
-		context->PSSetShaderResources(94, 1, &debugTBMain);
 		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
 		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
 		context->PSSetShader(shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);
-		context->PSSetShaderResources(94, 3, nullAttrSRVs);
 		context->PSSetShaderResources(99, 1, nullAttrSRVs);
 		context->OMSetRenderTargets(8, rtvs, dsv);
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
