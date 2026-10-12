@@ -706,7 +706,7 @@ bool SnowDeformation::LandscapeSnowRefresh()
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
-	cb.TessScreen = { std::max(shellTessTargetPx, 0.0f), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
+	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
 
 	if (!ls.shellCB)
 		ls.shellCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<ShellCB>(), "SnowDeformation::LandscapeShellCB");

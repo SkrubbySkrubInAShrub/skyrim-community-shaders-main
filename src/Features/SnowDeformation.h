@@ -1538,8 +1538,10 @@ public:
 	void BuildTerrainFineWindow();
 	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
 	bool shellLandHeightDisabled = false;
-	/** @brief Runtime-only: the ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many pixels each (0 = distance factor alone). Default 16, with the churn parallax on (Josef, 2026-09-25). */
+	/** @brief Runtime-only: the ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many display pixels each (0 = distance factor alone). Default 16, with the churn parallax on (Josef, 2026-09-25). */
 	float shellTessTargetPx = 16.0f;
+	/** @brief shellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
+	float ShellTessTargetRenderPx() const;
 	/** @brief Runtime-only A/B, "Disable Churn Parallax": the churn and berm clods go back into the shell geometry. Off (default) = churn by parallax (ShellFlags bit 4): the geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
 	bool shellChurnParallaxOff = false;
 

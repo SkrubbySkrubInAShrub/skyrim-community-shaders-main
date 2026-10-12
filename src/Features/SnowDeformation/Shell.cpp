@@ -1154,6 +1154,14 @@ void SnowDeformation::TickEffectCostProbe()
 	}
 }
 
+float SnowDeformation::ShellTessTargetRenderPx() const
+{
+	// Dynamic resolution ratios: render size over display size.
+	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
+	const float scale = (dynRes.x > 0.0f && dynRes.y > 0.0f) ? std::clamp(std::sqrt(dynRes.x * dynRes.y), 0.25f, 1.0f) : 1.0f;
+	return std::max(shellTessTargetPx, 0.0f) * scale;
+}
+
 // S1: the ground prepass at the end of Prepass, before the game's opaque
 // draws. Last DrawShell's CB re-placed for this frame's camera and windows:
 // the deformation map and its fields are this frame's, the object maps and
@@ -1222,7 +1230,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
-	cb.TessScreen = { std::max(shellTessTargetPx, 0.0f), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
+	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	cb.SnowParallax.w = parallax ? std::max(trenchParallaxReach, 0.0f) : 0.0f;
 	shellCB->Update(cb);
 
@@ -1988,7 +1996,7 @@ void SnowDeformation::DrawShell()
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
 	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	if (prevViewportCount)
-		cbData.TessScreen = { std::max(shellTessTargetPx, 0.0f), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
+		cbData.TessScreen = { ShellTessTargetRenderPx(), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	// GetDimensions of the field maps every landscape-shell pass binds from here
 	// on; they change size only in Prepass, so they hold for the next frame's
 	// caster too.
