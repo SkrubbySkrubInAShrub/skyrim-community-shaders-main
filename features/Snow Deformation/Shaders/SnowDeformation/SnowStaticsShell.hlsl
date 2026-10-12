@@ -811,9 +811,14 @@ float FineTop(float2 worldXY)
 		ObjectTopFine.GetDimensions(dims.x, dims.y);
 		float2 tf = FineTexel(worldXY, dims);
 		int2 t0 = (int2)tf;
+#ifdef PSHADER
+		const float4 tops = ObjectTopFine.GatherRed(ShellLinearSampler, (float2(t0) + 1.0) / dims);
+		result = max(max(tops.x, tops.y), max(tops.z, tops.w));
+#else
 		int2 t1 = min(t0 + 1, int2(dims) - 1);
 		result = max(max(ObjectTopFine.Load(int3(t0.x, t0.y, 0)), ObjectTopFine.Load(int3(t1.x, t0.y, 0))),
 			max(ObjectTopFine.Load(int3(t0.x, t1.y, 0)), ObjectTopFine.Load(int3(t1.x, t1.y, 0))));
+#endif
 	}
 	return result;
 }
@@ -900,9 +905,14 @@ float PatchTop(float2 worldXY)
 			ObjectTopRaw.GetDimensions(dims.x, dims.y);
 			float2 t = PatchTexel(worldXY, dims);
 			int2 t0 = (int2)t;
+#ifdef PSHADER
+			const float4 tops = ObjectTopRaw.GatherRed(ShellLinearSampler, (float2(t0) + 1.0) / dims);
+			result = max(max(tops.x, tops.y), max(tops.z, tops.w));
+#else
 			int2 t1 = min(t0 + 1, int2(dims) - 1);
 			result = max(max(ObjectTopRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopRaw.Load(int3(t1.x, t0.y, 0))),
 				max(ObjectTopRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopRaw.Load(int3(t1.x, t1.y, 0))));
+#endif
 		}
 	}
 	return result;
@@ -978,9 +988,16 @@ float2 PatchSkinDepth(float2 worldXY)
 		ObjectSkinDepth.GetDimensions(dims.x, dims.y);
 		float2 t = PatchTexel(worldXY, dims);
 		int2 t0 = (int2)t;
+#ifdef PSHADER
+		const float2 uv = (float2(t0) + 1.0) / dims;
+		const float4 depths = ObjectSkinDepth.GatherRed(ShellLinearSampler, uv);
+		const float4 roadTops = ObjectSkinDepth.GatherGreen(ShellLinearSampler, uv);
+		result = float2(max(max(depths.x, depths.y), max(depths.z, depths.w)), max(max(roadTops.x, roadTops.y), max(roadTops.z, roadTops.w)));
+#else
 		int2 t1 = min(t0 + 1, int2(dims) - 1);
 		result = max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
 			max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
+#endif
 	}
 	return result;
 }
@@ -1047,20 +1064,32 @@ float PatchSilhouetteDrop(float2 worldXY)
 		float2 t = PatchTexel(worldXY, dims);
 		int2 c0 = (int2)t;
 		float2 cf = t - c0;
+#ifdef PSHADER
+		const float4 tops = ObjectTopRaw.GatherRed(ShellLinearSampler, (float2(c0) + 1.0) / dims).wzxy;
+		float top00 = tops.x;
+		float top10 = tops.y;
+		float top01 = tops.z;
+		float top11 = tops.w;
+#else
 		int2 c1 = min(c0 + 1, int2(dims) - 1);
 		float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
 		float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
 		float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
 		float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
+#endif
 		// On a road column the silhouette is the ROAD's, not that of whatever
 		// stands over it: a wall's top would clip the patch running under it.
 		float2 sdims;
 		ObjectSkinDepth.GetDimensions(sdims.x, sdims.y);
 		float2 st = PatchTexel(worldXY, sdims);
 		int2 s0 = (int2)st;
+#ifdef PSHADER
+		float4 roadTops = ObjectSkinDepth.GatherGreen(ShellLinearSampler, (float2(s0) + 1.0) / sdims).wzxy;
+#else
 		int2 s1 = min(s0 + 1, int2(sdims) - 1);
 		float4 roadTops = float4(ObjectSkinDepth.Load(int3(s0.x, s0.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s0.y, 0)).y,
 			ObjectSkinDepth.Load(int3(s0.x, s1.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s1.y, 0)).y);
+#endif
 		bool4 onRoad = roadTops > kNoRoadTop * 0.5;
 		[flatten] if (any(onRoad))
 		{
@@ -2508,8 +2537,9 @@ Texture2D<float> TerrainFine : register(t52);
 // The landscape sheet's drawn surface at a grid-local point, as SnowShell's
 // ShellSurfaceZ builds open snow: land-exact ground, class depth, melt, carve,
 // berm, undulation. The analytic top (window height + depth) stands 4-9 units
-// off it. Sentinel where no sheet stands.
-float SheetSurfaceZ(float2 gridLocal)
+// off it. Sentinel where no sheet stands, and where its upper bound (land plus
+// the most carve, lip, berm and dunes can add) stays at or below zFloor.
+float SheetSurfaceZ(float2 gridLocal, float zFloor)
 {
 	float z = -100000.0;
 	float3 st = SampleTerrainStatics(gridLocal);
@@ -2532,12 +2562,17 @@ float SheetSurfaceZ(float2 gridLocal)
 			[flatten] if (min(min(g00, g10), min(g01, g11)) > -50000.0)
 				land = slash ? hA : hB;
 		}
-		float2 worldXY = GridOrigin + gridLocal;
-		depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionField(worldXY).y));
-		float deform = SampleDeformation(gridLocal);
-		float berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
-		float carved = CarveProfile(deform, depth, worldXY) + BermShape(berm) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
-		z = land + carved + UndulationSampled(worldXY) * saturate(carved / 8.0);
+		float zMax = land + depth * (1.0 + max(RimStyle.x, 0.0) + max(BermHeightAmp, 0.0)) + abs(UndulationAmp);
+		zMax += 0.01 + 1e-6 * abs(zMax);
+		[branch] if (zMax > zFloor)
+		{
+			float2 worldXY = GridOrigin + gridLocal;
+			depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionField(worldXY).y));
+			float deform = SampleDeformation(gridLocal);
+			float berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
+			float carved = CarveProfile(deform, depth, worldXY) + BermShape(berm) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+			z = land + carved + UndulationSampled(worldXY) * saturate(carved / 8.0);
+		}
 	}
 	return z;
 }
@@ -3101,12 +3136,12 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			{
 				float depth0 = max(st0.y, 0.0);
 				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(SampleExclusionField(GridOrigin + input.GridLocal).y));
-				// Untouched: deformation and berm read 0, CarveProfile(0, d) is d.
+				// Untouched: deformation and berm read 0, CarveProfileNoTeeth(0, d) is d.
 				[branch] if (!ShellUntouched(input.GridLocal))
 				{
 					float deform0 = SampleDeformation(input.GridLocal);
 					float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(input.GridLocal) : 0.0;
-					depth0 = CarveProfile(deform0, depth0, GridOrigin + input.GridLocal) +
+					depth0 = CarveProfileNoTeeth(deform0, depth0) +
 					         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
 				}
 				refTer = st0.x + depth0 + Undulation(GridOrigin + input.GridLocal) * saturate(depth0 / 8.0);
@@ -3180,9 +3215,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				{
 					float2 topDims;
 					ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
-					float2 topUV = float2(topLocal.x * 0.5 + 0.5, 0.5 - topLocal.y * 0.5);
-					float topH = ObjectTopRaw.Load(int3((int2)clamp(topUV * topDims, 0.0, topDims - 1.0), 0));
-					[flatten] if (topH > -50000.0)
+					// No point read of the top first: its texel is one of the
+					// four below, which must all be real.
 					{
 						// Inside an object's footprint the surface is its top
 						// plus a skin dusting. The terrain window's class-ramp
@@ -3208,23 +3242,27 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						float2 bt = PatchTexel(tapWorld, topDims);
 						int2 bt0 = (int2)bt;
 						float2 btf = bt - bt0;
-						int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
-						float4 tapTops = float4(
-							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
-							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
+						// One gather per raster fetches the bilinear's four texels
+						// (bt0 <= dims - 2). Road tops first: off a road nothing
+						// else is read.
+						const float2 tapGatherUV = (float2(bt0) + 1.0) / topDims;
+						const float4 tapRoadTops = ObjectSkinDepth.GatherGreen(ShellLinearSampler, tapGatherUV);
+						float tapRoadTop = max(max(tapRoadTops.x, tapRoadTops.y), max(tapRoadTops.z, tapRoadTops.w));
+						float4 tapTops = -100000.0;
+						float4 tapSkinDepths = 0.0;
+						[branch] if (tapRoadTop > kNoRoadTop * 0.5)
+						{
+							tapTops = ObjectTopRaw.GatherRed(ShellLinearSampler, tapGatherUV).wzxy;
+							tapSkinDepths = ObjectSkinDepth.GatherRed(ShellLinearSampler, tapGatherUV).wzxy;
+						}
 						[branch] if (all(tapTops > -50000.0))
 						{
-							float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
-							float2 sd10 = ObjectSkinDepth.Load(int3(bt1.x, bt0.y, 0));
-							float2 sd01 = ObjectSkinDepth.Load(int3(bt0.x, bt1.y, 0));
-							float2 sd11 = ObjectSkinDepth.Load(int3(bt1.x, bt1.y, 0));
 							float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
-							float depthSmooth = lerp(lerp(sd00.x, sd10.x, btf.x), lerp(sd01.x, sd11.x, btf.x), btf.y);
-							float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
+							float depthSmooth = lerp(lerp(tapSkinDepths.x, tapSkinDepths.y, btf.x), lerp(tapSkinDepths.z, tapSkinDepths.w, btf.x), btf.y);
 							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && depthSmooth >= 1.0)
 							{
 								float roadBound = max(max(tapTops.x, tapTops.y), max(tapTops.z, tapTops.w)) +
-								                  max(max(sd00.x, sd10.x), max(sd01.x, sd11.x)) * (1.0 + lipGain + max(ObjBermHeightAmp, 0.0)) + undBound;
+								                  max(max(tapSkinDepths.x, tapSkinDepths.y), max(tapSkinDepths.z, tapSkinDepths.w)) * (1.0 + lipGain + max(ObjBermHeightAmp, 0.0)) + undBound;
 								roadBound += 0.01 + 1e-6 * abs(roadBound);
 								[branch] if ((roadBound - surfZ - 1.0) / d >= skipTan)
 								{
@@ -3238,7 +3276,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 									{
 										float tapDeform = SampleDeformation(sampleLocal);
 										float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-										tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
+										tapDepth = CarveProfileNoTeeth(tapDeform, depthSmooth) +
 										           BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
 									}
 									sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
@@ -3266,7 +3304,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 					{
 						float sampleDeform = SampleDeformation(sampleLocal);
 						float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-						sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
+						sampleDepth = CarveProfileNoTeeth(sampleDeform, sampleDepth) +
 						              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 					}
 					// Sentinel terrain contributes a hugely negative horizon: a
@@ -3750,7 +3788,7 @@ float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixel
 	float sheetMeet = 0.0;
 	[branch] if (pdMode && ObjectMeetBand > 0.0 && pixelDist < 2048.0 && groundData.x > -50000.0)
 	{
-		float sheetZ = SheetSurfaceZ(input.GridLocal);
+		float sheetZ = SheetSurfaceZ(input.GridLocal, pixelAbsZ - ObjectMeetBand * 0.5);
 		float sheetGap = pixelAbsZ - sheetZ;
 		[branch] if (sheetZ > -50000.0 && sheetGap < ObjectMeetBand * 0.5)
 		{
