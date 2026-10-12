@@ -1776,20 +1776,6 @@ public:
 	ID3D11PixelShader* shellPSDeferred[2] = {};
 	uint32_t shellPSDeferredLegacyBits[2] = {};
 	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false);
-	/** @brief Runtime-only A/B: the deferred PS reads the trail map and the berm field through the sampler's bilinear (SNOW_RELIEF_HW). */
-	bool shellReliefHW = false;
-	/** @brief Runtime-only A/B: the deferred PS skips the churn's parallax march; the lumps shade by their normals alone (SNOW_CHURN_NO_MARCH). */
-	bool shellChurnNoMarch = false;
-	/** @brief Deferred PS per A/B combination (index = relief | churn << 1; 0 is shellPSDeferred) and parallax, compiled off the render thread on first use. */
-	ID3D11PixelShader* shellPSDeferredAB[4][2] = {};
-	uint32_t shellPSDeferredABLegacyBits[4][2] = {};
-	std::future<ID3D11PixelShader*> shellPSDeferredABJob[4][2];
-	uint32_t shellPSDeferredABJobBits[4][2] = {};
-	bool shellPSDeferredABTried[4][2] = {};
-	/** @brief The deferred PS for this frame's A/B toggles; shellPSDeferred until the variant has compiled. */
-	ID3D11PixelShader* GetShellPSDeferredAB(bool a_parallax);
-	/** @brief An A/B variant is compiling. */
-	bool ShellDeferredABCompiling() const;
 	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept][tessellated, parallax]. */
 	ID3D11PixelShader* shellPSPrepassAttr[2][2] = {};
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden, bool a_parallax = false);

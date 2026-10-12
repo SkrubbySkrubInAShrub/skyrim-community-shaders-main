@@ -374,8 +374,10 @@ Texture2D<float4> UndulationFieldMap : register(t29);
 
 SamplerState SnowSampler : register(s0);
 #if defined(PSHADER) && defined(SNOW_SHELL_DEFERRED)
-// s0 wraps like DeformTexel: one Gather fetches a bilinear's four texels.
-#	define SNOW_DEFORM_GATHER
+// The shading reads the trail map and the berm field through s0's bilinear
+// (s0 wraps like DeformTexel). Its coarser sub-texel weights tilt a few rim
+// normals: judged acceptable for the cost.
+#	define SNOW_DEFORM_SAMPLER
 #endif
 
 // Shared trench-detail shaping, spell-mark readers, field surfaces and the
@@ -568,26 +570,17 @@ float SampleTerrainBilinearHeight(float2 gridLocal)
 float SampleDeformationBilinear(float2 t, float2 dims)
 {
 	t = clamp(t, 0.0, dims - 1.001);
-#ifdef SNOW_RELIEF_HW
-	// A/B: the sampler's bilinear, whose sub-texel weights are coarser.
+#ifdef SNOW_DEFORM_SAMPLER
 	return saturate(DeformationMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0).x);
 #else
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
-#ifdef SNOW_DEFORM_GATHER
-	const float4 g = DeformationMap.GatherRed(SnowSampler, (float2(t0 + DeformMapOrigin) + 1.0) / dims);
-	float s00 = g.w;
-	float s10 = g.z;
-	float s01 = g.x;
-	float s11 = g.y;
-#else
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
 	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
 	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
 	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
 	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
-#endif
 
 	// Clamped here rather than at each call site: melt writes past 1.0 into
 	// the refill headroom, and this is the single tap every consumer goes
@@ -2296,15 +2289,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// it meets is shaded. Depth-buffer work stays on the sheet.
 	float3 shadePos = input.WorldPos;
 	bool gridShifted = false;
-	// A/B SNOW_CHURN_NO_MARCH: the lumps shade by their normals alone.
-#ifndef SNOW_CHURN_NO_MARCH
-#	ifdef SNOW_TRENCH_PARALLAX
+#ifdef SNOW_TRENCH_PARALLAX
 	// The parallax replay leaves churn and clods out of the geometry either way.
 	{
-#	else
+#else
 	[branch] if ((ShellFlags.x & 16) != 0)
 	{
-#	endif
+#endif
 		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
 		float churnAmp = (ChurnHeightAmp > 0.01 ? ChurnHeightAmp * churnW : 0.0) * fade;
 		float clodAmp = RimStyle.z * clodW * fade;
@@ -2318,7 +2309,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			gridShifted = true;
 		}
 	}
-#endif
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
 	{
 		const float cStep = 3.0;
