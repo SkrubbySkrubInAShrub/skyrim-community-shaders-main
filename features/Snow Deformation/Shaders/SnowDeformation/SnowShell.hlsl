@@ -2227,7 +2227,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #	ifdef SNOW_SHELL_DEPTH_PREPASS
 	// The land's verdict is read from Masks only where the land wrote it: an
 	// object's code there (skin's 1, a blended pass diluting 2) decodes as odds.
-	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
+	// Snow whose side wins any verdict skips the contest and buries objects.
+	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998) && LandSnowSide(landRemaining, pixelCarve) < 16.0)
 	{
 		[flatten] if (ShellMasksNotLand(input.WorldPos, input.Position.xy, shellZ, sceneZ))
 			coverageAlpha = 0.0;
