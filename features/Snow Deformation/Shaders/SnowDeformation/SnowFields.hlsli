@@ -93,10 +93,16 @@ float BermGradStep()
 	return min(4.0, max(4.0 * BermReach, 0.5 / (DeformInvWorldSize * dims.x)));
 }
 
+// The carve's short blur (BermFieldCS .y): the centre and a ring of eight
+// this far out, world units. CarveProfile lays walls back toward it by the
+// slough (CompactLook.w). Mirror in BermFieldCS.hlsl.
+static const float kWallBlurReach = 12.0;
+
 // One bilinear tap of the baked field, addressed exactly like the deformation
 // map it was baked from (BermFieldCS writes texel-for-texel, same toroidal
-// layout and MapOrigin - so partial rebuilds survive scrolls).
-float BermFieldBaked(float2 gridLocal)
+// layout and MapOrigin - so partial rebuilds survive scrolls). x = berm,
+// y = the carve's short blur.
+float2 BermFieldBaked(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
 	if (any(uv < 0.0) || any(uv > 1.0))
@@ -111,10 +117,10 @@ float BermFieldBaked(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+	float2 s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float2 s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float2 s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float2 s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 #endif
@@ -592,31 +598,41 @@ float2 UndulationGradSampled(float2 worldXY)
 // one function, every consumer agrees. Teeth first, then the depth remap,
 // then the lip on the notched value so the teeth break the lip into blocks
 // (RDR2 O1: "irregular teeth and broken blocks" at the rim).
-float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
+// Slough (Snow Climate) comes before all of them: loose snow lays the wall
+// back toward the carve's short blur (deformBlur, the berm field's .y), which
+// keeps the volume, so a softened print is wider and shallower.
+float CarveSlough(float deformation, float deformBlur)
+{
+	return saturate(lerp(deformation, deformBlur, CompactLook.w));
+}
+
+float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, float2 worldXY)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
-	float d = saturate(deformation);
-
+	float d = CarveSlough(deformation, deformBlur);
 
 	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
 	// 8-unit raggedness, HEIGHT-BLEND-PLAN - reused, not reinvented),
 	// applied to the carve value inside the rim band only.
 	// The contour breaks into teeth; floors (d high) and open snow (d = 0)
 	// sit outside the band and never move. Faded by depthT: teeth are
-	// cut-wall vocabulary, dimples stay smooth.
+	// cut-wall vocabulary, dimples stay smooth. The churn-free shading
+	// draws only when they are off.
+#ifndef SNOW_NO_CHURN
 	[branch] if (RimStyle.y > 0.001)
 	{
 		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
 		// Outside the band the notch adds a signed zero.
-#ifndef SNOW_TEETH_UNGATED
+#	ifndef SNOW_TEETH_UNGATED
 		[branch] if (rimBand > 0.0 && depthT > 0.0)
-#endif
+#	endif
 		{
 			float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
 			              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
 			d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
 		}
 	}
+#endif
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
@@ -639,10 +655,10 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 
 // CarveProfile without the rim teeth, for the sun march's occluders. The tail
 // mirrors CarveProfile's: keep the two in step.
-float CarveProfileNoTeeth(float deformation, float uncarvedDepth)
+float CarveProfileNoTeeth(float deformation, float deformBlur, float uncarvedDepth)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
-	float d = saturate(deformation);
+	float d = CarveSlough(deformation, deformBlur);
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
 	float profile = uncarvedDepth * (1.0 - d);

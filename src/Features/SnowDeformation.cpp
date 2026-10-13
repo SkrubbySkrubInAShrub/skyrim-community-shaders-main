@@ -127,6 +127,7 @@
 	X(SnowResistance) \
 	X(FreshSnowSoftness) \
 	X(FreshSnowChurn) \
+	X(SnowClimateStrength) \
 	X(FreshSnowSettleHours) \
 	X(TrampledFlattening) \
 	X(TrampledResistFade) \
@@ -267,12 +268,13 @@ void SnowDeformation::CreateDeformationTextures()
 	}
 
 	// Berm field: a bake of the 17-tap disc average the shells used to run per
-	// pixel. Same dimensions as the map it is derived from, one half-float
-	// channel (every reader and the writer are scalar), and no ping-pong - it
-	// is rebuilt from scratch from the current map each frame.
+	// pixel, and beside it the carve's short blur the walls lay back toward
+	// (Snow Climate's slough). Same dimensions as the map it is derived from,
+	// two half-float channels, and no ping-pong - it is rebuilt from the
+	// current map where the map changed.
 	{
 		D3D11_TEXTURE2D_DESC bermDesc = texDesc;
-		bermDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		bermDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
 		D3D11_SHADER_RESOURCE_VIEW_DESC bermSrvDesc = srvDesc;
 		bermSrvDesc.Format = bermDesc.Format;
 		D3D11_UNORDERED_ACCESS_VIEW_DESC bermUavDesc = uavDesc;
@@ -1103,7 +1105,11 @@ void SnowDeformation::PrepassSimulation()
 	// Fresh snow cannot hold a cut: walls stamped while it is loose slope
 	// across most of the print. Stamp-time, so a trench keeps the wall it
 	// was cut with until firmer traffic re-cuts it.
-	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f * std::lerp(1.0f, 0.3f, GetSnowSoftness()), 0.0f, 0.98f);
+	{
+		const SnowClimateLook look = ComputeSnowClimateLook();
+		const float wallEase = std::lerp(std::lerp(1.0f, 0.3f, GetSnowSoftness()), std::lerp(1.0f, 0.3f, look.slough), look.strength);
+		perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f * wallEase, 0.0f, 0.98f);
+	}
 	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
 	perFrameData.ShoutShape = { std::clamp(settings.ShoutMarkWaist, 0.05f, 0.95f), std::clamp(settings.ShoutMarkRoundness, 1.0f, 4.0f),
 		std::clamp(settings.ShoutMarkFadeStart, 0.0f, 0.98f), std::clamp(settings.ShoutMarkFarDepth, 0.0f, 1.0f) };

@@ -178,7 +178,8 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
-	// Unread by the skins (x = the landscape shell's water cut).
+	// x = the landscape shell's water cut (unread here); w = trench wall
+	// slough (Snow Climate, CarveProfile).
 	float4 CompactLook;
 	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
 	float4 RimStyle;
@@ -359,9 +360,10 @@ int3 DeformTexel(int2 t, int2 dims)
 	return int3((t + DeformMapOrigin) & (dims - 1), 0);
 }
 
-// Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
-// map, at the map's own resolution and addressing.
-Texture2D<float> BermFieldMap : register(t14);
+// Baked berm field (BermFieldCS): x = the 17-tap disc average of the
+// deformation map, y = the carve's short blur, at the map's own resolution
+// and addressing.
+Texture2D<float2> BermFieldMap : register(t14);
 // Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
 Texture2D<float> ExtentFieldMap : register(t56);
 // 1 per 8x8 physical map tile where the map and the berm field read zero
@@ -630,22 +632,31 @@ float SampleDeformation(float2 gridLocal)
 // to carry a ridge) and a geometry berm would straddle the patch/skin
 // height seam.
 
-float BermFieldTapped(float2 gridLocal)
+// The A/B path: the carve itself stands in for its short blur, so the
+// walls do not soften without the bake.
+float2 BermFieldTapped(float2 gridLocal)
 {
-	float b = SampleDeformation(gridLocal);
+	const float centre = SampleDeformation(gridLocal);
+	float b = centre;
 	[unroll] for (int i = 0; i < 16; i++)
 		b += SampleDeformation(gridLocal + kBermTaps[i] * BermReach);
-	return saturate(b / 17.0);
+	return float2(saturate(b / 17.0), centre);
 }
 
-float BermField(float2 gridLocal)
+// x = berm, y = the carve's short blur.
+float2 BermFieldPair(float2 gridLocal)
 {
-	float field = 0.0;
+	float2 field = 0.0;
 	[branch] if (BermBakeActive > 0.5)
 		field = BermFieldBaked(gridLocal);
 	else
 		field = BermFieldTapped(gridLocal);
 	return field;
+}
+
+float BermField(float2 gridLocal)
+{
+	return BermFieldPair(gridLocal).x;
 }
 
 float ChurnNoise(float2 worldXY)
@@ -1433,10 +1444,12 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// patch draw carries the shallow object depth in RoundedDepth, and
 		// BermDepthGate of a shallow depth is exactly zero - which is why the
 		// pixel shader's shading berm has been silently inert on the patch.
-		float bermD = 0.0;
-		[branch] if (ObjBermHeightAmp > 0.005)
-			bermD = BermField(gridLocal);
-		float depth = CarveProfile(deform, skinDepth, worldXY) +
+		// The carve's short blur rides the same read (Snow Climate's slough).
+		float2 bermPair = float2(0.0, deform);
+		[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.w > 0.0)
+			bermPair = BermFieldPair(gridLocal);
+		const float bermD = ObjBermHeightAmp > 0.005 ? bermPair.x : 0.0;
+		float depth = CarveProfile(deform, bermPair.y, skinDepth, worldXY) +
 		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
 
 		// Precision pad, NOT a floor. The patch stands on real geometry, so even
@@ -1512,9 +1525,16 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float dXN = saturate(SampleDeformationSmooth(gridLocal - float2(gStep, 0.0)));
 		float dYP = saturate(SampleDeformationSmooth(gridLocal + float2(0.0, gStep)));
 		float dYN = saturate(SampleDeformationSmooth(gridLocal - float2(0.0, gStep)));
+		float4 blur = float4(dXP, dXN, dYP, dYN);
+		[branch] if (CompactLook.w > 0.0)
+		{
+			blur = float4(BermFieldPair(gridLocal + float2(gStep, 0.0)).y, BermFieldPair(gridLocal - float2(gStep, 0.0)).y,
+				BermFieldPair(gridLocal + float2(0.0, gStep)).y, BermFieldPair(gridLocal - float2(0.0, gStep)).y);
+		}
 		float2 profGrad = float2(
-			CarveProfile(dXP, skinDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, skinDepth, worldXY - float2(gStep, 0.0)),
-			CarveProfile(dYP, skinDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, skinDepth, worldXY - float2(0.0, gStep))) / (2.0 * gStep);
+							  CarveProfile(dXP, blur.x, skinDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, blur.y, skinDepth, worldXY - float2(gStep, 0.0)),
+							  CarveProfile(dYP, blur.z, skinDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, blur.w, skinDepth, worldXY - float2(0.0, gStep))) /
+		                  (2.0 * gStep);
 		// Undulation gradient, the same field the depth above displaced by -
 		// mirrors SnowShell.hlsl's PS block. The geometry alone is not enough:
 		// at patch vertex spacing the dunes are far coarser than the shading
@@ -2578,8 +2598,8 @@ float SheetSurfaceZ(float2 gridLocal, float zFloor)
 			float2 worldXY = GridOrigin + gridLocal;
 			depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionField(worldXY).y));
 			float deform = SampleDeformation(gridLocal);
-			float berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
-			float carved = CarveProfile(deform, depth, worldXY) + BermShape(berm) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+			float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float2(0.0, deform);
+			float carved = CarveProfile(deform, berm.y, depth, worldXY) + BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
 			z = land + carved + UndulationSampled(worldXY) * saturate(carved / 8.0);
 		}
 	}
@@ -5160,9 +5180,9 @@ float RoadTapHeight(float2 sampleLocal)
 				const float tapCone = ObjectConeDepth(tapWorld);
 				depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
 				const float tapDeform = SampleDeformation(sampleLocal);
-				const float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-				const float tapDepth = CarveProfileNoTeeth(tapDeform, depthSmooth) +
-				                       BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+				const float2 tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : float2(0.0, tapDeform);
+				const float tapDepth = CarveProfileNoTeeth(tapDeform, tapBerm.y, depthSmooth) +
+				                       BermShape(tapBerm.x) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
 				sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
 			}
 		}

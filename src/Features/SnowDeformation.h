@@ -585,6 +585,8 @@ public:
 		float RimTeeth = 0.33f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
 		float SnowResistance = 40.0f;
+		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth, clods, churn and wall softness follow the snow, each with its slider as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
+		float SnowClimateStrength = 1.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
@@ -1547,6 +1549,11 @@ public:
 	/** @brief Runtime-only A/B, "Disable Churn Parallax": the churn and berm clods go back into the shell geometry. Off (default) = churn by parallax (ShellFlags bit 4): the geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
 	bool shellChurnParallaxOff = false;
 
+	/** @brief Rows of ShellCB::SnowClimateLUT: 2 C below the player's temperature, at it, 2 C above. */
+	static constexpr uint32_t kClimateLUTRows = 3;
+	/** @brief Temperature step between the rows (C). */
+	static constexpr float kClimateLUTStep = 2.0f;
+
 	/** @brief Per-draw constants for the shell pass. Layout must match ShellCB in SnowShell.hlsl. */
 	struct alignas(16) ShellCB
 	{
@@ -1672,7 +1679,7 @@ public:
 		float4 CrustLook2;
 		/** @brief xy layout keepers (the retired dust switch and trench floor), uploaded as 0; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w spare. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w = trench wall slough, 0-1: how far CarveProfile takes the berm field's short blur over the carve (Snow Climate). Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -1704,14 +1711,17 @@ public:
 		float4 FieldDims;
 		/** @brief Snow climate at the player (TRACK-VARIATION-RESEARCH.md 3.2): x = air temperature (C), y = cooling per world unit of height, z = the player's world z, w = freshness. Overrides applied. SnowShell.hlsl only; appended last. */
 		float4 SnowClimate;
-		/** @brief x = wind packing, y = wetness at the player, z = condition view (0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all), w spare. */
+		/** @brief x = wind packing, y = wetness at the player, z = condition view (0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all), w = 1 - Snow Climate: the weight of the fixed churn depth ramp. */
 		float4 SnowClimate2;
 		/** @brief Overrides painted everywhere, below 0 = derived per pixel: x wetness, y stickiness, z firmness; w spare. */
 		float4 SnowClimateOverride;
+		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: x, y = the churn depth ramp's start and 1/width (cover units), z = its weight (Snow Climate x churn scale), w = Snow Climate x wetness. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
+		float4 SnowClimateLUT[kClimateLUTRows];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");
 	static_assert(offsetof(ShellCB, SnowClimate) == 848, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(offsetof(ShellCB, SnowClimateLUT) == 896 && sizeof(ShellCB) == 944, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
 
 	/**
 	 * @brief Per-light shadow data for shadow-casting local lights (t38), indexed by the light's shadow-mask channel.
@@ -1781,10 +1791,15 @@ public:
 	Texture2D* shellDeferredAttr[3] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
 	bool EnsureDeferredResources();
-	/** @brief The deferred PS [tessellated trenches, Screen-Space Parallax Trenches]. */
-	ID3D11PixelShader* shellPSDeferred[2] = {};
-	uint32_t shellPSDeferredLegacyBits[2] = {};
-	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false);
+	/** @brief The deferred PS [tessellated trenches, Screen-Space Parallax Trenches, churn-free]. The churn-free one (SNOW_NO_CHURN) compiles out the churn march, the churn and clod gradients and the rim teeth; it draws in place of the first when no texel of the window can churn (shellChurnFree). */
+	ID3D11PixelShader* shellPSDeferred[3] = {};
+	uint32_t shellPSDeferredLegacyBits[3] = {};
+	/** @brief a_churnFree applies without parallax only. */
+	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false, bool a_churnFree = false);
+	/** @brief This frame's climate leaves no churn, clods or teeth anywhere in the window: the churn-free deferred PS draws. Set by the ShellCB fill. */
+	bool shellChurnFree = false;
+	/** @brief Debug A/B, not saved: always draw the full deferred PS. */
+	bool debugChurnFreeOff = false;
 	/** @brief The deferred PS with SNOW_CONDITION_VIEW (tessellated trenches only), compiled off the render thread the first time the view is switched on. */
 	ID3D11PixelShader* shellPSDeferredConditionView = nullptr;
 	std::atomic<int> conditionViewShaderState = 0;
@@ -1833,8 +1848,6 @@ public:
 	std::array<uint8_t, kMarchCensusFrames> marchCensus{};
 	uint32_t marchCensusCursor = 0;
 	uint32_t marchCensusFilled = 0;
-	/** @brief Debug A/B, not saved: key the full rebuild on the freshness-eased berm and lip values again, as before the fix. */
-	bool debugMarchOldKey = false;
 	/** @brief Brings the caches up to date and binds them at PS t106-t108 (DrawShell, after the shell CB upload). False = no caches this frame: the marches must be switched off, as they read nothing else. */
 	bool UpdateMarchCaches(const ShellCB& a_cb);
 	void UnbindMarchCaches();
@@ -4361,8 +4374,8 @@ protected:
 	static constexpr float kClimateLapse = 0.0005f;
 	/**
 	 * @brief Snow climate (TRACK-VARIATION-RESEARCH.md 3.2): what kind of snow
-	 * lies around the player. Stage 0 computes, shows and paints it; nothing
-	 * reads it for the look yet. Render thread only.
+	 * lies around the player. The trench look follows it by Snow Climate
+	 * (ComputeSnowClimateLook). Render thread only.
 	 */
 	struct SnowClimateState
 	{
@@ -4371,6 +4384,8 @@ protected:
 		float windPacking = 0.0f;
 		/** @brief Share of the loaded land painted with snow textures; below 0 until measured. */
 		float landSnowShare = -1.0f;
+		/** @brief Deepest snow any known land texture carries (units, before accumulation), refreshed with the share. */
+		float maxLandSnowDepth = 0.0f;
 		float rainHeld = 0.0f;
 		float ageingClock = kAgeingClockStart;
 		/** @brief Clock units per game hour, last tick. */
@@ -4395,10 +4410,41 @@ protected:
 		float windPacking;
 	};
 	SnowCondition GetSnowCondition() const;
+	/** @brief The snow at the player had the air there this temperature: wetness moves with it as height moves it per pixel, overrides apply. */
+	SnowCondition SnowConditionAt(float a_temperature) const;
+	/**
+	 * @brief The trench look the climate asks for (TRACK-VARIATION-RESEARCH.md 3.3).
+	 * Each factor scales its slider, 1 in settled sticky snow just below
+	 * freezing, where the look is the sliders' own; Snow Climate is applied.
+	 */
+	struct SnowClimateLook
+	{
+		float strength = 0.0f;
+		/** @brief At the player, 0-1, before Snow Climate. */
+		float berm = 1.0f;
+		float lip = 1.0f;
+		float teeth = 1.0f;
+		float clods = 1.0f;
+		/** @brief Wall softness: how far walls lay back toward the berm field's short blur. */
+		float slough = 0.0f;
+		float churnScale = 1.0f;
+		/** @brief Share of the churn that is powder lumps (deep cover only) rather than sticky clods. */
+		float churnPowder = 0.0f;
+		/** @brief Road churn multiplier at the road cover, Snow Climate applied. */
+		float roadChurn = 1.0f;
+		/** @brief Deepest cover the window can hold, accumulation applied. */
+		float coverMax = 0.0f;
+		/** @brief No texel of the window can churn at any height in the table, and Snow Climate is full. */
+		bool churnNowhere = false;
+		std::array<float4, kClimateLUTRows> lut{};
+	};
+	SnowClimateLook ComputeSnowClimateLook() const;
 	/** @brief Advances the climate off the shared clock; call after TickSnowCondition. */
 	void TickSnowClimate();
 	/** @brief Mean snow-texture weight of the loaded land around a point, from the baked cells; below 0 when none are baked. */
 	float LandSnowShareAround(float a_x, float a_y);
+	/** @brief The deepest snow any known land texture carries, 0 when none does. */
+	float MaxLandSnowDepth();
 	/** @brief Debug overrides, not saved. Temperature has its own switch; the others replace the live value at 0 or above. */
 	bool debugClimateTemperatureOn = false;
 	float debugClimateTemperature = -5.0f;

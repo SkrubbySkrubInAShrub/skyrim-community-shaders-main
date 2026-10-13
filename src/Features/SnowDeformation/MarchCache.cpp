@@ -147,8 +147,9 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	// What moves every texel at once: the settings, the window's size, the
 	// readers' gates. Snowfall's depth scale (RimStyle.w) creeps every frame
 	// while it snows and is left to the row bands. So do the berm and lip
-	// amplitudes: freshness eases them every tick while it snows and for a
-	// day after, so the key holds their sliders, not their values.
+	// amplitudes and the wall slough: freshness and the climate ease them
+	// every tick, so the key holds their sliders and the climate's overrides,
+	// not their values.
 	uint64_t key = 1469598103934665603ull;
 	auto mix = [&](const void* a_p, size_t a_n) {
 		const auto* b = static_cast<const uint8_t*>(a_p);
@@ -157,13 +158,11 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 			key *= 1099511628211ull;
 		}
 	};
-	const float bermKey = debugMarchOldKey ? a_cb.BermHeightAmp : settings.BermHeight;
-	const float objBermKey = debugMarchOldKey ? a_cb.ObjBermHeightAmp : settings.BermHeight;
-	const float lipKey = debugMarchOldKey ? a_cb.RimStyle.x : settings.RimLip;
-	const float keyFloats[] = { a_cb.DeformInvWorldSize, a_cb.UndulationAmp, a_cb.UndulationScale, bermKey, objBermKey, lipKey,
+	const float keyFloats[] = { a_cb.DeformInvWorldSize, a_cb.UndulationAmp, a_cb.UndulationScale, settings.BermHeight, settings.RimLip,
 		a_cb.ShellTriHeight, a_cb.BermBakeActive, a_cb.ObjectLiftCap > 0.0f ? 1.0f : 0.0f, a_cb.ExclusionFieldWindow.w, a_cb.CompactLook.x, a_cb.FineWindow.z,
 		a_cb.ObjectHeightHalfExtent, a_cb.FieldDims.x, a_cb.FieldDims.y, a_cb.FieldDims.z, a_cb.FieldDims.w,
-		settings.FreshSnowSoftness, debugFreshnessOverride, debugMarchOldKey ? 1.0f : 0.0f };
+		settings.FreshSnowSoftness, debugFreshnessOverride, settings.SnowClimateStrength, debugClimateTemperatureOn ? debugClimateTemperature : -1000.0f,
+		debugClimateShareOverride, debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride };
 	mix(keyFloats, sizeof(keyFloats));
 	const int landExactOff = a_cb.ShellFlags.x & 4;
 	mix(&landExactOff, sizeof(landExactOff));

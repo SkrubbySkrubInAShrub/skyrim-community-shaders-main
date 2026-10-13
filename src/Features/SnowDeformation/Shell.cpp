@@ -728,16 +728,17 @@ bool SnowDeformation::EnsureDeferredResources()
 	return shellDeferredAttr[0]->rtv && shellDeferredAttr[1]->rtv && shellDeferredAttr[2]->rtv;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSDeferred(bool a_parallax)
+ID3D11PixelShader* SnowDeformation::GetShellPSDeferred(bool a_parallax, bool a_churnFree)
 {
-	auto*& slot = shellPSDeferred[a_parallax ? 1 : 0];
-	auto& slotBits = shellPSDeferredLegacyBits[a_parallax ? 1 : 0];
+	const uint32_t index = a_parallax ? 1 : (a_churnFree ? 2 : 0);
+	auto*& slot = shellPSDeferred[index];
+	auto& slotBits = shellPSDeferredLegacyBits[index];
 	if (slot && slotBits != shellPSLegacyBits) {
 		slot->Release();
 		slot = nullptr;
 	}
 	if (!slot) {
-		logger::debug("Compiling SnowShell PS (deferred{})", a_parallax ? ", trench parallax" : "");
+		logger::debug("Compiling SnowShell PS (deferred{})", a_parallax ? ", trench parallax" : (index == 2 ? ", churn-free" : ""));
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
 		if (shellPSLegacyBits & 1)
@@ -746,6 +747,8 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred(bool a_parallax)
 			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
 		if (a_parallax)
 			defines.emplace_back("SNOW_TRENCH_PARALLAX", "");
+		if (index == 2)
+			defines.emplace_back("SNOW_NO_CHURN", "");
 		slotBits = shellPSLegacyBits;
 		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
@@ -1746,15 +1749,21 @@ void SnowDeformation::DrawShell()
 		std::max(settings.FrostPatternScale, 4.0f),
 		frostPatternNormalSRV ? 1.0f : 0.0f };
 	// Fresh snow compacts instead of being thrown: little berm, no cut rim.
+	// Snow Climate moves each lever from that fixed look to the climate's.
 	const float snowSoftness = GetSnowSoftness();
-	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f) * std::lerp(1.0f, 0.35f, snowSoftness);
+	const SnowClimateLook look = ComputeSnowClimateLook();
+	const float bermSlider = std::clamp(settings.BermHeight, 0.0f, 1.0f);
+	const float lipSlider = std::clamp(settings.RimLip, 0.0f, 0.3f);
+	const float teethSlider = std::clamp(settings.RimTeeth, 0.0f, 1.0f);
+	const float clodSlider = std::clamp(settings.BermClods, 0.0f, 6.0f);
+	cbData.BermHeightAmp = std::lerp(bermSlider * std::lerp(1.0f, 0.35f, snowSoftness), bermSlider * look.berm, look.strength);
 	cbData.BermReach = BermReachScale();
 	// .w claims RimStyle's documented spare rather than growing ShellCB: the
 	// buffer is hand-mirrored across two shaders and the statics pass binds
 	// this same b0, so one component serves both shells with nothing moving.
-	cbData.RimStyle = { std::clamp(settings.RimLip, 0.0f, 0.3f) * (1.0f - snowSoftness),
-		std::clamp(settings.RimTeeth, 0.0f, 1.0f) * (1.0f - snowSoftness),
-		std::clamp(settings.BermClods, 0.0f, 6.0f),
+	cbData.RimStyle = { std::lerp(lipSlider * (1.0f - snowSoftness), lipSlider * look.lip, look.strength),
+		std::lerp(teethSlider * (1.0f - snowSoftness), teethSlider * look.teeth, look.strength),
+		std::lerp(clodSlider, clodSlider * look.clods, look.strength),
 		GetAccumulationDepthScale() };
 	// A stale extent field turns the class switch off with it.
 	const float2 trampleBracket = TrampleBracket();
@@ -1762,8 +1771,11 @@ void SnowDeformation::DrawShell()
 		ExtentLive() ? std::clamp(settings.TrampledFlattening, 0.0f, 1.0f) : 1.0f,
 		trampleBracket.x,
 		trampleBracket.y };
-	// Loose snow holds no clods. ObjChurnHeightAmp copies this below.
-	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f) * std::lerp(1.0f, std::clamp(settings.FreshSnowChurn, 0.0f, 1.0f), snowSoftness);
+	// Loose snow holds no clods. Under Snow Climate the per-pixel ramp
+	// (SnowClimateLUT) scales the slider instead; roads take it below.
+	const float churnSlider = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
+	const float churnBase = std::lerp(churnSlider * std::lerp(1.0f, std::clamp(settings.FreshSnowChurn, 0.0f, 1.0f), snowSoftness), churnSlider, look.strength);
+	cbData.ChurnHeightAmp = churnBase;
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
 	{
 		// Pixels per world unit at distance d = focalPx / d, with
@@ -1773,10 +1785,17 @@ void SnowDeformation::DrawShell()
 		const float capPx = std::clamp(settings.SkinTessCapPx, 0.0f, 64.0f);
 		cbData.SkinTessCapSlope = (focalPx > 1.0f && capPx > 0.0f) ? capPx / focalPx : 0.0f;
 	}
+	// No texel of the window can churn: the churn-free deferred PS draws, and
+	// the geometry's churn path skips with it.
+	shellChurnFree = !debugChurnFreeOff && cbData.RimStyle.y <= 0.001f && cbData.RimStyle.z <= 0.01f &&
+	                 (cbData.ChurnHeightAmp <= 0.01f || look.churnNowhere);
+	if (shellChurnFree)
+		cbData.ChurnHeightAmp = 0.0f;
 	// Object trench detail follows the landscape set. The CB rows stay because
-	// both shells read them.
+	// both shells read them. The road patch reads no climate rows: its cover
+	// is the road layer's, so the ramp at that depth is folded in here.
 	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
-	cbData.ObjChurnHeightAmp = cbData.ChurnHeightAmp;
+	cbData.ObjChurnHeightAmp = churnBase * look.roadChurn;
 	cbData.ObjChurnSizeScale = cbData.ChurnSizeScale;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
@@ -1790,15 +1809,16 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { 0.0f, 0.0f, (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	// x = the water cut (runtime A/B in Debugging Options); y, z = the land-blend
-	// contest's depth bonus and carve penalty (log2 odds); w spare.
+	// contest's depth bonus and carve penalty (log2 odds); w = the wall slough.
 	const float2 landContest = LandBlendContest();
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, 0.0f };
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, look.strength * look.slough };
 	{
 		const SnowCondition condition = GetSnowCondition();
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		cbData.SnowClimate = { condition.temperature, kClimateLapse, player ? player->GetPosition().z : 0.0f, condition.freshness };
-		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 5), 0.0f };
+		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 5), 1.0f - look.strength };
 		cbData.SnowClimateOverride = { debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, 0.0f };
+		std::copy(look.lut.begin(), look.lut.end(), cbData.SnowClimateLUT);
 	}
 	cbData.DebugNoFarPad = 0.0f;
 	cbData.DebugParallaxView = (parallax && trenchParallaxView) ? 1.0f : 0.0f;
@@ -2462,7 +2482,12 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
 		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
 		ID3D11PixelShader* conditionView = parallax ? nullptr : ConditionViewPS();
-		context->PSSetShader(conditionView ? conditionView : shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
+		ID3D11PixelShader* deferredPS = shellPSDeferred[parallax ? 1 : 0];
+		if (!parallax && shellChurnFree) {
+			if (auto* churnFreePS = GetShellPSDeferred(false, true))
+				deferredPS = churnFreePS;
+		}
+		context->PSSetShader(conditionView ? conditionView : deferredPS, nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);

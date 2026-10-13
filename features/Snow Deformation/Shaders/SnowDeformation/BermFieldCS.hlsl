@@ -18,7 +18,8 @@
 // smooth at a far coarser scale than one texel.
 
 Texture2D<float4> DeformationMap : register(t0);
-RWTexture2D<float> OutBermField : register(u0);
+// x = the berm field, y = the carve's short blur (CarveProfile's slough).
+RWTexture2D<float2> OutBermField : register(u0);
 // Tiles (x | y<<16) whose berm output is stale, from ScanBermCS: the map
 // changed within the tap reach. Consumed by BermTiledCS via indirect args.
 StructuredBuffer<uint> BermTilesIn : register(t1);
@@ -67,6 +68,9 @@ cbuffer PerFrame : register(b0)
 	float MeltEdgeNoise;
 }
 
+// Must match kWallBlurReach in SnowFields.hlsli.
+static const float kWallBlurReach = 12.0;
+
 // Must match kBermTaps in SnowShell.hlsl / SnowStaticsShell.hlsl.
 static const float2 kBermTaps[16] = {
 	float2(18.0, 0.0), float2(12.73, 12.73), float2(0.0, 18.0), float2(-12.73, 12.73),
@@ -114,6 +118,22 @@ float TapBilinear(float2 t, float2 dims)
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
+// The carve as CarveProfile reads it (all of it, melt included), bilinear.
+float CarveBilinear(float2 t, float2 dims)
+{
+	t = clamp(t, 0.0, dims - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = saturate(DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x);
+	float s10 = saturate(DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x);
+	float s01 = saturate(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x);
+	float s11 = saturate(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x);
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
 // A tap whose window UV leaves [0,1] contributes 0, matching
 // SampleDeformationFast: the field must decay to nothing at the window border
 // rather than smearing the edge texels inward.
@@ -123,6 +143,14 @@ float Tap(float2 texel, float2 dims)
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
 	return TapBilinear(texel, dims);
+}
+
+float CarveTap(float2 texel, float2 dims)
+{
+	float2 uv = (texel + 0.5) / dims;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+	return CarveBilinear(texel, dims);
 }
 
 bool BermTexel(uint2 phys)
@@ -143,9 +171,18 @@ bool BermTexel(uint2 phys)
 	[unroll] for (int i = 0; i < 16; i++)
 		b += Tap(centre + kBermTaps[i] * (BermReach * invTexel), dims);
 
+	// The short blur: the centre and the inner ring's eight directions at
+	// kWallBlurReach, never closer than a texel. Inside ScanBermCS's halo,
+	// whose reach is at least 20 units.
+	const float blurReach = max(kWallBlurReach * invTexel, 1.0) / 18.0;
+	float s = CarveTap(centre, dims);
+	[unroll] for (int j = 0; j < 8; j++)
+		s += CarveTap(centre + kBermTaps[j] * blurReach, dims);
+
 	const float berm = saturate(b / 17.0);
-	OutBermField[phys] = berm;
-	return berm != 0.0;
+	const float blur = s / 9.0;
+	OutBermField[phys] = float2(berm, blur);
+	return berm != 0.0 || blur != 0.0;
 }
 
 [numthreads(8, 8, 1)]

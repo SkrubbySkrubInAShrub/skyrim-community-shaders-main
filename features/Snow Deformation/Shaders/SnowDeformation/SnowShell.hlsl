@@ -227,7 +227,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// atlas moves them with the active-light set).
 	float4 BorderStyle;
 	// x = water cut (1 = the sheet ends at the drawn waterline); yz = the land
-	// contest's depth bonus and carve penalty; w spare.
+	// contest's depth bonus and carve penalty; w = trench wall slough (Snow
+	// Climate, CarveProfile).
 	float4 CompactLook;
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
@@ -270,10 +271,15 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// Snow climate at the player: x = air temperature (C), y = cooling per
 	// world unit of height, z = the player's world z, w = freshness.
 	float4 SnowClimate;
-	// x = wind packing, y = wetness at the player, z = condition view, w spare.
+	// x = wind packing, y = wetness at the player, z = condition view,
+	// w = 1 - Snow Climate (the fixed churn ramp's weight).
 	float4 SnowClimate2;
 	// Overrides painted everywhere, < 0 = per pixel: x wet, y sticky, z firm.
 	float4 SnowClimateOverride;
+	// The climate look by the pixel's temperature, rows at the player's - 2,
+	// + 0 and + 2 C: x, y = churn depth ramp start and 1/width, z = its
+	// weight, w = wetness (both x Snow Climate). Read through SnowClimateRow.
+	float4 SnowClimateLUT[3];
 }
 
 
@@ -355,9 +361,10 @@ Texture2D<float4> SnowHeightMap : register(t8);
 // (Lighting.hlsl WriteLandSnowOdds; 0 = no data - grass, or an object
 // behind), the land's side of the contest.
 Texture2D<float3> LandMasksCopy : register(t10);
-// Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
-// map, at the map's own resolution and addressing.
-Texture2D<float> BermFieldMap : register(t14);
+// Baked berm field (BermFieldCS): x = the 17-tap disc average of the
+// deformation map, y = the carve's short blur, at the map's own resolution
+// and addressing.
+Texture2D<float2> BermFieldMap : register(t14);
 // Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
 Texture2D<float> ExtentFieldMap : register(t56);
 // 1 per 8x8 physical map tile where the map and the berm field read zero
@@ -937,25 +944,33 @@ float3 ShellObjectMeet(float2 worldXY, float sheetZ)
 // weight giving a long tail instead of a knife along the stamp falloff.
 // BermShape and the tap ring are in SnowFields.hlsli.
 
-float BermFieldTapped(float2 gridLocal)
+// The A/B path: the carve itself stands in for its short blur, so the
+// walls do not soften without the bake.
+float2 BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDisplacedFast(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += SampleDisplacedFast(gridLocal + kBermTaps[i] * BermReach);
-	return saturate(b / 17.0);
+	return float2(saturate(b / 17.0), SampleDeformationFast(gridLocal));
 }
 
 // The berm field dominated the shell's pixel cost at 68 loads a call, and the
 // normal alone needs four. BermBakeActive routes to the bake; the tapped path
-// stays compiled so the two can be A/B'd from the debug menu.
-float BermField(float2 gridLocal)
+// stays compiled so the two can be A/B'd from the debug menu. x = berm,
+// y = the carve's short blur.
+float2 BermFieldPair(float2 gridLocal)
 {
-	float field = 0.0;
+	float2 field = 0.0;
 	[branch] if (BermBakeActive > 0.5)
 		field = BermFieldBaked(gridLocal);
 	else
 		field = BermFieldTapped(gridLocal);
 	return field;
+}
+
+float BermField(float2 gridLocal)
+{
+	return BermFieldPair(gridLocal).x;
 }
 
 // ---- Trench churn: chunky broken snow in disturbed zones ----
@@ -966,6 +981,24 @@ float BermField(float2 gridLocal)
 float ChurnNoise(float2 worldXY)
 {
 	return ChurnNoiseScaled(worldXY, ChurnSizeScale);
+}
+
+// ---- Snow Climate per pixel (TRACK-VARIATION-RESEARCH.md 3.3) ----
+// The CPU's climate rows lerped by the point's temperature offset from the
+// player's (height x lapse, clamped at the outer rows' 2 C). Fixed indices:
+// a per-pixel index into the constant buffer serialises the warp's reads.
+float4 SnowClimateRow(float worldZ)
+{
+	const float dT = clamp(SnowClimate.y * (SnowClimate.z - worldZ), -2.0, 2.0);
+	return lerp(SnowClimateLUT[1], dT < 0.0 ? SnowClimateLUT[0] : SnowClimateLUT[2], abs(dT) * 0.5);
+}
+
+// The churn's weight by cover depth: the fixed ramp by 1 - Snow Climate, and
+// the climate's own (sticky clods from a hand deep, powder lumps only in very
+// deep cover) by the row.
+float ClimateChurnRamp(float cover, float4 row)
+{
+	return SnowClimate2.w * saturate(cover / 10.0) + row.z * smoothstep(0.0, 1.0, (cover - row.x) * row.y);
 }
 
 // Water level over the texels a point touches, from the raw raster: the max,
@@ -1269,19 +1302,22 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		[flatten] if (depth > 0.0)
 		{
 			float deformation = saturate(SampleDeformation(gridLocal));
-			float bermD = BermField(gridLocal);
+			float2 bermPair = BermFieldPair(gridLocal);
+			float bermD = bermPair.x;
 			float uncarved = depth;
 			// The berm is spoil piled on snow that was NOT dug. Unmasked, the
 			// blurred field also lifted the trench floor and walls - a narrow
 			// trail's disc average is well above zero at its own centre, so
 			// raising Berm Height raised the whole trench with it.
-			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal) +
+			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal) +
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
-			// local depth even at the slider's 8-unit maximum.
+			// local depth even at the slider's 8-unit maximum. Snow Climate's
+			// ramp takes over from it as the PS's does.
 			[branch] if ((ShellFlags.x & 16) == 0)
-				depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD, GridOrigin + gridLocal) * saturate(depth / 10.0);
+				depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD, GridOrigin + gridLocal) *
+			             ClimateChurnRamp(depth, SnowClimateRow(terrainHeight + depth));
 			// Berm clods: a coarser octave weighted by BermShape rather than
 			// the churn weight, since spoil lands on the crest and churn peaks
 			// in the trench. Masked like the berm and gated on material; the
@@ -1646,8 +1682,8 @@ static const float kTrenchParallaxMaxSteps = 32.0;
 float TrenchRelief(float2 foot, float u, float bermScale, float und, bool fine)
 {
 	const float d = saturate(fine ? SampleDeformation(foot) : SampleDeformationMarch(foot));
-	const float berm = BermBakeActive > 0.5 ? BermFieldBaked(foot) : 0.0;
-	const float carved = CarveProfile(d, u, GridOrigin + foot) + BermShape(berm) * saturate(1.0 - d) * bermScale;
+	const float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(foot) : float2(0.0, d);
+	const float carved = CarveProfile(d, berm.y, u, GridOrigin + foot) + BermShape(berm.x) * saturate(1.0 - d) * bermScale;
 	return carved - u + und * (saturate(carved / 8.0) - saturate(u / 8.0));
 }
 
@@ -2158,7 +2194,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #ifndef SNOW_SHELL_DEFERRED
 	[branch] if (coverageAlpha > 0.001)
 	{
-		landRemaining = CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
+		landRemaining = CarveProfile(pixelCarve, pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
 		landFilm = landRemaining < kLandFilmDepth;
 	}
 #endif
@@ -2258,9 +2294,18 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float dXN = SampleDeformation(gridLocal - float2(step, 0.0));
 		float dYP = SampleDeformation(gridLocal + float2(0.0, step));
 		float dYN = SampleDeformation(gridLocal - float2(0.0, step));
+		// Snow Climate's slough lays the walls back toward the carve's short
+		// blur, read only while the snow is loose.
+		float4 blur = saturate(float4(dXP, dXN, dYP, dYN));
+		[branch] if (CompactLook.w > 0.0)
+		{
+			blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
+				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
+		}
 		profileGrad = float2(
-			CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
-			CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
+						  CarveProfile(saturate(dXP), blur.x, pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+						  CarveProfile(saturate(dYP), blur.z, pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) /
+		              (2.0 * step);
 		// Berm shading: numerical gradient of the SAME blurred hill the
 		// geometry displaces by, so the light/shadow break sits on the hill's
 		// true flanks (the analytic shortcut put the terminator on the crest).
@@ -2331,25 +2376,28 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #endif
 
 	// Churn gradient (same field the geometry displaces by). Untouched, carve
-	// and berm are 0 and so are both weights.
+	// and berm are 0 and so are both weights. Snow Climate's row at this
+	// height sets the churn's depth ramp.
 	float churnW = 0.0;
 	float clodW = 0.0;
 	[branch] if (!pixelUntouched)
 	{
-		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * saturate(pixelDepth / 10.0);
+		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * ClimateChurnRamp(pixelDepth, SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z));
 		clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
 	}
 	// Churn by parallax (ShellFlags bit 4): the geometry leaves the churn and
 	// clod heights out, so the ray is marched through them here and the point
-	// it meets is shaded. Depth-buffer work stays on the sheet.
+	// it meets is shaded. Depth-buffer work stays on the sheet. The churn-free
+	// build draws only while both amplitudes are zero everywhere.
 	float3 shadePos = input.WorldPos;
-#ifdef SNOW_TRENCH_PARALLAX
+#ifndef SNOW_NO_CHURN
+#	ifdef SNOW_TRENCH_PARALLAX
 	// The parallax replay leaves churn and clods out of the geometry either way.
 	{
-#else
+#	else
 	[branch] if ((ShellFlags.x & 16) != 0)
 	{
-#endif
+#	endif
 		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
 		float churnAmp = (ChurnHeightAmp > 0.01 ? ChurnHeightAmp * churnW : 0.0) * fade;
 		float clodAmp = RimStyle.z * clodW * fade;
@@ -2384,6 +2432,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float kYN = ChurnNoiseScaled(worldXYPS - float2(0.0, kStep), kClodSizeScale);
 		gradZ += float2(kXP - kXN, kYP - kYN) / (2.0 * kStep) * RimStyle.z * clodW;
 	}
+#endif
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
 
@@ -2558,10 +2607,18 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Thin-snow print: a boot through a dusting (thin classes) has no wall
 	// to light, so it reads by material - pressed wet, darker and smoother.
 	// Gone by ~6 units of cover, where relief takes over. Not on melted
-	// floors: a walked fire ring went dark as a whole.
-	float wetPrint = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1.5, 6.0, pixelDepth)) * (1.0 - smoothstep(0.1, 0.4, pixelMelt));
-	[branch] if (wetPrint > 0.001)
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.76, 0.77, 0.80), wetPrint);
+	// floors: a walked fire ring went dark as a whole. Wet snow (Snow
+	// Climate) presses darker and glossier at any depth; the warmest row
+	// says whether any snow in view is wet. wetRough is the roughness cut.
+	float wetRough = 0.0;
+	const float wetPress = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(0.1, 0.4, pixelMelt));
+	[branch] if (wetPress > 0.001 && (pixelDepth < 6.0 || SnowClimateLUT[2].w > 0.001))
+	{
+		const float climateWet = SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z).w;
+		const float wetPrint = wetPress * max(1.0 - smoothstep(1.5, 6.0, pixelDepth), 0.8 * climateWet);
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint);
+		wetRough = wetPrint * (0.24 + 0.26 * climateWet);
+	}
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -2609,7 +2666,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
 	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
-	snowRoughness = lerp(snowRoughness, snowRoughness * 0.76, wetPrint);
+	snowRoughness *= 1.0 - wetRough;
 	// Fresh blood is wet and glossy; dried blood is matte like the snow.
 	snowRoughness = lerp(snowRoughness, 0.22, saturate(bloodCover * 2.0) * bloodFresh * BloodLook2.y);
 
@@ -3023,8 +3080,8 @@ float MarchTapHeight(float2 gridLocal)
 	float depth = max(st.y, 0.0);
 	depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionMask(GridOrigin + gridLocal).y));
 	const float deform = SampleDeformationMarch(gridLocal);
-	const float berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
-	depth = CarveProfileNoTeeth(deform, depth) + BermShape(berm) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+	const float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float2(0.0, deform);
+	depth = CarveProfileNoTeeth(deform, berm.y, depth) + BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
 	return st.x + depth + Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 }
 

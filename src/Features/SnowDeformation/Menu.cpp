@@ -844,13 +844,17 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttResist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Dropped items, spells and melt keep their own depths; trampled ground fades it (Trampled Ground > Resistance Fade). Affects new trenches only."));
 
+		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
+		if (auto _ttClimate = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves soft holes with no ridge and no lumps; settled snow just below freezing keeps the full ridge, lip, teeth and churn; wet snow leaves dark prints with crisp walls and clumps. Churn needs depth: in sticky snow from a hand deep, in powder only in very deep cover. Each trench slider is the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
+
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, new trenches get sloped sides instead of sharp walls, the ridge beside them shrinks, and the rim loses its lip and teeth. As the snow settles over the following days, the look you set with Trench Wall Sharpness, Berm Height, Rim Lip and Rim Teeth comes back. Trenches keep the walls they were cut with. 0 = off, the snow is always firm."));
+			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, new trenches get sloped sides instead of sharp walls, the ridge beside them shrinks, and the rim loses its lip and teeth. As the snow settles over the following days, the look you set with Trench Wall Sharpness, Berm Height, Rim Lip and Rim Teeth comes back. Trenches keep the walls they were cut with. 0 = off, the snow is always firm. Snow Climate takes over from this as it rises: at 1.00 fresh snow acts through its stickiness and density instead."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_churn"), "Fresh Snow Churn"), &settings.FreshSnowChurn, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttFreshChurn = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fresh_snow_churn_tooltip"), "Loose new snow does not break into lumps, so the churn in trenches and on berms is smoother while the snow is fresh: this multiplies Churn Height in fully fresh snow, easing back to the full height as the snow settles. At 0.50x a Churn Height of 4 becomes 2 during a storm. It stacks with Flattening on trampled ground. 1.00x = off."));
+			ImGui::Text("%s", T(TKEY("fresh_snow_churn_tooltip"), "Loose new snow does not break into lumps, so the churn in trenches and on berms is smoother while the snow is fresh: this multiplies Churn Height in fully fresh snow, easing back to the full height as the snow settles. At 0.50x a Churn Height of 4 becomes 2 during a storm. It stacks with Flattening on trampled ground. 1.00x = off. Snow Climate takes over from this as it rises."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_settle"), "Fresh Snow Settles In"), &settings.FreshSnowSettleHours, 6.0f, 168.0f, "%.0f game hours");
 		if (auto _ttSettle = Util::HoverTooltipWrapper())
@@ -2109,6 +2113,15 @@ void SnowDeformation::DrawSettings()
 				accumWeatherIntensity.load(std::memory_order_relaxed), climate.rainHeld);
 			WrapTextF("Ageing clock: %.2f, running at %.1f per game hour%s", climate.ageingClock, climate.ageingRate,
 				debugAgeingRateOverride >= 0.0f ? " (override)" : "");
+			{
+				const SnowClimateLook look = ComputeSnowClimateLook();
+				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, clods %.2f, wall slough %.2f", look.strength,
+					look.berm, look.lip, look.teeth, look.clods, look.slough);
+				WrapTextF("Churn %.2f, %.0f%% powder (ramp %.0f-%.0f units of cover); roads %.2f; deepest cover %.0f units", look.churnScale,
+					look.churnPowder * 100.0f, look.lut[1].x, look.lut[1].x + 1.0f / std::max(look.lut[1].y, 1e-4f), look.roadChurn, look.coverMax);
+				static const char* kShading[] = { "full shader", "full shader (churn-free shader off)", "churn-free shader (no churn, clods or teeth in the window)" };
+				WrapTextF("Ground shading: %s", kShading[shellChurnFree ? 2 : (debugChurnFreeOff ? 1 : 0)]);
+			}
 
 			ImGui::Checkbox(T(TKEY("climate_temperature_override_on"), "Override Temperature"), &debugClimateTemperatureOn);
 			if (auto _ttTempOn = Util::HoverTooltipWrapper())
@@ -2147,10 +2160,10 @@ void SnowDeformation::DrawSettings()
 				}
 				WrapTextF("Sun march cache, last %u updates: rebuilt whole %u near, %u far (settings key changed %u)",
 					marchCensusFilled, nearFull, farFull, keyed);
-				ImGui::Checkbox(T(TKEY("march_old_key"), "Old March Cache Key (A/B)"), &debugMarchOldKey);
-				if (auto _ttOldKey = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("march_old_key_tooltip"), "Not saved. Keys the cache's whole rebuild on the berm and lip values as eased by snow freshness, as before the fix: while freshness changes (snowfall, and for up to a day after) the near cache then rebuilds whole every frame. Compare the count above and the Ground - March Cache row."));
 			}
+			ImGui::Checkbox(T(TKEY("churn_free_off"), "Churn-Free Shader Off (A/B)"), &debugChurnFreeOff);
+			if (auto _ttChurnFree = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("churn_free_off_tooltip"), "Not saved. When the climate leaves no churn, clods or rim teeth anywhere in the trench window, the ground snow draws with a shader built without them. On: the full shader draws anyway, for timing the two in Ground - Shell Shading."));
 			ImGui::TreePop();
 		}
 
