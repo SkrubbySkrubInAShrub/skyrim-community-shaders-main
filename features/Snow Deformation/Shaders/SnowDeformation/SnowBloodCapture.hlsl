@@ -269,8 +269,9 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 		discard;
 	float3 p0 = PreSnow0.Load(pixel).rgb;
 	float3 d0 = PreDecal0.Load(pixel).rgb;
-	float2 ratio = p0.gb / max(d0.gb, 0.02);
-	float a = max(saturate(1.0 - min(ratio.x, ratio.y)), DecalMask.Load(pixel));
+	// What the decals took off green and blue: 0 wherever nothing drew, however dark.
+	float2 taken = (d0.gb - p0.gb) / max(d0.gb, 1e-4);
+	float a = max(saturate(max(taken.x, taken.y)), DecalMask.Load(pixel));
 	if (a < 0.02)
 		discard;
 	OVERLAY_OUTPUT o;
