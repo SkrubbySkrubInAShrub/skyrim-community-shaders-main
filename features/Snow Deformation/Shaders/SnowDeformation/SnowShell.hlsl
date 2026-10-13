@@ -1319,7 +1319,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// ramp takes over from it as the PS's does.
 			[branch] if ((ShellFlags.x & 16) == 0)
 				depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD, GridOrigin + gridLocal) *
-			             ClimateChurnRamp(depth, SnowClimateRow(terrainHeight + depth));
+			             max(ClimateChurnRamp(depth, SnowClimateRow(terrainHeight + depth)), SampleSpellMark(gridLocal) * saturate(depth / 10.0));
 			// Berm clods: a coarser octave weighted by BermShape rather than
 			// the churn weight, since spoil lands on the crest and churn peaks
 			// in the trench. Masked like the berm and gated on material; the
@@ -2410,12 +2410,14 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 
 	// Churn gradient (same field the geometry displaces by). Untouched, carve
 	// and berm are 0 and so are both weights. Snow Climate's row at this
-	// height sets the churn's depth ramp.
+	// height sets the churn's depth ramp; a fire or shock mark keeps the
+	// fixed one.
 	float churnW = 0.0;
 	float clodW = 0.0;
 	[branch] if (!pixelUntouched)
 	{
-		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * ClimateChurnRamp(pixelDepth, SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z));
+		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) *
+		         max(ClimateChurnRamp(pixelDepth, SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z)), SampleSpellMark(gridLocal) * saturate(pixelDepth / 10.0));
 		clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
 	}
 	// Churn by parallax (ShellFlags bit 4): the geometry leaves the churn and

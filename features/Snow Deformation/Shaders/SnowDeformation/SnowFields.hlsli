@@ -451,6 +451,29 @@ float SampleCrust(float2 gridLocal)
 	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
 }
 
+// A fire or shock mark's weight (either half of .y): it churns whatever the
+// climate. Magnitudes per tap, so a melt beside a scorch cannot cancel.
+// Mirrored by DeformationUpdateCS.hlsl SPELL_MARK_CHURN_START.
+static const float kSpellMarkChurnStart = 0.02;
+float SampleSpellMark(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	SNOW_DEFORM_DIMS(dims);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float m00 = abs(DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).y);
+	float m10 = abs(DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).y);
+	float m01 = abs(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).y);
+	float m11 = abs(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).y);
+	return smoothstep(kSpellMarkChurnStart, 0.15, lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y));
+}
+
 // Blood at a point (BloodMap t30 / BloodClock t31, the deformation map's
 // torus): rgb = pigment (linear), a = concentration after burial. Each texel
 // is dated by the snowfall clock and the game hour it was deposited; the

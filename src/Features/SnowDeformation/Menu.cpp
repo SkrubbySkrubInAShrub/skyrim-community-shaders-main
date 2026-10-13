@@ -2120,7 +2120,7 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("Churn %.2f, %.0f%% powder crumble (ramp %.0f-%.0f units of cover); roads %.2f; deepest cover %.0f units", look.churnScale,
 					look.churnPowder * 100.0f, look.lut[1].x, look.lut[1].x + 1.0f / std::max(look.lut[1].y, 1e-4f), look.roadChurn, look.coverMax);
 				static const char* kShading[] = { "full shader", "full shader (churn-free shader off)", "churn-free shader (no churn, clods or teeth in the window)" };
-				WrapTextF("Ground shading: %s", kShading[shellChurnFree ? 2 : (debugChurnFreeOff ? 1 : 0)]);
+				WrapTextF("Ground shading: %s; fire/shock mark texels %u", kShading[shellChurnFree ? 2 : (debugChurnFreeOff ? 1 : 0)], spellMarkTexels);
 			}
 
 			ImGui::Checkbox(T(TKEY("climate_temperature_override_on"), "Override Temperature"), &debugClimateTemperatureOn);

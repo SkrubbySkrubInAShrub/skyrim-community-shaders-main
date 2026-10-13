@@ -403,7 +403,7 @@ void SnowDeformation::SetupResources()
 		// without a stall. Dimension-independent, so a map-resolution change
 		// never touches it.
 		auto device = globals::d3d::device;
-		// 52 bytes, layout mirrored in DeformationUpdateCS.hlsl:
+		// 56 bytes, layout mirrored in DeformationUpdateCS.hlsl:
 		// [0] changed-anywhere flag, [4] changed count,
 		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
 		// so ClearUAV's all-zero init works for every field), [16] maxX,
@@ -411,9 +411,10 @@ void SnowDeformation::SetupResources()
 		// crust count, [36] per-texel max-delta sum, fixed-point 1e6,
 		// [40] evolve-only flag (that pass's own idle gate; meaningful only on
 		// frames evolve ran), [44] evolve tile count, [48] berm tile count
-		// (the dispatch census).
+		// (the dispatch census), [52] evolve-only count of texels holding a
+		// fire or shock mark.
 		D3D11_BUFFER_DESC flagDesc{};
-		flagDesc.ByteWidth = 52;
+		flagDesc.ByteWidth = 56;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
 		flagDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		flagDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
@@ -423,13 +424,13 @@ void SnowDeformation::SetupResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC flagUavDesc{};
 		flagUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		flagUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		flagUavDesc.Buffer.NumElements = 13;
+		flagUavDesc.Buffer.NumElements = 14;
 		flagUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(deformActivityBuffer.get(), &flagUavDesc, deformActivityUAV.put()));
 		Util::SetResourceName(deformActivityUAV.get(), "SnowDeformation::DeformActivity UAV");
 
 		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = 52;
+		stagingDesc.ByteWidth = 56;
 		stagingDesc.Usage = D3D11_USAGE_STAGING;
 		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -803,6 +804,7 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint evolveFlag = value[10];
 			const uint evolveTiles = value[11];
 			const uint bermTiles = value[12];
+			const uint spellMarks = value[13];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			// Evolve's own verdict, only from frames it actually ran (the
 			// buffer is cleared per frame, so a skipped evolve reads 0 there).
@@ -810,6 +812,7 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 				evolveVerdictSeq = deformActivitySlotSeq[i];
 				evolveFlagActive = evolveFlag != 0;
 				evolveTilesLast = evolveTiles;
+				spellMarkTexels = spellMarks;
 			}
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];

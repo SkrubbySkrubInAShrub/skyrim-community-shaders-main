@@ -4086,6 +4086,8 @@ protected:
 	bool deformActivitySlotEvolveRan[kDeformActivitySlots] = {};
 	/** @brief Evolve pass's own verdict: the last executed evolve changed nothing at stored precision. Starts active (errs toward running). */
 	bool evolveFlagActive = true;
+	/** @brief Texels holding a fire or shock mark at the last executed evolve; while any do, the ground keeps its churn shader (those marks churn whatever the climate). */
+	uint32_t spellMarkTexels = 0;
 	/** @brief Seq of the newest consumed evolve verdict. */
 	uint64_t evolveVerdictSeq = 0;
 	/** @brief Seq of the last frame that re-armed evolve: an external write landed (ring or stamps) so the settled verdict is stale. RefillAmount > 0 arms directly, per frame. */

@@ -674,6 +674,16 @@ float ChurnNoise(float2 worldXY)
 // landscape shell.
 
 #ifdef PATCH
+// Road churn: the climate's amplitude at the road cover, the slider's under
+// a fire or shock mark (the landscape's fixed ramp).
+float PatchChurnAmp(float2 gridLocal)
+{
+	float amp = ObjChurnHeightAmp;
+	[branch] if (ChurnHeightAmp > amp + 0.01)
+		amp = lerp(amp, ChurnHeightAmp, SampleSpellMark(gridLocal));
+	return amp;
+}
+
 // B-spline bicubic deformation sample; the landscape shell's smoothing,
 // ported so patch trench walls CURVE the way landscape trench walls do
 // instead of showing bilinear facets.
@@ -1483,8 +1493,8 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// pad clamp instead: lumps dig toward the pad, never through it.
 		const bool churnInGeometry = !PatchChurnParallax();
 		float churnW = ChurnWeight(deform, bermD, worldXY) * saturate(depth / 10.0);
-		[branch] if (churnInGeometry && ObjChurnHeightAmp > 0.01 && churnW > 0.001)
-			depth = max(depth + ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW, pad);
+		[branch] if (churnInGeometry && max(ObjChurnHeightAmp, ChurnHeightAmp) > 0.01 && churnW > 0.001)
+			depth = max(depth + ChurnNoise(worldXY) * PatchChurnAmp(gridLocal) * churnW, pad);
 
 		// Berm clods: a coarser octave weighted by BermShape rather than the churn
 		// weight, since spoil lands on the crest while churn peaks in the trench.
@@ -2781,7 +2791,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float churnW = ChurnWeight(input.pixelDeform, bermP, input.worldXY) * saturate(layerDepth / 10.0);
 		float clodW = RimStyle.z > 0.01 ? BermShape(bermP) * saturate(1.0 - input.pixelDeform) * BermDepthGate(layerDepth) : 0.0;
 		float fade = 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w);
-		float churnAmp = (ObjChurnHeightAmp > 0.01 ? ObjChurnHeightAmp * churnW : 0.0) * fade;
+		float patchAmp = churnW > 0.001 ? PatchChurnAmp(input.trenchGridLocal) : 0.0;
+		float churnAmp = (patchAmp > 0.01 ? patchAmp * churnW : 0.0) * fade;
 		float clodAmp = RimStyle.z * clodW * fade;
 		[branch] if (churnAmp + clodAmp > 0.05)
 		{
@@ -2925,16 +2936,17 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// the ramp depth, not the carve): trench floors shade at full churn
 	// whenever the layer is deep enough to churn at all. The carved depth
 	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
-	[branch] if (ObjChurnHeightAmp > 0.01)
+	[branch] if (max(ObjChurnHeightAmp, ChurnHeightAmp) > 0.01)
 	{
 		float churnWPix = ChurnWeight(pixelDeform, bermC, worldXY) * saturate(PatchSkinDepth(worldXY).x / 10.0);
-		[branch] if (churnWPix > 0.001)
+		float churnAmpPix = churnWPix > 0.001 ? PatchChurnAmp(trenchGridLocal) : 0.0;
+		[branch] if (churnAmpPix > 0.01)
 		{
 			const float cStep = 3.0;
 			float2 churnGradPix = float2(
 				ChurnNoise(worldXY + float2(cStep, 0.0)) - ChurnNoise(worldXY - float2(cStep, 0.0)),
 				ChurnNoise(worldXY + float2(0.0, cStep)) - ChurnNoise(worldXY - float2(0.0, cStep))) / (2.0 * cStep);
-			normalWS = normalize(normalWS + float3(-churnGradPix * ObjChurnHeightAmp * churnWPix, 0.0));
+			normalWS = normalize(normalWS + float3(-churnGradPix * churnAmpPix * churnWPix, 0.0));
 		}
 	}
 	// Clods left the geometry with the churn: shade them here, the landscape

@@ -362,9 +362,11 @@ int2 TorusPhys(int2 logical, int2 dims)
 // all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
 // per-channel counts (depth, melt/scorch, crust), [36] delta sum,
 // [40] evolve-only flag (EvolveCS changed something - its idle gate's own
-// verdict, meaningful only on frames evolve ran), [44] evolve tile count and
-// [48] berm tile count (the dispatch census). Both passes OR into the same
-// buffer; the CPU clears it once per executed frame.
+// verdict, meaningful only on frames evolve ran), [44] evolve tile count,
+// [48] berm tile count (the dispatch census) and [52] evolve-only count of
+// texels holding a fire or shock mark (|y| past SPELL_MARK_CHURN_START).
+// Both passes OR into the same buffer; the CPU clears it once per executed
+// frame.
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 groupshared uint gCountR;
@@ -382,6 +384,10 @@ groupshared uint gDeltaSum;
 // Any texel of this group's tile non-zero after the pass - the occupancy
 // truth an aligned 8x8 group can write absolutely.
 groupshared uint gNonZero;
+// Texels of this group's tile holding a fire or shock mark (EvolveCS).
+groupshared uint gSpellMarks;
+// Mirror of SnowFields.hlsli kSpellMarkChurnStart.
+#define SPELL_MARK_CHURN_START 0.02
 
 // Debug: per-texel activity, painted only while the menu view is open.
 // R = depth, G = melt/scorch, B = crust; brightness = how far past
@@ -411,6 +417,7 @@ void ActivityReset(uint GIdx)
 		gMaxY = 0;
 		gDeltaSum = 0;
 		gNonZero = 0;
+		gSpellMarks = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
 }
@@ -677,6 +684,8 @@ bool EvolveTexel(uint2 phys)
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
+	if (abs(melted) > SPELL_MARK_CHURN_START)
+		InterlockedAdd(gSpellMarks, 1u);
 	return any(result != 0.0);
 }
 
@@ -702,6 +711,8 @@ bool EvolveTexel(uint2 phys)
 	ActivityPublish(GIdx);
 	if (GIdx == 0) {
 		Occupancy[tile] = gNonZero;
+		if (gSpellMarks != 0)
+			ActivityFlag.InterlockedAdd(52, gSpellMarks);
 		if (gActivity != 0) {
 			BermDirty[tile] = 1u;
 			// Evolve's own word: a run that changed nothing lets the CPU

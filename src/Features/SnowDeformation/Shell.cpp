@@ -1791,9 +1791,10 @@ void SnowDeformation::DrawShell()
 		cbData.SkinTessCapSlope = (focalPx > 1.0f && capPx > 0.0f) ? capPx / focalPx : 0.0f;
 	}
 	// No texel of the window can churn: the churn-free deferred PS draws, and
-	// the geometry's churn path skips with it.
+	// the geometry's churn path skips with it. Fire and shock marks churn in
+	// any climate.
 	shellChurnFree = !debugChurnFreeOff && cbData.RimStyle.y <= 0.001f && cbData.RimStyle.z <= 0.01f &&
-	                 (cbData.ChurnHeightAmp <= 0.01f || look.churnNowhere);
+	                 (cbData.ChurnHeightAmp <= 0.01f || (look.churnNowhere && spellMarkTexels == 0));
 	if (shellChurnFree)
 		cbData.ChurnHeightAmp = 0.0f;
 	// Object trench detail follows the landscape set. The CB rows stay because
