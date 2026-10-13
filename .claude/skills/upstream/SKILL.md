@@ -126,7 +126,7 @@ Outcomes: `port-clean`, `port-adapted`, `already-upstream (#NNNN)`, `in-open-PR 
 ## 4. Port, one item at a time
 
 1. Branch from fresh upstream/dev: `git checkout -B port/<fork>-<slug> upstream/dev`, where `<fork>` is `open` or `bottle`. If the session requires a specific branch prefix, use `<prefix>-<slug>`. Use one branch per logical change; combine only tightly coupled items.
-2. Apply the change. When it's clean, use `git cherry-pick <sha>`, which keeps the original author, then `git commit --amend` to rewrite the message per step 6 (the author is preserved). Otherwise port by hand and commit with `git commit --author="<original author>"`.
+2. Apply every commit in the item. When it's clean, use `git cherry-pick <sha>` for a single commit, or `git cherry-pick <first-sha>^..<last-sha>` for a grouped item (step 2a) so no earlier commit in the group is dropped. Cherry-pick keeps the original authors; then rewrite the message(s) per step 6 with `git commit --amend` (or squash the group into one commit with `git commit --author="<original author>"`). Otherwise port the whole item by hand and commit with `git commit --author="<original author>"`.
 3. **Re-derive the claim.** Write one sentence explaining why the commit's reasoning holds in _upstream's_ code. If it doesn't hold, stop and reclassify.
 4. Run the C++ checklist and fix whatever applies:
     - **D3D state:** restored or unbound afterwards, with no extra per-draw state changes.
