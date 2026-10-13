@@ -752,6 +752,38 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred(bool a_parallax)
 	return slot;
 }
 
+ID3D11PixelShader* SnowDeformation::ConditionViewPS()
+{
+	if (debugConditionView <= 0)
+		return nullptr;
+	int state = conditionViewShaderState.load(std::memory_order_acquire);
+	if (state == 0) {
+		const uint32_t legacy = shellPSLegacyBits;
+		conditionViewShaderState.store(1, std::memory_order_release);
+		conditionViewCompile = std::async(std::launch::async, [this, legacy] {
+			auto defines = ShellPSDefines();
+			defines.emplace_back("SNOW_SHELL_DEFERRED", "");
+			if (legacy & 1)
+				defines.emplace_back("SNOW_TEETH_UNGATED", "");
+			if (legacy & 4)
+				defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
+			defines.emplace_back("SNOW_CONDITION_VIEW", "");
+			shellPSDeferredConditionView = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+			return shellPSDeferredConditionView != nullptr;
+		});
+		return nullptr;
+	}
+	if (state == 1) {
+		if (conditionViewCompile.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+			return nullptr;
+		state = conditionViewCompile.get() ? 2 : 3;
+		conditionViewShaderState.store(state, std::memory_order_release);
+		if (state == 3)
+			logger::warn("[SNOW DEFORMATION] Snow condition view: SnowShell.hlsl failed to compile, the view stays off");
+	}
+	return state == 2 ? shellPSDeferredConditionView : nullptr;
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden, bool a_parallax)
 {
 	auto*& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0][a_parallax ? 1 : 0];
@@ -1761,6 +1793,13 @@ void SnowDeformation::DrawShell()
 	// contest's depth bonus and carve penalty (log2 odds); w spare.
 	const float2 landContest = LandBlendContest();
 	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, 0.0f };
+	{
+		const SnowCondition condition = GetSnowCondition();
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		cbData.SnowClimate = { condition.temperature, kClimateLapse, player ? player->GetPosition().z : 0.0f, condition.freshness };
+		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 5), 0.0f };
+		cbData.SnowClimateOverride = { debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, 0.0f };
+	}
 	cbData.DebugNoFarPad = 0.0f;
 	cbData.DebugParallaxView = (parallax && trenchParallaxView) ? 1.0f : 0.0f;
 	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
@@ -2422,7 +2461,8 @@ void SnowDeformation::DrawShell()
 		context->PSSetShaderResources(91, 3, attrSRVs);
 		ID3D11ShaderResourceView* debugParallaxSRV = cbData.DebugParallaxView > 0.5f ? shellParallaxOffset->srv.get() : nullptr;
 		context->PSSetShaderResources(99, 1, &debugParallaxSRV);
-		context->PSSetShader(shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
+		ID3D11PixelShader* conditionView = parallax ? nullptr : ConditionViewPS();
+		context->PSSetShader(conditionView ? conditionView : shellPSDeferred[parallax ? 1 : 0], nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);

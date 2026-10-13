@@ -6,6 +6,9 @@
 
 #include "Features/SnowDeformation/CoSave.h"
 #include "Globals.h"
+#include "State.h"
+
+#include <numbers>
 
 // Progressive snow accumulation: one global scalar, 0 = the authored per-class
 // depth, 1 = AccumulationPeak times it. Co-save record 'SNAC'.
@@ -170,6 +173,159 @@ float SnowDeformation::GetSnowSoftness() const
 {
 	const float freshness = debugFreshnessOverride >= 0.0f ? debugFreshnessOverride : snowFreshness.load(std::memory_order_relaxed);
 	return std::clamp(freshness, 0.0f, 1.0f) * std::clamp(settings.FreshSnowSoftness, 0.0f, 1.0f);
+}
+
+// ---- Snow climate (TRACK-VARIATION-RESEARCH.md 3.2) ----
+// A temperature proxy from the land's snow share, the weather and the sun;
+// wetness, stickiness and firmness from it, freshness and wind packing; and
+// the ageing clock. Stage 0: shown and painted, not yet read by the look.
+// The formulas are mirrored in SnowShell.hlsl (SNOW_CONDITION_VIEW).
+
+namespace
+{
+	float ClimateSmoothstep(float a_edge0, float a_edge1, float a_x)
+	{
+		const float t = std::clamp((a_x - a_edge0) / (a_edge1 - a_edge0), 0.0f, 1.0f);
+		return t * t * (3.0f - 2.0f * t);
+	}
+
+	float ClimateWetRamp(float a_temperature)
+	{
+		return ClimateSmoothstep(-1.5f, 1.5f, a_temperature);
+	}
+
+	// New snow is lighter the colder it falls (Hedstrom and Pomeroy 1998);
+	// it settles toward 290 kg/m3, wetness and wind pack it further.
+	float ClimateDensity(float a_temperature, float a_freshness, float a_wetness, float a_wind)
+	{
+		const float fresh = a_temperature <= 0.0f ? 67.9f + 51.3f * std::exp(a_temperature / 2.6f) : 125.0f + 40.0f * std::min(a_temperature, 3.0f);
+		return std::clamp(std::lerp(fresh, 290.0f, 1.0f - a_freshness) + 110.0f * a_wetness + 150.0f * a_wind, 50.0f, 560.0f);
+	}
+
+	// Sintering is negligible below about -20 C and steepest near -2 C; moist
+	// snow sticks, slush does not; wind-packed snow holds together.
+	float ClimateStickiness(float a_temperature, float a_freshness, float a_wetness, float a_wind)
+	{
+		return std::clamp(0.1f + 0.62f * ClimateSmoothstep(-20.0f, -1.5f, a_temperature) * (0.3f + 0.7f * (1.0f - a_freshness)) +
+							  0.45f * a_wetness * (1.0f - ClimateSmoothstep(0.75f, 1.0f, a_wetness)) + 0.25f * a_wind,
+			0.0f, 1.0f);
+	}
+
+	float ClimateFirmness(float a_density)
+	{
+		return ClimateSmoothstep(150.0f, 460.0f, a_density);
+	}
+
+	float WeatherCloudiness(RE::TESWeather* a_weather)
+	{
+		using Flag = RE::TESWeather::WeatherDataFlag;
+		if (!a_weather)
+			return 0.5f;
+		const auto& flags = a_weather->data.flags;
+		if (flags.any(Flag::kRainy) || flags.any(Flag::kSnow))
+			return 0.9f;
+		if (flags.any(Flag::kCloudy))
+			return 0.6f;
+		if (flags.any(Flag::kPleasant))
+			return 0.1f;
+		return 0.5f;
+	}
+}
+
+void SnowDeformation::TickSnowClimate()
+{
+	auto& climate = snowClimate;
+	if (gameClock.reversed) {
+		climate.primed = false;
+		return;
+	}
+	const float elapsed = gameClock.elapsedHours;
+	auto* tes = globals::game::tes;
+	const bool indoors = !tes || tes->interiorCell;
+	auto* sky = globals::game::sky;
+	auto* player = RE::PlayerCharacter::GetSingleton();
+
+	if (!indoors && player) {
+		const uint32_t frame = globals::state->frameCount;
+		if (climate.landSnowShare < 0.0f || frame - climate.shareFrame >= 60) {
+			climate.shareFrame = frame;
+			const auto position = player->GetPosition();
+			if (const float share = LandSnowShareAround(position.x, position.y); share >= 0.0f)
+				climate.landSnowShare = share;
+		}
+		climate.rainHeld = ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kRainy);
+	}
+
+	const float snowfall = accumWeatherIntensity.load(std::memory_order_relaxed);
+	const float snowing = std::clamp(snowfall, 0.0f, 1.0f);
+	const float raining = std::clamp(climate.rainHeld, 0.0f, 1.0f);
+
+	if (!indoors) {
+		const float share = debugClimateShareOverride >= 0.0f ? std::min(debugClimateShareOverride, 1.0f) :
+		                    climate.landSnowShare >= 0.0f     ? climate.landSnowShare :
+		                                                        0.5f;
+		float cloud = 0.5f;
+		if (sky)
+			cloud = std::lerp(WeatherCloudiness(sky->lastWeather), WeatherCloudiness(sky->currentWeather), std::clamp(sky->currentWeatherPct, 0.0f, 1.0f));
+		float hour = 12.0f;
+		if (auto* calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton())
+			hour = calendar->GetHour();
+		const float sun = hour > 6.0f && hour < 19.0f ? std::sin(std::numbers::pi_v<float> * (hour - 6.0f) / 13.0f) : 0.0f;
+		const float blizzard = std::clamp(snowfall - 1.0f, 0.0f, 1.0f);
+
+		climate.termRegion = std::lerp(4.0f, -12.0f, share);
+		climate.termWeather = -snowing * (2.0f + 4.0f * blizzard) + 3.0f * raining;
+		climate.termSun = (1.0f - cloud) * (5.0f * sun - 3.0f * (1.0f - sun));
+		float target = climate.termRegion + climate.termWeather + climate.termSun;
+		if (raining > 0.2f)
+			target = std::max(target, 1.0f + raining);
+		climate.targetTemperature = target;
+
+		const float wetTarget = std::max(ClimateWetRamp(target), 0.9f * raining);
+		const float windTarget = sky ? std::clamp(sky->windSpeed, 0.0f, 1.0f) : 0.0f;
+		if (!climate.primed) {
+			climate.temperature = target;
+			climate.wetness = wetTarget;
+			climate.windPacking = windTarget;
+			climate.primed = true;
+		} else if (elapsed > 0.0f) {
+			const float hourEase = 1.0f - std::exp(-elapsed);
+			const float windEase = 1.0f - std::exp(-elapsed / 6.0f);
+			climate.temperature += (target - climate.temperature) * hourEase;
+			climate.wetness += (wetTarget - climate.wetness) * hourEase;
+			climate.windPacking += (windTarget - climate.windPacking) * windEase;
+		}
+	}
+
+	// Snowfall buries in an hour or two, sun and rain round in hours, calm
+	// cold keeps a track crisp for a day or two.
+	const float warm = std::clamp(climate.temperature / 3.0f, 0.0f, 1.0f);
+	climate.ageingRate = debugAgeingRateOverride >= 0.0f ? debugAgeingRateOverride :
+	                                                       1.0f + 20.0f * snowing + 8.0f * raining + 4.0f * climate.windPacking * (1.0f - snowing) + 6.0f * warm;
+	if (elapsed > 0.0f) {
+		climate.ageingClock += climate.ageingRate * elapsed;
+		while (climate.ageingClock >= 2.0f * kAgeingClockStart)
+			climate.ageingClock -= kAgeingClockStart;
+	}
+}
+
+SnowDeformation::SnowCondition SnowDeformation::GetSnowCondition() const
+{
+	SnowCondition condition{};
+	const float liveTemperature = snowClimate.temperature;
+	condition.temperature = debugClimateTemperatureOn ? debugClimateTemperature : liveTemperature;
+	condition.freshness = std::clamp(debugFreshnessOverride >= 0.0f ? debugFreshnessOverride : snowFreshness.load(std::memory_order_relaxed), 0.0f, 1.0f);
+	condition.windPacking = snowClimate.windPacking;
+	// An overridden temperature moves the wetness with it, as height does per pixel.
+	condition.wetness = debugClimateWetnessOverride >= 0.0f ?
+	                        std::min(debugClimateWetnessOverride, 1.0f) :
+	                        std::clamp(snowClimate.wetness + ClimateWetRamp(condition.temperature) - ClimateWetRamp(liveTemperature), 0.0f, 1.0f);
+	condition.density = ClimateDensity(condition.temperature, condition.freshness, condition.wetness, condition.windPacking);
+	condition.stickiness = debugClimateStickinessOverride >= 0.0f ?
+	                           std::min(debugClimateStickinessOverride, 1.0f) :
+	                           ClimateStickiness(condition.temperature, condition.freshness, condition.wetness, condition.windPacking);
+	condition.firmness = debugClimateFirmnessOverride >= 0.0f ? std::min(debugClimateFirmnessOverride, 1.0f) : ClimateFirmness(condition.density);
+	return condition;
 }
 
 void SnowDeformation::RegisterSnowConditionCoSave()

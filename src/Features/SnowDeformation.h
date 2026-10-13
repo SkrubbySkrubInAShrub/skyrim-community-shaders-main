@@ -873,6 +873,8 @@ public:
 
 	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions. 1.0 = reference-density snowfall. */
 	float ComputeSnowfallIntensity() const;
+	/** @brief The same transition-faded precipitation density for any weather class (snow, rain). */
+	float ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const;
 	/** @brief Last computed snowfall intensity, for the debug readout. */
 	float snowfallIntensity = 0.0f;
 
@@ -1700,9 +1702,16 @@ public:
 		float4 TessScreen;
 		/** @brief GetDimensions of the field maps every landscape-shell pass binds, 0 where unbound: x deformation (t1), y berm field (t14), z object maps (t4), w exclusion field (t15). All square. Landscape shell only (SnowShell.hlsl SNOW_FIELD_DIMS); appended last. */
 		float4 FieldDims;
+		/** @brief Snow climate at the player (TRACK-VARIATION-RESEARCH.md 3.2): x = air temperature (C), y = cooling per world unit of height, z = the player's world z, w = freshness. Overrides applied. SnowShell.hlsl only; appended last. */
+		float4 SnowClimate;
+		/** @brief x = wind packing, y = wetness at the player, z = condition view (0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all), w spare. */
+		float4 SnowClimate2;
+		/** @brief Overrides painted everywhere, below 0 = derived per pixel: x wetness, y stickiness, z firmness; w spare. */
+		float4 SnowClimateOverride;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");
+	static_assert(offsetof(ShellCB, SnowClimate) == 848, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
 
 	/**
 	 * @brief Per-light shadow data for shadow-casting local lights (t38), indexed by the light's shadow-mask channel.
@@ -1776,6 +1785,12 @@ public:
 	ID3D11PixelShader* shellPSDeferred[2] = {};
 	uint32_t shellPSDeferredLegacyBits[2] = {};
 	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false);
+	/** @brief The deferred PS with SNOW_CONDITION_VIEW (tessellated trenches only), compiled off the render thread the first time the view is switched on. */
+	ID3D11PixelShader* shellPSDeferredConditionView = nullptr;
+	std::atomic<int> conditionViewShaderState = 0;
+	std::future<bool> conditionViewCompile;
+	/** @brief The condition-view deferred PS when the view is on and compiled; null otherwise (the normal shading draws). */
+	ID3D11PixelShader* ConditionViewPS();
 
 	/** @brief The sun heightfield marches' occluder heights, baked (MarchCache.cpp), R32F: [0] the ground march's tap height per deformation texel in the map's torus (SnowShell.hlsl MarchHeightCS), [1] the statics march's road tap there (SnowStaticsShell.hlsl RoadMarchHeightCS; the sentinel where a tap is no road tap), [2] the ground's per land-layer vertex over the FineWindow, for marches that leave the trail map (MarchHeightFarRowsCS). Bound at PS t106-t108 for the ground and object snow. */
 	Texture2D* marchHeight[3] = {};
@@ -1813,6 +1828,13 @@ public:
 	/** @brief Berm bakes run, and the last one the caches applied: the tile list holds only the latest bake's tiles. */
 	uint64_t bermBakeSeq = 0;
 	uint64_t marchCacheBermSeq = 0;
+	/** @brief Census of the last 300 cache updates, per update: bit 0 key changed, bit 1 near rebuilt whole, bit 2 far rebuilt whole. */
+	static constexpr uint32_t kMarchCensusFrames = 300;
+	std::array<uint8_t, kMarchCensusFrames> marchCensus{};
+	uint32_t marchCensusCursor = 0;
+	uint32_t marchCensusFilled = 0;
+	/** @brief Debug A/B, not saved: key the full rebuild on the freshness-eased berm and lip values again, as before the fix. */
+	bool debugMarchOldKey = false;
 	/** @brief Brings the caches up to date and binds them at PS t106-t108 (DrawShell, after the shell CB upload). False = no caches this frame: the marches must be switched off, as they read nothing else. */
 	bool UpdateMarchCaches(const ShellCB& a_cb);
 	void UnbindMarchCaches();
@@ -4332,6 +4354,61 @@ protected:
 	float GetSnowSoftness() const;
 	/** @brief Claims 'SNFR' on the co-save channel. */
 	void RegisterSnowConditionCoSave();
+
+	/** @brief Starting value of the ageing clock: half floats hold integers exactly in [1024, 2048). */
+	static constexpr float kAgeingClockStart = 1024.0f;
+	/** @brief Air temperature falls this much per world unit of height (C). */
+	static constexpr float kClimateLapse = 0.0005f;
+	/**
+	 * @brief Snow climate (TRACK-VARIATION-RESEARCH.md 3.2): what kind of snow
+	 * lies around the player. Stage 0 computes, shows and paints it; nothing
+	 * reads it for the look yet. Render thread only.
+	 */
+	struct SnowClimateState
+	{
+		float temperature = 0.0f;
+		float wetness = 0.0f;
+		float windPacking = 0.0f;
+		/** @brief Share of the loaded land painted with snow textures; below 0 until measured. */
+		float landSnowShare = -1.0f;
+		float rainHeld = 0.0f;
+		float ageingClock = kAgeingClockStart;
+		/** @brief Clock units per game hour, last tick. */
+		float ageingRate = 0.0f;
+		float targetTemperature = 0.0f;
+		float termRegion = 0.0f;
+		float termWeather = 0.0f;
+		float termSun = 0.0f;
+		bool primed = false;
+		uint32_t shareFrame = 0;
+	};
+	SnowClimateState snowClimate;
+	/** @brief The snow at the player with every override applied: what the readout shows and the shells receive. */
+	struct SnowCondition
+	{
+		float temperature;
+		float wetness;
+		float stickiness;
+		float firmness;
+		float density;
+		float freshness;
+		float windPacking;
+	};
+	SnowCondition GetSnowCondition() const;
+	/** @brief Advances the climate off the shared clock; call after TickSnowCondition. */
+	void TickSnowClimate();
+	/** @brief Mean snow-texture weight of the loaded land around a point, from the baked cells; below 0 when none are baked. */
+	float LandSnowShareAround(float a_x, float a_y);
+	/** @brief Debug overrides, not saved. Temperature has its own switch; the others replace the live value at 0 or above. */
+	bool debugClimateTemperatureOn = false;
+	float debugClimateTemperature = -5.0f;
+	float debugClimateShareOverride = -1.0f;
+	float debugClimateWetnessOverride = -1.0f;
+	float debugClimateStickinessOverride = -1.0f;
+	float debugClimateFirmnessOverride = -1.0f;
+	float debugAgeingRateOverride = -1.0f;
+	/** @brief Condition view: 0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all three. */
+	int debugConditionView = 0;
 	/** @brief Writes the scalar. */
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	/** @brief Reads it back, refusing a version this build does not know. */

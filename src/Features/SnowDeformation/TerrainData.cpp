@@ -704,6 +704,41 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	return LandBlendDepth(depth, snowWeight);
 }
 
+float SnowDeformation::LandSnowShareAround(float a_x, float a_y)
+{
+	// The 5x5 cells around the point, every fourth land vertex.
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const int cellX = (int)std::floor(a_x / kCellSize);
+	const int cellY = (int)std::floor(a_y / kCellSize);
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	double snow = 0.0;
+	uint32_t samples = 0;
+	const std::shared_lock lock(shellCellMutex);
+	const std::shared_lock textureLock(landTextureMutex);
+	for (int dy = -2; dy <= 2; ++dy) {
+		for (int dx = -2; dx <= 2; ++dx) {
+			const uint64_t key = (uint64_t(uint32_t(cellX + dx)) << 32) | uint32_t(cellY + dy);
+			const auto it = shellCells.find(key);
+			if (it == shellCells.end() || it->second.worldspaceID != worldspace)
+				continue;
+			for (uint32_t vy = 0; vy < 33; vy += 4) {
+				for (uint32_t vx = 0; vx < 33; vx += 4) {
+					const uint32_t idx = vy * 33 + vx;
+					float weight = 0.0f;
+					for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
+						const uint16_t texture = it->second.layerTexture[idx][slot];
+						if (texture < landTextures.size() && IsSnowDepth(landTextures[texture].depth))
+							weight += it->second.layerWeight[idx][slot] / 255.0f;
+					}
+					snow += std::min(weight, 1.0f);
+					samples++;
+				}
+			}
+		}
+	}
+	return samples ? float(snow / samples) : -1.0f;
+}
+
 float SnowDeformation::LandBlendDepth(float a_depth, float a_snowWeight) const
 {
 	if (a_depth <= 0.0f || !LandBlendActive())

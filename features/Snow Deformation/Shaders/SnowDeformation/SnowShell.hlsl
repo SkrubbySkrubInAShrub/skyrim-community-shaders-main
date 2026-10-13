@@ -267,6 +267,13 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// GetDimensions of the bound field maps (0 = unbound): x deformation (t1),
 	// y berm field (t14), z object maps (t4), w exclusion field (t15).
 	float4 FieldDims;
+	// Snow climate at the player: x = air temperature (C), y = cooling per
+	// world unit of height, z = the player's world z, w = freshness.
+	float4 SnowClimate;
+	// x = wind packing, y = wetness at the player, z = condition view, w spare.
+	float4 SnowClimate2;
+	// Overrides painted everywhere, < 0 = per pixel: x wet, y sticky, z firm.
+	float4 SnowClimateOverride;
 }
 
 
@@ -1943,6 +1950,54 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 Texture2D<float2> DebugParallaxOffset : register(t99);
 #endif
 
+#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_CONDITION_VIEW)
+// Debugging Options > Snow Condition. Mirrors SnowDeformation::GetSnowCondition
+// (Accumulation.cpp): the player's values shifted by height. xyzw =
+// temperature (C), wetness, stickiness, firmness.
+float4 SnowConditionAt(float a_worldZ)
+{
+	const float playerT = SnowClimate.x;
+	const float t = playerT - SnowClimate.y * (a_worldZ - SnowClimate.z);
+	const float fresh = SnowClimate.w;
+	const float wind = SnowClimate2.x;
+	const float wet = SnowClimateOverride.x >= 0.0 ? saturate(SnowClimateOverride.x) :
+	                                                 saturate(SnowClimate2.y + smoothstep(-1.5, 1.5, t) - smoothstep(-1.5, 1.5, playerT));
+	const float freshDensity = t <= 0.0 ? 67.9 + 51.3 * exp(t / 2.6) : 125.0 + 40.0 * min(t, 3.0);
+	const float density = clamp(lerp(freshDensity, 290.0, 1.0 - fresh) + 110.0 * wet + 150.0 * wind, 50.0, 560.0);
+	const float sticky = SnowClimateOverride.y >= 0.0 ? saturate(SnowClimateOverride.y) :
+	                                                    saturate(0.1 + 0.62 * smoothstep(-20.0, -1.5, t) * (0.3 + 0.7 * (1.0 - fresh)) +
+																 0.45 * wet * (1.0 - smoothstep(0.75, 1.0, wet)) + 0.25 * wind);
+	const float firm = SnowClimateOverride.z >= 0.0 ? saturate(SnowClimateOverride.z) : smoothstep(150.0, 460.0, density);
+	return float4(t, wet, sticky, firm);
+}
+
+// 1 temperature (blue below freezing, white at it, orange above, a line
+// every 2 C), 2 wetness, 3 stickiness, 4 firmness, 5 all three as RGB.
+float3 SnowConditionColor(float4 a_condition, float a_view)
+{
+	const float t = a_condition.x;
+	const float band = t / 2.0;
+	const float bandWidth = fwidth(band);
+	float3 color;
+	[branch] if (a_view < 1.5)
+	{
+		const float3 cold = lerp(float3(1.0, 1.0, 1.0), float3(0.05, 0.25, 1.0), saturate(-t / 20.0));
+		const float3 warm = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.25, 0.0), saturate(t / 4.0));
+		const float isotherm = 1.0 - smoothstep(0.0, 1.5 * bandWidth, abs(frac(band + 0.5) - 0.5));
+		color = (t < 0.0 ? cold : warm) * (1.0 - 0.6 * isotherm);
+	}
+	else if (a_view < 2.5)
+		color = lerp(float3(0.95, 0.95, 0.95), float3(0.1, 0.35, 1.0), a_condition.y);
+	else if (a_view < 3.5)
+		color = lerp(float3(0.95, 0.95, 0.95), float3(1.0, 0.45, 0.05), a_condition.z);
+	else if (a_view < 4.5)
+		color = lerp(float3(0.95, 0.95, 0.95), float3(0.55, 0.1, 0.85), a_condition.w);
+	else
+		color = a_condition.yzw;
+	return color;
+}
+#endif
+
 #if defined(SNOW_SHELL_DEFERRED)
 PS_OUTPUT ShellShade(VS_OUTPUT input)
 #else
@@ -2860,6 +2915,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
+#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_CONDITION_VIEW)
+	{
+		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z);
+		psout.Diffuse.rgb = conditionColor * 2.0;
+		psout.Albedo.rgb = 0.0;
+		psout.Specular.rgb = 0.0;
+		psout.Reflectance.rgb = 0.0;
+	}
+#endif
 #if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_TRENCH_PARALLAX)
 	[branch] if (DebugParallaxView > 0.5)
 	{

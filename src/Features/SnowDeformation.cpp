@@ -892,14 +892,19 @@ void SnowDeformation::TickGameClock()
 
 float SnowDeformation::ComputeSnowfallIntensity() const
 {
+	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow);
+}
+
+float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const
+{
 	auto* sky = globals::game::sky;
 	if (!sky)
 		return 0.0f;
 
-	// Normalized precipitation density of a snowing weather; snow-flagged
-	// weathers without particle data count as baseline snowfall.
-	auto snowDensity = [](RE::TESWeather* weather) -> float {
-		if (!weather || !weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow))
+	// Normalized precipitation density of a weather of this class; flagged
+	// weathers without particle data count as baseline precipitation.
+	auto snowDensity = [a_flag](RE::TESWeather* weather) -> float {
+		if (!weather || !weather->data.flags.any(a_flag))
 			return 0.0f;
 		if (auto* precipitation = weather->precipitationData) {
 			float density = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;
@@ -1203,6 +1208,7 @@ void SnowDeformation::PrepassSimulation()
 	TickTrenchClock();
 	TickAccumulation();
 	TickSnowCondition();
+	TickSnowClimate();
 	spanClock.Lap(CpuCensus::kSpanTrenchTicks);
 	SweepTrenchStore();
 	spanClock.Lap(CpuCensus::kSpanTrenchSweep);
@@ -2130,6 +2136,12 @@ void SnowDeformation::ClearShaderCache()
 			deferredPS->Release();
 		deferredPS = nullptr;
 	}
+	if (conditionViewCompile.valid())
+		conditionViewCompile.wait();
+	if (shellPSDeferredConditionView)
+		shellPSDeferredConditionView->Release();
+	shellPSDeferredConditionView = nullptr;
+	conditionViewShaderState.store(0, std::memory_order_release);
 	ReleaseMarchCache();
 	for (auto& attrPair : shellPSPrepassAttr) {
 		for (auto& attrPS : attrPair) {

@@ -2084,6 +2084,76 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_condition"), "Snow Condition"))) {
+			// Diagnostics use plain text by existing convention (no i18n).
+			const SnowCondition condition = GetSnowCondition();
+			const auto& climate = snowClimate;
+			auto* tes = globals::game::tes;
+			const bool indoors = !tes || tes->interiorCell;
+			static const char* kHardness[] = { "F", "4F", "1F", "P", "K" };
+			static const char* kWetClass[] = { "dry", "moist", "wet", "very wet", "slush" };
+			const char* hardness = kHardness[(condition.density >= 120.0f) + (condition.density >= 220.0f) + (condition.density >= 320.0f) + (condition.density >= 420.0f)];
+			const char* wetClass = kWetClass[(condition.wetness >= 0.15f) + (condition.wetness >= 0.4f) + (condition.wetness >= 0.7f) + (condition.wetness >= 0.9f)];
+			WrapTextF("Temperature at the player: %+.1f C%s | target %+.1f = land %+.1f, weather %+.1f, sun %+.1f%s",
+				condition.temperature, debugClimateTemperatureOn ? " (override)" : "", climate.targetTemperature,
+				climate.termRegion, climate.termWeather, climate.termSun, indoors ? " | held indoors" : "");
+			if (climate.landSnowShare < 0.0f)
+				WrapTextF("Land snow share: not measured yet (using 0.50)%s", debugClimateShareOverride >= 0.0f ? ", override applied" : "");
+			else
+				WrapTextF("Land snow share: %.2f%s", climate.landSnowShare, debugClimateShareOverride >= 0.0f ? ", override applied" : "");
+			WrapTextF("Wetness: %.2f, %s%s", condition.wetness, wetClass, debugClimateWetnessOverride >= 0.0f ? " (override)" : "");
+			WrapTextF("Stickiness: %.2f%s", condition.stickiness, debugClimateStickinessOverride >= 0.0f ? " (override)" : "");
+			WrapTextF("Firmness: %.2f%s | density %.0f kg/m3, hand hardness %s", condition.firmness,
+				debugClimateFirmnessOverride >= 0.0f ? " (override)" : "", condition.density, hardness);
+			WrapTextF("Freshness %.2f | wind packing %.2f | snowfall %.2f | rain %.2f", condition.freshness, condition.windPacking,
+				accumWeatherIntensity.load(std::memory_order_relaxed), climate.rainHeld);
+			WrapTextF("Ageing clock: %.2f, running at %.1f per game hour%s", climate.ageingClock, climate.ageingRate,
+				debugAgeingRateOverride >= 0.0f ? " (override)" : "");
+
+			ImGui::Checkbox(T(TKEY("climate_temperature_override_on"), "Override Temperature"), &debugClimateTemperatureOn);
+			if (auto _ttTempOn = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("climate_temperature_override_on_tooltip"), "Not saved. Replaces the temperature at the player; wetness, stickiness and firmness follow it, and higher ground still reads colder."));
+			if (debugClimateTemperatureOn)
+				ImGui::SliderFloat(T(TKEY("climate_temperature_override"), "Temperature"), &debugClimateTemperature, -30.0f, 10.0f, "%+.1f C");
+			ImGui::SliderFloat(T(TKEY("climate_share_override"), "Land Snow Share Override"), &debugClimateShareOverride, -1.0f, 1.0f, debugClimateShareOverride < 0.0f ? "live" : "%.2f");
+			if (auto _ttShare = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("climate_share_override_tooltip"), "Not saved. Below 0 the land around the player decides how cold the region is: all snow reads -12 C, no snow +4 C, before weather and sun."));
+			ImGui::SliderFloat(T(TKEY("climate_wetness_override"), "Wetness Override"), &debugClimateWetnessOverride, -1.0f, 1.0f, debugClimateWetnessOverride < 0.0f ? "live" : "%.2f");
+			ImGui::SliderFloat(T(TKEY("climate_stickiness_override"), "Stickiness Override"), &debugClimateStickinessOverride, -1.0f, 1.0f, debugClimateStickinessOverride < 0.0f ? "live" : "%.2f");
+			ImGui::SliderFloat(T(TKEY("climate_firmness_override"), "Firmness Override"), &debugClimateFirmnessOverride, -1.0f, 1.0f, debugClimateFirmnessOverride < 0.0f ? "live" : "%.2f");
+			if (auto _ttCond = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("climate_condition_override_tooltip"), "Not saved. Below 0 the value is derived; at 0 or above it replaces it at the player and in the view."));
+			ImGui::SliderFloat(T(TKEY("ageing_rate_override"), "Ageing Clock Rate Override"), &debugAgeingRateOverride, -1.0f, 60.0f, debugAgeingRateOverride < 0.0f ? "live" : "%.1f per hour");
+			if (auto _ttAge = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("ageing_rate_override_tooltip"), "Not saved. How fast tracks age, in clock units per game hour: about 1 in calm cold weather, over 20 while it snows."));
+
+			{
+				const char* views[] = { "Off", "Temperature", "Wetness", "Stickiness", "Firmness", "All (wet R, sticky G, firm B)" };
+				ImGui::Combo(T(TKEY("condition_view"), "Snow Condition View"), &debugConditionView, views, IM_ARRAYSIZE(views));
+				if (auto _ttView = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Roads and objects keep their look. Off while Screen-Space Parallax Trenches is on."));
+				if (debugConditionView > 0) {
+					static const char* kViewStates[] = { "starting", "compiling", "ready", "failed to compile" };
+					WrapTextF("View shader: %s", kViewStates[std::clamp(conditionViewShaderState.load(std::memory_order_acquire), 0, 3)]);
+				}
+			}
+
+			{
+				uint32_t keyed = 0, nearFull = 0, farFull = 0;
+				for (uint32_t i = 0; i < marchCensusFilled; i++) {
+					keyed += marchCensus[i] & 1u;
+					nearFull += (marchCensus[i] >> 1) & 1u;
+					farFull += (marchCensus[i] >> 2) & 1u;
+				}
+				WrapTextF("Sun march cache, last %u updates: rebuilt whole %u near, %u far (settings key changed %u)",
+					marchCensusFilled, nearFull, farFull, keyed);
+				ImGui::Checkbox(T(TKEY("march_old_key"), "Old March Cache Key (A/B)"), &debugMarchOldKey);
+				if (auto _ttOldKey = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("march_old_key_tooltip"), "Not saved. Keys the cache's whole rebuild on the berm and lip values as eased by snow freshness, as before the fix: while freshness changes (snowfall, and for up to a day after) the near cache then rebuilds whole every frame. Compare the count above and the Ground - March Cache row."));
+			}
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx("Weight sink")) {
 			itemSinkReadoutWanted.store(true, std::memory_order_release);
 			std::string readout;
