@@ -76,7 +76,7 @@ pip install -q git+https://github.com/alandtse/hlslkit.git   # buffer-scan only;
 
 -   Drop `chore(sync)`, `fix(sync)` and upstream-merge commits.
 -   For a remaining merge commit (more than one parent), use its first-parent diff everywhere below: `git diff <sha>^1 <sha>` instead of `git show <sha>`, because `git show` prints a combined diff that can hide changes. A clean merge port uses `git cherry-pick -m 1 <sha>`.
--   Group consecutive non-merge commits that touch the same area (e.g. "opt pass" + "opt fixes") and triage their **combined** diff (`git diff A^ B`). A merge commit always ends a group.
+-   After filtering, group non-merge commits only when they are adjacent in the original first-parent history and touch the same area (e.g. "opt pass" + "opt fixes"). A filtered-out commit or a merge commit always ends a group, so a group's `git diff A^ B` never contains anything that was not selected. Record each group as its exact list of SHAs and triage its **combined** diff.
 
 ### 2b. Already ported or upstream?
 
@@ -126,7 +126,7 @@ Outcomes: `port-clean`, `port-adapted`, `already-upstream (#NNNN)`, `in-open-PR 
 ## 4. Port, one item at a time
 
 1. Branch from fresh upstream/dev: `git checkout -B port/<fork>-<slug> upstream/dev`, where `<fork>` is `open` or `bottle`. If the session requires a specific branch prefix, use `<prefix>-<slug>`. Use one branch per logical change; combine only tightly coupled items.
-2. Apply every commit in the item. When it's clean, use `git cherry-pick <sha>` for a single commit. For a grouped item (step 2a), replay exactly the triaged first-parent commits, in order: `git cherry-pick $(git rev-list --reverse --first-parent <first-sha>^..<last-sha>)`. A plain `<first-sha>^..<last-sha>` range would also pull in side-branch commits. Never group across a merge commit: split the group there and cherry-pick the merge on its own with `-m 1`. Cherry-pick keeps the original authors; then rewrite the message(s) per step 6 with `git commit --amend` (or squash the group into one commit with `git commit --author="<original author>"`). Otherwise port the whole item by hand and commit with `git commit --author="<original author>"`.
+2. Apply every commit in the item. When it's clean, use `git cherry-pick <sha>` for a single commit. Cherry-pick keeps the original author; then rewrite the message per step 6 with `git commit --amend`. For a grouped item (step 2a), apply the group's exact recorded SHAs in order without committing, then make one commit for the whole group: `git cherry-pick -n <sha-1> <sha-2> ... <sha-n>` followed by `git commit --author="<original author>"`, with a step 6 message whose `Ported from` line names every source SHA (add `Co-authored-by:` for any other original authors). Never use a `<first>^..<last>` range, which can pull in filtered or side-branch commits. A merge commit is never part of a group; cherry-pick it on its own with `-m 1`. Otherwise port the whole item by hand and commit with `git commit --author="<original author>"`.
 3. **Re-derive the claim.** Write one sentence explaining why the commit's reasoning holds in _upstream's_ code. If it doesn't hold, stop and reclassify.
 4. Run the C++ checklist and fix whatever applies:
     - **D3D state:** restored or unbound afterwards, with no extra per-draw state changes.
@@ -153,7 +153,7 @@ Outcomes: `port-clean`, `port-adapted`, `already-upstream (#NNNN)`, `in-open-PR 
 
 -   Title: `type(scope): description`, ≤ 50 chars. Pick the type for its version impact: `fix`/`perf` → patch, `feat` → minor, `refactor`/`chore`/`style`/`docs`/`test` → none.
 -   Body wrapped at 72: what was wrong, why the change fixes it, and how upstream differs from the fork.
--   Last body line: `Ported from <owner/repo>#<pr>` or `<owner/repo>@<sha>`, plus "adapted to dev" if hand-ported. Step 2b depends on this line, so never omit it.
+-   Last body line: `Ported from <owner/repo>#<pr>` or `<owner/repo>@<sha>` (for a group, every SHA: `<owner/repo>@<sha-1>, @<sha-2>`), plus "adapted to dev" if hand-ported. Step 2b depends on this line, so never omit it.
 -   Trailers: `Co-authored-by: <original author>` when you are the committer, plus any attribution trailers the session requires.
 -   Never include model identifiers.
 
