@@ -13,7 +13,7 @@ Any maintainer can run this skill. Branches are always pushed to **the invoking 
 
 -   **Window:** default is the last 1 day of activity on each fork. Use the fork's last commit date, not today's date.
 -   **Explicit commits:** `open:<sha>` / `bottle:<sha>`. When given, triage only those (window ignored).
--   **`--auto`:** skip the checkpoint in step 3. Never set this for scheduled or unattended runs.
+-   **`--auto`:** skip the checkpoint in step 3 for `port-clean` and `port-adapted` items only. `needs-decision` items are never ported under `--auto`; they are reported and wait for a maintainer's approval. Never set `--auto` for scheduled or unattended runs.
 
 ## 1. Setup
 
@@ -22,10 +22,26 @@ Any maintainer can run this skill. Branches are always pushed to **the invoking 
 Work in a clone of `community-shaders/skyrim-community-shaders`. Don't assume what `origin` points to, because maintainers clone either upstream or their fork. Add explicit remotes:
 
 ```bash
-git remote add upstream https://github.com/community-shaders/skyrim-community-shaders 2>/dev/null
-git remote add open     https://github.com/alandtse/open-shaders                     2>/dev/null
-git remote add bottle   https://github.com/InTheBottle/Bottled-Shaders               2>/dev/null
+ensure_remote() {  # name url: add the remote, or stop if the name already points elsewhere
+    if url=$(git remote get-url "$1" 2>/dev/null); then
+        [ "${url%.git}" = "$2" ] || { echo "remote $1 is $url, expected $2" >&2; return 1; }
+    else
+        git remote add "$1" "$2"
+    fi
+}
+ensure_remote upstream https://github.com/community-shaders/skyrim-community-shaders &&
+ensure_remote open     https://github.com/alandtse/open-shaders &&
+ensure_remote bottle   https://github.com/InTheBottle/Bottled-Shaders &&
 git fetch upstream dev && git fetch open dev && git fetch bottle Bottle-Compendium
+```
+
+On a mismatch, stop and ask the maintainer. Never fetch or push through an unexpected remote.
+
+Patch checks in step 2 need a clean tree at `upstream/dev`, whatever branch the maintainer has checked out. Create a scratch worktree once and run every `git apply --check` inside it:
+
+```bash
+git worktree add --detach "$SCRATCH/upstream-dev" upstream/dev   # $SCRATCH: a temp dir outside the clone
+# refresh after a fetch: git -C "$SCRATCH/upstream-dev" checkout --detach upstream/dev
 ```
 
 ### 1b. Resolve the maintainer's fork
@@ -35,9 +51,9 @@ git fetch upstream dev && git fetch open dev && git fetch bottle Bottle-Compendi
     - an existing git remote whose URL owner is the login, or
     - `gh api repos/community-shaders/skyrim-community-shaders/forks --paginate --jq '.[] | select(.owner.login=="<login>") | .full_name'`, or
     - the GitHub MCP `search_repositories` with `fork:true user:<login> skyrim-community-shaders`.
-3. Add it: `git remote add fork https://github.com/<login>/<fork-repo>`.
+3. Add it with `ensure_remote fork https://github.com/<login>/<fork-repo>` and remember that exact URL as `FORK_URL`.
 4. If no fork exists, stop and ask whether to create one. Never fall back to pushing to upstream.
-5. **Guard:** before every push, check that `git remote get-url fork` does not contain `community-shaders/`.
+5. **Guard:** before every push, check that `git remote get-url fork` equals `FORK_URL` (ignoring a trailing `.git`) and that its owner is the login. Stop on any mismatch.
 
 ### 1c. Tools (Linux-safe)
 
@@ -50,7 +66,14 @@ pip install -q git+https://github.com/alandtse/hlslkit.git   # buffer-scan only;
 
 ### 2a. Collect
 
--   `git log --first-parent --since=<window> <remote/branch>`
+-   Anchor the window to each fork's tip, so a fork that has been quiet for a few days still yields its last day of commits:
+
+    ```bash
+    tip=$(git log -1 --format=%cI <remote/branch>)
+    cutoff=$(date -u -d "$tip - 1 day" +%Y-%m-%dT%H:%M:%SZ)   # use the requested window; "since <date>" is used as-is
+    git log --first-parent --since="$cutoff" <remote/branch>
+    ```
+
 -   Drop `chore(sync)`, `fix(sync)` and upstream-merge commits.
 -   Group consecutive commits that touch the same area (e.g. "opt pass" + "opt fixes") and triage their **combined** diff (`git diff A^ B`).
 
@@ -60,7 +83,7 @@ There is no committed ledger. The record of what has been ported is the `Ported 
 
 1. Search upstream PRs in every state, open, closed and merged, for the source SHA (short and full) and for `<owner/repo>#<pr>`, e.g. `repo:community-shaders/skyrim-community-shaders is:pr "alandtse/open-shaders#921"`. A closed-unmerged hit means a maintainer already declined it: report it, and don't re-port it unless the commit was named explicitly.
 2. Run `git log upstream/dev --grep="<sha-or-pr-ref>"` to catch ported commits.
-3. Run `git show <sha> | git apply -R --check` against upstream/dev. If it succeeds, the change is already applied.
+3. Run `git show <sha> | git -C "$SCRATCH/upstream-dev" apply -R --check` (the step 1a worktree). If it succeeds, the change is already applied.
 4. Compare `git patch-id --stable` against patch-ids of upstream/dev commits from the last ~2 weeks.
 5. Grep upstream/dev for the commit's distinctive new identifiers and strings (new functions, members, log messages).
 6. If the commit message references an upstream PR (`#NNNN` ≥ 2000), check whether that PR has merged and how its merged version differs.
@@ -82,7 +105,7 @@ There is no committed ledger. The record of what has been ported is the `Ported 
 
 ### 2e. Portable? Classify the patch
 
--   `git show <sha> | git apply --check` → **clean**
+-   `git show <sha> | git -C "$SCRATCH/upstream-dev" apply --check` → **clean**
 -   `git apply --3way` or a hand port → **adapted**: list every place where upstream's code differs.
 -   Generated or config files (shader-validation yaml, en.json) → **regenerate** against upstream; never hand-merge them.
 
@@ -102,7 +125,7 @@ Outcomes: `port-clean`, `port-adapted`, `already-upstream (#NNNN)`, `in-open-PR 
 ## 4. Port, one item at a time
 
 1. Branch from fresh upstream/dev: `git checkout -B port/<fork>-<slug> upstream/dev`, where `<fork>` is `open` or `bottle`. If the session requires a specific branch prefix, use `<prefix>-<slug>`. Use one branch per logical change; combine only tightly coupled items.
-2. Apply the change: cherry-pick with `--author="<original>"` when clean; otherwise port by hand.
+2. Apply the change. When it's clean, use `git cherry-pick <sha>`, which keeps the original author, then `git commit --amend` to rewrite the message per step 6 (the author is preserved). Otherwise port by hand and commit with `git commit --author="<original author>"`.
 3. **Re-derive the claim.** Write one sentence explaining why the commit's reasoning holds in _upstream's_ code. If it doesn't hold, stop and reclassify.
 4. Run the C++ checklist and fix whatever applies:
     - **D3D state:** restored or unbound afterwards, with no extra per-draw state changes.
