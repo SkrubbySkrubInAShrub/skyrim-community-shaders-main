@@ -584,7 +584,7 @@ public:
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
 		float RimTeeth = 0.33f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
-		float SnowResistance = 40.0f;
+		float SnowResistance = 33.0f;
 		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth, clods, churn and wall softness follow the snow, each with its slider as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
 		float SnowClimateStrength = 1.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
@@ -752,7 +752,9 @@ public:
 
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
 		DirectX::XMINT2 DeformMapOrigin;
-		DirectX::XMINT2 DeformTorusPad;
+		/** @brief Snow Climate x wetness at the player, for the wet print on the land's recoloured snow (SnowLighting.hlsli LandRecolorBegin). Took the torus pad. Mirror in SharedData.hlsli. */
+		float LandWetPrint;
+		float LandWetPad;
 
 		/** @brief Water raster (t104) frame for Lighting's underwater veto: world xy of texel (0,0) and the texel size; Dim 0 = no raster this frame. Mirror in SharedData.hlsli. */
 		float2 WaterWindowOrigin;
@@ -1336,6 +1338,15 @@ public:
 	Texture2D* undulationFieldTexture = nullptr;
 	ID3D11ComputeShader* undulationFieldCS = nullptr;
 	ID3D11ComputeShader* GetUndulationFieldCS();
+	/** @brief The churn's and rim teeth's value-noise hash, one R16 texel per cell of the 256-cell torus (UndulationFieldCS NoiseHashCS), baked once and bound at PS t109 for the ground and the trench patch: one fetch per octave where the live noise takes four hashes. */
+	static constexpr uint32_t kNoiseHashDim = 256;
+	static constexpr uint32_t kNoiseHashSlot = 109;
+	Texture2D* noiseHashTexture = nullptr;
+	bool noiseHashBaked = false;
+	ID3D11ComputeShader* noiseHashCS = nullptr;
+	ID3D11ComputeShader* GetNoiseHashCS();
+	/** @brief Bakes the hash table on the first call after it was created; the bound SRV, or null until baked. */
+	ID3D11ShaderResourceView* NoiseHashSRV();
 	struct alignas(16) UndulationFieldCB
 	{
 		float2 FieldOriginWorld;
@@ -4425,10 +4436,10 @@ protected:
 		float lip = 1.0f;
 		float teeth = 1.0f;
 		float clods = 1.0f;
-		/** @brief Wall softness: how far walls lay back toward the berm field's short blur. */
+		/** @brief Wall softness: how far loose snow falls back into a print, toward the berm field's short blur. */
 		float slough = 0.0f;
 		float churnScale = 1.0f;
-		/** @brief Share of the churn that is powder lumps (deep cover only) rather than sticky clods. */
+		/** @brief Share of the churn that is powder's fine crumble rather than sticky clods. */
 		float churnPowder = 0.0f;
 		/** @brief Road churn multiplier at the road cover, Snow Climate applied. */
 		float roadChurn = 1.0f;

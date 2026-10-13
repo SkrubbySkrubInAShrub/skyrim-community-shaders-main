@@ -410,7 +410,11 @@ namespace SharedData
 		// Toroidal deformation-map addressing: physical position of logical
 		// texel (0,0); every map Load adds this and masks by dim-1.
 		int2 DeformMapOrigin;
-		int2 DeformTorusPad;
+		// Snow Climate x wetness at the player: a pressed print in the land's
+		// recoloured snow darkens like the shell's. Was a pad. Mirror in
+		// SnowDeformation.h.
+		float LandWetPrint;
+		float LandWetPad;
 
 		// Water raster (t104) frame: world xy of texel (0,0), texel size;
 		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.

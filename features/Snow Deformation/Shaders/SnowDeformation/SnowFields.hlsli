@@ -25,6 +25,25 @@
 // context. Callers here are unchanged.
 #include "SnowDeformation/SnowNoise.hlsli"
 
+// The churn's and the rim teeth's value noise. Pixel passes that bind the
+// hash table (t109, DrawShell) read it in one fetch; every other stage
+// evaluates the same torus noise from the hash.
+#if defined(SNOW_NOISE_TABLE)
+Texture2D<float> SnowNoiseHash : register(t109);
+
+float SnowDetailNoise(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	return SnowNoiseHash.SampleLevel(SnowSampler, (i + f * f * (3.0 - 2.0 * f) + 0.5) / kNoiseTorusCells, 0.0);
+}
+#else
+float SnowDetailNoise(float2 p)
+{
+	return ShapeNoiseTorus(p);
+}
+#endif
+
 // Field map sizes. The landscape shell (SNOW_FIELD_DIMS) takes them from
 // ShellCB.FieldDims, GetDimensions of what DrawShell binds (0 where unbound);
 // elsewhere the macros expand to the query itself, token for token.
@@ -271,7 +290,7 @@ float TrampleChurnScale(float2 worldXY, float deformation)
 float ChurnNoiseScaled(float2 worldXY, float sizeScale)
 {
 	float s = max(sizeScale, 0.05);
-	float n = ShapeNoise(worldXY / (16.0 * s)) * 0.65 + ShapeNoise(worldXY / (7.0 * s)) * 0.35;
+	float n = SnowDetailNoise(worldXY / (16.0 * s)) * 0.65 + SnowDetailNoise(worldXY / (7.0 * s)) * 0.35;
 	return (n - 0.5) * 2.0;
 }
 
@@ -598,12 +617,13 @@ float2 UndulationGradSampled(float2 worldXY)
 // one function, every consumer agrees. Teeth first, then the depth remap,
 // then the lip on the notched value so the teeth break the lip into blocks
 // (RDR2 O1: "irregular teeth and broken blocks" at the rim).
-// Slough (Snow Climate) comes before all of them: loose snow lays the wall
-// back toward the carve's short blur (deformBlur, the berm field's .y), which
-// keeps the volume, so a softened print is wider and shallower.
+// Slough (Snow Climate) comes before all of them: loose snow falls back into
+// the print, toward the carve's short blur (deformBlur, the berm field's .y)
+// but never past the print, so the hole keeps its outline and its floor
+// rounds and narrows.
 float CarveSlough(float deformation, float deformBlur)
 {
-	return saturate(lerp(deformation, deformBlur, CompactLook.w));
+	return saturate(lerp(deformation, min(deformation, deformBlur), CompactLook.w));
 }
 
 float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, float2 worldXY)
@@ -627,8 +647,8 @@ float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, flo
 		[branch] if (rimBand > 0.0 && depthT > 0.0)
 #	endif
 		{
-			float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
-			              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
+			float notch = (SnowDetailNoise(worldXY / 37.0) - 0.5) * 0.8 +
+			              (SnowDetailNoise(worldXY / 8.0) - 0.5) * 1.2;
 			d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
 		}
 	}

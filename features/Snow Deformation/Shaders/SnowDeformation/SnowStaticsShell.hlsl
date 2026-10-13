@@ -452,6 +452,10 @@ SamplerState SnowSampler : register(s0);
 #ifdef PATCH
 #	define SNOW_RUNE_GLYPHS
 #endif
+#if defined(PSHADER) && defined(PATCH)
+// The patch's churn reads the noise hash table, as the ground's shading does.
+#	define SNOW_NOISE_TABLE
+#endif
 #if defined(PSHADER) && defined(SNOW_PATCH_DEFERRED)
 // Deferred trench patch: the attribute pass's coarse derivatives of GridLocal
 // and of WorldPos.z, read back per pixel (the ground's deferred pass, same

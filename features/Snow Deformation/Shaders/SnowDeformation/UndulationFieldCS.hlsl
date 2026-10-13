@@ -25,6 +25,13 @@ cbuffer UndulationFieldCB : register(b0)
 }
 
 RWTexture2D<float4> UndulationField : register(u0);
+// The torus hash table SnowDetailNoise reads (SnowFields.hlsli): one texel per
+// cell, baked once.
+RWTexture2D<unorm float> NoiseHashTable : register(u1);
+
+[numthreads(8, 8, 1)] void NoiseHashCS(uint3 id : SV_DispatchThreadID) {
+	NoiseHashTable[id.xy] = ShapeNoiseHash(float2(id.xy));
+}
 
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	float2 w = FieldOriginWorld + float2(id.xy) * FieldTexel;

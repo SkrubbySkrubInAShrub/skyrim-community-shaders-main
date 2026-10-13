@@ -2260,6 +2260,9 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
+	// The churn and teeth noise table, for this pass and the trench patch's.
+	ID3D11ShaderResourceView* noiseSRV = NoiseHashSRV();
+	context->PSSetShaderResources(kNoiseHashSlot, 1, &noiseSRV);
 
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* frostSRVs[] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };

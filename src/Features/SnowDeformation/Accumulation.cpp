@@ -223,11 +223,15 @@ namespace
 	}
 
 	// Churn depth ramps in cover units: sticky clods from a hand's depth,
-	// powder lumps only past the deepest default cover.
+	// loose powder a finer crumble from a little deeper.
 	constexpr float kChurnClumpStart = 2.0f;
 	constexpr float kChurnClumpFull = 10.0f;
-	constexpr float kChurnPowderStart = 48.0f;
-	constexpr float kChurnPowderFull = 80.0f;
+	constexpr float kChurnPowderStart = 4.0f;
+	constexpr float kChurnPowderFull = 16.0f;
+	// Powder's crumble against the slider; sticky clods take all of it.
+	constexpr float kChurnCrumble = 0.4f;
+	// Loose snow falls back into the print; the rest of the wall stands.
+	constexpr float kSloughMax = 0.5f;
 
 	struct ClimateLookTerms
 	{
@@ -246,10 +250,10 @@ namespace
 		look.lip = ClimateSmoothstep(0.35f, 0.65f, a_stickiness) * (1.0f - 0.6f * ClimateSmoothstep(0.70f, 1.0f, dryFirm));
 		look.teeth = ClimateSmoothstep(0.45f, 0.70f, std::max(a_stickiness, dryFirm)) * (1.0f - 0.6f * a_wetness);
 		look.clods = std::min(ClimateSmoothstep(0.40f, 0.70f, a_stickiness), look.berm);
-		look.slough = 1.0f - std::max(sticky, ClimateSmoothstep(0.50f, 0.85f, dryFirm));
+		look.slough = kSloughMax * (1.0f - std::max(sticky, ClimateSmoothstep(0.50f, 0.85f, dryFirm)));
 		const float firmDamp = 1.0f - 0.75f * ClimateSmoothstep(0.60f, 1.0f, dryFirm);
 		const float clump = sticky * (1.0f - 0.5f * a_wetness) * firmDamp;
-		const float powder = (1.0f - sticky) * (1.0f - a_wetness) * firmDamp;
+		const float powder = kChurnCrumble * (1.0f - sticky) * (1.0f - a_wetness) * firmDamp;
 		look.churnScale = std::max(clump, powder);
 		look.churnPowder = clump + powder > 1e-4f ? powder / (clump + powder) : 1.0f;
 		return look;

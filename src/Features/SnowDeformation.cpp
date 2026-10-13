@@ -538,6 +538,18 @@ void SnowDeformation::SetupResources()
 		undulationFieldTexture->CreateUAV(undUavDesc);
 		undulationFieldCB = new ConstantBuffer(ConstantBufferDesc<UndulationFieldCB>(), "SnowDeformation::UndulationFieldCB");
 		undulationFieldValid = false;
+
+		D3D11_TEXTURE2D_DESC hashDesc = undDesc;
+		hashDesc.Width = hashDesc.Height = kNoiseHashDim;
+		hashDesc.Format = DXGI_FORMAT_R16_UNORM;
+		D3D11_SHADER_RESOURCE_VIEW_DESC hashSrvDesc = undSrvDesc;
+		hashSrvDesc.Format = hashDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC hashUavDesc = undUavDesc;
+		hashUavDesc.Format = hashDesc.Format;
+		noiseHashTexture = new Texture2D(hashDesc, "SnowDeformation::NoiseHash");
+		noiseHashTexture->CreateSRV(hashSrvDesc);
+		noiseHashTexture->CreateUAV(hashUavDesc);
+		noiseHashBaked = false;
 	}
 
 	{
@@ -722,6 +734,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = std::clamp(landRecolorLumLo, 0.0f, 1.0f);
+	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// skins are gated the same way in DrawCapturedStatics.
@@ -1944,6 +1957,36 @@ ID3D11ComputeShader* SnowDeformation::GetUndulationFieldCS()
 	return undulationFieldCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetNoiseHashCS()
+{
+	if (!noiseHashCS) {
+		logger::debug("Compiling UndulationFieldCS NoiseHashCS");
+		noiseHashCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", {}, "cs_5_0", "NoiseHashCS"));
+	}
+	return noiseHashCS;
+}
+
+ID3D11ShaderResourceView* SnowDeformation::NoiseHashSRV()
+{
+	auto context = globals::d3d::context;
+	if (!noiseHashTexture || !noiseHashTexture->srv)
+		return nullptr;
+	if (!noiseHashBaked) {
+		auto* cs = GetNoiseHashCS();
+		if (!cs || !context)
+			return nullptr;
+		ID3D11UnorderedAccessView* uav = noiseHashTexture->uav.get();
+		context->CSSetUnorderedAccessViews(1, 1, &uav, nullptr);
+		context->CSSetShader(cs, nullptr, 0);
+		context->Dispatch(kNoiseHashDim / 8, kNoiseHashDim / 8, 1);
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+		noiseHashBaked = true;
+	}
+	return noiseHashTexture->srv.get();
+}
+
 void SnowDeformation::UpdateUndulationField()
 {
 	auto context = globals::d3d::context;
@@ -2126,6 +2169,10 @@ void SnowDeformation::ClearShaderCache()
 	if (undulationFieldCS)
 		undulationFieldCS->Release();
 	undulationFieldCS = nullptr;
+	if (noiseHashCS)
+		noiseHashCS->Release();
+	noiseHashCS = nullptr;
+	noiseHashBaked = false;
 	// The next UpdateUndulationField rebakes with the fresh CS.
 	undulationFieldValid = false;
 	if (bermFieldCS)

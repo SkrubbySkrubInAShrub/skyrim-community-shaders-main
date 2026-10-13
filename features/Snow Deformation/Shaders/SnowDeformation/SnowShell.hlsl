@@ -390,8 +390,10 @@ SamplerState SnowSampler : register(s0);
 #if defined(PSHADER) && defined(SNOW_SHELL_DEFERRED)
 // The shading reads the trail map and the berm field through s0's bilinear
 // (s0 wraps like DeformTexel). Its coarser sub-texel weights tilt a few rim
-// normals: judged acceptable for the cost.
+// normals: judged acceptable for the cost. The churn and teeth noise read the
+// hash table through it too.
 #	define SNOW_DEFORM_SAMPLER
+#	define SNOW_NOISE_TABLE
 #endif
 
 // Shared trench-detail shaping, spell-mark readers, field surfaces and the

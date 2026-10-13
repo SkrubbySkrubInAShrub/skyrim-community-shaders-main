@@ -846,7 +846,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
 		if (auto _ttClimate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves soft holes with no ridge and no lumps; settled snow just below freezing keeps the full ridge, lip, teeth and churn; wet snow leaves dark prints with crisp walls and clumps. Churn needs depth: in sticky snow from a hand deep, in powder only in very deep cover. Each trench slider is the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
+			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge, loose snow fallen back into them and a fine crumble; settled snow just below freezing keeps the full ridge, lip, teeth and churn; wet snow leaves dark prints with crisp walls and clumps. Churn needs depth: sticky clods from a hand deep, powder's crumble from a little deeper. Each trench slider is the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
@@ -2117,7 +2117,7 @@ void SnowDeformation::DrawSettings()
 				const SnowClimateLook look = ComputeSnowClimateLook();
 				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, clods %.2f, wall slough %.2f", look.strength,
 					look.berm, look.lip, look.teeth, look.clods, look.slough);
-				WrapTextF("Churn %.2f, %.0f%% powder (ramp %.0f-%.0f units of cover); roads %.2f; deepest cover %.0f units", look.churnScale,
+				WrapTextF("Churn %.2f, %.0f%% powder crumble (ramp %.0f-%.0f units of cover); roads %.2f; deepest cover %.0f units", look.churnScale,
 					look.churnPowder * 100.0f, look.lut[1].x, look.lut[1].x + 1.0f / std::max(look.lut[1].y, 1e-4f), look.roadChurn, look.coverMax);
 				static const char* kShading[] = { "full shader", "full shader (churn-free shader off)", "churn-free shader (no churn, clods or teeth in the window)" };
 				WrapTextF("Ground shading: %s", kShading[shellChurnFree ? 2 : (debugChurnFreeOff ? 1 : 0)]);

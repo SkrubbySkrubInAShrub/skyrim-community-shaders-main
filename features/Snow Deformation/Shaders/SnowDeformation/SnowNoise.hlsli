@@ -27,6 +27,24 @@ float ShapeNoise(float2 p)
 		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
+// ShapeNoise on a 256-cell torus: the cell hash wraps, so a 256x256 table of
+// ShapeNoiseHash (UndulationFieldCS NoiseHashCS) read through a wrapping
+// bilinear sampler returns the same value: one fetch where this takes four
+// hashes. The churn and the rim teeth use the pair (SnowDetailNoise).
+static const float kNoiseTorusCells = 256.0;
+
+float ShapeNoiseTorus(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	f = f * f * (3.0 - 2.0 * f);
+	float2 c0 = i - kNoiseTorusCells * floor(i / kNoiseTorusCells);
+	float2 c1 = c0 + 1.0;
+	c1 -= kNoiseTorusCells * floor(c1 / kNoiseTorusCells);
+	return lerp(lerp(ShapeNoiseHash(c0), ShapeNoiseHash(float2(c1.x, c0.y)), f.x),
+		lerp(ShapeNoiseHash(float2(c0.x, c1.y)), ShapeNoiseHash(c1), f.x), f.y);
+}
+
 // The dune field's amp-free core: two octaves in [-1, 1]. The shells apply
 // UndulationAmp live (so the strength slider needs no rebake) and the bake
 // CS stores exactly this.
