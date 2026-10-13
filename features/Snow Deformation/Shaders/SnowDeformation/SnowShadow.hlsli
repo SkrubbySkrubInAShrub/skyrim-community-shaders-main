@@ -96,14 +96,17 @@ namespace SnowShadow
 			posLS.z -= 0.0008 * (primaryCascade + 1.0);
 			float shadow = SampleCascadePCF(posLS, primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
 
-			[branch] if (cascadeSelect > 0.0 && cascadeSelect < 1.0)
+			// Blend band = primary cascade 0 with select > 0; the partner is
+			// cascade 1. Weight and partner carry the band test because fxc can
+			// drop the select < 1 half of a branch condition.
+			const float blendW = primaryCascade == 0 ? smoothstep(0, 1, cascadeSelect) : 0.0;
+			[branch] if (blendW > 0.0)
 			{
-				uint secondaryCascade = 1 - primaryCascade;
-				posLS = mul(sd.ShadowProj[secondaryCascade], float4(positionWS, 1)).xyz;
+				posLS = mul(sd.ShadowProj[1], float4(positionWS, 1)).xyz;
 				posLS.xy = saturate(posLS.xy);
-				posLS.z -= 0.0008 * (secondaryCascade + 1.0);
-				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
-				shadow = lerp(shadow, shadowBlend, smoothstep(0, 1, cascadeSelect));
+				posLS.z -= 0.0016;
+				float shadowBlend = SampleCascadePCF(posLS, a_atlasSlices.y, texel, a_spread);
+				shadow = lerp(shadow, shadowBlend, blendW);
 			}
 
 			// Distance fade matching the VSM path: beyond the cascades the
@@ -155,14 +158,15 @@ namespace SnowShadow
 					shadow = 1.0;
 			}
 
-			[branch] if (cascadeSelect > 0.0 && cascadeSelect < 1.0)
+			// Blend band as in GetCascadeShadow.
+			const float blendW = primaryCascade == 0 ? smoothstep(0, 1, cascadeSelect) : 0.0;
+			[branch] if (blendW > 0.0)
 			{
-				uint secondaryCascade = 1 - primaryCascade;
-				posLS = mul(sd.ShadowProj[secondaryCascade], float4(positionWS, 1)).xyz;
+				posLS = mul(sd.ShadowProj[1], float4(positionWS, 1)).xyz;
 				posLS.xy = saturate(posLS.xy);
-				posLS.z -= 0.0008 * (secondaryCascade + 1.0);
-				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
-				shadow = lerp(shadow, shadowBlend, smoothstep(0, 1, cascadeSelect));
+				posLS.z -= 0.0016;
+				float shadowBlend = SampleCascadePCF(posLS, a_atlasSlices.y, texel, a_spread);
+				shadow = lerp(shadow, shadowBlend, blendW);
 			}
 
 			float fade = saturate(shadowMapDepth / sd.EndSplitDistances.y);
