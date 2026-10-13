@@ -76,7 +76,7 @@ pip install -q git+https://github.com/alandtse/hlslkit.git   # buffer-scan only;
 
 -   Drop `chore(sync)`, `fix(sync)` and upstream-merge commits.
 -   For a remaining merge commit (more than one parent), use its first-parent diff everywhere below: `git diff <sha>^1 <sha>` instead of `git show <sha>`, because `git show` prints a combined diff that can hide changes. A clean merge port uses `git cherry-pick -m 1 <sha>`.
--   Group consecutive commits that touch the same area (e.g. "opt pass" + "opt fixes") and triage their **combined** diff (`git diff A^ B`).
+-   Group consecutive non-merge commits that touch the same area (e.g. "opt pass" + "opt fixes") and triage their **combined** diff (`git diff A^ B`). A merge commit always ends a group.
 
 ### 2b. Already ported or upstream?
 
@@ -126,7 +126,7 @@ Outcomes: `port-clean`, `port-adapted`, `already-upstream (#NNNN)`, `in-open-PR 
 ## 4. Port, one item at a time
 
 1. Branch from fresh upstream/dev: `git checkout -B port/<fork>-<slug> upstream/dev`, where `<fork>` is `open` or `bottle`. If the session requires a specific branch prefix, use `<prefix>-<slug>`. Use one branch per logical change; combine only tightly coupled items.
-2. Apply every commit in the item. When it's clean, use `git cherry-pick <sha>` for a single commit, or `git cherry-pick <first-sha>^..<last-sha>` for a grouped item (step 2a) so no earlier commit in the group is dropped. Cherry-pick keeps the original authors; then rewrite the message(s) per step 6 with `git commit --amend` (or squash the group into one commit with `git commit --author="<original author>"`). Otherwise port the whole item by hand and commit with `git commit --author="<original author>"`.
+2. Apply every commit in the item. When it's clean, use `git cherry-pick <sha>` for a single commit. For a grouped item (step 2a), replay exactly the triaged first-parent commits, in order: `git cherry-pick $(git rev-list --reverse --first-parent <first-sha>^..<last-sha>)`. A plain `<first-sha>^..<last-sha>` range would also pull in side-branch commits. Never group across a merge commit: split the group there and cherry-pick the merge on its own with `-m 1`. Cherry-pick keeps the original authors; then rewrite the message(s) per step 6 with `git commit --amend` (or squash the group into one commit with `git commit --author="<original author>"`). Otherwise port the whole item by hand and commit with `git commit --author="<original author>"`.
 3. **Re-derive the claim.** Write one sentence explaining why the commit's reasoning holds in _upstream's_ code. If it doesn't hold, stop and reclassify.
 4. Run the C++ checklist and fix whatever applies:
     - **D3D state:** restored or unbound afterwards, with no extra per-draw state changes.
