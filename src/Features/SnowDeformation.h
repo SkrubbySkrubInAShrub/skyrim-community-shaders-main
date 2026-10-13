@@ -3526,9 +3526,9 @@ public:
 	ID3D11HullShader* patchHS = nullptr;
 	ID3D11DomainShader* patchDS = nullptr;
 	ID3D11PixelShader* patchPS = nullptr;
-	/** @brief Runtime-only A/B "Deferred Trench Patch": the patch draws its geometry once with the coverage cut alone (SNOW_PATCH_ATTR, into the ground's deferred targets), and one full-screen pass shades the pixels it kept (SNOW_PATCH_DEFERRED). Off = the forward patch. */
-	bool patchDeferredEnabled = false;
-	/** @brief [attribute pass, shading pass], compiled off the render thread on first use. */
+	/** @brief The trench patch draws deferred: its geometry once with the coverage cut alone (SNOW_PATCH_ATTR, into the ground's deferred targets), then one full-screen pass shades the pixels it kept (SNOW_PATCH_DEFERRED). Runtime-only measurement switch (DevBench patchDeferred); false = the forward patch (patchPS), which also draws under the statics debug views and until both deferred shaders exist. */
+	bool patchDeferredEnabled = true;
+	/** @brief [attribute pass, shading pass]: primed with the object snow group, else compiled off the render thread on first use. */
 	ID3D11PixelShader* patchDeferredPS[2] = {};
 	std::future<ID3D11PixelShader*> patchDeferredJob[2];
 	bool patchDeferredTried[2] = {};
@@ -3537,7 +3537,11 @@ public:
 	Texture2D* patchDeferredMark = nullptr;
 	/** @brief The mark target and the shading pass's depth-off state; false leaves the patch forward. */
 	bool EnsurePatchDeferredResources();
-	/** @brief Both deferred patch shaders, once compiled (the first call starts their compiles). */
+	/** @brief One deferred patch PS (0 attribute pass, 1 shading pass), compiled now; null on failure. */
+	static ID3D11PixelShader* CompilePatchDeferredPS(int a_which);
+	/** @brief Shader-prime step (object snow group): compiles both deferred patch shaders on the prime worker. */
+	void PrimePatchDeferred();
+	/** @brief Both deferred patch shaders, once compiled (the first call starts any compile the prime did not run). */
 	bool PatchDeferredReady();
 	/** @brief A deferred patch shader is compiling. */
 	bool PatchDeferredCompiling() const;

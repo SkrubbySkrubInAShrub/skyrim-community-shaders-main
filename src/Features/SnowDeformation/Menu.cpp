@@ -1965,11 +1965,18 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("patch_caster_nonindexed"), "Non-indexed Trench Patch Caster (A/B)"), &patchCasterNonIndexed);
 			if (auto _ttPatchIdx = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("patch_caster_nonindexed_tooltip"), "A/B: the trench patch's sun-shadow caster normally draws through an index buffer, so each grid vertex is worked out once. Tick to draw six vertices per quad again. Same triangles in the same order; the Shadows - Trench Patch row is the difference."));
-			ImGui::Checkbox(T(TKEY("patch_deferred"), "Deferred Trench Patch (A/B)"), &patchDeferredEnabled);
-			if (auto _ttPatchDeferred = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("patch_deferred_tooltip"), "A/B: the trench patch's triangles are small, and the graphics card shades pixels in blocks of four, so a small triangle pays for many pixels it never shows. Tick to draw the patch twice: once with only its coverage test, keeping where each pixel lies, then once more as a single screen-wide pass that shades every kept pixel exactly once, the way the ground snow is drawn. Same snow either way; the Trails - Trench Patch row is the difference. The two extra shaders compile in the background the first time it is ticked. The debug views draw the patch the old way."));
-			if (patchDeferredEnabled)
-				WrapTextDisabledF("Deferred Trench Patch: %s", PatchDeferredCompiling() ? "compiling" : (patchDeferredPS[0] && patchDeferredPS[1] ? "drawing" : (patchDeferredTried[0] ? "failed, drawing the old way" : "waiting")));
+			{
+				// The prime worker owns the patch shader members until the object snow group is published.
+				const bool primed = !SnowShadersPending(2);
+				const char* patchShading = !patchDeferredEnabled ? "forward (switched off)" :
+				                           staticsDebugView != 0 ? "forward (debug view)" :
+				                           !primed               ? "forward until its shaders compile" :
+				                           (patchDeferredPS[0] && patchDeferredPS[1]) ? "deferred" :
+				                           PatchDeferredCompiling() ? "forward until its shaders compile" :
+				                           (patchDeferredTried[0] || patchDeferredTried[1]) ? "forward (shaders failed to compile)" :
+				                                                                              "forward until its shaders compile";
+				WrapTextDisabledF("Trench patch shading: %s", patchShading);
+			}
 			ImGui::Checkbox(T(TKEY("skin_cull_hiz_full_texture"), "Full-Size Cull Depth Pyramid (A/B)"), &skinCullHiZFullTexture);
 			if (auto _ttHiZFull = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("skin_cull_hiz_full_texture_tooltip"), "A/B: the occlusion cull's far-depth pyramid normally covers only the rectangle the frame was rendered into. Tick to build it over the whole screen-sized depth again. The cull only ever skips what could not have drawn, so the image is the same either way; the Objects - Occlusion Cull row is the difference."));

@@ -1554,31 +1554,43 @@ bool SnowDeformation::EnsurePatchDeferredResources()
 	return patchDeferredMark->srv && patchDeferredMark->rtv;
 }
 
-bool SnowDeformation::PatchDeferredReady()
+ID3D11PixelShader* SnowDeformation::CompilePatchDeferredPS(int a_which)
 {
 	static constexpr const char* kDefine[2] = { "SNOW_PATCH_ATTR", "SNOW_PATCH_DEFERRED" };
 	static constexpr const char* kName[2] = { "SnowDeformation::TrenchPatchPS Attributes", "SnowDeformation::TrenchPatchPS Deferred" };
+	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
+	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
+	winrt::com_ptr<ID3DBlob> blob;
+	blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine, kDefine[a_which]));
+	ID3D11PixelShader* ps = nullptr;
+	if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &ps)))
+		Util::SetResourceName(ps, kName[a_which]);
+	else
+		logger::warn("[SNOW DEFORMATION] trench patch: the {} PS failed to compile, the patch draws forward", kDefine[a_which]);
+	return ps;
+}
+
+void SnowDeformation::PrimePatchDeferred()
+{
+	for (int i = 0; i < 2; i++) {
+		if (patchDeferredPS[i] || patchDeferredTried[i])
+			continue;
+		patchDeferredTried[i] = true;
+		patchDeferredPS[i] = CompilePatchDeferredPS(i);
+	}
+}
+
+bool SnowDeformation::PatchDeferredReady()
+{
 	for (int i = 0; i < 2; i++) {
 		if (patchDeferredPS[i])
 			continue;
 		if (patchDeferredJob[i].valid()) {
-			if (patchDeferredJob[i].wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-				continue;
-			patchDeferredPS[i] = patchDeferredJob[i].get();
-			if (!patchDeferredPS[i])
-				logger::warn("[SNOW DEFORMATION] Deferred Trench Patch: the {} variant failed to compile, the patch stays forward", kDefine[i]);
+			if (patchDeferredJob[i].wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+				patchDeferredPS[i] = patchDeferredJob[i].get();
 		} else if (!patchDeferredTried[i]) {
 			patchDeferredTried[i] = true;
-			const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
-			const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-			patchDeferredJob[i] = std::async(std::launch::async, [ehfDefine, iblDefine, i]() -> ID3D11PixelShader* {
-				winrt::com_ptr<ID3DBlob> blob;
-				blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine, kDefine[i]));
-				ID3D11PixelShader* ps = nullptr;
-				if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &ps)))
-					Util::SetResourceName(ps, kName[i]);
-				return ps;
-			});
+			patchDeferredJob[i] = std::async(std::launch::async, [i] { return CompilePatchDeferredPS(i); });
 		}
 	}
 	return patchDeferredPS[0] && patchDeferredPS[1];
@@ -4315,9 +4327,10 @@ void SnowDeformation::DrawCapturedStatics()
 		} else {
 			context->VSSetShader(patchVS, nullptr, 0);
 		}
-		// Deferred (A/B): the geometry keeps the coverage cut alone, into the
-		// ground's deferred targets, which are free once the ground has shaded;
-		// one full-screen pass then shades each kept pixel once.
+		// Deferred: the geometry keeps the coverage cut alone, into the ground's
+		// deferred targets, which are free once the ground has shaded; one
+		// full-screen pass then shades each kept pixel once. Forward under the
+		// debug views and until both deferred shaders exist.
 		bool deferredPatch = patchDeferredEnabled && staticsDebugView == 0 && PatchDeferredReady() && EnsurePatchDeferredResources();
 		ID3D11VertexShader* patchFillVS = deferredPatch ? GetShellFillVS() : nullptr;
 		deferredPatch = deferredPatch && patchFillVS;
