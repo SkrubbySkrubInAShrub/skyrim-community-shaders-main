@@ -53,7 +53,7 @@ git worktree add --detach "$SCRATCH/upstream-dev" upstream/dev   # $SCRATCH: a t
     - the GitHub MCP `search_repositories` with `fork:true user:<login> skyrim-community-shaders`.
 3. Add it with `ensure_remote fork https://github.com/<login>/<fork-repo>` and remember that exact URL as `FORK_URL`.
 4. If no fork exists, stop and ask whether to create one. Never fall back to pushing to upstream.
-5. **Guard:** before every push, check that `git remote get-url fork` equals `FORK_URL` (ignoring a trailing `.git`) and that its owner is the login. Stop on any mismatch.
+5. **Guard:** before every push, check that every URL from `git remote get-url --push --all fork` equals `FORK_URL` (ignoring a trailing `.git`) and that each URL's owner is the login. A `pushurl` can differ from the fetch URL and a remote can hold several, so check them all. Stop on any mismatch.
 
 ### 1c. Tools (Linux-safe)
 
@@ -75,6 +75,7 @@ pip install -q git+https://github.com/alandtse/hlslkit.git   # buffer-scan only;
     ```
 
 -   Drop `chore(sync)`, `fix(sync)` and upstream-merge commits.
+-   For a remaining merge commit (more than one parent), use its first-parent diff everywhere below: `git diff <sha>^1 <sha>` instead of `git show <sha>`, because `git show` prints a combined diff that can hide changes. A clean merge port uses `git cherry-pick -m 1 <sha>`.
 -   Group consecutive commits that touch the same area (e.g. "opt pass" + "opt fixes") and triage their **combined** diff (`git diff A^ B`).
 
 ### 2b. Already ported or upstream?
