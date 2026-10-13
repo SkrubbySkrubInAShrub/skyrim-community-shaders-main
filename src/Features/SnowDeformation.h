@@ -1498,6 +1498,8 @@ public:
 	std::vector<uint8_t> shellBareScratch;
 	/** @brief Shell SRV slot of shellTerrainBare (SnowShell.hlsl TerrainBare). */
 	static constexpr UINT kTerrainBareSlot = 26;
+	/** @brief Replay prepass PS slot of Terrain Blending's mask depth (SnowShell.hlsl TBMaskDepth); null without Terrain Blending. */
+	static constexpr UINT kTBMaskSlot = 110;
 	/** @brief The land-blend state the window was last built with, so a switch rebuilds it. */
 	bool shellWindowLandBlend = false;
 	float shellWindowLandBlendStart = 1.0f;

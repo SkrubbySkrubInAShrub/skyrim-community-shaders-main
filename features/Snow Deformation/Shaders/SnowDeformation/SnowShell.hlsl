@@ -1668,6 +1668,27 @@ bool ShellPrepassQuadHidden(float rasterZ, float rawSceneDepth, float shellZ, fl
 	return hidden > 0.5 && hx == 0.0 && ddy_fine(hidden) == 0.0 && ddy_fine(hx) == 0.0;
 }
 
+#ifdef SNOW_SHELL_DEPTH_PREPASS
+// Terrain Blending's mask: the main depth after the depth prepass, land within
+// its 1024-unit reach pushed back, objects at their own depth. Null without it.
+Texture2D<float> TBMaskDepth : register(t110);
+static const float kTBMaskReach = 1000.0;
+
+// Masks here is not the land's own write: an object is the surface (the mask
+// holds it at the scene depth), or a surface stands in front of the snow
+// inside the near clamp window.
+bool ShellMasksNotLand(float3 worldPosRel, float2 pixel, float shellZ, float sceneZ)
+{
+	bool notLand = !ShellFarClampWindow(shellZ, sceneZ) && ShellNearClampWindow(shellZ, sceneZ);
+	[branch] if (!notLand && dot(worldPosRel, worldPosRel) < kTBMaskReach * kTBMaskReach)
+	{
+		const float mask = TBMaskDepth.Load(int3(pixel, 0));
+		notLand = mask > 0.0 && SharedData::GetScreenDepth(mask) - sceneZ < 0.05;
+	}
+	return notLand;
+}
+#endif
+
 #if defined(SNOW_TRENCH_PARALLAX) && defined(SNOW_SHELL_DEPTH_PREPASS)
 // Trenches by parallax occlusion: the replay draws the uncarved top, and each
 // prepass pixel marches the trench relief the way Extended Materials marches a
@@ -2203,6 +2224,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
 
 #ifndef SNOW_SHELL_DEFERRED
+#	ifdef SNOW_SHELL_DEPTH_PREPASS
+	// The land's verdict is read from Masks only where the land wrote it: an
+	// object's code there (skin's 1, a blended pass diluting 2) decodes as odds.
+	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
+	{
+		[flatten] if (ShellMasksNotLand(input.WorldPos, input.Position.xy, shellZ, sceneZ))
+			coverageAlpha = 0.0;
+	}
+#	endif
 #	ifdef SNOW_PREPASS_EARLY
 	// The land's verdict is drawn after this pass: the snow's side is recorded
 	// and the resolve runs the contest. It only lowers the alpha, so the cut

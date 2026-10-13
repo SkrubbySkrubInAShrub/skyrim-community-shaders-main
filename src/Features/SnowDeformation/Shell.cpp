@@ -1431,7 +1431,12 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		context->PSSetShaderResources(29, 1, &marchSRVs[1]);
 	}
 	context->PSSetSamplers(0, 1, &snowSampler);
+	// Terrain Blending's mask: whether the land or an object is the surface at a pixel.
+	ID3D11ShaderResourceView* tbMaskSRV = tb.terrainDepth.depthSRV;
+	context->PSSetShaderResources(kTBMaskSlot, 1, &tbMaskSRV);
 	DrawLandscapeSnowPrepass(context, cb, cbs[0], parallax);
+	tbMaskSRV = nullptr;
+	context->PSSetShaderResources(kTBMaskSlot, 1, &tbMaskSRV);
 
 	// The settled pixels into the main depth: the game's opaque draws, the
 	// terrain replay among them, now test against the snow.
@@ -2424,7 +2429,12 @@ void SnowDeformation::DrawShell()
 				parallax ? shellParallaxOffset->rtv.get() : nullptr };
 			context->OMSetRenderTargets(parallax ? 5 : 4, prepassRTVs, dsv);
 			context->PSSetShader(psPrepass, nullptr, 0);
+			const auto& terrainBlend = globals::features::terrainBlending;
+			ID3D11ShaderResourceView* tbMaskSRV = (terrainBlend.loaded && terrainBlend.settings.Enabled) ? terrainBlend.terrainDepth.depthSRV : nullptr;
+			context->PSSetShaderResources(kTBMaskSlot, 1, &tbMaskSRV);
 			DrawLandscapeSnowPrepass(context, cbData, cbs[0], parallax);
+			tbMaskSRV = nullptr;
+			context->PSSetShaderResources(kTBMaskSlot, 1, &tbMaskSRV);
 			context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
