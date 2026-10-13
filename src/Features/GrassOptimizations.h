@@ -159,7 +159,10 @@ public:
 	void UploadCullState(ID3D11Device* device, ID3D11DeviceContext* ctx, uint32_t visibleBuckets);
 
 	/** @brief Binds a bucket's resources and dispatches the instance culling compute shader. */
-	void CullBucket(GrassBucket& b, ID3D11DeviceContext* ctx);
+	void DispatchCullBucket(GrassBucket& b, ID3D11DeviceContext* ctx);
+
+	/** @brief Copies a bucket's LOD tier counts into their indirect draw arguments. */
+	void CopyCullBucketLODArgs(GrassBucket& b, ID3D11DeviceContext* ctx);
 
 	/** @brief Grows the slotted per-bucket constant buffer to hold at least `slots` entries. */
 	bool EnsureCullBucketCapacity(uint32_t slots, ID3D11Device* device);
