@@ -159,7 +159,7 @@ void AdvancedSettingsRenderer::RenderLoggingSection()
 	}
 
 	// Shader Defines input
-	auto& shaderDefines = globals::state->shaderDefinesString;
+	auto shaderDefines = globals::state->GetDefinesString();
 	if (ImGui::InputText(T("menu.advanced.shader_defines", "Shader Defines"), &shaderDefines)) {
 		globals::state->SetDefines(shaderDefines);
 	}
