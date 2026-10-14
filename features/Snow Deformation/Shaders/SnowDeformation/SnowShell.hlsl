@@ -2644,13 +2644,16 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Gone by ~6 units of cover, where relief takes over. Not on melted
 	// floors: a walked fire ring went dark as a whole. Wet snow (Snow
 	// Climate) presses darker and glossier at any depth; the warmest row
-	// says whether any snow in view is wet. wetRough is the roughness cut.
+	// says whether any snow in view is wet. Under Snow Climate the thin
+	// print is the wet look too, so it follows the wetness. wetRough is
+	// the roughness cut.
 	float wetRough = 0.0;
 	const float wetPress = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(0.1, 0.4, pixelMelt));
 	[branch] if (wetPress > 0.001 && (pixelDepth < 6.0 || SnowClimateLUT[2].w > 0.001))
 	{
 		const float climateWet = SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z).w;
-		const float wetPrint = wetPress * max(1.0 - smoothstep(1.5, 6.0, pixelDepth), 0.8 * climateWet);
+		const float thinPrint = (1.0 - smoothstep(1.5, 6.0, pixelDepth)) * saturate(SnowClimate2.w + climateWet);
+		const float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
 		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint);
 		wetRough = wetPrint * (0.24 + 0.26 * climateWet);
 	}
