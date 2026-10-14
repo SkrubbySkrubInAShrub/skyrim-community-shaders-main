@@ -320,10 +320,33 @@ namespace Util
 	 */
 	struct ConfirmationPopup
 	{
+		/** @brief The button pressed on a frame; Cancel also covers closing the popup. */
+		enum class Choice
+		{
+			None,
+			Confirm,
+			Alternate,
+			Cancel
+		};
+
+		/** @brief Which button keyboard navigation starts on, so Enter picks it. */
+		enum class Focus
+		{
+			None,
+			Confirm,
+			Cancel
+		};
+
 		std::string title;
 		std::string message;
+		/// Empty hides the button.
 		std::string confirmLabel = "Confirm";
 		std::string cancelLabel = "Cancel";
+		/// Optional destructive button between Confirm and Cancel; empty hides it.
+		std::string alternateLabel;
+		/// Styles Confirm as the primary action rather than a plain button.
+		bool primaryConfirm = false;
+		Focus focus = Focus::None;
 		bool showDontAskAgain = false;
 		bool* dontAskAgainPersist = nullptr;  // Optional external bool to persist preference
 
@@ -333,6 +356,8 @@ namespace Util
 
 		void Request();
 		bool Draw();  // Returns true on confirm frame
+		/** @brief Draws the popup while requested. @return The button pressed this frame, else Choice::None. */
+		Choice DrawChoice();
 
 		bool IsOpen() const { return show; }
 

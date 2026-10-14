@@ -13,6 +13,7 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/Icons/helpers/IconFonts.h"
@@ -23,6 +24,7 @@
 #include "SceneTransitionField.h"
 #include "SceneWidgetInterceptor.h"
 #include "SettingsOverrideManager.h"
+#include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -430,8 +432,9 @@ namespace
 	}
 
 	/** @brief The value the last Baseline pack applying to a setting gives it, or null.
-	 *  Later packs merge over earlier ones, so the last to hold the key is the one in effect. */
-	const json* FindFeatureOverrideValue(const SettingMetadata& a_setting)
+	 *  Later packs merge over earlier ones, so the last to hold the key is the one in effect.
+	 *  @param a_packId Receives the pack supplying the value. */
+	const json* FindFeatureOverrideValue(const SettingMetadata& a_setting, std::string& a_packId)
 	{
 		auto* overrides = SettingsOverrideManager::GetSingleton();
 		const std::string featureShortName{ a_setting.featureShortName };
@@ -443,10 +446,20 @@ namespace
 			// A file naming keys the feature lacks is never applied.
 			if (!(*info)->unknownKeys.empty())
 				continue;
-			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->overrideData, a_setting))
+			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->overrideData, a_setting)) {
+				a_packId = (*info)->packId;
 				return value;
+			}
 		}
 		return nullptr;
+	}
+
+	/** @brief The setting's value in the layers beneath the user's edits: defaults with Baseline packs applied. */
+	const json* FindLayeredBaseValue(const SettingMetadata& a_setting)
+	{
+		auto* feature = Feature::FindFeatureByShortName(std::string{ a_setting.featureShortName });
+		const auto* base = feature ? globals::state->GetFeatureBase(feature->GetName()) : nullptr;
+		return base ? SceneSettingsInternal::GetCatalogSerializedValue(*base, a_setting) : nullptr;
 	}
 }
 
@@ -628,7 +641,7 @@ void SceneWidgetBinding::Guard::BindBaseline()
 		return;
 	}
 
-	baselineLayer = ResolveBaselineLayer();
+	baselineLayer = ResolveBaselineLayer(baselinePackId);
 	if ((baselineLayer == BaselineLayer::Scene || baselineLayer == BaselineLayer::Sketch) &&
 		(policy == GutterPolicy::Owner || ClaimGutter(value.data))) {
 		CaptureNextItemWidth();
@@ -642,8 +655,9 @@ void SceneWidgetBinding::Guard::BindBaseline()
 	}
 }
 
-SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLayer() const
+SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLayer(std::string& a_packId) const
 {
+	a_packId.clear();
 	auto* manager = SceneSettingsManager::GetSingleton();
 	const auto anyComponent = [&](auto&& a_predicate) { return std::ranges::any_of(components, a_predicate); };
 
@@ -654,24 +668,28 @@ SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLaye
 		}))
 		return BaselineLayer::Scene;
 
-	bool overridden = false;
+	bool fromPack = false;
 	for (const auto& component : components) {
-		const auto* overrideValue = FindFeatureOverrideValue(*component.setting);
-		if (!overrideValue)
+		std::string packId;
+		const auto* packValue = FindFeatureOverrideValue(*component.setting, packId);
+		const auto* beneath = packValue ? packValue : FindLayeredBaseValue(*component.setting);
+		if (packValue && a_packId.empty())
+			a_packId = std::move(packId);
+		if (!beneath)
 			continue;
-		if (!SceneSettingsManager::AppliedValuesEqual(*overrideValue, ReadEditedValue(component)))
-			return BaselineLayer::OverrideEdited;
-		overridden = true;
+		if (!SceneSettingsManager::AppliedValuesEqual(*beneath, ReadEditedValue(component)))
+			return BaselineLayer::Edited;
+		fromPack |= packValue != nullptr;
 	}
-	return overridden ? BaselineLayer::Override : BaselineLayer::Base;
+	return fromPack ? BaselineLayer::Pack : BaselineLayer::Base;
 }
 
 std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveBaselineColor() const
 {
 	switch (baselineLayer) {
-	case BaselineLayer::Override:
+	case BaselineLayer::Pack:
 		return Util::Colors::GetWarning();
-	case BaselineLayer::OverrideEdited:
+	case BaselineLayer::Edited:
 	case BaselineLayer::Sketch:
 		return Util::Colors::GetSuccess();
 	case BaselineLayer::Scene:
@@ -681,14 +699,18 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveBaselineColor() const
 	}
 }
 
-const char* SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
+std::string SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
 {
 	switch (baselineLayer) {
-	case BaselineLayer::Override:
-		return T(TKEY("baseline_from_pack"), "A Baseline preset supplies this value.");
-	case BaselineLayer::OverrideEdited:
-		return T(TKEY("baseline_pack_edited"),
-			"Your edit, over the Baseline preset's value. Save Settings keeps it; Restore Defaults goes back to the preset.");
+	case BaselineLayer::Pack:
+		return std::vformat(T(TKEY("baseline_from_named_pack"), "Baseline: {}. This preset supplies the value."),
+			std::make_format_args(baselinePackId));
+	case BaselineLayer::Edited:
+		if (baselinePackId.empty())
+			return T(TKEY("baseline_edited"), "Edited: your change from the default. Save Settings keeps it; Restore Defaults clears it.");
+		return std::vformat(T(TKEY("baseline_edited_over_pack"),
+								"Edited: your change over Baseline {}. Save Settings keeps it; Restore Defaults goes back to the preset."),
+			std::make_format_args(baselinePackId));
 	case BaselineLayer::Scene:
 		return T(TKEY("baseline_from_scene"),
 			"A Scene Manager preset supplies this value here. Editing sketches over it until you leave "
@@ -698,7 +720,7 @@ const char* SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
 			"Sketched over the Scene Manager's value. It is kept as your base setting, but the scene's "
 			"value returns once you leave this feature or close the menu.");
 	default:
-		return nullptr;
+		return {};
 	}
 }
 
@@ -1539,8 +1561,8 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 			for (const auto& component : components)
 				manager->RecordBaselineEdit(ComponentIdentity(component), ReadEditedValue(component));
 		}
-		if (const char* tooltip = ResolveBaselineTooltip())
-			Util::AddTooltip(tooltip, Util::kTooltipWhenDisabled);
+		if (const auto tooltip = ResolveBaselineTooltip(); !tooltip.empty())
+			Util::AddTooltip(tooltip.c_str(), Util::kTooltipWhenDisabled);
 		return a_changed;
 	}
 	// Both were greyed, so neither took input: no gutter to own and nothing to commit. Words are all a

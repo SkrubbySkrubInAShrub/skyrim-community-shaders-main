@@ -164,12 +164,29 @@ public:
 	 */
 	void RestoreFeatureLayers(Feature* feature);
 
+	/** @brief Loaded features whose user edits change settings a Baseline pack also sets. */
+	std::vector<Feature*> FindEditsUnderPack(const std::string& packId);
+
+	/** @brief Drops the user's edits to every setting a Baseline pack sets, so the pack shows as authored. */
+	void ClearEditsUnderPack(const std::string& packId);
+
 	/** @brief Notes that feature settings were edited, so the main menu's Save shows them as unsaved. */
 	void MarkSettingsChanged() { settingsChanged = true; }
 
 	/** @brief Re-checks the sections that are not feature settings (Menu, General, ...) against the last save or
 	 *  load. Cheap enough to call on any frame the main menu edited something. */
 	void CheckCoreSettingsChanged();
+
+	/**
+	 * @brief A feature's settings in the layers beneath the user's edits: defaults with the enabled Baseline packs applied.
+	 * @param featureName The feature's GetName().
+	 * @return Null when the feature has no settings layers.
+	 */
+	const nlohmann::json* GetFeatureBase(const std::string& featureName) const
+	{
+		const auto found = featureBases.find(featureName);
+		return found != featureBases.end() ? &found->second : nullptr;
+	}
 
 	/** @brief True when the user config has changes not yet saved. */
 	bool HasUnsavedChanges() const { return settingsChanged || coreSettingsChanged; }

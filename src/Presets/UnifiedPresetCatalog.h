@@ -12,6 +12,9 @@
 #include "Features/Effects11/SceneHandoff.h"
 #include "PostProcessingMode.h"
 #include "PresetCompatibility.h"
+#include "Utils/UI.h"
+
+struct Feature;
 
 /** @brief Discovers unified preset packs (Effects 11 and CS Presets payloads) plus orphan Effects 11 presets. */
 class UnifiedPresetCatalog
@@ -174,6 +177,10 @@ public:
 	bool IsBaselineEnabled(const std::string& id) const;
 	/** @brief Re-applies a pack that is active or has its Baseline enabled, so freshly exported files take effect. */
 	void ReapplyIfInUse(const std::string& id);
+	/** @brief Asks, once for every pack enabled since the last answer, whether Baseline packs that set settings
+	 *  the user changed should replace those edits. Call every frame the menu or the CS editor is open. */
+	void DrawBaselineOverlapPrompt();
+
 	/** @brief Stops applying a pack's Baseline overwrites; its features fall back to the layers beneath,
 	 *  with the user's edits kept on top.
 	 *  @return False when the pack was not enabled. */
@@ -228,6 +235,8 @@ private:
 
 	/** @brief Enables a pack's Baseline overwrites as the last layer and reapplies them to the loaded features. */
 	void EnableBaseline(const PackInfo& pack);
+	/** @brief Adds a pack whose Baseline sets settings the user changed to the pending overlap prompt. */
+	void QueueBaselineOverlap(const std::string& packId, const std::vector<Feature*>& features);
 
 	/** @brief Adds each folder under Presets as a pack, read from its manifest. */
 	void DiscoverUnifiedPacks();
@@ -246,4 +255,9 @@ private:
 	std::vector<std::string> baselinePackIds;
 	std::optional<PostProcessingMode::Mode> activePipeline;
 	uint32_t pipelineRevision = 0;
+
+	/// Packs, and the feature names they overlap, waiting on the overlap prompt.
+	std::vector<std::string> overlapPackIds;
+	std::vector<std::string> overlapFeatureNames;
+	Util::ConfirmationPopup overlapPrompt;
 };

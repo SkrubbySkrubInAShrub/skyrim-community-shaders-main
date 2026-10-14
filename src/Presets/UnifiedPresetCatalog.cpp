@@ -770,6 +770,8 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
 	// The user's edits stay on top; features that are not loaded pick the pack up when they load.
 	globals::state->ReapplySettingsLayers();
+	if (const auto edited = globals::state->FindEditsUnderPack(pack.id); !edited.empty())
+		QueueBaselineOverlap(pack.id, edited);
 
 	// Disable-at-boot entries take effect on the next game start; persist them with the rest of Settings.
 	if (!pack.disableAtBoot.empty()) {
@@ -849,6 +851,46 @@ bool UnifiedPresetCatalog::SetSceneControl(E11Handoff::Feature feature, bool han
 
 	logger::info("[Presets] Pack '{}': sceneControl '{}' = {} in manifest", activePackId, shortName, handedOff);
 	return true;
+}
+
+void UnifiedPresetCatalog::QueueBaselineOverlap(const std::string& packId, const std::vector<Feature*>& features)
+{
+	if (std::ranges::find(overlapPackIds, packId) == overlapPackIds.end())
+		overlapPackIds.push_back(packId);
+	for (auto* feature : features)
+		if (auto name = feature->GetDisplayName(); std::ranges::find(overlapFeatureNames, name) == overlapFeatureNames.end())
+			overlapFeatureNames.push_back(std::move(name));
+
+	std::string packs;
+	for (const auto& id : overlapPackIds) {
+		const auto* pack = FindPack(id);
+		packs += (packs.empty() ? "" : ", ") + (pack && !pack->name.empty() ? pack->name : id);
+	}
+	std::string names;
+	for (const auto& name : overlapFeatureNames)
+		names += (names.empty() ? "" : ", ") + name;
+	const auto count = overlapFeatureNames.size();
+
+	overlapPrompt.title = T("menu.presets.overlap_title", "Baseline Preset Over Your Changes");
+	overlapPrompt.message = std::vformat(T("menu.presets.overlap_message",
+											 "{} sets {} features you have changed: {}.\n\n"
+											 "Your changes are kept and still win. Use the preset's values to drop them for the settings it sets."),
+		std::make_format_args(packs, count, names));
+	overlapPrompt.confirmLabel = T("menu.presets.overlap_use_preset", "Use Preset Values");
+	overlapPrompt.cancelLabel = T("menu.presets.overlap_keep", "Keep My Changes");
+	overlapPrompt.focus = Util::ConfirmationPopup::Focus::Cancel;
+	overlapPrompt.Request();
+}
+
+void UnifiedPresetCatalog::DrawBaselineOverlapPrompt()
+{
+	if (overlapPrompt.Draw())
+		for (const auto& packId : overlapPackIds)
+			globals::state->ClearEditsUnderPack(packId);
+	if (!overlapPrompt.IsOpen()) {
+		overlapPackIds.clear();
+		overlapFeatureNames.clear();
+	}
 }
 
 bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)

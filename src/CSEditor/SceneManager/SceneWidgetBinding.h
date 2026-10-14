@@ -82,11 +82,11 @@ namespace SceneWidgetBinding
 	/// Which layer a main-menu control's value comes from, highest precedence last.
 	enum class BaselineLayer : std::uint8_t
 	{
-		Base,            // the user's own base setting
-		Override,        // a Baseline preset supplies it
-		OverrideEdited,  // the user's edit over a Baseline preset's value
-		Scene,           // a Scene Manager preset supplies it
-		Sketch           // edited over the Scene Manager's value, until the menu moves on
+		Base,    // the default value
+		Pack,    // a Baseline preset supplies it
+		Edited,  // the user's edit over the default or a Baseline preset's value
+		Scene,   // a Scene Manager preset supplies it
+		Sketch   // edited over the Scene Manager's value, until the menu moves on
 	};
 
 	/// Wraps one intercepted widget call for the duration of that call.
@@ -133,12 +133,15 @@ namespace SceneWidgetBinding
 
 		/// The main menu's path: binds the live member and colours the control by the layer winning it.
 		void BindBaseline();
-		/** @brief Highest layer behind a main-menu control: sketch, scene, feature override, else base. */
-		BaselineLayer ResolveBaselineLayer() const;
+		/**
+		 * @brief Highest layer behind a main-menu control: sketch, scene, the user's edit, Baseline preset, else default.
+		 * @param a_packId Receives the Baseline pack supplying the value beneath, or is cleared.
+		 */
+		BaselineLayer ResolveBaselineLayer(std::string& a_packId) const;
 		/** @brief Tint for baselineLayer, nothing for Base. */
 		std::optional<ImVec4> ResolveBaselineColor() const;
-		/** @brief Tooltip for baselineLayer, null for Base. */
-		const char* ResolveBaselineTooltip() const;
+		/** @brief Tooltip for baselineLayer, empty for Base. */
+		std::string ResolveBaselineTooltip() const;
 		/// Jumps to the Scene Manager page supplying the value, or commits a sketch into it.
 		void DrawBaselineGutter();
 
@@ -277,6 +280,8 @@ namespace SceneWidgetBinding
 		GutterPolicy policy;
 		State state = State::Unsupported;
 		BaselineLayer baselineLayer = BaselineLayer::Base;
+		/// The Baseline pack supplying the value beneath the control, for its tooltip.
+		std::string baselinePackId;
 		/// Layer winning at this address, which drives the colour independently of `state`. A paused
 		/// user entry stays Paused so the checkbox has something to resume, but reads as the mod's.
 		SceneSettingsManager::SettingLayer winningLayer = SceneSettingsManager::SettingLayer::None;

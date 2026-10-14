@@ -21,6 +21,7 @@
 #include "Menu.h"
 #include "Menu/CursorLoader.h"
 #include "Menu/FontAtlasState.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -220,6 +221,10 @@ void OverlayRenderer::RenderOverlay(
 	} else {
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
+
+	// Enabling a Baseline pack can happen from either the menu or the CS editor, and the answer outlives the page.
+	if (editorWindow->open || menu.IsEnabled)
+		UnifiedPresetCatalog::GetSingleton().DrawBaselineOverlapPrompt();
 
 	// The editor draws its own notifications; while it is closed they still need a host, e.g. the
 	// "cannot open in a loading screen" warning raised by the toggle hotkey.
