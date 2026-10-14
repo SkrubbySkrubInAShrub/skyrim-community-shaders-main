@@ -604,7 +604,7 @@ public:
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
-		float ChurnHeight = 4.0f;
+		float ChurnHeight = 1.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades and the SSS mask shade the snow. A/B for dark blotches on open snow at a low sun. */

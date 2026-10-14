@@ -259,6 +259,10 @@ namespace
 		return look;
 	}
 
+	// The condition takes at most half the churn.
+	constexpr float kChurnConditionFloor = 0.5f;
+	float ConditionChurn(float a_churnScale) { return std::lerp(kChurnConditionFloor, 1.0f, ClimateHardZero(a_churnScale)); }
+
 	float ChurnRampStart(float a_powder) { return std::lerp(kChurnClumpStart, kChurnPowderStart, a_powder); }
 	float ChurnRampFull(float a_powder) { return std::lerp(kChurnClumpFull, kChurnPowderFull, a_powder); }
 
@@ -391,7 +395,7 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 	look.teeth = ClimateHardZero(terms.teeth);
 	look.clods = ClimateHardZero(terms.clods);
 	look.slough = terms.slough;
-	look.churnScale = ClimateHardZero(terms.churnScale);
+	look.churnScale = ConditionChurn(terms.churnScale);
 	look.churnPowder = terms.churnPowder;
 
 	// The class sliders floor it until the land's own textures are registered;
@@ -408,7 +412,7 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
 		const SnowCondition row = SnowConditionAt(player.temperature + (float(i) - 1.0f) * kClimateLUTStep);
 		const ClimateLookTerms rowTerms = ClimateLookOf(row.stickiness, row.firmness, row.wetness);
-		const float weight = look.strength * ClimateHardZero(rowTerms.churnScale);
+		const float weight = look.strength * ConditionChurn(rowTerms.churnScale);
 		float start = ChurnRampStart(rowTerms.churnPowder);
 		const float full = ChurnRampFull(rowTerms.churnPowder);
 		// A weightless row keeps its start past the deepest cover, so the lerp
