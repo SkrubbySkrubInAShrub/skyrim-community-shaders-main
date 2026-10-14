@@ -1047,6 +1047,8 @@ public:
 		float4 ViewProjRow2;
 		float4 ViewProjRow3;
 		float4 CameraAdjust;
+		/** @brief Overlay: x = the focal length in pixels, yz = the principal point in pixels, w spare. */
+		float4 OverlayView;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodCB);
 	struct alignas(16) BloodSkinCB

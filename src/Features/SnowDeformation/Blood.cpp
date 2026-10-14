@@ -1335,6 +1335,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodPreSkinDepthThisFrame = false;
 	cb.Spread = { 0.0f, shellPaintsOwn ? 1.0f : 0.0f, 0.0f, 0.0f };
 	const float W = std::max(bloodViewport.Width, 1.0f), H = std::max(bloodViewport.Height, 1.0f);
+	// The camera in pixels: the overlay turns a depth gap into snow height with it.
+	const auto& eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
+	cb.OverlayView = { 0.5f * H * eye.projMat(1, 1), bloodViewport.TopLeftX + 0.5f * W, bloodViewport.TopLeftY + 0.5f * H, 0.0f };
 	cb.OverlayRect = { float(bloodCopyRect.left) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.top) / H * 2.0f,
 		float(bloodCopyRect.right) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.bottom) / H * 2.0f };
 	bloodCB->Update(cb);

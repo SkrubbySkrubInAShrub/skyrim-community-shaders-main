@@ -49,6 +49,9 @@ cbuffer BloodCB : register(b1)
 	float4 ViewProjRow2;
 	float4 ViewProjRow3;
 	float4 CameraAdjust;
+
+	// Overlay: x = the focal length in pixels, yz = the principal point.
+	float4 OverlayView;
 }
 
 #ifdef SKINNED
@@ -72,9 +75,10 @@ cbuffer BloodSkinCB : register(b2)
 // the specular and the reflectance. No decal geometry and no per-decal
 // alpha: stacked decals, the game's own fade and its depth test are all
 // in P already, and pixels the game did not paint stay untouched. Kept
-// where the depth after the skin pass sits 0.05..6 units nearer than the
-// pre-snow depth (a thin layer drew here); bare rock has no lift and the
-// deep shell keeps its extinction smear.
+// where a thin layer drew over the pre-snow surface: the depth after the
+// skin pass nearer than it, and the snow's height over it fading the decal
+// out from 1.5 to 5 units; bare rock has no lift and the deep shell keeps
+// its extinction smear.
 #	ifdef PSHADER
 #		include "Common/SharedData.hlsli"
 // Pre-snow depth (TerrainBlending's copy) and the skin pass's own depth.
@@ -97,9 +101,11 @@ Texture2D<float> DecalMask : register(t15);
 // The main depth after the landscape shell, before the object-snow skins.
 Texture2D<float> PreSkinDepth : register(t16);
 #	endif
-// View-distance units. Coat lift is 0.4; a rise or the shell is 10-40.
+// View-distance units. Coat lift is 0.4; a rise or the shell is 10-40. The
+// snow height over the decal (SnowHeightOver) does the fine cut; the far one
+// is wide so grazing views keep the thin end of a melt basin.
 static const float kOverlayMinLift = 0.05;
-static const float kOverlayMaxLift = 6.0;
+static const float kOverlayMaxLift = 24.0;
 #endif
 
 #ifdef MASK
@@ -254,6 +260,29 @@ float4 DecalPart(Texture2D<float4> p, Texture2D<float4> pd, int3 pixel, float a)
 	return float4(max(p.Load(pixel).rgb - (1.0 - a) * pd.Load(pixel).rgb, 0.0), a);
 }
 
+// The pre-snow surface at a pixel, in view space.
+float3 PreSnowViewPos(int2 px)
+{
+	const float z = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
+	return float3((float2(px) + 0.5 - OverlayView.yz) * (z / OverlayView.x), z);
+}
+
+// The snow's height over the pre-snow surface: lift is a gap in view depth,
+// the ray's slant through that surface turns it into a height.
+float SnowHeightOver(int2 px, float lift)
+{
+	const float3 p = PreSnowViewPos(px);
+	const float3 n = normalize(cross(PreSnowViewPos(px + int2(1, 0)) - p, PreSnowViewPos(px + int2(0, 1)) - p));
+	return lift * abs(dot(normalize(p), n)) * length(p) / max(p.z, 1e-3);
+}
+
+// Snow over a decal: under this much it shows whole, from this much it is
+// hidden - so the ground of a melt basin comes through as the snow thins
+// instead of ending on a contour. kDecalHiddenOver is mirrored by
+// SnowShell.hlsl kDecalShowDepth.
+static const float kDecalShowsUnder = 1.5;
+static const float kDecalHiddenOver = 5.0;
+
 OVERLAY_OUTPUT main(VS_OUTPUT input)
 {
 	const int3 pixel = int3(input.Position.xy, 0);
@@ -277,6 +306,12 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float a = max(saturate(max(taken.x, taken.y)), any(p0 != d0) ? DecalMask.Load(pixel) : 0.0);
 	if (a < 0.02)
 		discard;
+	[branch] if (OverlayView.x > 0.0)
+	{
+		a *= 1.0 - smoothstep(kDecalShowsUnder, kDecalHiddenOver, SnowHeightOver(pixel.xy, lift));
+		if (a < 0.02)
+			discard;
+	}
 	OVERLAY_OUTPUT o;
 	o.Diffuse = DecalPart(PreSnow0, PreDecal0, pixel, a);
 	o.NormalGloss = DecalPart(PreSnow2, PreDecal2, pixel, a);

@@ -1122,6 +1122,11 @@ static const float kLandFilm = 0.5;
 // Remaining depth under which the snow is a film: the land's own verdict
 // decides it pixel by pixel, objects included.
 static const float kLandFilmDepth = 1.0;
+// Snow over a decal from which the decal overlay hides it (mirror of
+// SnowBloodCapture.hlsl kDecalHiddenOver): thinner snow on a fire or shock
+// mark is left to the game's draws, so the ground and its scorch exist under
+// it for the overlay to show through.
+static const float kDecalShowDepth = 5.0;
 
 // The land's snow-texture weight, bilinear like TerrainHeightAt.
 float LandSnowWeight(float2 gridLocal)
@@ -2282,9 +2287,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #	ifdef SNOW_PREPASS_EARLY
 	// Pending: the land contest to run, or a clamp a static behind would
 	// cancel. Marked by a negative raster depth; the claim fill skips it.
+	// Thin snow on a fire or shock mark goes pending too, unflagged: the
+	// ground and its scorch draw under it, and the decal overlay lets them
+	// through as the snow thins (SnowBloodCapture.hlsl SnowHeightOver).
 	const bool clampPending = prepassOut.DepthLE < input.Position.z;
+	bool markPending = false;
+	[branch] if (landRemaining < kDecalShowDepth)
+		markPending = SampleSpellMark(gridLocal) > 0.0;
 	prepassOut.Pending = 0.0;
-	[branch] if (clampPending || landContest)
+	[branch] if (clampPending || landContest || markPending)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
 		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0));
