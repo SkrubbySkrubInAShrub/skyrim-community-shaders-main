@@ -4489,6 +4489,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Not in pdMode: the ease is the dissolve's companion, and a zero-lift
 	// coat neither dissolves nor meets the sheet at the analytic top, so the
 	// band printed a flat-lit stripe on the object above the real junction.
+	// Skins only: the patch's carved normal must not ease to the uncarved blanket.
+#	ifndef PATCH
 	[branch] if (!pdMode && HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
 	{
 		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
@@ -4518,6 +4520,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 		}
 	}
+#	endif
 
 	// The drape's half of the meeting with the landscape sheet: its normal
 	// goes halfway to the sheet's through the last half of ObjectMeetBand above
