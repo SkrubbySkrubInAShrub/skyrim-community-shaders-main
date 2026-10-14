@@ -750,18 +750,8 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 	SaveActiveState();
 
 	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
-
-	// The baseline is the layer beneath the scene, so reapply it without the scene's values in play.
-	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-	for (const auto& featureName : pack.baselineFeatures) {
-		auto* feature = Feature::FindFeatureByShortName(featureName);
-		if (!feature || !feature->loaded) {
-			logger::info("[Presets] Baseline '{}': feature '{}' is not loaded; it applies once the feature loads", pack.id, featureName);
-			continue;
-		}
-		if (!feature->ReapplyOverrideSettings())
-			logger::warn("[Presets] Baseline '{}': nothing applied to '{}' (see Feature Issues for rejected files)", pack.id, featureName);
-	}
+	// The user's edits stay on top; features that are not loaded pick the pack up when they load.
+	globals::state->ReapplySettingsLayers();
 
 	// Disable-at-boot entries take effect on the next game start; persist them with the rest of Settings.
 	if (!pack.disableAtBoot.empty()) {
@@ -849,10 +839,8 @@ bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)
 		return false;
 	SaveActiveState();
 
-	auto* overrides = SettingsOverrideManager::GetSingleton();
-	overrides->RefreshOverrides();
-	// Drops the .user deltas of features that no longer have any override behind them.
-	overrides->CleanupStaleUserOverrides();
+	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	globals::state->ReapplySettingsLayers();
 	logger::info("[Presets] Removed Baseline pack '{}'", id);
 	return true;
 }

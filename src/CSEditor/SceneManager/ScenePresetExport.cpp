@@ -1012,6 +1012,7 @@ void ScenePresetExport::Draw()
 		if (exported) {
 			UnifiedPresetCatalog::GetSingleton().Discover();
 			SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+			globals::state->ReapplySettingsLayers();
 			auto& catalog = UnifiedPresetCatalog::GetSingleton();
 			if (info.type != PresetType::Baseline) {
 				// The export baked the user entries into the pack, so apply it and drop them from SceneManager.json.

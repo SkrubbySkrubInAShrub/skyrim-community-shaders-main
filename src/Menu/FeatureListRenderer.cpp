@@ -27,7 +27,6 @@
 #include "Menu/PresetsPageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -783,17 +782,10 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const auto featureName = feat->GetShortName();
 
 	// Calculate action button widths
-	float buttonPadding = ThemeManager::Constants::BUTTON_PADDING;
 	float buttonSpacing = ThemeManager::Constants::BUTTON_SPACING;
 
-	const char* overrideButtonText = T("menu.features.apply_override", "Apply Override");
 	float bootToggleWidth = ImGui::GetFrameHeight() * 1.6f;
-	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
 	const float exportIconSize = ImGui::GetFrameHeight();
-
-	// Check if override is available for this feature
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
 	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
 
@@ -805,9 +797,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	}
 	if (canExport) {
 		totalButtonWidth += exportIconSize + buttonSpacing;
-	}
-	if (!isDisabled && isLoaded && hasOverrides) {
-		totalButtonWidth += overrideButtonWidth + buttonSpacing;
 	}
 
 	// Get available content width for positioning
@@ -873,29 +862,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 				"Restart required for changes to take effect.\n"
 				"Disabling removes performance impact."),
 			bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
-	}
-
-	// Apply Override button (when feature has available overrides)
-	if (!isDisabled && isLoaded && hasOverrides) {
-		ImGui::SameLine();
-		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
-			// The override replaces the base settings, not the values the scene is applying over them.
-			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-			if (feat->ReapplyOverrideSettings()) {
-				logger::info("Successfully reapplied override settings for {}", featureName);
-			} else {
-				logger::warn("Failed to reapply override settings for {}", featureName);
-			}
-		}
-
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("menu.features.restore_override_tooltip",
-					"Restores original override settings from mod files.\n"
-					"This will discard your customizations and revert to\n"
-					"the mod author's recommended settings."));
-		}
 	}
 
 	// Drawn after all header items so the modal cannot clobber their hover state.
@@ -981,15 +947,13 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	{
 		auto style = Util::TransparentIconButtonStyle();
 		if (Icons::Button("##RestoreDefaults", Icons::FA(ICON_FA_UNDO), ImVec2(size, size))) {
-			feat->RestoreDefaultSettings();
-			// Rewrites the base values behind a live scene layer, so the resolver has to re-baseline or
-			// the next resolve restores the pre-default values.
-			globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat);
+			// Clears the user's edits, so the feature shows what defaults and Baseline packs set.
+			globals::state->RestoreFeatureLayers(feat);
 		}
 	}
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
+		ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore defaults: clears your edits to this feature, back to what defaults and your Baseline presets set"));
 	}
 }
 

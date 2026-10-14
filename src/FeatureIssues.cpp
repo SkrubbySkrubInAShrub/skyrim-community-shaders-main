@@ -419,10 +419,10 @@ namespace FeatureIssues
 				DrawFeatureIssue(*issue, theme.StatusPalette.Warning);
 			}
 		}
-		// Override Failures Section
-		if (auto section = Util::SectionWrapper(T("menu.issues.override_failures_header", "Override Failures"),
-				T("menu.issues.override_failures_desc",
-					"The following override files failed to load or apply. Check the file format and content."),
+		// Baseline preset failures
+		if (auto section = Util::SectionWrapper(T("menu.issues.baseline_failures_header", "Baseline Preset Failures"),
+				T("menu.issues.baseline_failures_desc",
+					"These Baseline preset files failed to load or apply. Check the file format and content."),
 				theme.StatusPalette.Error, !overrideIssues.empty())) {
 			for (const auto* issue : overrideIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Error);

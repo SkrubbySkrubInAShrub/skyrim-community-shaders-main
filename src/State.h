@@ -17,6 +17,9 @@ using json = nlohmann::json;
 
 #include <Hooks.h>
 #include <mutex>
+#include <unordered_map>
+
+struct Feature;
 
 class State
 {
@@ -148,6 +151,18 @@ public:
 	 * @param i_json Input JSON object to read from.
 	 */
 	void LoadFromJson(nlohmann::json& i_json);
+
+	/**
+	 * @brief Recombines defaults and the enabled Baseline packs under every loaded feature, keeping the
+	 *        user's edits on top. Call after the set of Baseline packs, or their files, changes.
+	 */
+	void ReapplySettingsLayers();
+
+	/**
+	 * @brief Clears the user's edits to one feature, so it shows what defaults and Baseline packs give it.
+	 * @param feature A loaded feature.
+	 */
+	void RestoreFeatureLayers(Feature* feature);
 
 	/** @brief Loads the active theme preset from the menu settings. */
 	void LoadTheme();
@@ -492,6 +507,20 @@ public:
 	}
 
 private:
+	/// SettingsDefault.json as last loaded; the bottom settings layer.
+	nlohmann::json defaultSettings;
+	/// Per feature (keyed by GetName()): defaults with the enabled Baseline packs applied. The user's
+	/// edits are what a feature's settings differ from this by.
+	std::unordered_map<std::string, nlohmann::json> featureBases;
+	/// Per feature: the edits SettingsUser.json holds, kept for features that are not loaded so a save
+	/// carries them over untouched.
+	std::unordered_map<std::string, nlohmann::json> userFeatureEdits;
+
+	/** @brief Defaults with the enabled Baseline packs applied, for one feature. */
+	nlohmann::json BuildFeatureBase(Feature* feature);
+	/** @brief Replaces each feature's full settings in a config with only the user's edits to it. */
+	void KeepOnlyUserEdits(nlohmann::json& settings);
+
 	std::optional<TonemapOwner> tonemapOwner;
 	uint historyResetFrame = UINT_MAX;
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;

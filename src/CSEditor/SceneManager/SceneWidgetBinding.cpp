@@ -429,19 +429,19 @@ namespace
 		return supplier;
 	}
 
-	/** @brief The value the last enabled feature override applying to a setting gives it, or null.
-	 *  Later overrides merge over earlier ones, so the last to hold the key is the one in effect. */
+	/** @brief The value the last Baseline pack applying to a setting gives it, or null.
+	 *  Later packs merge over earlier ones, so the last to hold the key is the one in effect. */
 	const json* FindFeatureOverrideValue(const SettingMetadata& a_setting)
 	{
 		auto* overrides = SettingsOverrideManager::GetSingleton();
 		const std::string featureShortName{ a_setting.featureShortName };
-		if (!overrides->IsEnabled() || !overrides->HasFeatureOverrides(featureShortName))
+		if (!overrides->HasFeatureOverrides(featureShortName))
 			return nullptr;
 
 		const auto featureOverrides = overrides->GetFeatureOverrides(featureShortName);
 		for (auto info = featureOverrides.rbegin(); info != featureOverrides.rend(); ++info) {
-			// An override naming keys the feature lacks is never applied.
-			if (!(*info)->enabled || !(*info)->unknownKeys.empty())
+			// A file naming keys the feature lacks is never applied.
+			if (!(*info)->unknownKeys.empty())
 				continue;
 			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->overrideData, a_setting))
 				return value;
@@ -685,10 +685,10 @@ const char* SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
 {
 	switch (baselineLayer) {
 	case BaselineLayer::Override:
-		return T(TKEY("baseline_from_override"), "A feature override supplies this value.");
+		return T(TKEY("baseline_from_pack"), "A Baseline preset supplies this value.");
 	case BaselineLayer::OverrideEdited:
-		return T(TKEY("baseline_override_edited"),
-			"Edited away from the feature override's value. Save or export an override to keep it.");
+		return T(TKEY("baseline_pack_edited"),
+			"Your edit, over the Baseline preset's value. Save Settings keeps it; Restore Defaults goes back to the preset.");
 	case BaselineLayer::Scene:
 		return T(TKEY("baseline_from_scene"),
 			"A Scene Manager preset supplies this value here. Editing sketches over it until you leave "

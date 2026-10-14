@@ -1,6 +1,7 @@
 #include "State.h"
 
 #include <algorithm>
+#include <cmath>
 #include <codecvt>
 
 #include <pystring/pystring.h>
@@ -362,6 +363,71 @@ void State::Setup()
 	tonemapOwner.reset();
 }
 
+namespace
+{
+	/** @brief Writes overlay onto target, merging objects key by key; any other value replaces. */
+	void MergeInto(json& target, const json& overlay)
+	{
+		if (!target.is_object() || !overlay.is_object()) {
+			target = overlay;
+			return;
+		}
+		for (const auto& [key, value] : overlay.items()) {
+			if (const auto found = target.find(key); found != target.end() && found->is_object() && value.is_object())
+				MergeInto(*found, value);
+			else
+				target[key] = value;
+		}
+	}
+
+	/** @brief Equality that tolerates float noise: JSON stores float64 while features hold float32. */
+	bool ValuesMatch(const json& lhs, const json& rhs)
+	{
+		if (lhs.is_number() && rhs.is_number()) {
+			const double lhsValue = lhs.get<double>();
+			const double rhsValue = rhs.get<double>();
+			return std::abs(lhsValue - rhsValue) <= std::max(1e-6, std::abs(rhsValue) * 1e-5);
+		}
+		if (lhs.is_array() && rhs.is_array()) {
+			if (lhs.size() != rhs.size())
+				return false;
+			for (size_t index = 0; index < lhs.size(); ++index)
+				if (!ValuesMatch(lhs[index], rhs[index]))
+					return false;
+			return true;
+		}
+		if (lhs.is_object() && rhs.is_object()) {
+			if (lhs.size() != rhs.size())
+				return false;
+			for (const auto& [key, value] : lhs.items())
+				if (const auto found = rhs.find(key); found == rhs.end() || !ValuesMatch(value, *found))
+					return false;
+			return true;
+		}
+		return lhs == rhs;
+	}
+
+	/** @brief The parts of current that differ from base: objects compare key by key, anything else whole. */
+	json DiffFromBase(const json& current, const json& base)
+	{
+		json diff = json::object();
+		if (!current.is_object())
+			return diff;
+		for (const auto& [key, value] : current.items()) {
+			const auto found = base.find(key);
+			if (found == base.end()) {
+				diff[key] = value;
+			} else if (value.is_object() && found->is_object()) {
+				if (auto nested = DiffFromBase(value, *found); !nested.empty())
+					diff[key] = std::move(nested);
+			} else if (!ValuesMatch(value, *found)) {
+				diff[key] = value;
+			}
+		}
+		return diff;
+	}
+}
+
 static std::string GetConfigPath(State::ConfigMode a_configMode)
 {
 	switch (a_configMode) {
@@ -404,7 +470,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		return true;
 	};
 
-	// LOADING ORDER: Default → User → Overrides → User Overrides (.user files)
+	// LOADING ORDER, per feature: Default → enabled Baseline packs → the user's edits. Sections that are
+	// not feature settings (Menu, General, ...) come from the user's config as a whole.
 
 	// Step 1: Always start with default settings
 	logger::info("Loading default settings from: {}", defaultConfigFilePath);
@@ -419,38 +486,44 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		}
 	}
 
-	// Step 2: Apply user settings on top of defaults (user preferences)
+	defaultSettings = settings;
+
+	// Step 2: Read the user's config
+	json userSettings = json::object();
 	if (a_configMode == ConfigMode::USER) {
-		if (const auto userSettings = Util::FileHelpers::ReadJsonObject(userConfigFilePath, "user config")) {
-			for (const auto& [key, value] : userSettings->items())
-				settings[key] = value;
+		if (auto loaded = Util::FileHelpers::ReadJsonObject(userConfigFilePath, "user config")) {
+			userSettings = std::move(*loaded);
 			logger::info("Applied user settings from: {}", userConfigFilePath);
 		} else {
 			logger::info("No usable user config at: {}", userConfigFilePath);
 		}
 	}
 
-	// Step 3: Discover and prepare overrides (applied after user settings, so overrides take priority)
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	size_t overridesDiscovered = overrideManager->DiscoverOverrides();
-
-	// Runs even at zero discoveries so companions orphaned by an uninstall still get pruned.
-	overrideManager->CleanupStaleUserOverrides();
-
-	if (overridesDiscovered > 0) {
-		logger::info("Discovered {} override files", overridesDiscovered);
-
-		// Apply global overrides to main settings
-		size_t globalOverrides = overrideManager->ApplyGlobalOverrides(settings);
-		if (globalOverrides > 0) {
-			logger::info("Applied {} global override(s)", globalOverrides);
+	// Step 3: Layer each feature's settings; the user's edits win over Baseline packs
+	SettingsOverrideManager::GetSingleton()->DiscoverOverrides();
+	featureBases.clear();
+	userFeatureEdits.clear();
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (!feature->UsesMainSettings())
+			continue;
+		const auto name = feature->GetName();
+		json edits = json::object();
+		if (const auto found = userSettings.find(name); found != userSettings.end()) {
+			if (found->is_object())
+				edits = *found;
+			userSettings.erase(found);
 		}
-
-		// Apply global user overrides on top (if any)
-		if (overrideManager->LoadUserOverride("Global", settings)) {
-			logger::info("Applied global user override customizations");
-		}
+		json merged = BuildFeatureBase(feature);
+		featureBases[name] = merged;
+		MergeInto(merged, edits);
+		userFeatureEdits[name] = std::move(edits);
+		if (merged.empty())
+			settings.erase(name);
+		else
+			settings[name] = std::move(merged);
 	}
+	for (const auto& [key, value] : userSettings.items())
+		settings[key] = value;
 
 	try {
 		// Load core settings (Menu, Advanced, General, Replace Original Shaders)
@@ -495,32 +568,8 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 				if (!isDisabled) {
 					logger::info("Loading Feature: '{}'", featureName);
 
-					// Load base feature settings from merged config (default + user)
+					// Settings arrive already layered: defaults, Baseline packs, then the user's edits
 					feature->Load(settings);
-
-					// Apply feature-specific overrides on top (overrides take priority over user settings)
-					if (feature->UsesMainSettings() && overridesDiscovered > 0 && overrideManager->HasFeatureOverrides(featureName)) {
-						json featureJson;
-						feature->SaveSettings(featureJson);  // Get current settings as JSON
-
-						// Apply overrides
-						size_t appliedOverrides = overrideManager->ApplyOverrides(featureName, featureJson);
-						if (appliedOverrides > 0) {
-							logger::info("Applied {} override(s) to {}", appliedOverrides, feature->GetName());
-						}
-
-						// Apply user override customizations on top (if any)
-						if (overrideManager->LoadUserOverride(featureName, featureJson)) {
-							logger::info("Applied user override customizations to {}", feature->GetName());
-						}
-
-						// Reload settings with overrides applied
-						try {
-							feature->LoadSettings(featureJson);
-						} catch (...) {
-							logger::warn("Invalid override settings for {}, keeping original settings.", feature->GetName());
-						}
-					}
 				} else {
 					logger::info("Feature '{}' is disabled at boot.", featureName);
 				}
@@ -604,24 +653,8 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["Version"] = Plugin::VERSION.string();
 
-	// Save feature settings and user overrides
-	auto overrideManager = SettingsOverrideManager::GetSingleton();
-	for (auto* feature : Feature::GetFeatureList()) {
+	for (auto* feature : Feature::GetFeatureList())
 		feature->Save(settings);
-
-		// If feature has overrides, save user modifications to .user file
-		const std::string featureName = feature->GetShortName();
-		if (overrideManager->HasFeatureOverrides(featureName) && feature->loaded) {
-			json currentSettings;
-			feature->SaveSettings(currentSettings);
-
-			// Get the merged override settings (all overrides applied to empty base)
-			json overrideSettings = overrideManager->GetMergedOverrideSettings(featureName, json::object());
-
-			// Save user override only if settings differ from override
-			overrideManager->SaveUserOverride(featureName, currentSettings, overrideSettings);
-		}
-	}
 }
 
 void State::LoadFromJson(nlohmann::json& settings)
@@ -720,6 +753,8 @@ void State::Save(ConfigMode a_configMode)
 	json settings;
 	try {
 		SaveToJson(settings);
+		if (a_configMode == ConfigMode::USER)
+			KeepOnlyUserEdits(settings);
 	} catch (const std::exception& e) {
 		logger::error("Failed to serialize settings, leaving {} untouched. Error: {}", configPath, e.what());
 		return;
@@ -727,6 +762,83 @@ void State::Save(ConfigMode a_configMode)
 
 	if (Util::FileHelpers::WriteJsonAtomically(configPath, settings, 1, "config")) {
 		logger::info("Saving settings to {}", configPath);
+	}
+}
+
+json State::BuildFeatureBase(Feature* feature)
+{
+	const auto found = defaultSettings.find(feature->GetName());
+	json base = found != defaultSettings.end() && found->is_object() ? *found : json::object();
+	SettingsOverrideManager::GetSingleton()->ApplyOverrides(feature->GetShortName(), base);
+	return base;
+}
+
+void State::KeepOnlyUserEdits(json& settings)
+{
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (!feature->UsesMainSettings())
+			continue;
+		const auto name = feature->GetName();
+		// A feature that never loaded holds defaults, not the user's values, so its stored edits carry over.
+		if (feature->loaded) {
+			const auto current = settings.find(name);
+			const auto base = featureBases.find(name);
+			userFeatureEdits[name] = current == settings.end() ? json::object() :
+			                                                     DiffFromBase(*current, base != featureBases.end() ? base->second : json::object());
+		}
+		const auto edits = userFeatureEdits.find(name);
+		if (edits == userFeatureEdits.end() || edits->second.empty())
+			settings.erase(name);
+		else
+			settings[name] = edits->second;
+	}
+}
+
+void State::ReapplySettingsLayers()
+{
+	// Base values are read and rewritten, so the scene's values must be out of the way.
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (!feature->loaded || !feature->UsesMainSettings())
+			continue;
+		auto& base = featureBases[feature->GetName()];
+		json newBase = BuildFeatureBase(feature);
+		if (newBase == base)
+			continue;
+
+		json current;
+		feature->SaveSettings(current);
+		json layered = newBase;
+		MergeInto(layered, DiffFromBase(current, base));
+		try {
+			feature->LoadSettings(layered);
+		} catch (const std::exception& e) {
+			// A malformed Baseline file can throw after some fields applied, so put the previous values back.
+			logger::warn("Could not apply Baseline changes to {}, keeping its settings: {}", feature->GetName(), e.what());
+			try {
+				feature->LoadSettings(current);
+			} catch (...) {
+			}
+			continue;
+		}
+		base = std::move(newBase);
+	}
+}
+
+void State::RestoreFeatureLayers(Feature* feature)
+{
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	// Defaults first, so settings a partial base leaves out still reset.
+	feature->RestoreDefaultSettings();
+	const auto base = featureBases.find(feature->GetName());
+	if (base == featureBases.end() || base->second.empty())
+		return;
+	json values = base->second;
+	try {
+		feature->LoadSettings(values);
+	} catch (const std::exception& e) {
+		logger::warn("Could not restore {} to its Baseline values, using defaults: {}", feature->GetName(), e.what());
+		feature->RestoreDefaultSettings();
 	}
 }
 

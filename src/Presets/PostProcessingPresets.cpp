@@ -10,6 +10,7 @@
 #include "Globals.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SettingsOverrideManager.h"
+#include "State.h"
 #include "Utils/FileSystem.h"
 
 namespace
@@ -121,5 +122,6 @@ bool PostProcessingPresets::WriteBaseline(const std::filesystem::path& packRoot)
 		return false;
 
 	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	globals::state->ReapplySettingsLayers();
 	return true;
 }

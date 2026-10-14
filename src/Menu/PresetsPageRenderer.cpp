@@ -254,7 +254,7 @@ namespace
 			if (ImGui::Button(removeLabel))
 				catalog.RemoveBaseline(pack.id);
 			Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
-				"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
+				"Stops applying this pack's baseline settings. Its features go back to what defaults and your other Baseline packs set; your own edits are kept."));
 		}
 
 		if (packActive) {

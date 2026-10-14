@@ -83,8 +83,8 @@ namespace SceneWidgetBinding
 	enum class BaselineLayer : std::uint8_t
 	{
 		Base,            // the user's own base setting
-		Override,        // a feature override file supplies it
-		OverrideEdited,  // edited away from the feature override's value
+		Override,        // a Baseline preset supplies it
+		OverrideEdited,  // the user's edit over a Baseline preset's value
 		Scene,           // a Scene Manager preset supplies it
 		Sketch           // edited over the Scene Manager's value, until the menu moves on
 	};
