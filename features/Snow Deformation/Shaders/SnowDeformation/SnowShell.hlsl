@@ -1122,11 +1122,11 @@ static const float kLandFilm = 0.5;
 // Remaining depth under which the snow is a film: the land's own verdict
 // decides it pixel by pixel, objects included.
 static const float kLandFilmDepth = 1.0;
-// Snow over a decal from which the decal overlay hides it (mirror of
-// SnowBloodCapture.hlsl kDecalHiddenOver): thinner snow on a fire or shock
-// mark is left to the game's draws, so the ground and its scorch exist under
-// it for the overlay to show through.
-static const float kDecalShowDepth = 5.0;
+// Thinner snow on a fire or shock mark is left to the game's draws, so the
+// ground and its scorch exist under it for the decal overlay to show
+// through. Past SnowBloodCapture.hlsl kDecalHiddenOver: the overlay's height,
+// measured over the real ground, runs down to ~0.75 of this remaining depth.
+static const float kDecalShowDepth = 14.0;
 
 // The land's snow-texture weight, bilinear like TerrainHeightAt.
 float LandSnowWeight(float2 gridLocal)

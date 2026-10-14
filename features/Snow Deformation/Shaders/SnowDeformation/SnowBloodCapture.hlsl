@@ -278,10 +278,10 @@ float SnowHeightOver(int2 px, float lift)
 
 // Snow over a decal: under this much it shows whole, from this much it is
 // hidden - so the ground of a melt basin comes through as the snow thins
-// instead of ending on a contour. kDecalHiddenOver is mirrored by
-// SnowShell.hlsl kDecalShowDepth.
-static const float kDecalShowsUnder = 1.5;
-static const float kDecalHiddenOver = 5.0;
+// instead of ending on a contour. SnowShell.hlsl kDecalShowDepth stays above
+// kDecalHiddenOver.
+static const float kDecalShowsUnder = 2.0;
+static const float kDecalHiddenOver = 12.0;
 
 OVERLAY_OUTPUT main(VS_OUTPUT input)
 {
