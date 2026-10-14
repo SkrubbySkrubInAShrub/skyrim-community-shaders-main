@@ -4387,9 +4387,14 @@ void SnowDeformation::DrawCapturedStatics()
 		context->VSSetShaderResources(13, 1, &patchConeSRV);
 		// The march's road taps read the same cone.
 		context->PSSetShaderResources(13, 1, &patchConeSRV);
+		// Land-exact layer (t52): the landscape meet finds the sheet's drawn
+		// surface with it, in whichever stage builds the patch vertex.
+		ID3D11ShaderResourceView* patchLandFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+		context->VSSetShaderResources(52, 1, &patchLandFineSRV);
 		if (tessellatePatch) {
 			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
 			context->DSSetShaderResources(13, 1, &patchConeSRV);
+			context->DSSetShaderResources(52, 1, &patchLandFineSRV);
 			// The hull's screen-size cap stands corners off any road on the terrain.
 			context->HSSetShaderResources(0, 1, &patchTerrainSRV);
 		}
@@ -4460,6 +4465,8 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
 		context->VSSetShaderResources(11, 2, nullHeightSRVs);
 		context->PSSetShaderResources(13, 1, nullHeightSRVs);
+		context->VSSetShaderResources(52, 1, nullHeightSRVs);
+		context->DSSetShaderResources(52, 1, nullHeightSRVs);
 		ID3D11ShaderResourceView* nullPatchRune[2 * kRuneMaxTiles] = {};
 		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullPatchRune);
 		context->PSSetShaderResources(90, 1, nullPatchRune);

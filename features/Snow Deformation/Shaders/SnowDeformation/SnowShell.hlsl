@@ -868,30 +868,47 @@ float SampleObjectDepthCap(float2 worldXY)
 	return max(max(sd00.x, sd10.x), max(sd01.x, sd11.x));
 }
 
-// Road share of the ground around a point: the road raster's presence,
-// bilinear, at four corners `reach` out - a half on a road's edge, 0 or 1 a
-// little way off it. roadDepth: the deepest road layer seen, 0 with none.
-float RoadShareAround(float2 worldXY, float reach, out float roadDepth)
+// The road raster at a point, max of four texels like the patch: x = road
+// layer depth, y = road top (kNoRoadTop where no road drew).
+float2 RoadRasterAt(float2 worldXY)
 {
-	roadDepth = 0.0;
-	float share = 0.0;
-	[unroll] for (int k = 0; k < 4; ++k)
+	float2 s = float2(0.0, kNoRoadTop);
+	float2 dims;
+	bool valid;
+	const float2 t = ObjectMapTexel(worldXY, dims, valid);
+	[branch] if (valid)
 	{
-		float2 dims;
-		bool valid;
-		const float2 t = ObjectMapTexel(worldXY + float2((k & 1) ? reach : -reach, (k & 2) ? reach : -reach), dims, valid);
 		const int2 t0 = (int2)t;
-		const float2 f = t - t0;
 		const int2 t1 = min(t0 + 1, int2(dims) - 1);
-		const float2 s00 = ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0));
-		const float2 s10 = ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0));
-		const float2 s01 = ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0));
-		const float2 s11 = ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0));
-		const float4 onRoad = (float4(s00.y, s10.y, s01.y, s11.y) > kNoRoadTop * 0.5) && valid ? 1.0 : 0.0;
-		share += lerp(lerp(onRoad.x, onRoad.y, f.x), lerp(onRoad.z, onRoad.w, f.x), f.y);
-		roadDepth = max(roadDepth, max(max(onRoad.x * s00.x, onRoad.y * s10.x), max(onRoad.z * s01.x, onRoad.w * s11.x)));
+		s = max(max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0))),
+			max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0))));
 	}
-	return share * 0.25;
+	return s;
+}
+
+// The road trench patch's drawn surface over a road column (RoadRasterAt), as
+// BuildPatchVertex lays it: the road's top, the carve through the road layer,
+// the dunes.
+float RoadPatchZ(float2 road, float deform, float blur, float und, float2 worldXY)
+{
+	const float carved = CarveProfile(deform, blur, road.x, worldXY);
+	return road.y + carved + und * saturate(carved / 8.0) - 0.4;
+}
+
+// The patch's macro slope (its normal's top term, BuildPatchVertex): 16-unit
+// differences of the road's top (tops = +x, -x, +y, -y), one-sided at the
+// road's edge, clamped to 45 degrees.
+float RoadTopSlope1(float p, float n, float c, float step)
+{
+	const bool vp = p > kNoRoadTop * 0.5;
+	const bool vn = n > kNoRoadTop * 0.5;
+	return vp && vn ? (p - n) / (2.0 * step) : (vp ? (p - c) / step : (vn ? (c - n) / step : 0.0));
+}
+
+float2 RoadTopSlope(float4 tops, float centreTop, float step)
+{
+	const float2 g = float2(RoadTopSlope1(tops.x, tops.y, centreTop, step), RoadTopSlope1(tops.z, tops.w, centreTop, step));
+	return g / max(1.0, length(g));
 }
 
 // Bilinear raw object top at world XY; sentinel where a texel is empty.
@@ -2341,6 +2358,36 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// scales by it, so a print in a melt basin shades as flat as it is built.
 	float pixelDepth = max(TouchDownToe(pixelRampDepth), 0.0);
 	pixelDepth = lerp(pixelDepth, min(pixelDepth, kFireMeltFloor), pixelMelt);
+	// Meeting a road's trench patch (Object Meeting Blend): where the two
+	// surfaces cross, the sheet's trench walls go halfway to the patch's, the
+	// patch comes the other half (SnowStaticsShell.hlsl BuildPatchVertex); the
+	// macro slope goes the whole way to the road's here, the patch keeping its
+	// own. Weighed by the height gap, not the road's edge: the sheet runs on
+	// over the road and meets the patch wherever the two pass through one
+	// height. Shading only.
+	float roadMeet = 0.0;
+	float roadMeetDepth = 0.0;
+	float2 roadMeetSlope = 0.0;
+	[branch] if (ObjectMeetBand > 0.0 && ShellFlags.y != 0 && shellZ < 2048.0)
+	{
+		const float2 roadXY = GridOrigin + gridLocal;
+		const float2 road = RoadRasterAt(roadXY);
+		[branch] if (road.y > kNoRoadTop * 0.5 && road.x >= 1.0)
+		{
+			const float centreBlur = (CompactLook.w > 0.0 && !pixelUntouched) ? BermFieldPair(gridLocal).y : pixelCarve;
+			const float roadZ = RoadPatchZ(road, pixelCarve, centreBlur, UndulationSampled(roadXY), roadXY);
+			roadMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, abs(input.WorldPos.z + ShellCameraPosAdjust.z - roadZ))) *
+			           (1.0 - smoothstep(1024.0, 2048.0, shellZ));
+			roadMeetDepth = road.x;
+			[branch] if (roadMeet > 0.001)
+			{
+				const float tStep = 16.0;
+				roadMeetSlope = RoadTopSlope(float4(RoadRasterAt(roadXY + float2(tStep, 0.0)).y, RoadRasterAt(roadXY - float2(tStep, 0.0)).y,
+												 RoadRasterAt(roadXY + float2(0.0, tStep)).y, RoadRasterAt(roadXY - float2(0.0, tStep)).y),
+					road.y, tStep);
+			}
+		}
+	}
 	// Untouched: every profile tap is pixelDepth and every berm tap zero, so
 	// both gradients and the centre are +0.
 	float2 profileGrad = 0.0;
@@ -2361,17 +2408,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
 				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
 		}
-		// Meeting a road's trench patch (Object Meeting Blend): the walls shade
-		// with half the road layer's depth at the seam, the patch takes the other
-		// half (SnowStaticsShell.hlsl PatchMeetLand). Shading only.
-		float profileDepth = pixelDepth;
-		[branch] if (ObjectMeetBand > 0.0 && ShellFlags.y != 0 && pixelCarve > 0.1 && shellZ < 2048.0)
-		{
-			float roadDepth;
-			const float share = RoadShareAround(GridOrigin + gridLocal, ObjectMeetBand * 0.25, roadDepth);
-			const float meet = (1.0 - abs(2.0 * share - 1.0)) * smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1024.0, 2048.0, shellZ));
-			profileDepth = lerp(pixelDepth, roadDepth, 0.5 * meet);
-		}
+		const float profileDepth = lerp(pixelDepth, roadMeetDepth, 0.5 * roadMeet);
 		profileGrad = float2(
 						  CarveProfile(saturate(dXP), blur.x, profileDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, profileDepth, GridOrigin + gridLocal - float2(step, 0.0)),
 						  CarveProfile(saturate(dYP), blur.z, profileDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, profileDepth, GridOrigin + gridLocal - float2(0.0, step))) /
@@ -2407,6 +2444,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// (SnowStaticsShell.hlsl). Relief and grain stay the sheet's own.
 	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
 	macroGrad = lerp(macroGrad, objectMeet.yz, 0.5 * objectMeet.x);
+	macroGrad = lerp(macroGrad, roadMeetSlope, roadMeet);
 	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.

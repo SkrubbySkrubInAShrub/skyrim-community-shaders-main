@@ -1178,6 +1178,81 @@ bool RoadOwnsColumn(float2 worldXY)
 }
 #endif
 
+#if defined(PSHADER) || ((defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH))
+// Land-exact layer, the ground the landscape sheet stands on (SnowShell.hlsl
+// LandHeightFine; FineWindow rides ShellCB). The patch's vertex stages read it
+// for the landscape meet (BuildPatchVertex).
+Texture2D<float> TerrainFine : register(t52);
+
+// Land-exact ground at a grid-local point (SnowShell.hlsl LandHeightFine); the
+// missing sentinel outside the fine window or over missing data.
+float SheetLandFine(float2 gridLocal)
+{
+	float land = -100000.0;
+	float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
+	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0 && all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
+	{
+		int2 f0 = (int2)tf;
+		float2 ff = tf - f0;
+#ifdef PSHADER
+		const float4 g = TerrainFine.GatherRed(ShellLinearSampler, (float2(f0) + 1.0) / FineWindow.z).wzxy;
+		float g00 = g.x;
+		float g10 = g.y;
+		float g01 = g.z;
+		float g11 = g.w;
+#else
+		float g00 = TerrainFine.Load(int3(f0, 0));
+		float g10 = TerrainFine.Load(int3(f0 + int2(1, 0), 0));
+		float g01 = TerrainFine.Load(int3(f0 + int2(0, 1), 0));
+		float g11 = TerrainFine.Load(int3(f0 + int2(1, 1), 0));
+#endif
+		bool slash = ((f0.x + f0.y) & 1) == 0;
+		float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
+		float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
+		[flatten] if (min(min(g00, g10), min(g01, g11)) > -50000.0)
+			land = slash ? hA : hB;
+	}
+	return land;
+}
+
+// The landscape sheet's drawn surface at a grid-local point, as SnowShell's
+// ShellSurfaceZ builds open snow: land-exact ground, class depth, melt, carve,
+// berm, undulation. The analytic top (window height + depth) stands 4-9 units
+// off it. Sentinel where no sheet stands, and where its upper bound (land plus
+// the most carve, lip, berm and dunes can add) stays at or below zFloor.
+// a_depth: the layer's uncarved depth there.
+float SheetSurfaceZ(float2 gridLocal, float zFloor, out float a_depth)
+{
+	float z = -100000.0;
+	float3 st = SampleTerrainStatics(gridLocal);
+	float depth = st.y - 8.0 * saturate(1.0 - st.z);
+	a_depth = depth;
+	[branch] if (st.x > -50000.0 && depth > 4.0)
+	{
+		const float fine = SheetLandFine(gridLocal);
+		float land = fine > -50000.0 ? fine : st.x;
+		float zMax = land + depth * (1.0 + max(RimStyle.x, 0.0) + max(BermHeightAmp, 0.0)) + abs(UndulationAmp);
+		zMax += 0.01 + 1e-6 * abs(zMax);
+		[branch] if (zMax > zFloor)
+		{
+			float2 worldXY = GridOrigin + gridLocal;
+			depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionField(worldXY).y));
+			a_depth = depth;
+#ifdef PATCH
+			// The sheet's own bicubic, for the landscape meet.
+			float deform = saturate(SampleDeformationSmooth(gridLocal));
+#else
+			float deform = SampleDeformation(gridLocal);
+#endif
+			float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float2(0.0, deform);
+			float carved = CarveProfile(deform, berm.y, depth, worldXY) + BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+			z = land + carved + UndulationSampled(worldXY) * saturate(carved / 8.0);
+		}
+	}
+	return z;
+}
+#endif
+
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
 // Patch surface evaluation, shared by the legacy VS and the tessellated
@@ -1545,9 +1620,23 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 			blur = float4(BermFieldPair(gridLocal + float2(gStep, 0.0)).y, BermFieldPair(gridLocal - float2(gStep, 0.0)).y,
 				BermFieldPair(gridLocal + float2(0.0, gStep)).y, BermFieldPair(gridLocal - float2(0.0, gStep)).y);
 		}
+		// Meeting the landscape sheet (Object Meeting Blend): where the two
+		// surfaces cross, the walls shade halfway to the landscape layer's
+		// depth; the sheet comes the other half and takes the road's macro
+		// slope (SnowShell.hlsl). Weighed by the height gap to the sheet's
+		// drawn surface: the sheet runs on over the road. Shading only.
+		float profDepth = skinDepth;
+		[branch] if (ObjectMeetBand > 0.0 && camDist < 2048.0)
+		{
+			float landDepth;
+			const float sheetZ = SheetSurfaceZ(gridLocal, v.WorldAbs.z - ObjectMeetBand * 0.5, landDepth);
+			const float meet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, abs(v.WorldAbs.z - sheetZ))) * (1.0 - smoothstep(1024.0, 2048.0, camDist));
+			[flatten] if (sheetZ > -50000.0)
+				profDepth = lerp(skinDepth, landDepth, 0.5 * meet);
+		}
 		float2 profGrad = float2(
-							  CarveProfile(dXP, blur.x, skinDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, blur.y, skinDepth, worldXY - float2(gStep, 0.0)),
-							  CarveProfile(dYP, blur.z, skinDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, blur.w, skinDepth, worldXY - float2(0.0, gStep))) /
+							  CarveProfile(dXP, blur.x, profDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, blur.y, profDepth, worldXY - float2(gStep, 0.0)),
+							  CarveProfile(dYP, blur.z, profDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, blur.w, profDepth, worldXY - float2(0.0, gStep))) /
 		                  (2.0 * gStep);
 		// Undulation gradient, the same field the depth above displaced by -
 		// mirrors SnowShell.hlsl's PS block. The geometry alone is not enough:
@@ -2572,55 +2661,6 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 // (Stage 2 P3): the landscape shell runs the same two-plane blend now.
 
 
-#if defined(PSHADER)
-// Land-exact layer, the ground the landscape sheet stands on (SnowShell.hlsl
-// LandHeightFine; FineWindow rides ShellCB).
-Texture2D<float> TerrainFine : register(t52);
-
-// The landscape sheet's drawn surface at a grid-local point, as SnowShell's
-// ShellSurfaceZ builds open snow: land-exact ground, class depth, melt, carve,
-// berm, undulation. The analytic top (window height + depth) stands 4-9 units
-// off it. Sentinel where no sheet stands, and where its upper bound (land plus
-// the most carve, lip, berm and dunes can add) stays at or below zFloor.
-float SheetSurfaceZ(float2 gridLocal, float zFloor)
-{
-	float z = -100000.0;
-	float3 st = SampleTerrainStatics(gridLocal);
-	float depth = st.y - 8.0 * saturate(1.0 - st.z);
-	[branch] if (st.x > -50000.0 && depth > 4.0)
-	{
-		float land = st.x;
-		float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
-		[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0 && all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
-		{
-			int2 f0 = (int2)tf;
-			float2 ff = tf - f0;
-			float g00 = TerrainFine.Load(int3(f0, 0));
-			float g10 = TerrainFine.Load(int3(f0 + int2(1, 0), 0));
-			float g01 = TerrainFine.Load(int3(f0 + int2(0, 1), 0));
-			float g11 = TerrainFine.Load(int3(f0 + int2(1, 1), 0));
-			bool slash = ((f0.x + f0.y) & 1) == 0;
-			float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
-			float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
-			[flatten] if (min(min(g00, g10), min(g01, g11)) > -50000.0)
-				land = slash ? hA : hB;
-		}
-		float zMax = land + depth * (1.0 + max(RimStyle.x, 0.0) + max(BermHeightAmp, 0.0)) + abs(UndulationAmp);
-		zMax += 0.01 + 1e-6 * abs(zMax);
-		[branch] if (zMax > zFloor)
-		{
-			float2 worldXY = GridOrigin + gridLocal;
-			depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionField(worldXY).y));
-			float deform = SampleDeformation(gridLocal);
-			float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float2(0.0, deform);
-			float carved = CarveProfile(deform, berm.y, depth, worldXY) + BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
-			z = land + carved + UndulationSampled(worldXY) * saturate(carved / 8.0);
-		}
-	}
-	return z;
-}
-#endif
-
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
@@ -2727,59 +2767,6 @@ Texture2DArray<uint> DbgVoxHeightUnder : register(t54);
 Texture2D<float2> DbgShelter : register(t49);
 Texture2D<float> DbgSky : register(t51);
 
-#if defined(PSHADER) && defined(PATCH)
-// Road share of the ground around a point, SnowShell.hlsl RoadShareAround's
-// twin: a half on the road's edge.
-float PatchRoadShare(float2 worldXY, float reach)
-{
-	float2 dims;
-	ObjectSkinDepth.GetDimensions(dims.x, dims.y);
-	float share = 0.0;
-	[unroll] for (int k = 0; k < 4; ++k)
-	{
-		const float2 t = PatchTexel(worldXY + float2((k & 1) ? reach : -reach, (k & 2) ? reach : -reach), dims);
-		const int2 t0 = (int2)t;
-		const float2 f = t - t0;
-		const float4 onRoad = ObjectSkinDepth.GatherGreen(ShellLinearSampler, (float2(t0) + 1.0) / dims).wzxy > kNoRoadTop * 0.5 ? 1.0 : 0.0;
-		share += lerp(lerp(onRoad.x, onRoad.y, f.x), lerp(onRoad.z, onRoad.w, f.x), f.y);
-	}
-	return share * 0.25;
-}
-
-// Meeting the landscape trench (Object Meeting Blend): the patch's walls shade
-// with half the landscape layer's depth at the seam; the sheet takes the other
-// half (SnowShell.hlsl). Shading only.
-float3 PatchMeetLand(float3 normalWS, float2 gridLocal, float2 worldXY, float deform, float pixelDist)
-{
-	[branch] if (ObjectMeetBand > 0.0 && deform > 0.1 && pixelDist < 2048.0)
-	{
-		const float share = PatchRoadShare(worldXY, ObjectMeetBand * 0.25);
-		const float meet = (1.0 - abs(2.0 * share - 1.0)) * smoothstep(0.1, 0.5, deform) * (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
-		[branch] if (meet > 0.001)
-		{
-			const float roadDepth = PatchSkinDepth(worldXY).x;
-			const float meetDepth = lerp(roadDepth, max(SampleTerrainStatics(gridLocal).y, 0.0), 0.5 * meet);
-			const float step = 4.0;
-			const float4 d = saturate(float4(SampleDeformation(gridLocal + float2(step, 0.0)), SampleDeformation(gridLocal - float2(step, 0.0)),
-				SampleDeformation(gridLocal + float2(0.0, step)), SampleDeformation(gridLocal - float2(0.0, step))));
-			float4 blur = d;
-			[branch] if (CompactLook.w > 0.0)
-				blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
-					BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
-			// Without the teeth: their notch is the same on both sides of the difference.
-			const float2 own = float2(
-				CarveProfileNoTeeth(d.x, blur.x, roadDepth) - CarveProfileNoTeeth(d.y, blur.y, roadDepth),
-				CarveProfileNoTeeth(d.z, blur.z, roadDepth) - CarveProfileNoTeeth(d.w, blur.w, roadDepth));
-			const float2 met = float2(
-				CarveProfileNoTeeth(d.x, blur.x, meetDepth) - CarveProfileNoTeeth(d.y, blur.y, meetDepth),
-				CarveProfileNoTeeth(d.z, blur.z, meetDepth) - CarveProfileNoTeeth(d.w, blur.w, meetDepth));
-			const float2 grad = -normalWS.xy / max(normalWS.z, 0.1) + (met - own) / (2.0 * step);
-			normalWS = normalize(float3(-grad, 1.0));
-		}
-	}
-	return normalWS;
-}
-#endif
 
 // THE skin material and lighting, factored out of the skin's main: taps,
 // two-plane projection, parallax, normal map, frost/crust, RMAOS, cascades +
@@ -2980,8 +2967,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	}
 
 #ifdef PATCH
-	normalWS = PatchMeetLand(normalWS, trenchGridLocal, worldXY, pixelDeform, pixelDist);
-
 	// Churn shading at PIXEL rate, the landscape PS's own recipe (weight =
 	// ChurnWeight x depth/10). Not in the vertex normal: at ChurnSize 0.25
 	// the lumps sit at 4/1.75 units, under even the dense band's vertex
@@ -3796,7 +3781,8 @@ float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixel
 	float sheetMeet = 0.0;
 	[branch] if (pdMode && ObjectMeetBand > 0.0 && pixelDist < 2048.0 && groundData.x > -50000.0)
 	{
-		float sheetZ = SheetSurfaceZ(input.GridLocal, pixelAbsZ - ObjectMeetBand * 0.5);
+		float sheetDepth;
+		float sheetZ = SheetSurfaceZ(input.GridLocal, pixelAbsZ - ObjectMeetBand * 0.5, sheetDepth);
 		float sheetGap = pixelAbsZ - sheetZ;
 		[branch] if (sheetZ > -50000.0 && sheetGap < ObjectMeetBand * 0.5)
 		{
