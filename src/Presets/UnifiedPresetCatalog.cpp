@@ -1,6 +1,7 @@
 #include "UnifiedPresetCatalog.h"
 #include "PCH.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/FormEditSources.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
@@ -14,7 +15,6 @@
 #include "PostProcessingMode.h"
 #include "Presets/PostProcessingPresets.h"
 #include "Presets/PresetCompatibility.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
@@ -130,7 +130,7 @@ namespace
 				std::error_code typeEc;
 				if (!entry.is_regular_file(typeEc))
 					continue;
-				auto name = SettingsOverrideManager::ParseBaselineFeatureName(entry.path());
+				auto name = BaselineManager::ParseBaselineFeatureName(entry.path());
 				if (!name.empty())
 					features.push_back(std::move(name));
 			}
@@ -767,7 +767,7 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 	baselinePackIds.push_back(pack.id);
 	SaveActiveState();
 
-	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	BaselineManager::GetSingleton()->Refresh();
 	// The user's edits stay on top; features that are not loaded pick the pack up when they load.
 	globals::state->ReapplySettingsLayers();
 	if (const auto edited = globals::state->FindEditsUnderPack(pack.id); !edited.empty())
@@ -899,7 +899,7 @@ bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)
 		return false;
 	SaveActiveState();
 
-	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	BaselineManager::GetSingleton()->Refresh();
 	globals::state->ReapplySettingsLayers();
 	logger::info("[Presets] Removed Baseline pack '{}'", id);
 	return true;

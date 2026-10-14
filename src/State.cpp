@@ -6,6 +6,7 @@
 
 #include <pystring/pystring.h>
 
+#include "BaselineManager.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Deferred.h"
@@ -29,7 +30,6 @@
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
 #include "PostProcessingMode.h"
-#include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
@@ -440,9 +440,9 @@ namespace
 	json GetPackFeatureData(const std::string& packId, const std::string& featureShortName)
 	{
 		json data = json::object();
-		for (const auto* info : SettingsOverrideManager::GetSingleton()->GetFeatureOverrides(featureShortName))
+		for (const auto* info : BaselineManager::GetSingleton()->GetFeatureFiles(featureShortName))
 			if (info->packId == packId && info->unknownKeys.empty())
-				MergeInto(data, info->overrideData);
+				MergeInto(data, info->values);
 		return data;
 	}
 
@@ -539,7 +539,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 	}
 
 	// Step 3: Layer each feature's settings; the user's edits win over Baseline packs
-	SettingsOverrideManager::GetSingleton()->DiscoverOverrides();
+	BaselineManager::GetSingleton()->DiscoverFiles();
 	featureBases.clear();
 	userFeatureEdits.clear();
 	for (auto* feature : Feature::GetFeatureList()) {
@@ -838,7 +838,7 @@ json State::BuildFeatureBase(Feature* feature)
 {
 	const auto found = defaultSettings.find(feature->GetName());
 	json base = found != defaultSettings.end() && found->is_object() ? *found : json::object();
-	SettingsOverrideManager::GetSingleton()->ApplyOverrides(feature->GetShortName(), base);
+	BaselineManager::GetSingleton()->ApplyBaselines(feature->GetShortName(), base);
 	return base;
 }
 

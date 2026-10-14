@@ -5,11 +5,11 @@
 #include <string>
 #include <utility>
 
+#include "BaselineManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "Presets/UnifiedPresetCatalog.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 
@@ -47,8 +47,8 @@ namespace
 	/// The same checks a Baseline file meets when the catalog loads it, so nothing is written that would be rejected.
 	bool IsValidBaseline(const json& document, const std::filesystem::path& path)
 	{
-		auto* overrides = SettingsOverrideManager::GetSingleton();
-		return overrides && overrides->IsValidOverrideDocument(document, path);
+		auto* baselines = BaselineManager::GetSingleton();
+		return baselines && baselines->IsValidDocument(document, path);
 	}
 
 	bool WriteDocument(const std::filesystem::path& packRoot, const json& document)
@@ -121,7 +121,7 @@ bool PostProcessingPresets::WriteBaseline(const std::filesystem::path& packRoot)
 	if (!WriteDocument(packRoot, ToBaselineDocument(std::move(settings))))
 		return false;
 
-	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+	BaselineManager::GetSingleton()->Refresh();
 	globals::state->ReapplySettingsLayers();
 	return true;
 }

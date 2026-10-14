@@ -1,5 +1,6 @@
 #include "FeatureOverwritesPanel.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/Browser/BrowserWidgets.h"
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
@@ -7,7 +8,6 @@
 #include "IconsFontAwesome5.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsManager.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
 #include "Utils/UI.h"
@@ -198,8 +198,8 @@ namespace
 		if (entry.targetKey == key)
 			return;
 		entry.targetKey = std::move(key);
-		entry.destination = SettingsOverrideManager::GetSingleton()->GetExportDestination(target.name, entry.shortName);
-		entry.existing = entry.destination.empty() ? std::optional<json>(json::object()) : SettingsOverrideManager::ReadExportTarget(entry.destination);
+		entry.destination = BaselineManager::GetSingleton()->GetExportDestination(target.name, entry.shortName);
+		entry.existing = entry.destination.empty() ? std::optional<json>(json::object()) : BaselineManager::ReadExportTarget(entry.destination);
 		entry.fileCount = 0;
 		for (auto& row : entry.rows) {
 			row.fileState = FileState::Absent;
@@ -533,7 +533,7 @@ namespace
 	/** @brief Writes one file per feature with a tick. @return False when any write failed. */
 	bool RunExport()
 	{
-		auto* manager = SettingsOverrideManager::GetSingleton();
+		auto* manager = BaselineManager::GetSingleton();
 		for (auto& entry : session.features) {
 			if (CountTicked(entry) == 0)
 				continue;

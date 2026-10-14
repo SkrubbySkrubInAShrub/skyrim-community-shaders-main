@@ -55,7 +55,7 @@ namespace FeatureIssues
 		{
 			OBSOLETE,          // Known obsolete feature with replacement info
 			VERSION_MISMATCH,  // Feature exists but version is incompatible
-			OVERRIDE_FAILED,   // Override file failed to load or apply
+			BASELINE_FAILED,   // Baseline preset file failed to load or apply
 			UNKNOWN            // Feature not recognized by this CS version
 		};
 
@@ -66,8 +66,8 @@ namespace FeatureIssues
 		bool IsObsolete() const { return issueType == IssueType::OBSOLETE; }
 		/** @brief Checks if issue type is VERSION_MISMATCH. */
 		bool IsVersionMismatch() const { return issueType == IssueType::VERSION_MISMATCH; }
-		/** @brief Checks if issue type is OVERRIDE_FAILED. */
-		bool IsOverrideFailed() const { return issueType == IssueType::OVERRIDE_FAILED; }
+		/** @brief Checks if issue type is BASELINE_FAILED. */
+		bool IsBaselineFailed() const { return issueType == IssueType::BASELINE_FAILED; }
 		/** @brief Checks if issue type is UNKNOWN. */
 		bool IsUnknown() const { return issueType == IssueType::UNKNOWN; }
 		/** @brief Checks whether a replacement feature is specified. */

@@ -1,5 +1,6 @@
 #include "SceneSettingsManager.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/FormEditSources.h"
 #include "Features/CSEditor.h"
 #include "Features/Effects11.h"
@@ -9,7 +10,6 @@
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
 #include "SceneSettingsOverwrites.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 
@@ -469,16 +469,16 @@ try {
 	for (const auto& [featureName, settings] : info.baselines) {
 		const auto path = packRoot / UnifiedPresetCatalog::kBaselineSubdir / (featureName + ".json");
 		if (Util::FileHelpers::SanitizeFileName(featureName) != featureName ||
-			!SettingsOverrideManager::GetSingleton()->IsValidOverrideDocument(settings, path))
+			!BaselineManager::GetSingleton()->IsValidDocument(settings, path))
 			return false;
-		auto document = SettingsOverrideManager::ReadExportTarget(path);
+		auto document = BaselineManager::ReadExportTarget(path);
 		if (!document)
 			return false;
 		if (info.replaceBaselines.contains(featureName))
 			*document = settings;
 		else
 			document->update(settings, true);
-		if (!SettingsOverrideManager::GetSingleton()->IsValidOverrideDocument(*document, path) ||
+		if (!BaselineManager::GetSingleton()->IsValidDocument(*document, path) ||
 			!Util::FileHelpers::WriteJsonAtomically(path, *document, kOverwriteJsonIndent, "preset baseline"))
 			return false;
 	}

@@ -17,29 +17,29 @@ using json = nlohmann::json;
  * Each pack's `Baseline/<FeatureShortName>.json` sets part of one feature's settings; packs apply in
  * layering order, so a later pack wins conflicts. The user's own edits sit above this layer (see State).
  */
-class SettingsOverrideManager
+class BaselineManager
 {
 public:
-	struct OverrideInfo
+	struct BaselineFile
 	{
 		/// Presets pack the file belongs to.
 		std::string packId;
 		std::string featureName;
 		std::string filePath;
-		json overrideData;
+		json values;
 
 		// Metadata from the file
 		std::string version;
 		std::string description;
 
-		// Keys the feature does not serialize; while non-empty the override is not applied
+		// Keys the feature does not serialize; while non-empty the file is not applied
 		std::vector<std::string> unknownKeys;
 	};
 
 	/** @brief Gets the singleton instance */
-	static SettingsOverrideManager* GetSingleton()
+	static BaselineManager* GetSingleton()
 	{
-		static SettingsOverrideManager instance;
+		static BaselineManager instance;
 		return &instance;
 	}
 
@@ -47,7 +47,7 @@ public:
 	 * @brief Discovers the Baseline folder of each enabled preset pack, in layering order
 	 * @return Number of files discovered
 	 */
-	size_t DiscoverOverrides();
+	size_t DiscoverFiles();
 
 	/**
 	 * @brief The feature a Baseline file targets: the part of the file stem after the last underscore, or the whole stem
@@ -56,41 +56,41 @@ public:
 	static std::string ParseBaselineFeatureName(const std::filesystem::path& filePath);
 
 	/**
-	 * @brief Applies overrides to a specific feature's settings JSON
+	 * @brief Applies the enabled Baseline files to a feature's settings JSON
 	 * @param featureName The short name of the feature
 	 * @param featureJson The feature's JSON settings to modify; when non-empty it is taken as the
-	 *        canonical shape, and overrides naming keys absent from it are skipped and reported
-	 * @return Number of overrides applied
+	 *        canonical shape, and files naming keys absent from it are skipped and reported
+	 * @return Number of files applied
 	 */
-	size_t ApplyOverrides(const std::string& featureName, json& featureJson);
+	size_t ApplyBaselines(const std::string& featureName, json& featureJson);
 
 	/**
-	 * @brief Gets list of all discovered overrides
-	 * @return Vector of override information
+	 * @brief Gets list of all discovered Baseline files
+	 * @return Discovered files, in layering order
 	 */
-	const std::vector<OverrideInfo>& GetOverrides() const { return overrides; }
+	const std::vector<BaselineFile>& GetFiles() const { return files; }
 
-	/** @brief Bumped on every discovery, so callers can cache what they derive from GetOverrides(). */
+	/** @brief Bumped on every discovery, so callers can cache what they derive from GetFiles(). */
 	std::uint64_t GetRevision() const { return revision; }
 
 	/**
-	 * @brief Gets overrides for a specific feature
+	 * @brief Gets the Baseline files for a specific feature
 	 * @param featureName The short name of the feature
-	 * @return Vector of override information for the feature
+	 * @return The feature's files, in layering order
 	 */
-	std::vector<const OverrideInfo*> GetFeatureOverrides(const std::string& featureName) const;
+	std::vector<const BaselineFile*> GetFeatureFiles(const std::string& featureName) const;
 
 	/**
-	 * @brief Checks if there are any overrides available for a specific feature
+	 * @brief Checks if there are any Baseline files for a specific feature
 	 * @param featureName The short name of the feature
-	 * @return True if the feature has overrides available
+	 * @return True if the feature has Baseline files
 	 */
-	bool HasFeatureOverrides(const std::string& featureName) const;
+	bool HasFeatureFiles(const std::string& featureName) const;
 
 	/**
-	 * @brief Clears all cached overrides and forces rediscovery
+	 * @brief Clears all cached files and forces rediscovery
 	 */
-	void RefreshOverrides();
+	void Refresh();
 
 	/**
 	 * @brief Reports a Baseline file failure to the Feature Issues system
@@ -99,7 +99,7 @@ public:
 	 * @param errorMessage Description of the failure
 	 * @param filePath The file, for the issue's file details; may be empty
 	 */
-	void ReportOverrideFailure(const std::string& packId, const std::string& featureName, const std::string& errorMessage,
+	void ReportFailure(const std::string& packId, const std::string& featureName, const std::string& errorMessage,
 		const std::filesystem::path& filePath = {});
 
 	/**
@@ -109,7 +109,7 @@ public:
 	std::filesystem::path GetExportDestination(const std::string& packName, const std::string& featureName) const;
 
 	/** @brief Reports whether a file can reach a feature that persists settings */
-	bool IsApplicable(const OverrideInfo& info) const;
+	bool IsApplicable(const BaselineFile& info) const;
 
 	/**
 	 * @brief Reads an export destination raw, keeping its _metadata
@@ -129,17 +129,17 @@ public:
 		std::span<const std::string> settingPaths, const json& featureSettings, std::span<const std::string> removePaths = {});
 
 	/**
-	 * @brief Whether a document passes the format and data checks every override file is loaded with,
+	 * @brief Whether a document passes the format and data checks every Baseline file is loaded with,
 	 * for writers that produce whole files rather than going through ExportSettings
 	 * @param filePath Destination, named in the log when a check fails
 	 */
-	bool IsValidOverrideDocument(const json& document, const std::filesystem::path& filePath);
+	bool IsValidDocument(const json& document, const std::filesystem::path& filePath);
 
 private:
-	SettingsOverrideManager() = default;
-	~SettingsOverrideManager() = default;
-	SettingsOverrideManager(const SettingsOverrideManager&) = delete;
-	SettingsOverrideManager& operator=(const SettingsOverrideManager&) = delete;
+	BaselineManager() = default;
+	~BaselineManager() = default;
+	BaselineManager(const BaselineManager&) = delete;
+	BaselineManager& operator=(const BaselineManager&) = delete;
 
 	/**
 	 * @brief Loads a single Baseline file
@@ -147,7 +147,7 @@ private:
 	 * @param packId Presets pack the file belongs to; the file must target a known feature
 	 * @return File info if successful, nullptr otherwise
 	 */
-	std::unique_ptr<OverrideInfo> LoadOverrideFile(const std::filesystem::path& filePath, const std::string& packId);
+	std::unique_ptr<BaselineFile> LoadFile(const std::filesystem::path& filePath, const std::string& packId);
 
 	/**
 	 * @brief Loads every file in one pack's Baseline folder into the discovered set
@@ -158,12 +158,12 @@ private:
 	size_t DiscoverDirectory(const std::filesystem::path& directory, const std::string& packId);
 
 	/**
-	 * @brief Validates override file format and content
-	 * @param overrideJson The JSON to validate
+	 * @brief Validates Baseline file format and content
+	 * @param fileJson The JSON to validate
 	 * @param filePath Path to the file being validated (for error reporting)
 	 * @return True if valid
 	 */
-	bool ValidateOverrideFormat(const json& overrideJson, const std::string& filePath = "");
+	bool ValidateFormat(const json& fileJson, const std::string& filePath = "");
 
 	/**
 	 * @brief Validates JSON data types and ranges for safety
@@ -182,22 +182,22 @@ private:
 	json SanitizeJsonData(const json& jsonData);
 
 	/**
-	 * @brief Recursively merges override JSON into target JSON
+	 * @brief Recursively merges a Baseline file's JSON into target JSON
 	 * @param target The target JSON to modify
-	 * @param override The override JSON to apply
+	 * @param overlay The JSON to apply
 	 */
-	void MergeJson(json& target, const json& override);
+	void MergeJson(json& target, const json& overlay);
 
 	/**
-	 * @brief Reports whether an override names keys the feature does not serialize.
-	 * @param override The override to check; its unknownKeys verdict is refreshed when featureJson has a shape
+	 * @brief Reports whether a file names keys the feature does not serialize.
+	 * @param file The file to check; its unknownKeys verdict is refreshed when featureJson has a shape
 	 * @param featureJson Canonical settings blob, or an empty object to reuse the last verdict
-	 * @return True if the override must not be applied
+	 * @return True if the file must not be applied
 	 */
-	bool RejectsUnknownKeys(OverrideInfo& override, const json& featureJson);
+	bool RejectsUnknownKeys(BaselineFile& file, const json& featureJson);
 
-	std::vector<OverrideInfo> overrides;
-	std::unordered_map<std::string, std::vector<size_t>> featureOverrideMap;  // Maps feature name to override indices
+	std::vector<BaselineFile> files;
+	std::unordered_map<std::string, std::vector<size_t>> featureFileMap;  // Maps feature name to file indices
 	bool discovered = false;
 	std::uint64_t revision = 0;
 

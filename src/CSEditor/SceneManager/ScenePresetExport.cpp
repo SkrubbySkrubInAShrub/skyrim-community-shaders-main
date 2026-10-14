@@ -23,6 +23,7 @@
 #include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
 #include "../FormEditSources.h"
+#include "BaselineManager.h"
 #include "Feature.h"
 #include "FeatureOverwritesPanel.h"
 #include "Features/CSEditor.h"
@@ -33,7 +34,6 @@
 #include "Presets/PostProcessingPresets.h"
 #include "Presets/PresetCompatibility.h"
 #include "Presets/UnifiedPresetCatalog.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
@@ -1011,7 +1011,7 @@ void ScenePresetExport::Draw()
 		ReportExportResult(sanitizedName, exported);
 		if (exported) {
 			UnifiedPresetCatalog::GetSingleton().Discover();
-			SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+			BaselineManager::GetSingleton()->Refresh();
 			globals::state->ReapplySettingsLayers();
 			auto& catalog = UnifiedPresetCatalog::GetSingleton();
 			if (info.type != PresetType::Baseline) {

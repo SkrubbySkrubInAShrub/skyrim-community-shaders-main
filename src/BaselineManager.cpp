@@ -1,4 +1,4 @@
-#include "SettingsOverrideManager.h"
+#include "BaselineManager.h"
 
 #include "Feature.h"
 #include "FeatureIssues.h"
@@ -19,13 +19,13 @@ using namespace SKSE;
 
 namespace
 {
-	constexpr size_t MAX_OVERRIDE_FILE_SIZE = 1024 * 1024;
-	constexpr int kOverrideJsonIndent = 2;
+	constexpr size_t MAX_BASELINE_FILE_SIZE = 1024 * 1024;
+	constexpr int kBaselineJsonIndent = 2;
 
-	/** @brief Parses an override file without the discovery-time filename and sanitization passes. */
-	bool ReadOverrideDocument(const std::filesystem::path& path, json& document)
+	/** @brief Parses a Baseline file without the discovery-time filename and sanitization passes. */
+	bool ReadBaselineDocument(const std::filesystem::path& path, json& document)
 	{
-		auto parsed = Util::FileHelpers::ReadJsonObject(path, "override file", MAX_OVERRIDE_FILE_SIZE);
+		auto parsed = Util::FileHelpers::ReadJsonObject(path, "Baseline file", MAX_BASELINE_FILE_SIZE);
 		if (!parsed)
 			return false;
 		document = std::move(*parsed);
@@ -45,10 +45,10 @@ namespace
 	}
 }
 
-size_t SettingsOverrideManager::DiscoverOverrides()
+size_t BaselineManager::DiscoverFiles()
 {
-	overrides.clear();
-	featureOverrideMap.clear();
+	files.clear();
+	featureFileMap.clear();
 	++revision;
 
 	// Each enabled pack in layering order: later files win merge conflicts.
@@ -58,11 +58,11 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 	}
 
 	discovered = true;
-	logger::info("Discovered {} Baseline files", overrides.size());
-	return overrides.size();
+	logger::info("Discovered {} Baseline files", files.size());
+	return files.size();
 }
 
-std::string SettingsOverrideManager::ParseBaselineFeatureName(const std::filesystem::path& filePath)
+std::string BaselineManager::ParseBaselineFeatureName(const std::filesystem::path& filePath)
 {
 	const auto filename = filePath.filename().string();
 	if (filePath.extension() != ".json" || filename.empty() || filename[0] == '.' || filename[0] == '~') {
@@ -76,21 +76,21 @@ std::string SettingsOverrideManager::ParseBaselineFeatureName(const std::filesys
 	return name;
 }
 
-size_t SettingsOverrideManager::DiscoverDirectory(const std::filesystem::path& overridesDir, const std::string& packId)
+size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory, const std::string& packId)
 {
-	if (!std::filesystem::exists(overridesDir)) {
-		logger::info("Override directory does not exist: {}", overridesDir.string());
+	if (!std::filesystem::exists(directory)) {
+		logger::info("Baseline directory does not exist: {}", directory.string());
 		return 0;
 	}
 
-	logger::info("Discovering override files in: {}", overridesDir.string());
+	logger::info("Discovering Baseline files in: {}", directory.string());
 
 	size_t filesProcessed = 0;
 	size_t filesLoaded = 0;
 	size_t maxFilesToProcess = 1000;  // Prevent processing too many files
 
 	try {
-		for (const auto& entry : std::filesystem::directory_iterator(overridesDir)) {
+		for (const auto& entry : std::filesystem::directory_iterator(directory)) {
 			// Safety check to prevent infinite loops or DoS
 			if (filesProcessed >= maxFilesToProcess) {
 				logger::info("Reached maximum file processing limit ({}), stopping discovery", maxFilesToProcess);
@@ -106,7 +106,7 @@ size_t SettingsOverrideManager::DiscoverDirectory(const std::filesystem::path& o
 			// Check filename length to prevent overly long names
 			std::string filename = entry.path().filename().string();
 			if (filename.length() > MAX_STRING_LENGTH) {
-				logger::info("Skipping override file with overly long name: {}", filename.substr(0, 50) + "...");
+				logger::info("Skipping Baseline file with overly long name: {}", filename.substr(0, 50) + "...");
 				continue;
 			}
 
@@ -119,18 +119,18 @@ size_t SettingsOverrideManager::DiscoverDirectory(const std::filesystem::path& o
 			std::error_code ec;
 			auto fileSize = std::filesystem::file_size(entry.path(), ec);
 			if (ec) {
-				logger::info("Could not get size of override file, skipping: {}", entry.path().string());
+				logger::info("Could not get size of Baseline file, skipping: {}", entry.path().string());
 				continue;
 			}
 
 			// Skip empty files or overly large files
 			if (fileSize == 0) {
-				logger::info("Skipping empty override file: {}", entry.path().string());
+				logger::info("Skipping empty Baseline file: {}", entry.path().string());
 				continue;
 			}
 
-			if (fileSize > MAX_OVERRIDE_FILE_SIZE) {
-				logger::info("Skipping overly large override file ({}KB): {}", fileSize / 1024, entry.path().string());
+			if (fileSize > MAX_BASELINE_FILE_SIZE) {
+				logger::info("Skipping overly large Baseline file ({}KB): {}", fileSize / 1024, entry.path().string());
 				continue;
 			}
 
@@ -139,42 +139,42 @@ size_t SettingsOverrideManager::DiscoverDirectory(const std::filesystem::path& o
 			const auto featureName = ParseBaselineFeatureName(entry.path());
 			if (!Feature::IsFeatureKnown(featureName)) {
 				logger::warn("Baseline file {} targets '{}', which is not a feature in this build; skipping", entry.path().string(), featureName);
-				ReportOverrideFailure(packId, featureName, "Feature is not part of this Community Shaders build", entry.path());
+				ReportFailure(packId, featureName, "Feature is not part of this Community Shaders build", entry.path());
 				continue;
 			}
 
 			try {
-				auto overrideInfo = LoadOverrideFile(entry.path(), packId);
-				if (overrideInfo) {
-					size_t index = overrides.size();
-					overrides.push_back(std::move(*overrideInfo));
+				auto baselineFile = LoadFile(entry.path(), packId);
+				if (baselineFile) {
+					size_t index = files.size();
+					files.push_back(std::move(*baselineFile));
 
-					// Map feature overrides for quick lookup
-					const auto& override = overrides[index];
-					featureOverrideMap[override.featureName].push_back(index);
+					// Map files by feature for quick lookup
+					const auto& file = files[index];
+					featureFileMap[file.featureName].push_back(index);
 
 					filesLoaded++;
-					logger::info("Loaded Baseline file: {} for {}", override.packId, override.featureName);
+					logger::info("Loaded Baseline file: {} for {}", file.packId, file.featureName);
 				} else {
-					ReportOverrideFailure(packId, featureName, "File could not be loaded or parsed", entry.path());
+					ReportFailure(packId, featureName, "File could not be loaded or parsed", entry.path());
 				}
 			} catch (const std::exception& e) {
 				logger::info("Error loading Baseline file {}: {}", entry.path().string(), e.what());
-				ReportOverrideFailure(packId, featureName, e.what(), entry.path());
+				ReportFailure(packId, featureName, e.what(), entry.path());
 				continue;
 			}
 		}
 	} catch (const std::filesystem::filesystem_error& e) {
-		logger::info("Error accessing overrides directory: {}", e.what());
+		logger::info("Error accessing Baseline directory: {}", e.what());
 	} catch (const std::exception& e) {
-		logger::info("Unexpected error during override discovery: {}", e.what());
+		logger::info("Unexpected error during Baseline discovery: {}", e.what());
 	}
 
-	logger::info("Loaded {} override files from {} ({} processed)", filesLoaded, overridesDir.string(), filesProcessed);
+	logger::info("Loaded {} Baseline files from {} ({} processed)", filesLoaded, directory.string(), filesProcessed);
 	return filesProcessed;
 }
 
-size_t SettingsOverrideManager::ApplyOverrides(const std::string& featureName, json& featureJson)
+size_t BaselineManager::ApplyBaselines(const std::string& featureName, json& featureJson)
 {
 	if (!discovered) {
 		return 0;
@@ -182,17 +182,17 @@ size_t SettingsOverrideManager::ApplyOverrides(const std::string& featureName, j
 
 	size_t appliedCount = 0;
 
-	auto it = featureOverrideMap.find(featureName);
-	if (it != featureOverrideMap.end()) {
+	auto it = featureFileMap.find(featureName);
+	if (it != featureFileMap.end()) {
 		for (size_t index : it->second) {
-			auto& override = overrides[index];
-			if (!RejectsUnknownKeys(override, featureJson)) {
+			auto& file = files[index];
+			if (!RejectsUnknownKeys(file, featureJson)) {
 				try {
-					MergeJson(featureJson, override.overrideData);
+					MergeJson(featureJson, file.values);
 					appliedCount++;
 				} catch (const std::exception& e) {
-					logger::info("Failed to apply Baseline file from {} to {}: {}", override.packId, featureName, e.what());
-					ReportOverrideFailure(override.packId, featureName, "Failed to apply: " + std::string(e.what()), override.filePath);
+					logger::info("Failed to apply Baseline file from {} to {}: {}", file.packId, featureName, e.what());
+					ReportFailure(file.packId, featureName, "Failed to apply: " + std::string(e.what()), file.filePath);
 				}
 			}
 		}
@@ -201,56 +201,56 @@ size_t SettingsOverrideManager::ApplyOverrides(const std::string& featureName, j
 	return appliedCount;
 }
 
-std::vector<const SettingsOverrideManager::OverrideInfo*> SettingsOverrideManager::GetFeatureOverrides(const std::string& featureName) const
+std::vector<const BaselineManager::BaselineFile*> BaselineManager::GetFeatureFiles(const std::string& featureName) const
 {
-	std::vector<const OverrideInfo*> result;
+	std::vector<const BaselineFile*> result;
 
-	auto it = featureOverrideMap.find(featureName);
-	if (it != featureOverrideMap.end()) {
+	auto it = featureFileMap.find(featureName);
+	if (it != featureFileMap.end()) {
 		for (size_t index : it->second) {
-			result.push_back(&overrides[index]);
+			result.push_back(&files[index]);
 		}
 	}
 
 	return result;
 }
 
-bool SettingsOverrideManager::HasFeatureOverrides(const std::string& featureName) const
+bool BaselineManager::HasFeatureFiles(const std::string& featureName) const
 {
 	if (!discovered) {
 		return false;
 	}
 
-	auto it = featureOverrideMap.find(featureName);
-	return it != featureOverrideMap.end() && !it->second.empty();
+	auto it = featureFileMap.find(featureName);
+	return it != featureFileMap.end() && !it->second.empty();
 }
 
-void SettingsOverrideManager::RefreshOverrides()
+void BaselineManager::Refresh()
 {
 	discovered = false;
-	DiscoverOverrides();
+	DiscoverFiles();
 }
 
-std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::LoadOverrideFile(const std::filesystem::path& filePath, const std::string& packId)
+std::unique_ptr<BaselineManager::BaselineFile> BaselineManager::LoadFile(const std::filesystem::path& filePath, const std::string& packId)
 {
 	try {
 		// Check file size to prevent loading extremely large files
 		std::error_code ec;
 		auto fileSize = std::filesystem::file_size(filePath, ec);
 		if (ec) {
-			logger::info("Could not get file size for override file: {}", filePath.string());
+			logger::info("Could not get file size for Baseline file: {}", filePath.string());
 			return nullptr;
 		}
 
 		// Limit file size to 1MB to prevent abuse
-		if (fileSize > MAX_OVERRIDE_FILE_SIZE) {
-			logger::info("Override file too large ({}KB, max 1MB): {}", fileSize / 1024, filePath.string());
+		if (fileSize > MAX_BASELINE_FILE_SIZE) {
+			logger::info("Baseline file too large ({}KB, max 1MB): {}", fileSize / 1024, filePath.string());
 			return nullptr;
 		}
 
 		std::ifstream file(filePath);
 		if (!file.is_open()) {
-			logger::info("Could not open override file: {}", filePath.string());
+			logger::info("Could not open Baseline file: {}", filePath.string());
 			return nullptr;
 		}
 
@@ -262,111 +262,111 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 
 		// Validate file content is not empty
 		if (fileContent.empty()) {
-			logger::info("Override file is empty: {}", filePath.string());
+			logger::info("Baseline file is empty: {}", filePath.string());
 			return nullptr;
 		}
 
 		// Parse JSON from content with error handling
-		json overrideJson;
+		json fileJson;
 		try {
-			overrideJson = json::parse(fileContent);
+			fileJson = json::parse(fileContent);
 		} catch (const json::parse_error& e) {
-			logger::info("JSON parse error in override file {}: {} at byte {}",
+			logger::info("JSON parse error in Baseline file {}: {} at byte {}",
 				filePath.string(), e.what(), e.byte);
 			return nullptr;
 		} catch (const json::exception& e) {
-			logger::info("JSON error in override file {}: {}", filePath.string(), e.what());
+			logger::info("JSON error in Baseline file {}: {}", filePath.string(), e.what());
 			return nullptr;
 		}
 
-		// Validate override format and data types
-		if (!ValidateOverrideFormat(overrideJson, filePath.string())) {
-			logger::info("Invalid override file format: {}", filePath.string());
+		// Validate the file's format and data types
+		if (!ValidateFormat(fileJson, filePath.string())) {
+			logger::info("Invalid Baseline file format: {}", filePath.string());
 			return nullptr;
 		}
 
-		if (!ValidateJsonDataTypes(overrideJson, "", filePath.string())) {
-			logger::info("Invalid data types in override file: {}", filePath.string());
+		if (!ValidateJsonDataTypes(fileJson, "", filePath.string())) {
+			logger::info("Invalid data types in Baseline file: {}", filePath.string());
 			return nullptr;
 		}
 
-		auto overrideInfo = std::make_unique<OverrideInfo>();
+		auto baselineFile = std::make_unique<BaselineFile>();
 
 		const auto featureName = ParseBaselineFeatureName(filePath);
 		assert(Feature::IsFeatureKnown(featureName));
 
-		overrideInfo->packId = packId;
-		overrideInfo->featureName = featureName;
-		overrideInfo->filePath = filePath.string();
+		baselineFile->packId = packId;
+		baselineFile->featureName = featureName;
+		baselineFile->filePath = filePath.string();
 
 		// Extract and validate metadata if present
-		if (overrideJson.contains("_metadata") && overrideJson["_metadata"].is_object()) {
-			const auto& metadata = overrideJson["_metadata"];
+		if (fileJson.contains("_metadata") && fileJson["_metadata"].is_object()) {
+			const auto& metadata = fileJson["_metadata"];
 
 			try {
 				if (metadata.contains("version") && metadata["version"].is_string()) {
 					std::string version = metadata["version"];
 					if (version.length() <= MAX_STRING_LENGTH) {
-						overrideInfo->version = version;
+						baselineFile->version = version;
 					} else {
-						logger::info("Version string too long in override file: {}", filePath.string());
+						logger::info("Version string too long in Baseline file: {}", filePath.string());
 					}
 				}
 
 				if (metadata.contains("description") && metadata["description"].is_string()) {
 					std::string description = metadata["description"];
 					if (description.length() <= MAX_STRING_LENGTH) {
-						overrideInfo->description = description;
+						baselineFile->description = description;
 					} else {
-						logger::info("Description string too long in override file: {}", filePath.string());
+						logger::info("Description string too long in Baseline file: {}", filePath.string());
 					}
 				}
 
 			} catch (const json::exception& e) {
-				logger::info("Error parsing metadata in override file {}: {}", filePath.string(), e.what());
+				logger::info("Error parsing metadata in Baseline file {}: {}", filePath.string(), e.what());
 				// Continue without metadata if it's malformed
 			}
 		}
 
-		// Store the override data (excluding metadata) and sanitize it
-		overrideInfo->overrideData = SanitizeJsonData(overrideJson);
-		if (overrideInfo->overrideData.contains("_metadata")) {
-			overrideInfo->overrideData.erase("_metadata");
+		// Store the settings (excluding metadata) and sanitize it
+		baselineFile->values = SanitizeJsonData(fileJson);
+		if (baselineFile->values.contains("_metadata")) {
+			baselineFile->values.erase("_metadata");
 		}
 
-		return overrideInfo;
+		return baselineFile;
 
 	} catch (const std::filesystem::filesystem_error& e) {
-		logger::info("Filesystem error loading override file {}: {}", filePath.string(), e.what());
+		logger::info("Filesystem error loading Baseline file {}: {}", filePath.string(), e.what());
 		return nullptr;
 	} catch (const std::exception& e) {
-		logger::info("Unexpected error loading override file {}: {}", filePath.string(), e.what());
+		logger::info("Unexpected error loading Baseline file {}: {}", filePath.string(), e.what());
 		return nullptr;
 	}
 }
 
-bool SettingsOverrideManager::ValidateOverrideFormat(const json& overrideJson, const std::string& filePath)
+bool BaselineManager::ValidateFormat(const json& fileJson, const std::string& filePath)
 {
 	try {
 		// Basic validation - must be an object
-		if (!overrideJson.is_object()) {
+		if (!fileJson.is_object()) {
 			if (!filePath.empty()) {
-				logger::info("Override file must contain a JSON object: {}", filePath);
+				logger::info("Baseline file must contain a JSON object: {}", filePath);
 			}
 			return false;
 		}
 
 		// Check object size limits
-		if (overrideJson.size() > MAX_OBJECT_SIZE) {
+		if (fileJson.size() > MAX_OBJECT_SIZE) {
 			if (!filePath.empty()) {
-				logger::info("Override file contains too many top-level properties (max {}): {}", MAX_OBJECT_SIZE, filePath);
+				logger::info("Baseline file contains too many top-level properties (max {}): {}", MAX_OBJECT_SIZE, filePath);
 			}
 			return false;
 		}
 
 		// Must have at least one non-metadata field
 		bool hasNonMetadata = false;
-		for (const auto& [key, value] : overrideJson.items()) {
+		for (const auto& [key, value] : fileJson.items()) {
 			if (key.length() == 0 || key[0] != '_') {
 				hasNonMetadata = true;
 				break;
@@ -375,17 +375,17 @@ bool SettingsOverrideManager::ValidateOverrideFormat(const json& overrideJson, c
 
 		if (!hasNonMetadata) {
 			if (!filePath.empty()) {
-				logger::info("Override file contains only metadata, no actual overrides: {}", filePath);
+				logger::info("Baseline file contains only metadata, no settings: {}", filePath);
 			}
 			return false;
 		}
 
 		// Validate metadata section if present
-		if (overrideJson.contains("_metadata")) {
-			const auto& metadata = overrideJson["_metadata"];
+		if (fileJson.contains("_metadata")) {
+			const auto& metadata = fileJson["_metadata"];
 			if (!metadata.is_object()) {
 				if (!filePath.empty()) {
-					logger::info("_metadata must be an object in override file: {}", filePath);
+					logger::info("_metadata must be an object in Baseline file: {}", filePath);
 				}
 				return false;
 			}
@@ -395,20 +395,20 @@ bool SettingsOverrideManager::ValidateOverrideFormat(const json& overrideJson, c
 				if (key == "version" || key == "description") {
 					if (!value.is_string()) {
 						if (!filePath.empty()) {
-							logger::info("Metadata field '{}' must be a string in override file: {}", key, filePath);
+							logger::info("Metadata field '{}' must be a string in Baseline file: {}", key, filePath);
 						}
 						return false;
 					}
 					if (value.get<std::string>().length() > MAX_STRING_LENGTH) {
 						if (!filePath.empty()) {
-							logger::info("Metadata field '{}' too long (max {} chars) in override file: {}", key, MAX_STRING_LENGTH, filePath);
+							logger::info("Metadata field '{}' too long (max {} chars) in Baseline file: {}", key, MAX_STRING_LENGTH, filePath);
 						}
 						return false;
 					}
 				} else if (key == "enabled") {
 					if (!value.is_boolean()) {
 						if (!filePath.empty()) {
-							logger::info("Metadata field 'enabled' must be a boolean in override file: {}", filePath);
+							logger::info("Metadata field 'enabled' must be a boolean in Baseline file: {}", filePath);
 						}
 						return false;
 					}
@@ -416,14 +416,14 @@ bool SettingsOverrideManager::ValidateOverrideFormat(const json& overrideJson, c
 					// Allow modName in metadata but validate it
 					if (!value.is_string()) {
 						if (!filePath.empty()) {
-							logger::info("Metadata field 'modName' must be a string in override file: {}", filePath);
+							logger::info("Metadata field 'modName' must be a string in Baseline file: {}", filePath);
 						}
 						return false;
 					}
 				} else {
 					// Unknown metadata field - warn but don't fail
 					if (!filePath.empty()) {
-						logger::info("Unknown metadata field '{}' in override file: {}", key, filePath);
+						logger::info("Unknown metadata field '{}' in Baseline file: {}", key, filePath);
 					}
 				}
 			}
@@ -433,24 +433,24 @@ bool SettingsOverrideManager::ValidateOverrideFormat(const json& overrideJson, c
 
 	} catch (const json::exception& e) {
 		if (!filePath.empty()) {
-			logger::info("JSON error during validation of override file {}: {}", filePath, e.what());
+			logger::info("JSON error during validation of Baseline file {}: {}", filePath, e.what());
 		}
 		return false;
 	} catch (const std::exception& e) {
 		if (!filePath.empty()) {
-			logger::info("Error during validation of override file {}: {}", filePath, e.what());
+			logger::info("Error during validation of Baseline file {}: {}", filePath, e.what());
 		}
 		return false;
 	}
 }
 
-bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const std::string& path, const std::string& filePath)
+bool BaselineManager::ValidateJsonDataTypes(const json& jsonData, const std::string& path, const std::string& filePath)
 {
 	try {
 		// Check nesting depth
 		if (std::count(path.begin(), path.end(), '.') > MAX_JSON_DEPTH) {
 			if (!filePath.empty()) {
-				logger::info("JSON nesting too deep at '{}' (max {}) in override file: {}", path, MAX_JSON_DEPTH, filePath);
+				logger::info("JSON nesting too deep at '{}' (max {}) in Baseline file: {}", path, MAX_JSON_DEPTH, filePath);
 			}
 			return false;
 		}
@@ -458,7 +458,7 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 		if (jsonData.is_object()) {
 			if (jsonData.size() > MAX_OBJECT_SIZE) {
 				if (!filePath.empty()) {
-					logger::info("JSON object too large at '{}' (max {} properties) in override file: {}", path, MAX_OBJECT_SIZE, filePath);
+					logger::info("JSON object too large at '{}' (max {} properties) in Baseline file: {}", path, MAX_OBJECT_SIZE, filePath);
 				}
 				return false;
 			}
@@ -467,7 +467,7 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 				// Validate key length
 				if (key.length() > MAX_STRING_LENGTH) {
 					if (!filePath.empty()) {
-						logger::info("JSON property name too long at '{}' (max {} chars) in override file: {}", path + "." + key, MAX_STRING_LENGTH, filePath);
+						logger::info("JSON property name too long at '{}' (max {} chars) in Baseline file: {}", path + "." + key, MAX_STRING_LENGTH, filePath);
 					}
 					return false;
 				}
@@ -481,7 +481,7 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 		} else if (jsonData.is_array()) {
 			if (jsonData.size() > MAX_ARRAY_SIZE) {
 				if (!filePath.empty()) {
-					logger::info("JSON array too large at '{}' (max {} elements) in override file: {}", path, MAX_ARRAY_SIZE, filePath);
+					logger::info("JSON array too large at '{}' (max {} elements) in Baseline file: {}", path, MAX_ARRAY_SIZE, filePath);
 				}
 				return false;
 			}
@@ -495,7 +495,7 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 		} else if (jsonData.is_string()) {
 			if (jsonData.get<std::string>().length() > MAX_STRING_LENGTH) {
 				if (!filePath.empty()) {
-					logger::info("JSON string too long at '{}' (max {} chars) in override file: {}", path, MAX_STRING_LENGTH, filePath);
+					logger::info("JSON string too long at '{}' (max {} chars) in Baseline file: {}", path, MAX_STRING_LENGTH, filePath);
 				}
 				return false;
 			}
@@ -503,7 +503,7 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 			double value = jsonData.get<double>();
 			if (value > MAX_NUMERIC_VALUE || value < MIN_NUMERIC_VALUE) {
 				if (!filePath.empty()) {
-					logger::info("JSON numeric value out of range at '{}' ({} to {}) in override file: {}", path, MIN_NUMERIC_VALUE, MAX_NUMERIC_VALUE, filePath);
+					logger::info("JSON numeric value out of range at '{}' ({} to {}) in Baseline file: {}", path, MIN_NUMERIC_VALUE, MAX_NUMERIC_VALUE, filePath);
 				}
 				return false;
 			}
@@ -511,7 +511,7 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 			// Check for NaN and infinity
 			if (std::isnan(value) || std::isinf(value)) {
 				if (!filePath.empty()) {
-					logger::info("JSON numeric value is NaN or infinity at '{}' in override file: {}", path, filePath);
+					logger::info("JSON numeric value is NaN or infinity at '{}' in Baseline file: {}", path, filePath);
 				}
 				return false;
 			}
@@ -522,18 +522,18 @@ bool SettingsOverrideManager::ValidateJsonDataTypes(const json& jsonData, const 
 
 	} catch (const json::exception& e) {
 		if (!filePath.empty()) {
-			logger::info("JSON error during data type validation at '{}' in override file {}: {}", path, filePath, e.what());
+			logger::info("JSON error during data type validation at '{}' in Baseline file {}: {}", path, filePath, e.what());
 		}
 		return false;
 	} catch (const std::exception& e) {
 		if (!filePath.empty()) {
-			logger::info("Error during data type validation at '{}' in override file {}: {}", path, filePath, e.what());
+			logger::info("Error during data type validation at '{}' in Baseline file {}: {}", path, filePath, e.what());
 		}
 		return false;
 	}
 }
 
-json SettingsOverrideManager::SanitizeJsonData(const json& jsonData)
+json BaselineManager::SanitizeJsonData(const json& jsonData)
 {
 	try {
 		json sanitized = jsonData;
@@ -558,7 +558,7 @@ json SettingsOverrideManager::SanitizeJsonData(const json& jsonData)
 					}
 
 					if (isDangerous) {
-						logger::info("Removing potentially dangerous key from override: {}", key);
+						logger::info("Removing potentially dangerous key from file: {}", key);
 						it = data.erase(it);
 					} else {
 						// Recursively sanitize the value
@@ -582,7 +582,7 @@ json SettingsOverrideManager::SanitizeJsonData(const json& jsonData)
 				// Truncate if too long
 				if (str.length() > MAX_STRING_LENGTH) {
 					str = str.substr(0, MAX_STRING_LENGTH);
-					logger::info("Truncated overly long string in override data");
+					logger::info("Truncated overly long string in file data");
 				}
 
 				data = str;
@@ -612,15 +612,15 @@ json SettingsOverrideManager::SanitizeJsonData(const json& jsonData)
 	}
 }
 
-void SettingsOverrideManager::MergeJson(json& target, const json& override)
+void BaselineManager::MergeJson(json& target, const json& overlay)
 {
 	try {
-		if (!override.is_object()) {
+		if (!overlay.is_object()) {
 			logger::info("Attempting to merge non-object JSON data, skipping");
 			return;
 		}
 
-		for (const auto& [key, value] : override.items()) {
+		for (const auto& [key, value] : overlay.items()) {
 			// Skip metadata fields during merge
 			if (key.length() > 0 && key[0] == '_') {
 				continue;
@@ -695,25 +695,25 @@ void SettingsOverrideManager::MergeJson(json& target, const json& override)
 	}
 }
 
-bool SettingsOverrideManager::RejectsUnknownKeys(OverrideInfo& override, const json& featureJson)
+bool BaselineManager::RejectsUnknownKeys(BaselineFile& file, const json& featureJson)
 {
 	// MergeJson would drop unknown keys without error; an empty target has no shape, so keep the last verdict.
 	if (featureJson.is_object() && !featureJson.empty()) {
-		const bool alreadyReported = !override.unknownKeys.empty();
-		override.unknownKeys.clear();
-		Util::Settings::CollectUnknownSettingKeys(override.overrideData, featureJson, "", override.unknownKeys);
-		if (!override.unknownKeys.empty() && !alreadyReported) {
+		const bool alreadyReported = !file.unknownKeys.empty();
+		file.unknownKeys.clear();
+		Util::Settings::CollectUnknownSettingKeys(file.values, featureJson, "", file.unknownKeys);
+		if (!file.unknownKeys.empty() && !alreadyReported) {
 			std::string keys;
-			for (const auto& key : override.unknownKeys)
+			for (const auto& key : file.unknownKeys)
 				keys += (keys.empty() ? "" : ", ") + key;
-			logger::warn("Skipped Baseline file from {} to {}: unrecognized keys {}", override.packId, override.featureName, keys);
-			ReportOverrideFailure(override.packId, override.featureName, "Unrecognized settings keys: " + keys, override.filePath);
+			logger::warn("Skipped Baseline file from {} to {}: unrecognized keys {}", file.packId, file.featureName, keys);
+			ReportFailure(file.packId, file.featureName, "Unrecognized settings keys: " + keys, file.filePath);
 		}
 	}
-	return !override.unknownKeys.empty();
+	return !file.unknownKeys.empty();
 }
 
-void SettingsOverrideManager::ReportOverrideFailure(const std::string& packId, const std::string& featureName, const std::string& errorMessage,
+void BaselineManager::ReportFailure(const std::string& packId, const std::string& featureName, const std::string& errorMessage,
 	const std::filesystem::path& filePath)
 {
 	FeatureIssues::FeatureFileInfo fileInfo;
@@ -747,23 +747,23 @@ void SettingsOverrideManager::ReportOverrideFailure(const std::string& packId, c
 		packId + "_" + featureName,  // Combined name as shortName
 		"unknown",                   // version
 		fullErrorMessage,
-		FeatureIssues::FeatureIssueInfo::IssueType::OVERRIDE_FAILED,
+		FeatureIssues::FeatureIssueInfo::IssueType::BASELINE_FAILED,
 		fileInfo);
 }
 
-bool SettingsOverrideManager::IsApplicable(const OverrideInfo& info) const
+bool BaselineManager::IsApplicable(const BaselineFile& info) const
 {
 	const auto* feature = Feature::FindFeatureByShortName(info.featureName);
 	return feature && feature->UsesMainSettings();
 }
 
-bool SettingsOverrideManager::IsValidOverrideDocument(const json& document, const std::filesystem::path& filePath)
+bool BaselineManager::IsValidDocument(const json& document, const std::filesystem::path& filePath)
 {
 	const auto path = filePath.string();
-	return ValidateOverrideFormat(document, path) && ValidateJsonDataTypes(document, "", path);
+	return ValidateFormat(document, path) && ValidateJsonDataTypes(document, "", path);
 }
 
-std::filesystem::path SettingsOverrideManager::GetExportDestination(const std::string& packName, const std::string& featureName) const
+std::filesystem::path BaselineManager::GetExportDestination(const std::string& packName, const std::string& featureName) const
 {
 	const auto safeName = Util::FileHelpers::SanitizeFileName(packName);
 	if (safeName.empty()) {
@@ -773,20 +773,20 @@ std::filesystem::path SettingsOverrideManager::GetExportDestination(const std::s
 	return Util::PathHelpers::GetUnifiedPackPath(safeName) / UnifiedPresetCatalog::kBaselineSubdir / std::format("{}.json", featureName);
 }
 
-std::optional<json> SettingsOverrideManager::ReadExportTarget(const std::filesystem::path& destination)
+std::optional<json> BaselineManager::ReadExportTarget(const std::filesystem::path& destination)
 {
 	std::error_code ec;
 	if (!std::filesystem::exists(destination, ec)) {
 		return json::object();
 	}
 	json document;
-	if (!ReadOverrideDocument(destination, document)) {
+	if (!ReadBaselineDocument(destination, document)) {
 		return std::nullopt;
 	}
 	return document;
 }
 
-bool SettingsOverrideManager::ExportSettings(const std::string& packName, const std::string& featureName,
+bool BaselineManager::ExportSettings(const std::string& packName, const std::string& featureName,
 	std::span<const std::string> settingPaths, const json& featureSettings, std::span<const std::string> removePaths)
 {
 	const auto destination = GetExportDestination(packName, featureName);
@@ -814,7 +814,7 @@ bool SettingsOverrideManager::ExportSettings(const std::string& packName, const 
 	// reading it raw so any _metadata the author wrote survives.
 	auto document = ReadExportTarget(destination);
 	if (!document) {
-		logger::error("Refusing to overwrite unreadable override file {}", destination.string());
+		logger::error("Refusing to overwrite unreadable Baseline file {}", destination.string());
 		return false;
 	}
 	for (const auto& path : removePaths) {
@@ -822,7 +822,7 @@ bool SettingsOverrideManager::ExportSettings(const std::string& packName, const 
 	}
 	document->update(selected, true);
 
-	if (!IsValidOverrideDocument(*document, destination)) {
+	if (!IsValidDocument(*document, destination)) {
 		return false;
 	}
 
@@ -833,11 +833,11 @@ bool SettingsOverrideManager::ExportSettings(const std::string& packName, const 
 	}
 
 	// Atomic so a failed export cannot leave a pack's Baseline file truncated.
-	if (!Util::FileHelpers::WriteJsonAtomically(destination, *document, kOverrideJsonIndent, "Baseline file")) {
+	if (!Util::FileHelpers::WriteJsonAtomically(destination, *document, kBaselineJsonIndent, "Baseline file")) {
 		return false;
 	}
 
 	logger::info("Exported {} setting(s) of {} to {}, removed {}", settingPaths.size(), featureName, destination.string(), removePaths.size());
-	RefreshOverrides();
+	Refresh();
 	return true;
 }

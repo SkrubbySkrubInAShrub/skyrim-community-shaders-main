@@ -362,7 +362,7 @@ namespace FeatureIssues
 		std::vector<const FeatureIssueInfo*> unknownIssues;
 		std::vector<const FeatureIssueInfo*> obsoleteIssues;
 		std::vector<const FeatureIssueInfo*> versionIssues;
-		std::vector<const FeatureIssueInfo*> overrideIssues;
+		std::vector<const FeatureIssueInfo*> baselineIssues;
 
 		for (const auto& issue : featureIssues) {
 			if (issue.IsObsolete() && issue.ModifiedShaderDirectory()) {
@@ -375,8 +375,8 @@ namespace FeatureIssues
 				obsoleteIssues.push_back(&issue);
 			} else if (issue.IsVersionMismatch()) {
 				versionIssues.push_back(&issue);
-			} else if (issue.IsOverrideFailed()) {
-				overrideIssues.push_back(&issue);
+			} else if (issue.IsBaselineFailed()) {
+				baselineIssues.push_back(&issue);
 			}
 		}
 		// Shader Breaking Features Section (most critical)
@@ -423,8 +423,8 @@ namespace FeatureIssues
 		if (auto section = Util::SectionWrapper(T("menu.issues.baseline_failures_header", "Baseline Preset Failures"),
 				T("menu.issues.baseline_failures_desc",
 					"These Baseline preset files failed to load or apply. Check the file format and content."),
-				theme.StatusPalette.Error, !overrideIssues.empty())) {
-			for (const auto* issue : overrideIssues) {
+				theme.StatusPalette.Error, !baselineIssues.empty())) {
+			for (const auto* issue : baselineIssues) {
 				DrawFeatureIssue(*issue, theme.StatusPalette.Error);
 			}
 		}

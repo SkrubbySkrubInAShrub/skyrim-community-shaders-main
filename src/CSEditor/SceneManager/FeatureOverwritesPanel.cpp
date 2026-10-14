@@ -1,12 +1,12 @@
 #include "FeatureOverwritesPanel.h"
 
+#include "BaselineManager.h"
 #include "CSEditor/Browser/BrowserWidgets.h"
 #include "Feature.h"
 #include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsManager.h"
-#include "SettingsOverrideManager.h"
 #include "Utils/SettingsCatalog.h"
 #include "Utils/UI.h"
 
@@ -40,9 +40,9 @@ namespace
 
 	std::vector<OverwriteRow> BuildRows()
 	{
-		auto* manager = SettingsOverrideManager::GetSingleton();
+		auto* manager = BaselineManager::GetSingleton();
 		std::vector<OverwriteRow> rows;
-		for (const auto& info : manager->GetOverrides()) {
+		for (const auto& info : manager->GetFiles()) {
 			if (!manager->IsApplicable(info))
 				continue;
 			auto* feature = Feature::FindFeatureByShortName(info.featureName);
@@ -50,13 +50,13 @@ namespace
 				.featureName = info.featureName,
 				.packId = info.packId,
 				.filePath = info.filePath,
-				.settingCount = Util::Settings::GetExportSettings(info.featureName, info.overrideData).size() };
+				.settingCount = Util::Settings::GetExportSettings(info.featureName, info.values).size() };
 			auto unknownKeys = info.unknownKeys;
 			if (feature && unknownKeys.empty()) {
 				// Rediscovery clears the verdict until the next load applies the file, so recheck against the live shape.
 				json shape;
 				feature->SaveSettings(shape);
-				Util::Settings::CollectUnknownSettingKeys(info.overrideData, shape, "", unknownKeys);
+				Util::Settings::CollectUnknownSettingKeys(info.values, shape, "", unknownKeys);
 			}
 			for (const auto& key : unknownKeys)
 				row.unknownKeys += (row.unknownKeys.empty() ? "" : "\n") + key;
@@ -185,7 +185,7 @@ bool FeatureOverwritesPanel::HasExportableSettings(Feature* feature)
 
 void FeatureOverwritesPanel::Draw()
 {
-	auto* manager = SettingsOverrideManager::GetSingleton();
+	auto* manager = BaselineManager::GetSingleton();
 	const auto& rows = rowCache.Get(manager->GetRevision(), BuildRows);
 
 	DrawToolbar(rows);

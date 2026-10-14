@@ -13,6 +13,7 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "BaselineManager.h"
 #include "Feature.h"
 #include "Globals.h"
 #include "Menu.h"
@@ -23,7 +24,6 @@
 #include "SceneSettingsUI.h"
 #include "SceneTransitionField.h"
 #include "SceneWidgetInterceptor.h"
-#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -434,19 +434,19 @@ namespace
 	/** @brief The value the last Baseline pack applying to a setting gives it, or null.
 	 *  Later packs merge over earlier ones, so the last to hold the key is the one in effect.
 	 *  @param a_packId Receives the pack supplying the value. */
-	const json* FindFeatureOverrideValue(const SettingMetadata& a_setting, std::string& a_packId)
+	const json* FindBaselineValue(const SettingMetadata& a_setting, std::string& a_packId)
 	{
-		auto* overrides = SettingsOverrideManager::GetSingleton();
+		auto* baselines = BaselineManager::GetSingleton();
 		const std::string featureShortName{ a_setting.featureShortName };
-		if (!overrides->HasFeatureOverrides(featureShortName))
+		if (!baselines->HasFeatureFiles(featureShortName))
 			return nullptr;
 
-		const auto featureOverrides = overrides->GetFeatureOverrides(featureShortName);
-		for (auto info = featureOverrides.rbegin(); info != featureOverrides.rend(); ++info) {
+		const auto featureFiles = baselines->GetFeatureFiles(featureShortName);
+		for (auto info = featureFiles.rbegin(); info != featureFiles.rend(); ++info) {
 			// A file naming keys the feature lacks is never applied.
 			if (!(*info)->unknownKeys.empty())
 				continue;
-			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->overrideData, a_setting)) {
+			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->values, a_setting)) {
 				a_packId = (*info)->packId;
 				return value;
 			}
@@ -671,7 +671,7 @@ SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLaye
 	bool fromPack = false;
 	for (const auto& component : components) {
 		std::string packId;
-		const auto* packValue = FindFeatureOverrideValue(*component.setting, packId);
+		const auto* packValue = FindBaselineValue(*component.setting, packId);
 		const auto* beneath = packValue ? packValue : FindLayeredBaseValue(*component.setting);
 		if (packValue && a_packId.empty())
 			a_packId = std::move(packId);
