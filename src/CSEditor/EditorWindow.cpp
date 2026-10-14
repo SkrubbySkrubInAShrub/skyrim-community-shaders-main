@@ -1404,6 +1404,8 @@ void EditorWindow::RenderUI()
 	if (featuresWasOpen != settings.showFeaturesWindow)
 		Save();
 
+	DrawToolClosePrompt();
+
 	if (deleteSceneChangesConfirmation.Draw()) {
 		if (auto* sceneManager = globals::sceneSettingsManager) {
 			// An export earlier this session left the mod layer holding what was on disk before it.
@@ -1479,6 +1481,23 @@ void EditorWindow::UpdateOpenState()
 	// The user can release the lock from the weather controls; it stops being ours the moment they do.
 	if (weatherLockedByOverlay && !IsWeatherLocked())
 		weatherLockedByOverlay = false;
+
+	// Closing would discard a tool's unwritten changes, so a user's close waits for an answer. A forced
+	// close (a loading screen) cannot wait, so it discards and says so.
+	if (!open && wasOpen && !std::exchange(skipToolPrompt, false)) {
+		const auto tools = GetExternalTools();
+		if (const auto found = std::ranges::find_if(tools, [](ExternalTool* tool) { return tool->HasUnwrittenChanges(); }); found != tools.end()) {
+			if (CanBeOpen()) {
+				open = true;
+				RequestToolClosePrompt(**found);
+			} else {
+				const auto what = (*found)->DescribeChanges();
+				const std::string target = (*found)->GetTargetName();
+				ShowNotification(std::vformat(T(TKEY("tool_changes_discarded"), "{}: changes discarded, not written to {}"), std::make_format_args(what, target)),
+					Util::Colors::GetWarning(), kLongNotificationDuration);
+			}
+		}
+	}
 
 	if (open && !wasOpen) {
 		HideGameMenus();
@@ -2668,6 +2687,52 @@ void EditorWindow::ShowNotification(const std::string& message, const ImVec4& co
 	notif.startTime = static_cast<float>(ImGui::GetTime());
 	notif.duration = duration;
 	notifications.push_back(notif);
+}
+
+void EditorWindow::RequestToolClosePrompt(ExternalTool& tool)
+{
+	promptedTool = &tool;
+	const auto what = tool.DescribeChanges();
+	const std::string target = tool.GetTargetName();
+	toolClosePrompt.title = T(TKEY("tool_close_title"), "Unwritten Changes");
+	if (tool.CanWriteChanges()) {
+		toolClosePrompt.message = std::vformat(T(TKEY("tool_close_message"), "{}: changes not written to {}. Write them before closing?"),
+			std::make_format_args(what, target));
+		toolClosePrompt.confirmLabel = std::vformat(T(TKEY("tool_close_write"), "Write to {}"), std::make_format_args(target));
+		toolClosePrompt.primaryConfirm = true;
+		toolClosePrompt.focus = Util::ConfirmationPopup::Focus::Confirm;
+	} else {
+		toolClosePrompt.message = std::vformat(T(TKEY("tool_close_preview_message"), "{}: these edits are a preview and cannot be written to {}. Closing discards them."),
+			std::make_format_args(what, target));
+		toolClosePrompt.confirmLabel.clear();
+		toolClosePrompt.primaryConfirm = false;
+		toolClosePrompt.focus = Util::ConfirmationPopup::Focus::Cancel;
+	}
+	toolClosePrompt.alternateLabel = T(TKEY("tool_close_discard"), "Discard");
+	toolClosePrompt.cancelLabel = T(TKEY("cancel"), "Cancel");
+	toolClosePrompt.Request();
+}
+
+void EditorWindow::DrawToolClosePrompt()
+{
+	using Choice = Util::ConfirmationPopup::Choice;
+	switch (toolClosePrompt.DrawChoice()) {
+	case Choice::Confirm:
+		// A failed write keeps the editor open; the tool has already said why.
+		if (promptedTool && promptedTool->WriteChanges()) {
+			skipToolPrompt = true;
+			open = false;
+		}
+		break;
+	case Choice::Alternate:
+		if (promptedTool)
+			promptedTool->DiscardChanges();
+		skipToolPrompt = true;
+		open = false;
+		break;
+	default:
+		break;
+	}
 }
 
 void EditorWindow::RenderNotifications()

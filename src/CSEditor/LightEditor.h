@@ -1,5 +1,6 @@
 #pragma once
 #include "../Features/LightLimitFix/Common.h"
+#include "ExternalTool.h"
 #include "LightPicker.h"
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -11,7 +12,7 @@ namespace RE
 	class BSLight;
 }
 
-struct LightEditor
+struct LightEditor : ExternalTool
 {
 	bool disableInvSqLights = false;
 	bool disableRegularLights = false;
@@ -36,6 +37,16 @@ struct LightEditor
 	 * @return True if the light should be rendered, false if it should be suppressed.
 	 */
 	bool ApplyOverrides(RE::NiLight* niLight, LLFCommon::RuntimeLightDataExt* runtimeData) const;
+
+	const char* GetTargetName() const override { return "Light Placer"; }
+	std::string DescribeChanges() const override { return selected.name; }
+	/** @brief Whether the selected light differs from its state at selection, in anything Reset would put back. */
+	bool HasUnwrittenChanges() const override;
+	/** @brief A Light Placer light with a matching JSON entry; other lights' edits are previews only. */
+	bool CanWriteChanges() const override { return lpInfo.isLPLight && lpMatchFound; }
+	/** @brief Writes the selected light to its Light Placer entry, as Write to Light Placer does. */
+	bool WriteChanges() override;
+	void DiscardChanges() override { ResetOverrides(); }
 
 private:
 	struct LightInfo

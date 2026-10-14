@@ -7,6 +7,8 @@
 #include "State.h"
 #include "Utils/UI.h"
 
+#include <format>
+
 namespace SaveManager
 {
 	namespace
@@ -23,10 +25,21 @@ namespace SaveManager
 
 		void ConfirmSaved(Trigger trigger)
 		{
-			// The main menu flashes its own button; the toast is for saves made inside the editor.
+			// The main menu flashes its own button; the toasts are for saves made inside the editor.
 			auto* editor = EditorWindow::GetSingleton();
-			if (trigger == Trigger::User && editor->open)
-				editor->ShowNotification(T("cs_editor.saved", "Saved"), Util::Colors::GetSuccess(), 1.5f);
+			if (trigger != Trigger::User || !editor->open)
+				return;
+			editor->ShowNotification(T("cs_editor.saved", "Saved"), Util::Colors::GetSuccess(), 1.5f);
+			// Tools write into other mods only from their own buttons, so the save left these behind.
+			for (auto* tool : editor->GetExternalTools()) {
+				if (!tool->HasUnwrittenChanges())
+					continue;
+				const auto what = tool->DescribeChanges();
+				const std::string target = tool->GetTargetName();
+				editor->ShowNotification(
+					std::vformat(T("cs_editor.tool_unwritten", "{}: changes not written to {}. Use its Write button to keep them."), std::make_format_args(what, target)),
+					Util::Colors::GetWarning(), EditorWindow::kLongNotificationDuration);
+			}
 		}
 	}
 

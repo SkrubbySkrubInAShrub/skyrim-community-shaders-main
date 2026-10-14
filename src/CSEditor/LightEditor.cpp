@@ -869,15 +869,8 @@ void LightEditor::DrawInspector(const ImVec2& size)
 	if (lpInfo.isLPLight && Section(T(TKEY("section_light_placer"), "Light Placer"))) {
 		{
 			auto _style = Util::StatusButtonStyle(lpMatchFound ? Util::Colors::GetSuccess() : Util::Colors::GetError());
-			if (ImGui::Button(T(TKEY("save_to_light_placer"), "Save to Light Placer"))) {
-				const bool ok = SaveToLightPlacer(saveColorToLP);
-				if (ok) {
-					ReloadLPAndReselect();
-					lpMatchFound = true;
-				}
-				const std::string okMsg = I18n::GetSingleton()->Format(TKEY("saved_to_config"), { { "path", lpInfo.configPath } }, "Saved to {path}");
-				NotifyResult(ok, okMsg.c_str(), T(TKEY("save_failed"), "Save failed \xe2\x80\x94 see log"));
-			}
+			if (ImGui::Button(T(TKEY("write_to_light_placer"), "Write to Light Placer")))
+				WriteChanges();
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			if (lpMatchFound)
@@ -1239,6 +1232,35 @@ bool LightEditor::BeginSearchableCombo(const char* label, const char* preview, c
 	ImGui::Separator();
 	filterOut = searchBuf;
 	return true;
+}
+
+bool LightEditor::HasUnwrittenChanges() const
+{
+	if (!selected.isSelected)
+		return false;
+	const auto& edited = current.data;
+	const auto& base = original.data;
+	const bool dataChanged = edited.flags.underlying() != base.flags.underlying() || edited.cutoffOverride != base.cutoffOverride ||
+	                         edited.lighFormId != base.lighFormId || edited.diffuse.red != base.diffuse.red ||
+	                         edited.diffuse.green != base.diffuse.green || edited.diffuse.blue != base.diffuse.blue ||
+	                         edited.radius != base.radius || edited.size != base.size || edited.fade != base.fade;
+	const bool moved = current.pos.x != original.pos.x || current.pos.y != original.pos.y || current.pos.z != original.pos.z;
+	return dataChanged || moved || current.tesFlags.underlying() != original.tesFlags.underlying() ||
+	       (lpInfo.isLPLight && lpFlagSet != originalLpFlagSet) || activeEmittanceSource != originalEmittanceSource ||
+	       externalEmittanceEdid != originalExternalEmittanceEdid || useExternalEmittance != originalUseExternalEmittance ||
+	       shadowDepthBias != originalShadowDepthBias;
+}
+
+bool LightEditor::WriteChanges()
+{
+	const bool ok = SaveToLightPlacer(saveColorToLP);
+	if (ok) {
+		ReloadLPAndReselect();
+		lpMatchFound = true;
+	}
+	const std::string okMsg = I18n::GetSingleton()->Format(TKEY("saved_to_config"), { { "path", lpInfo.configPath } }, "Saved to {path}");
+	NotifyResult(ok, okMsg.c_str(), T(TKEY("save_failed"), "Save failed \xe2\x80\x94 see log"));
+	return ok;
 }
 
 void LightEditor::NotifyResult(bool ok, const char* okMsg, const char* failMsg)

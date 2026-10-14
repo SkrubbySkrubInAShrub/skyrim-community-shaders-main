@@ -92,6 +92,9 @@ public:
 
 	LightEditor lightEditor;
 
+	/** @brief Tools that write into other mods' files; the editor's save never writes them. */
+	std::array<ExternalTool*, 1> GetExternalTools() { return { &lightEditor }; }
+
 	/** @brief When true, resets all window positions/sizes on next frame (auto-cleared). */
 	bool resetLayout = false;
 
@@ -497,6 +500,16 @@ private:
 	bool weatherLockedByOverlay = false;
 	/** @brief The main menu was open when the editor opened, so closing the editor reopens it. */
 	bool returnToMenu = false;
+
+	/// Asks what to do with a tool's unwritten changes before the editor closes.
+	Util::ConfirmationPopup toolClosePrompt;
+	ExternalTool* promptedTool = nullptr;
+	/// The next close goes ahead without asking: the prompt was just answered.
+	bool skipToolPrompt = false;
+	/** @brief Opens toolClosePrompt for a tool's unwritten changes. */
+	void RequestToolClosePrompt(ExternalTool& tool);
+	/** @brief Acts on the answer to toolClosePrompt. */
+	void DrawToolClosePrompt();
 
 	/// True from overlay open until its weather lock engages or the overlay closes.
 	bool overlayWeatherLockPending = false;
