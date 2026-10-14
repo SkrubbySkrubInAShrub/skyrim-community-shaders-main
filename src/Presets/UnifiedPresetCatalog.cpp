@@ -51,17 +51,17 @@ namespace
 
 	using Util::ToLower;
 
-	/** @brief The Effects 11 preset id a pack switches to. */
-	std::string GetEffects11PresetId(const UnifiedPresetCatalog::PackInfo& pack)
+	constexpr const char* kPipelineKey = "pipeline";
+	constexpr const char* kPipelineRevisionKey = "pipelineRevision";
+
+	/** @brief The Effects 11 preset id a pack switches to, read off the form of its id. */
+	std::string GetEffects11PresetId(const std::string& packId)
 	{
-		using SourceKind = UnifiedPresetCatalog::SourceKind;
-		if (pack.source == SourceKind::UnifiedPack)
-			return PresetManager::MakeUnifiedPackPresetId(pack.id);
-		if (pack.source == SourceKind::Effects11Orphan && pack.id.starts_with(kEffects11OrphanPrefix))
-			return pack.id.substr(kEffects11OrphanPrefix.size());
-		if (pack.source == SourceKind::Effects11Legacy)
+		if (packId == kEffects11LegacyPackId)
 			return PresetManager::kLegacyPresetId;
-		return pack.id;
+		if (packId.starts_with(kEffects11OrphanPrefix))
+			return packId.substr(kEffects11OrphanPrefix.size());
+		return PresetManager::MakeUnifiedPackPresetId(packId);
 	}
 
 	/** @brief Sets manifest[objectKey][entryKey], creating the object when missing, and writes the manifest atomically. */
@@ -111,6 +111,13 @@ namespace
 	bool IsPackFolderId(const std::string& id)
 	{
 		return !id.empty() && id != "." && id != ".." && id.find_first_of("/\\:") == std::string::npos;
+	}
+
+	/** @brief A pack folder, the Legacy Effects 11 install, or an orphan Effects 11 preset. */
+	bool IsActivePackId(const std::string& id)
+	{
+		return IsPackFolderId(id) || id == kEffects11LegacyPackId ||
+		       (id.starts_with(kEffects11OrphanPrefix) && IsPackFolderId(id.substr(kEffects11OrphanPrefix.size())));
 	}
 
 	/** @brief Feature short names set by a pack's Baseline folder, sorted and de-duplicated. */
@@ -331,13 +338,19 @@ void UnifiedPresetCatalog::LoadActiveState()
 {
 	activePackId.clear();
 	baselinePackIds.clear();
+	activePipeline.reset();
+	pipelineRevision = 0;
 	const auto state = Util::FileHelpers::ReadJsonObject(GetPresetsRealPath() / kActiveStateFileName, "active pack state");
 	if (!state)
 		return;
 	try {
 		activePackId = state->value("activePackId", "");
-		if (!IsPackFolderId(activePackId))
+		if (!IsActivePackId(activePackId))
 			activePackId.clear();
+		if (const auto pipeline = state->find(kPipelineKey); pipeline != state->end() && pipeline->is_string())
+			activePipeline = magic_enum::enum_cast<PostProcessingMode::Mode>(pipeline->get<std::string>());
+		if (const auto revision = state->find(kPipelineRevisionKey); revision != state->end() && revision->is_number_unsigned())
+			pipelineRevision = revision->get<uint32_t>();
 		if (const auto ids = state->find(kBaselinePackIdsKey); ids != state->end() && ids->is_array()) {
 			for (const auto& id : *ids) {
 				if (id.is_string() && IsPackFolderId(id.get_ref<const std::string&>()) && !IsBaselineEnabled(id.get<std::string>()))
@@ -347,6 +360,8 @@ void UnifiedPresetCatalog::LoadActiveState()
 	} catch (...) {
 		activePackId.clear();
 		baselinePackIds.clear();
+		activePipeline.reset();
+		pipelineRevision = 0;
 	}
 }
 
@@ -357,6 +372,10 @@ void UnifiedPresetCatalog::SaveActiveState() const
 		json j;
 		j["activePackId"] = activePackId;
 		j[kBaselinePackIdsKey] = baselinePackIds;
+		if (activePipeline) {
+			j[kPipelineKey] = magic_enum::enum_name(*activePipeline);
+			j[kPipelineRevisionKey] = pipelineRevision;
+		}
 		if (!Util::FileHelpers::WriteJsonAtomically(path, j, 4, "active pack state"))
 			logger::warn("[Presets] Failed to save active pack state to {}", path.string());
 	} catch (const std::exception& e) {
@@ -368,6 +387,18 @@ void UnifiedPresetCatalog::SetActivePackId(const std::string& id)
 {
 	activePackId = id;
 	SaveActiveState();
+}
+
+std::string UnifiedPresetCatalog::GetActiveEffects11PresetId() const
+{
+	return activePackId.empty() ? std::string() : GetEffects11PresetId(activePackId);
+}
+
+void UnifiedPresetCatalog::UsePackPipeline(PostProcessingMode::Mode mode)
+{
+	PostProcessingMode::Set(mode);
+	activePipeline = mode;
+	++pipelineRevision;
 }
 
 UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::string& id)
@@ -508,18 +539,6 @@ void UnifiedPresetCatalog::DiscoverEffects11Legacy()
 	packs.push_back(std::move(pack));
 }
 
-void UnifiedPresetCatalog::AdoptEffects11ActivePack()
-{
-	if (!activePackId.empty() || !globals::features::effects11.loaded || PostProcessingMode::Get() != PostProcessingMode::Mode::Effects11)
-		return;
-	const auto& e11Id = PresetManager::GetSingleton().GetActivePresetId();
-	const auto match = std::ranges::find_if(packs, [&](const PackInfo& pack) {
-		return pack.source != SourceKind::UnifiedPack && pack.valid && GetEffects11PresetId(pack) == e11Id;
-	});
-	if (match != packs.end())
-		activePackId = match->id;
-}
-
 void UnifiedPresetCatalog::Discover()
 {
 	ReleaseAllArtwork();
@@ -532,7 +551,6 @@ void UnifiedPresetCatalog::Discover()
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Orphans();
 	DiscoverEffects11Legacy();
-	AdoptEffects11ActivePack();
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -690,9 +708,8 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		auto& presetManager = PresetManager::GetSingleton();
 		presetManager.DiscoverPresets();
 
-		const auto e11Id = GetEffects11PresetId(*pack);
+		const auto e11Id = GetEffects11PresetId(pack->id);
 		if (presetManager.SwitchPreset(e11Id, saveEffects11Current)) {
-			globals::features::effects11.PersistActivePreset();
 			appliedAny = effects11Applied = true;
 		} else {
 			logger::warn("[Presets] Failed to switch Effects11 preset '{}'", e11Id);
@@ -704,13 +721,14 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 
 	// A Baseline-only pack is its own layer, so it must not displace the active Effects 11 / CS pack.
 	if (appliedAny) {
-		SetActivePackId(id);
 		// The scene layer always follows the active pack, so a pack without scene files clears it.
+		activePackId = id;
 		globals::features::sceneManager.ReloadOverwrites();
 		CSEditor::ReloadFormEdits();
 		// Applying a pack, even again, re-selects the pipeline it was authored for.
 		using PostProcessingMode::Mode;
-		PostProcessingMode::Set(pack->IsE11() && effects11Applied ? Mode::Effects11 : Mode::PostProcessing);
+		UsePackPipeline(pack->IsE11() && effects11Applied ? Mode::Effects11 : Mode::PostProcessing);
+		SaveActiveState();
 	}
 
 	if (pack->hasBaseline) {
@@ -725,7 +743,7 @@ void UnifiedPresetCatalog::DisableActivePack()
 {
 	assert(!activePackId.empty());
 	if (const auto* pack = FindPack(activePackId); pack && pack->hasEffects11)
-		PostProcessingMode::Set(PostProcessingMode::Mode::Vanilla);
+		UsePackPipeline(PostProcessingMode::Mode::Vanilla);
 	SetActivePackId("");
 	globals::features::sceneManager.ReloadOverwrites();
 	CSEditor::ReloadFormEdits();

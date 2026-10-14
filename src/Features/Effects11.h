@@ -33,23 +33,8 @@ public:
 		};
 	}
 
-	/** @brief Persisted Effects11 settings. */
-	struct Settings
-	{
-		std::string ActivePreset;  ///< Empty = Legacy (PresetManager::kLegacyPresetId)
-	};
-
-	Settings settings;
-
-	/** @brief Discovers presets and applies settings.ActivePreset, repairing the id if needed. */
-	void SyncActivePresetFromSettings();
-
-	/** @brief Copies the manager's active id into ActivePreset and saves it through State::Save(). */
-	void PersistActivePreset();
-
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
-	virtual void RestoreDefaultSettings() override;
+	/** @brief The active preset belongs to the active preset pack, so nothing goes in the user config. */
+	virtual bool UsesMainSettings() const override { return false; }
 
 	struct alignas(16) PerFrame
 	{
@@ -274,8 +259,6 @@ private:
 	bool presetActive = false;
 	bool resourcesReady = false;
 	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
-	/** Set when Sync repairs ActivePreset during load; flushed in SetupResources. */
-	bool activePresetNeedsPersist = false;
 	std::array<bool, static_cast<size_t>(E11Handoff::Feature::Count)> handedOff{};
 
 	/** @brief Point light settings, resolved once per frame in CheckCommonData since OverridePointLightColor runs per light. */

@@ -15,16 +15,13 @@
 #include "IBL.h"
 #include "PostProcessing.h"
 #include "PostProcessingMode.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "State.h"
 #include "TerrainShadows.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Effects11::Settings,
-	ActivePreset)
 
 bool Effects11::HasShaderDefine(RE::BSShader::Type)
 {
@@ -252,51 +249,6 @@ void Effects11::DrawSettings()
 	Effects11Editor::GetSingleton().DrawLauncher();
 }
 
-void Effects11::SyncActivePresetFromSettings()
-{
-	auto& presetManager = PresetManager::GetSingleton();
-	presetManager.DiscoverPresets();
-	if (!presetManager.SetActivePreset(settings.ActivePreset)) {
-		const auto repaired = presetManager.GetActivePresetId();
-		if (settings.ActivePreset != repaired) {
-			settings.ActivePreset = repaired;
-			// Defer disk write: LoadSettings runs mid State::Load; Save then would be unsafe.
-			activePresetNeedsPersist = true;
-		}
-	}
-}
-
-void Effects11::PersistActivePreset()
-{
-	settings.ActivePreset = PresetManager::GetSingleton().GetActivePresetId();
-	activePresetNeedsPersist = false;
-	if (globals::state)
-		globals::state->Save();
-}
-
-void Effects11::LoadSettings(json& o_json)
-{
-	settings = o_json;
-	SyncActivePresetFromSettings();
-}
-
-void Effects11::SaveSettings(json& o_json)
-{
-	settings.ActivePreset = PresetManager::GetSingleton().GetActivePresetId();
-	o_json = settings;
-}
-
-void Effects11::RestoreDefaultSettings()
-{
-	settings = {};
-	auto& presetManager = PresetManager::GetSingleton();
-	presetManager.DiscoverPresets();
-	presetManager.SelectDefaultPreset();
-	settings.ActivePreset = presetManager.GetActivePresetId();
-	// Also reached from Feature::Load, where saving mid State::Load would clobber later features.
-	activePresetNeedsPersist = true;
-}
-
 bool Effects11::IsUseEffectEnabled() const
 {
 	return loaded && SettingManager::GetSingleton().GetValue<bool>("UseEffect", "GLOBAL");
@@ -401,9 +353,11 @@ void Effects11::LoadRaindropTexture()
 
 void Effects11::SetupResources()
 {
-	SyncActivePresetFromSettings();
-	if (activePresetNeedsPersist)
-		PersistActivePreset();
+	// The active preset pack decides the preset; without one, or when it is gone, the default stays.
+	auto& presetManager = PresetManager::GetSingleton();
+	presetManager.DiscoverPresets();
+	if (const auto presetId = UnifiedPresetCatalog::GetSingleton().GetActiveEffects11PresetId(); !presetId.empty())
+		presetManager.SetActivePreset(presetId);
 	// Initialize() -> Apply() already loads the raindrop texture; do not load it again here.
 	EffectManager::GetSingleton().Initialize();
 }

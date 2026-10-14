@@ -10,6 +10,7 @@
 #include <winrt/base.h>
 
 #include "Features/Effects11/SceneHandoff.h"
+#include "PostProcessingMode.h"
 #include "PresetCompatibility.h"
 
 /** @brief Discovers unified preset packs (Effects 11 and CS Presets payloads) plus orphan Effects 11 presets. */
@@ -131,6 +132,15 @@ public:
 	/** @brief Sets and persists the active pack id. */
 	void SetActivePackId(const std::string& id);
 
+	/** @brief The Effects 11 preset the active pack selects, or empty when no pack is active. */
+	std::string GetActiveEffects11PresetId() const;
+
+	/** @brief The pipeline the last applied or disabled pack chose, if any. */
+	std::optional<PostProcessingMode::Mode> GetActivePipeline() const { return activePipeline; }
+	/** @brief Bumped each time a pack chooses the pipeline. The user config records the revision it was
+	 *  saved against, so a pack applied after the last save decides the pipeline at the next start. */
+	uint32_t GetPipelineRevision() const { return pipelineRevision; }
+
 	/** @brief Folder of the active unified pack; empty when none is active or the active preset is an orphan. */
 	std::filesystem::path GetActivePackRoot() const;
 
@@ -225,8 +235,8 @@ private:
 	void DiscoverEffects11Orphans();
 	/** @brief Adds the Effects 11 install at the game root or Data folder, when present. */
 	void DiscoverEffects11Legacy();
-	/** @brief With no pack applied, marks the Legacy or orphan pack Effects 11 is already running as active. */
-	void AdoptEffects11ActivePack();
+	/** @brief Switches to the pipeline a pack chose, recording it as the pack layer's choice; the caller persists. */
+	void UsePackPipeline(PostProcessingMode::Mode mode);
 
 	/** @brief Decodes an image file into an SRV; false when missing or undecodable. */
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);
@@ -234,4 +244,6 @@ private:
 	std::vector<PackInfo> packs;
 	std::string activePackId;
 	std::vector<std::string> baselinePackIds;
+	std::optional<PostProcessingMode::Mode> activePipeline;
+	uint32_t pipelineRevision = 0;
 };

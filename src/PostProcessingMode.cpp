@@ -6,11 +6,13 @@
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
 #include <array>
 #include <optional>
+#include <utility>
 
 namespace PostProcessingMode
 {
@@ -18,12 +20,16 @@ namespace PostProcessingMode
 	{
 		constexpr int kModeCount = 3;
 		constexpr const char* kSettingKey = "Post Processing Mode";
+		/// The preset catalog's pipeline revision the saved mode was chosen against.
+		constexpr const char* kPackRevisionKey = "Post Processing Mode Pack Revision";
 		constexpr Mode kDefaultMode = Mode::Vanilla;
 
 		/** @brief Mode read from the user settings, held until Effects 11 can take it. */
 		std::optional<Mode> pendingMode;
 		/** @brief The pending mode is only a placeholder, so ApplyPending() picks the default from what is installed. */
 		bool detectPreset = false;
+		/** @brief The pending mode is the one a pack applied after the last save, not the saved one. */
+		bool pendingFromPack = false;
 
 		/** @brief Effects 11 is initialized, so its UseEffect setting can be written. */
 		bool IsEffects11Ready()
@@ -83,6 +89,17 @@ namespace PostProcessingMode
 		std::error_code ec;
 		detectPreset = !savedMode || !std::filesystem::exists(Util::PathHelpers::GetSettingsUserPath(), ec);
 		pendingMode = savedMode.value_or(kDefaultMode);
+		pendingFromPack = false;
+
+		// A pack applied after these settings were saved chose the pipeline since, so its choice stands.
+		const auto& catalog = UnifiedPresetCatalog::GetSingleton();
+		const auto revision = a_general.find(kPackRevisionKey);
+		const auto savedRevision = revision != a_general.end() && revision->is_number_unsigned() ? revision->get<uint32_t>() : 0u;
+		if (const auto packPipeline = catalog.GetActivePipeline(); packPipeline && savedRevision != catalog.GetPipelineRevision()) {
+			pendingMode = *packPipeline;
+			detectPreset = false;
+			pendingFromPack = true;
+		}
 		// Effects 11 is not initialized this early, so only the bypass can apply now.
 		globals::features::postProcessing.bypass = *pendingMode != Mode::PostProcessing;
 	}
@@ -96,6 +113,7 @@ namespace PostProcessingMode
 		const bool modeKnown = globals::features::postProcessing.loaded &&
 		                       (!globals::features::effects11.loaded || EffectManager::GetSingleton().IsInitialized());
 		a_general[kSettingKey] = magic_enum::enum_name(pendingMode.value_or(modeKnown ? Get() : kDefaultMode));
+		a_general[kPackRevisionKey] = UnifiedPresetCatalog::GetSingleton().GetPipelineRevision();
 	}
 
 	void ApplyPending()
@@ -104,6 +122,9 @@ namespace PostProcessingMode
 			return;
 		const Mode mode = detectPreset ? ResolveDefaultMode() : *pendingMode;
 		Apply(mode == Mode::Effects11 && !CanUseEffects11() ? Mode::Vanilla : mode);
+		// Set() turns Linear Lighting on with Post Processing; a pack's choice gets the same at startup.
+		if (std::exchange(pendingFromPack, false) && mode == Mode::PostProcessing)
+			globals::features::linearLighting.settings.enableLinearLighting = true;
 		pendingMode.reset();
 	}
 
