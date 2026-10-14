@@ -4189,16 +4189,19 @@ void SnowDeformation::DrawCapturedStatics()
 			bindSkinStages(skinStagesTess);
 		};
 
-		statsRow("SnowDeformation::Objects - Prepass Fill");
 		// The decal overlay leaves the landscape shell's pixels to the blood
 		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
 		if (BloodTilesLive() && !bloodOverlays.empty() && bloodPreSkinDepth && bloodPreSkinDepthSRV) {
+			statsRow("SnowDeformation::Objects - Blood Depth Copy");
 			winrt::com_ptr<ID3D11Resource> mainDepthResource;
 			mainDepthSRV->GetResource(mainDepthResource.put());
 			context->CopyResource(bloodPreSkinDepth.get(), mainDepthResource.get());
 			bloodPreSkinDepthThisFrame = true;
+		} else {
+			globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Blood Depth Copy");
 		}
+		statsRow("SnowDeformation::Objects - Prepass Fill");
 		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow);
 		if (fillPreSnow) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Copy");
