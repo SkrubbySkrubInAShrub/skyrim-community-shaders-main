@@ -1364,7 +1364,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// in the trench. Masked like the berm and gated on material; the
 			// self-shadow march skips it, as it skips churn.
 			[branch] if (RimStyle.z > 0.01 && (ShellFlags.x & 16) == 0)
-				depth += ChurnNoiseScaled(GridOrigin + gridLocal, kClodSizeScale) * RimStyle.z *
+				depth += ClodNoise(GridOrigin + gridLocal, ChurnSizeScale) * RimStyle.z *
 				         BermShape(bermD) * saturate(1.0 - deformation) * BermDepthGate(uncarved);
 		}
 #endif
@@ -2468,6 +2468,12 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// build draws only while both amplitudes are zero everywhere.
 	float3 shadePos = input.WorldPos;
 #ifndef SNOW_NO_CHURN
+	// The churn tile's uvs here (xy churn, zw clods): the pixel's cell offsets,
+	// carried by the march to the point it shades and kept by the gradients.
+	const float2 churnScale = float2(ChurnTileScale(ChurnSizeScale), ChurnTileScale(kClodSizeScale));
+	float4 churnUV = 0.0;
+	[branch] if (churnW > 0.0 || clodW > 0.0)
+		churnUV = ChurnTileUVs(worldXYPS, ChurnSizeScale);
 #	ifdef SNOW_TRENCH_PARALLAX
 	// The parallax replay leaves churn and clods out of the geometry either way.
 	{
@@ -2480,20 +2486,21 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (churnAmp + clodAmp > 0.05)
 		{
 			float3 dir = normalize(input.WorldPos);
-			float t = ChurnParallaxT(dir, gradZ, churnAmp, clodAmp, worldXYPS, ChurnSizeScale);
+			float t = ChurnParallaxT(dir, gradZ, churnAmp, clodAmp, churnUV, churnScale);
 			shadePos = input.WorldPos + dir * t;
 			worldXYPS += dir.xy * t;
 			gridLocal += dir.xy * t;
+			churnUV += dir.xyxy * churnScale.xxyy * t;
 		}
 	}
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
-		gradZ += ChurnNoiseGrad(worldXYPS, ChurnSizeScale, 3.0) * ChurnHeightAmp * churnW;
+		gradZ += ChurnNoiseGradUV(churnUV.xy, churnScale.x, 3.0) * ChurnHeightAmp * churnW;
 
 	// P6 clod gradient (same field the VS displaces by; centre-weighted
 	// like the churn gradient - the clod frequency is far above the berm
 	// field's, so the noise gradient dominates).
 	[branch] if (clodW > 0.001)
-		gradZ += ChurnNoiseGrad(worldXYPS, kClodSizeScale, 4.0) * RimStyle.z * clodW;
+		gradZ += ChurnNoiseGradUV(churnUV.zw, churnScale.y, 4.0) * RimStyle.z * clodW;
 #endif
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));

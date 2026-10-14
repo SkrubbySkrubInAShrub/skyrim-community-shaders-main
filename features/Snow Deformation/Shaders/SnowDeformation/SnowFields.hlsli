@@ -39,7 +39,7 @@ float SnowDetailNoise(float2 p)
 	return SnowNoiseHash.SampleLevel(SnowSampler, (i + f * f * (3.0 - 2.0 * f) + 0.5) / kNoiseTorusCells, 0.0);
 }
 
-// The octave sum in [0, 1] at a churn tile uv (ChurnTileUV).
+// The octave sum in [0, 1] at a churn tile uv (ChurnTileUVs).
 float ChurnNoiseUV(float2 uv)
 {
 	return SnowChurnTile.SampleLevel(SnowSampler, uv, 0.0);
@@ -63,10 +63,10 @@ float ChurnTileScale(float sizeScale)
 	return 1.0 / (kChurnTileTexels * max(sizeScale, 0.05));
 }
 
-float2 ChurnTileUV(float2 worldXY, float sizeScale)
-{
-	return worldXY * ChurnTileScale(sizeScale) + 0.5 / kChurnTileTexels;
-}
+// Tiles the lattice input wraps after: the stochastic hash multiplies the
+// cell index by ~3300 and needs it small to keep a fraction (the frost
+// lattice below, same reason).
+static const float kChurnLatticeWrap = 32.0;
 
 // Field map sizes. The landscape shell (SNOW_FIELD_DIMS) takes them from
 // ShellCB.FieldDims, GetDimensions of what DrawShell binds (0 where unbound);
@@ -268,28 +268,45 @@ bool ShellUntouched(float2 gridLocal)
 #endif
 }
 
-// Churn lump noise in [-1, 1] at q = worldXY / sizeScale; the caller passes
-// its size knob (ChurnSizeScale / ObjChurnSizeScale), the only way the two
-// shells differ here.
-float ChurnNoiseScaled(float2 worldXY, float sizeScale)
-{
-	return ChurnNoiseUV(ChurnTileUV(worldXY, sizeScale)) * 2.0 - 1.0;
-}
-
-// Central difference of ChurnNoiseScaled, a_step world units either side.
-float2 ChurnNoiseGrad(float2 worldXY, float sizeScale, float a_step)
-{
-	const float2 uv = ChurnTileUV(worldXY, sizeScale);
-	const float d = a_step * ChurnTileScale(sizeScale);
-	return float2(ChurnNoiseUV(uv + float2(d, 0.0)) - ChurnNoiseUV(uv - float2(d, 0.0)),
-			   ChurnNoiseUV(uv + float2(0.0, d)) - ChurnNoiseUV(uv - float2(0.0, d))) /
-	       a_step;
-}
-
 // P6 clod cells: ~2.8x the default churn rubble (24/10-unit cells at
 // scale 1.5), so berm clods and trench rubble read at visibly different
 // frequencies - the two-scale contrast of RDR2's O3.
 static const float kClodSizeScale = 1.5;
+
+// The churn tile's uvs at a world point, xy for the churn at its size knob
+// (ChurnSizeScale / ObjChurnSizeScale, the only way the two shells differ
+// here), zw for the clods. Both move by the stochastic offset of the churn's
+// tile cell there (CS's sampler, one lattice cell per tile): one offset per
+// cell keeps every read one fetch, and churn and clods cut together at the
+// cell borders.
+float4 ChurnTileUVs(float2 worldXY, float churnSize)
+{
+	float4 uv = worldXY.xyxy * float4(ChurnTileScale(churnSize).xx, ChurnTileScale(kClodSizeScale).xx);
+	uv -= kChurnLatticeWrap * floor(uv / kChurnLatticeWrap);
+	return uv + ComputeStochasticOffsetsMesh(uv.xy).offset1.xyxy + 0.5 / kChurnTileTexels;
+}
+
+// Churn and clod lump noise in [-1, 1] at a world point.
+float ChurnNoiseScaled(float2 worldXY, float churnSize)
+{
+	return ChurnNoiseUV(ChurnTileUVs(worldXY, churnSize).xy) * 2.0 - 1.0;
+}
+
+float ClodNoise(float2 worldXY, float churnSize)
+{
+	return ChurnNoiseUV(ChurnTileUVs(worldXY, churnSize).zw) * 2.0 - 1.0;
+}
+
+// Central difference of the lump noise around a churn tile uv (ChurnTileUVs;
+// a_scale its ChurnTileScale), a_step world units either side. The taps share
+// the centre's cell offset.
+float2 ChurnNoiseGradUV(float2 uv, float a_scale, float a_step)
+{
+	const float d = a_step * a_scale;
+	return float2(ChurnNoiseUV(uv + float2(d, 0.0)) - ChurnNoiseUV(uv - float2(d, 0.0)),
+			   ChurnNoiseUV(uv + float2(0.0, d)) - ChurnNoiseUV(uv - float2(0.0, d))) /
+	       a_step;
+}
 
 // Churn plus clod heights at a_t along a ray whose churn tile uvs are
 // a_uv0 + a_duv * a_t (xy churn, zw clods).
@@ -303,8 +320,10 @@ float ChurnHeightsAlong(float4 a_uv0, float4 a_duv, float a_t, float churnAmp, f
 
 // Distance along the unit view ray (dir) from the sheet point to where it first
 // meets the churn and clod heights laid over the pixel's tangent plane (slope
-// g), searched from +h to -h around the plane and refined by secant.
-float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2 worldXY, float sizeScale)
+// g), searched from +h to -h around the plane and refined by secant. uv0: the
+// churn tile uvs at the sheet point (ChurnTileUVs), a_scale their
+// ChurnTileScale (x churn, y clods).
+float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float4 uv0, float2 a_scale)
 {
 	float rise = dir.z - dot(dir.xy, g);
 	float hMax = churnAmp + clodAmp;
@@ -315,9 +334,7 @@ float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float2
 		float span = -2.0 * hMax / rise;
 		float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
 		float dt = span / steps;
-		const float4 scale = float4(ChurnTileScale(sizeScale).xx, ChurnTileScale(kClodSizeScale).xx);
-		const float4 uv0 = float4(ChurnTileUV(worldXY, sizeScale), ChurnTileUV(worldXY, kClodSizeScale));
-		const float4 duv = dir.xyxy * scale;
+		const float4 duv = dir.xyxy * a_scale.xxyy;
 		float prevT = hMax / rise;
 		float prevGap = hMax - ChurnHeightsAlong(uv0, duv, prevT, churnAmp, clodAmp);
 		t = prevT;

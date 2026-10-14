@@ -1650,7 +1650,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// weight, since spoil lands on the crest while churn peaks in the trench.
 		// Mirrors ShellSurfaceZ; the self-shadow march skips it, as it skips churn.
 		[branch] if (churnInGeometry && RimStyle.z > 0.01 && bermD > 0.003)
-			depth += ChurnNoiseScaled(worldXY, kClodSizeScale) * RimStyle.z *
+			depth += ClodNoise(worldXY, ObjChurnSizeScale) * RimStyle.z *
 			         BermShape(bermD) * saturate(1.0 - deform) * BermDepthGate(skinDepth);
 
 		// Undulation, on the landscape shell's own terms (SnowShell.hlsl's
@@ -2908,6 +2908,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
 	float3 shadePos = input.WorldPos;
 #ifdef PATCH
+	// The churn tile's uvs at the shaded point (xy churn, zw clods), set by the
+	// march or on first use, so the gradients keep the march's cell offsets.
+	const float2 churnScale = float2(ChurnTileScale(ObjChurnSizeScale), ChurnTileScale(kClodSizeScale));
+	float4 churnUV = 0.0;
+	bool churnUVSet = false;
 	// Churn and clods by parallax, the landscape shell's march: the patch
 	// geometry left them out, and the point the view ray meets is shaded.
 	[branch] if (PatchChurnParallax())
@@ -2924,11 +2929,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		{
 			float3 dir = normalize(input.WorldPos);
 			float2 slope = -normalWS.xy / max(normalWS.z, 0.1);
-			float t = ChurnParallaxT(dir, slope, churnAmp, clodAmp, input.worldXY, ObjChurnSizeScale);
+			churnUV = ChurnTileUVs(input.worldXY, ObjChurnSizeScale);
+			churnUVSet = true;
+			float t = ChurnParallaxT(dir, slope, churnAmp, clodAmp, churnUV, churnScale);
 			shadePos = input.WorldPos + dir * t;
 			input.worldXY += dir.xy * t;
 			input.trenchGridLocal += dir.xy * t;
 			input.GridLocal += dir.xy * t;
+			churnUV += dir.xyxy * churnScale.xxyy * t;
 		}
 	}
 #endif
@@ -3040,15 +3048,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// P6 clods, shading-only like this whole ridge (geometry berm
 		// waits for the skin rework); same weight recipe as the landscape.
 		[branch] if (RimStyle.z > 0.01)
-		{
-			float2 clodXY = GridOrigin + trenchGridLocal;
-			float kXP = ChurnNoiseScaled(clodXY + float2(bStep, 0.0), kClodSizeScale);
-			float kXN = ChurnNoiseScaled(clodXY - float2(bStep, 0.0), kClodSizeScale);
-			float kYP = ChurnNoiseScaled(clodXY + float2(0.0, bStep), kClodSizeScale);
-			float kYN = ChurnNoiseScaled(clodXY - float2(0.0, bStep), kClodSizeScale);
-			normalWS = normalize(normalWS + float3(-float2(kXP - kXN, kYP - kYN) / (2.0 * bStep) *
+			normalWS = normalize(normalWS + float3(-ChurnNoiseGradUV(ChurnTileUVs(GridOrigin + trenchGridLocal, ObjChurnSizeScale).zw, ChurnTileScale(kClodSizeScale), bStep) *
 				RimStyle.z * BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(bermDepth), 0.0));
-		}
 	}
 
 #ifdef PATCH
@@ -3069,7 +3070,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float churnWPix = ChurnWeight(pixelDeform, bermC, worldXY) * saturate(PatchSkinDepth(worldXY).x / 10.0) * churnFade;
 		float churnAmpPix = churnWPix > 0.001 ? PatchChurnAmp(trenchGridLocal) : 0.0;
 		[branch] if (churnAmpPix > 0.01)
-			normalWS = normalize(normalWS + float3(-ChurnNoiseGrad(worldXY, ObjChurnSizeScale, 3.0) * churnAmpPix * churnWPix, 0.0));
+		{
+			[branch] if (!churnUVSet)
+			{
+				churnUV = ChurnTileUVs(worldXY, ObjChurnSizeScale);
+				churnUVSet = true;
+			}
+			normalWS = normalize(normalWS + float3(-ChurnNoiseGradUV(churnUV.xy, churnScale.x, 3.0) * churnAmpPix * churnWPix, 0.0));
+		}
 	}
 	// Clods left the geometry with the churn: shade them here, the landscape
 	// PS's centre-weighted clod gradient.
@@ -3077,7 +3085,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	{
 		float clodWPix = BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(PatchSkinDepth(worldXY).x) * churnFade;
 		[branch] if (clodWPix > 0.001)
-			normalWS = normalize(normalWS + float3(-ChurnNoiseGrad(worldXY, kClodSizeScale, 4.0) * RimStyle.z * clodWPix, 0.0));
+		{
+			[branch] if (!churnUVSet)
+				churnUV = ChurnTileUVs(worldXY, ObjChurnSizeScale);
+			normalWS = normalize(normalWS + float3(-ChurnNoiseGradUV(churnUV.zw, churnScale.y, 4.0) * RimStyle.z * clodWPix, 0.0));
+		}
 	}
 #endif
 
