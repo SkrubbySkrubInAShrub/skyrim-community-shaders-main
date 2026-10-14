@@ -790,7 +790,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
 
-	const bool canRestore = !isDisabled && isLoaded;
+	// Restore clears the user's edits in the user config, which a feature with its own store does not use.
+	const bool canRestore = !isDisabled && isLoaded && feat->UsesMainSettings();
 
 	float totalButtonWidth = bootToggleWidth;
 	if (canRestore) {
