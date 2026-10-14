@@ -836,7 +836,7 @@ float BermDepthGate(float depth)
 // is.
 struct FrostTaps
 {
-	float3 normal;   // tangent-space, already flipped for our v direction
+	float3 normal;   // tangent-space, x along +X, y along +Y
 	float crystal;   // 0 in the gaps, 1 on the crystal
 	bool valid;
 };
@@ -880,7 +880,6 @@ FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
 	StochasticOffsets offsets = ComputeStochasticOffsets(wrapped / WORLD_SCALE);
 	float3 n = StochasticEffect(FrostPatternNormal, SnowSampler, wrapped, offsets).xyz * 2.0 - 1.0;
 	n.z = sqrt(saturate(1.0 - dot(n.xy, n.xy)));
-	n.y = -n.y;  // DDS v grows down; our uv v grows with world +Y
 	taps.normal = n;
 	taps.crystal = saturate(StochasticEffect(FrostPatternDiffuse, SnowSampler, wrapped, offsets).x);
 	taps.valid = true;

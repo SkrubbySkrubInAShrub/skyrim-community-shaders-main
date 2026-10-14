@@ -163,6 +163,26 @@ float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTa
 	return c;
 }
 
+// The snow normal as a world-space offset to add to the surface normal n.
+// Snow maps are DirectX (+G along +v); each plane decodes in the uv frame
+// its parallax uses.
+float3 SampleSnowNormalOffset(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTaps, float sideWeight, float3 n,
+	float3 topT, float3 topB, bool sideDropsX)
+{
+	float2 top = SampleSnowMap(tex, topTaps).xy * 2.0 - 1.0;
+	float3 o = topT * top.x + topB * top.y;
+	[branch] if (sideWeight > 0.001)
+	{
+		float2 side = SampleSnowMap(tex, sideTaps).xy * 2.0 - 1.0;
+		float3 sideT = sideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+		float3 sideB = float3(0.0, 0.0, 1.0);
+		sideT = normalize(sideT - n * dot(n, sideT));
+		sideB = normalize(sideB - n * dot(n, sideB));
+		o = lerp(o, sideT * side.x + sideB * side.y, sideWeight);
+	}
+	return o;
+}
+
 float SnowParallaxOcclusion(SnowTaps taps, float2 lightUV, float mip, float quality, float noise, DisplacementParams params)
 {
 	uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);

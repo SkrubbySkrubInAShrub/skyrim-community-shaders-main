@@ -2601,12 +2601,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
-	{
-		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
-		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
-		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
-		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
-	}
+		normalWS = normalize(normalWS + bumpFade * SampleSnowNormalOffset(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness, normalWS,
+										   bumpT, bumpB, snowSideDropsX));
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
 		normalWS = ShellLuminanceBump(normalWS, worldXYPS, bumpFade);
 

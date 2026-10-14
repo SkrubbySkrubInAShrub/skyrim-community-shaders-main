@@ -3157,12 +3157,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// gate: bending the normal first would jitter the up-facing test into
 	// speckled edges.
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
-	{
-		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
-		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
-		texN.y = -texN.y;
-		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
-	}
+		normalWS = normalize(normalWS + bumpFade * SampleSnowNormalOffset(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness, normalWS,
+										   bumpT, bumpB, snowSideDropsX));
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
 	{
 		const float kBumpTile = 64.0;

@@ -462,9 +462,16 @@ namespace SnowLighting
 #		else
 					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
 #		endif
-					texN.y = -texN.y;
-					float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), worldNormal) + float3(1e-5, 0.0, 0.0));
-					float3 bumpB = cross(worldNormal, bumpT);
+					// The plane SampleStochastic took (its own test), decoded in that plane's
+					// uv frame: DirectX map, +G along +v (x plane: yz, y: xz, z: xy).
+					const bool planeX = screenNoise < snowTriWeights.x;
+					const bool planeZ = !planeX && screenNoise >= snowTriWeights.x + snowTriWeights.y;
+					float3 bumpT = planeX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+					float3 bumpB = planeZ ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0);
+					bumpT -= worldNormal * dot(worldNormal, bumpT);
+					bumpB -= worldNormal * dot(worldNormal, bumpB);
+					bumpT *= rsqrt(max(dot(bumpT, bumpT), 1e-8));
+					bumpB *= rsqrt(max(dot(bumpB, bumpB), 1e-8));
 					worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * snowVerdict);
 				}
 				// SINGLE RETURN: an early `return` inside a `[branch]` is the
