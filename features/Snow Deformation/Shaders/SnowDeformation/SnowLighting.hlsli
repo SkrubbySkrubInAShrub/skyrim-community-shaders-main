@@ -591,7 +591,7 @@ namespace SnowLighting
 	// Masks.y is dead for statics (SSS reads it only where Masks.x > 0):
 	// carry the projection's verdict for the object snow shell's coat. The
 	// target is an 11-bit float, 64 steps an octave: 2 = known and bare,
-	// [4, 32) = bare with the weight, three octaves over 0.3 below the half
+	// [4, 32) = bare with the weight, three octaves over 0.8 below the half
 	// blend (the coat's cut sinks into it as snow accumulates), 48 = painted.
 	// Landscape keeps (0, 1] for its grain. Mirror: SnowStaticsShell.hlsl.
 	void WriteMasksY(State s, float projWeight, inout float masksY)
@@ -599,7 +599,7 @@ namespace SnowLighting
 #	if defined(PROJECTED_UV)
 		[flatten] if (s.projMatch)
 		{
-			float snowBareT = saturate(1.0 + projWeight / 0.3);
+			float snowBareT = saturate(1.0 + projWeight / 0.8);
 			masksY = projWeight >= 0.0 ? 48.0 : (snowBareT > 0.0 ? 4.0 * exp2(3.0 * snowBareT) : 2.0);
 		}
 #	else

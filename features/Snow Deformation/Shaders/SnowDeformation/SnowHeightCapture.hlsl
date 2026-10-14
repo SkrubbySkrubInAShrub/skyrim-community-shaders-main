@@ -40,7 +40,7 @@ cbuffer StaticCB : register(b1)
 	// the patch can own the column outright.
 	float RoadField;
 	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
-	float padProjMask;       // layout sync with SnowStaticsShell
+	float ProjNoiseWeight;   // layout sync with SnowStaticsShell; unused here
 	float padProjDensity;    // layout sync with SnowStaticsShell
 	// Class override code, matching the skin VS: 0 = flat classifier,
 	// 1 = force ROUNDED (mountain/cliff family; every PD draw in

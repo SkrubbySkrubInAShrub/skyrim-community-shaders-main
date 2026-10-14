@@ -2234,6 +2234,8 @@ public:
 		float projNoiseScale;
 		/** @brief projectedUVParams.z - the noise map's world-space tiling; 0 without projection data. */
 		float projNoiseTiling;
+		/** @brief The noise term's weight in Lighting's projWeight (its ProjectedUVParams.x): red * (1 - alpha) of the unmodified property; 0 without projection data. */
+		float projNoiseWeight;
 		/** @brief Mountain/cliff family by geometry name: force the ROUNDED class. The divergence-only flat classifier reads a jagged low-poly cliff's split normals as "plate" and drapes it with a rigid vertical lift of the full flat depth - the hovering sheet Josef reported as a translucent film. Deterministic name match (road-class precedent), NOT a stats heuristic (those were tried and rejected, see SmoothNormalsCS FlatStatsCS). */
 		bool forceRounded;
 		/** @brief Plank family by geometry name (plank/walkway/catwalk). Currently DECIDES NOTHING - Josef's round-5 call classifies ALL PD draws rounded; the match is kept (and logged once per name) for the future cornice treatment when the 3D shell returns. */
@@ -2467,7 +2469,8 @@ public:
 		float RoadField;
 		/** @brief Vanilla projected-UV mask threshold (BSLightingShaderProperty::projectedUVParams.w) for this draw; -1 when the property carries no kProjectedUV (or kTreeAnim, whose vertex alpha is wind weight, not a snow mask). Feeds the S0 debug view and the S2 placement suppressor (SKIN-PLACEMENT-PLAN.md). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjThreshold;
-		float padProjMask;
+		/** @brief CapturedSnowStatic::projNoiseWeight: the coat's reach swaps that noise term for a hex-tiled read of the same map. Took the padProjMask slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjNoiseWeight;
 		float padProjDensity;
 		/** @brief Class override code: 0 = flat classifier decides, 1 = force ROUNDED (CapturedSnowStatic::forceRounded, and every PD draw in authored-relief mode), 2 = force FLAT (plankFamily in authored-relief mode). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ClassOverride;

@@ -265,7 +265,9 @@ cbuffer StaticCB : register(b1)
 	// vertex alpha is wind weight). Feeds debug mode 5 and the S2
 	// suppressor. Mirror in SnowDeformation.h.
 	float ProjThreshold;
-	float padProjMask;
+	// The noise term's weight in Lighting's projWeight (ProjectedUVParams.x);
+	// 0 without projection data. Mirror in SnowDeformation.h.
+	float ProjNoiseWeight;
 	float padProjDensity;
 	// Class override code: 0 = flat classifier decides, 1 = force ROUNDED
 	// (mountain/cliff family - a jagged cliff's split normals score "flat";
@@ -546,8 +548,13 @@ static const float kCoatSolidW = 0.15;
 // Edge Lump Reach 1: how far below the game's half blend the coat's cut sinks,
 // in projected weight. Under kRecolorWeightSpan, or reach 1 coats every face.
 static const float kEdgeReachWeightShift = 0.25;
-// Bare weights Lighting encodes, below the half blend (mirror: Lighting.hlsl).
-static const float kRecolorWeightSpan = 0.3;
+// Bare weights Lighting encodes, below the half blend (mirror: SnowLighting.hlsli
+// WriteMasksY). Covers the noise swap: 0.25 + 0.84 x ProjNoiseWeight.
+static const float kRecolorWeightSpan = 0.8;
+// Reach at which the cut's noise term is fully the hex-tiled read.
+static const float kDetileRamp = 0.5;
+// Hex-tiled read: triangle-grid cells per noise-map tile (2 sqrt 3).
+static const float kDetileGrid = 3.4641016;
 // The largest shortfall below the solid contour the lumps may hang from
 // (the game's own fade is 0.2 wide).
 static const float kEdgeMaxDrop = 0.12;
@@ -572,6 +579,63 @@ float SkinRecolorWeight(float enc)
 	enc = enc >= 256.0 ? enc / 256.0 : enc;
 	return (enc >= 3.5 && enc < 40.0) ? (log2(enc * 0.25) / 3.0 - 1.0) * kRecolorWeightSpan : -1.0;
 }
+#ifdef PSHADER
+// Projection noise map hex-tiled (Heitz & Neyret 2018): per-vertex hashed
+// offsets, squared barycentric blend, variance kept.
+float2 DetileOffset(int2 a_vertex)
+{
+	return float2(Random::pcg2d(asuint(a_vertex))) * (1.0 / 4294967296.0);
+}
+
+float DetiledNoisePlane(float2 a_uv, float2 a_dx, float2 a_dy, float a_mean)
+{
+	const float2 g = a_uv * kDetileGrid;
+	const float2 skew = float2(g.x - 0.57735027 * g.y, 1.15470054 * g.y);
+	const float2 cell = floor(skew);
+	const float2 f = skew - cell;
+	const float fz = 1.0 - f.x - f.y;
+	const int2 c = int2(cell);
+	const bool lower = fz > 0.0;
+	float3 w = lower ? float3(fz, f.y, f.x) : float3(-fz, 1.0 - f.y, 1.0 - f.x);
+	const int2 v1 = lower ? c : c + int2(1, 1);
+	const int2 v2 = lower ? c + int2(0, 1) : c + int2(1, 0);
+	const int2 v3 = lower ? c + int2(1, 0) : c + int2(0, 1);
+	w *= w;
+	w /= dot(w, 1.0);
+	const float3 n = float3(ProjNoiseMap.SampleGrad(SnowSampler, a_uv + DetileOffset(v1), a_dx, a_dy).x,
+		ProjNoiseMap.SampleGrad(SnowSampler, a_uv + DetileOffset(v2), a_dx, a_dy).x,
+		ProjNoiseMap.SampleGrad(SnowSampler, a_uv + DetileOffset(v3), a_dx, a_dy).x);
+	return a_mean + dot(w, n - a_mean) * rsqrt(dot(w, w));
+}
+
+// The map as Lighting reads it. a_p and the gradients pre-scaled by
+// ProjNoiseTiling.
+float ProjNoiseGame(float3 a_p, float3 a_triW, float3 a_dx, float3 a_dy)
+{
+	float n = 0.0;
+	[branch] if (a_triW.x > 0.001)
+		n += a_triW.x * ProjNoiseMap.SampleGrad(SnowSampler, a_p.yz, a_dx.yz, a_dy.yz).x;
+	[branch] if (a_triW.y > 0.001)
+		n += a_triW.y * ProjNoiseMap.SampleGrad(SnowSampler, a_p.xz, a_dx.xz, a_dy.xz).x;
+	[branch] if (a_triW.z > 0.001)
+		n += a_triW.z * ProjNoiseMap.SampleGrad(SnowSampler, a_p.xy, a_dx.xy, a_dy.xy).x;
+	return n;
+}
+
+// Hex-tiled, clamped to the map's [0, 1].
+float ProjNoiseDetiled(float3 a_p, float3 a_triW, float3 a_dx, float3 a_dy)
+{
+	const float mean = ProjNoiseMap.SampleLevel(SnowSampler, 0.5.xx, 16.0).x;
+	float n = 0.0;
+	[branch] if (a_triW.x > 0.001)
+		n += a_triW.x * DetiledNoisePlane(a_p.yz, a_dx.yz, a_dy.yz, mean);
+	[branch] if (a_triW.y > 0.001)
+		n += a_triW.y * DetiledNoisePlane(a_p.xz, a_dx.xz, a_dy.xz, mean);
+	[branch] if (a_triW.z > 0.001)
+		n += a_triW.z * DetiledNoisePlane(a_p.xy, a_dx.xy, a_dy.xy, mean);
+	return saturate(n);
+}
+#endif
 // The note through the decal blend: decal mode blends every bound target, Masks
 // included. The more painted of the pre-decal snapshot and the live copy wins.
 // Lighting writes nothing in (32, 40), so a live note there over a bare
@@ -4584,12 +4648,29 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// slope (smooth normal) scales the drop, so at reach 0 nothing
 				// changes and a wall stays as the game painted it while the
 				// roof beside it fills in.
+				float reachW = kEdgeReachWeightShift * EdgeFlankWidth;
+				// Noise swap: realW's tiling noise term traded for the hex-tiled read,
+				// both at the scene point. Each stage is skipped where no read left in
+				// [0, 1] can move the cut across [-0.01, 0.02]; unswapped, the verdict
+				// is the same there. Inputs must match the prepass: no bent normalWS.
+				const float swapW = ProjNoiseWeight * saturate(EdgeFlankWidth / kDetileRamp);
+				const float steepMin = 1.0 - SteepThin;
+				[branch] if (swapW > 0.0 && realW > -0.9 && realW + reachW + swapW >= -0.01 && realW + max(reachW - swapW, 0.0) * steepMin <= 0.02)
+				{
+					const float sceneViewZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+					const float3 sceneP = (input.WorldPos * (sceneViewZ / input.CurrentClip.w) + ShellCameraPosAdjust.xyz) * ProjNoiseTiling;
+					const float3 swapN = normalize(input.NormalWS);
+					const float3 swapTriW = Triplanar::GetWeights(swapN, swapN);
+					const float gameNoise = ProjNoiseGame(sceneP, swapTriW, projGradX, projGradY);
+					[branch] if (realW + reachW + swapW * gameNoise >= -0.01 && realW + max(reachW + swapW * (gameNoise - 1.0), 0.0) * steepMin <= 0.02)
+						reachW += swapW * (gameNoise - ProjNoiseDetiled(sceneP, swapTriW, projGradX, projGradY));
+				}
 #ifdef SNOW_STATICS_DEPTH_PREPASS
 				// The sheet-meet bend reaches the prepass only through
 				// steepKeep, and the cut is monotone in it: evaluate the cut at
 				// both ends of its range and bend only when they disagree.
-				const float npLo = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * (1.0 - SteepThin)) * 50.0 + 0.5);
-				const float npHi = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth) * 50.0 + 0.5);
+				const float npLo = saturate((realW + max(reachW * (1.0 - SteepThin), 0.0)) * 50.0 + 0.5);
+				const float npHi = saturate((realW + max(reachW, 0.0)) * 50.0 + 0.5);
 				const float kLo = (npLo - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
 				const float kHi = (npHi - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
 				const bool surelyKeep = npLo > 0.15 + 1e-4 && kLo >= 1e-4;
@@ -4603,7 +4684,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 #else
 				float steepKeep = 1.0 - SteepThin * (1.0 - smoothstep(0.15, 0.5, normalWS.z));
 #endif
-				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * steepKeep) * 50.0 + 0.5);
+				nearPaint = saturate((realW + max(reachW * steepKeep, 0.0)) * 50.0 + 0.5);
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}

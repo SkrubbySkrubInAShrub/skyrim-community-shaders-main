@@ -1183,6 +1183,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	float projThreshold = -1.0f;
 	float projNoiseScale = 0.0f;
 	float projNoiseTiling = 0.0f;
+	float projNoiseWeight = 0.0f;
 	bool projReal = false;
 	{
 		const auto& capFlags = a_pass->shaderProperty->flags;
@@ -1190,6 +1191,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim)) {
 			const auto& projParams = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams;
 			projThreshold = projParams.alpha;
+			// = Lighting's ProjectedUVParams.x.
+			projNoiseWeight = projParams.red * (1.0f - projParams.alpha);
 			// Runtime projection (Seasons of Skyrim): the record's 0 stands
 			// for "no angle"; the skin reconstructs with the angle Lighting
 			// masks by, so the drape and the recolor agree.
@@ -1237,7 +1240,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed;
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, projNoiseWeight, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow });
 	capturedRoads += road ? 1u : 0u;
 	capturedLoaded += lodBatch ? 0u : 1u;
 }
@@ -2974,6 +2977,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
 	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
 	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
+	a_scb.ProjNoiseWeight = a_cap.projNoiseWeight;
 	// 2 = the S4 shell owns this draw; 0 = classic path.
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;
@@ -3394,6 +3398,7 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&cap.projThreshold, sizeof(cap.projThreshold));
 			mix(&cap.projNoiseScale, sizeof(cap.projNoiseScale));
 			mix(&cap.projNoiseTiling, sizeof(cap.projNoiseTiling));
+			mix(&cap.projNoiseWeight, sizeof(cap.projNoiseWeight));
 			mix(&cap.forceRounded, sizeof(cap.forceRounded));
 			mix(&cap.plankFamily, sizeof(cap.plankFamily));
 			mix(&cap.projReal, sizeof(cap.projReal));
