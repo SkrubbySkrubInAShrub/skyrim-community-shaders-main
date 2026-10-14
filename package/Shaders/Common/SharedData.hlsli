@@ -385,6 +385,12 @@ namespace SharedData
 		uint VolumetricRaysSampleCount;
 		uint GameVolumetricRaysDisableDithering;
 		float2 GameVolumetricRaysPad0;
+
+		float3 GameVolumetricRaysLightScale;
+		float GameVolumetricRaysCustomContribution;
+
+		float3 GameVolumetricRaysCustomColor;
+		float GameVolumetricRaysPad1;
 	};
 	struct TerrainBlendingSettings
 	{

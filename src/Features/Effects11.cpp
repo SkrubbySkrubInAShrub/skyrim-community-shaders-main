@@ -21,6 +21,13 @@
 
 namespace
 {
+	/** @brief The game's volumetric lighting settings, blended by Sky::Update for the current weather and time. */
+	RE::BSVolumetricLightingRenderData& GetGameVolumetricLighting()
+	{
+		static auto& volumetricLighting = *reinterpret_cast<RE::BSVolumetricLightingRenderData*>(REL::RelocationID(527719, 414629).address() - offsetof(RE::BSVolumetricLightingRenderData, color));
+		return volumetricLighting;
+	}
+
 	/** @brief Angular half-size of a sky billboard as seen from the viewer, as tan(angle); a_fallback when it has no usable bound. */
 	float GetBillboardHalfTan(const RE::NiAVObject* a_billboard, const RE::NiPoint3& a_viewer, float a_fallback)
 	{
@@ -321,6 +328,11 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.VolumetricFogEnableShadows = settingManager.GetValue<bool>("EnableShadows", "VOLUMETRICFOG");
 
 	data.GameVolumetricRaysDisableDithering = settingManager.GetValue<bool>("DisableGameDithering", "GAMEVOLUMETRICRAYS");
+	const auto& gameVolumetricLighting = GetGameVolumetricLighting();
+	// Interiors light VL from the lighting template, which the sunlight grade never touched
+	data.GameVolumetricRaysLightScale = Util::IsInterior() ? float3{ 1.0f, 1.0f, 1.0f } : directLightingUngradeScale;
+	data.GameVolumetricRaysCustomContribution = gameVolumetricLighting.customColor.contribution;
+	data.GameVolumetricRaysCustomColor = { gameVolumetricLighting.color.red, gameVolumetricLighting.color.green, gameVolumetricLighting.color.blue };
 
 	data.ParticleIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "PARTICLE");
 	data.ParticleLightingInfluence = settingManager.GetInterpolatedTimeOfDayValue("LightingInfluence", "PARTICLE");
@@ -603,6 +615,7 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		auto& dirLightColor = colors[(uint)RE::TESWeather::ColorTypes::kSunlight];
 
 		auto dirLightColorF3 = NiToF3(dirLightColor);
+		const float3 ungradedDirLightColor = dirLightColorF3;
 
 		// A near-zero scale would blow up the divide below, so treat it as unset
 		static constexpr float minSunlightScale = 1e-3f;
@@ -624,6 +637,12 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		dirLightColorF3 = Intensity(dirLightColorF3, lightingValue("DirectLightingIntensity"));
 
 		dirLightColorF3 /= sunlightScale;
+
+		// The game lights its VL with this colour too, but ENB presets tune [GAMEVOLUMETRICRAYS] against the ungraded sunlight
+		static constexpr float minGradedChannel = 1e-6f;
+		auto ungradeScale = [](float a_ungraded, float a_graded) { return a_graded > minGradedChannel ? a_ungraded / a_graded : 1.0f; };
+		directLightingUngradeScale = { ungradeScale(ungradedDirLightColor.x, dirLightColorF3.x), ungradeScale(ungradedDirLightColor.y, dirLightColorF3.y),
+			ungradeScale(ungradedDirLightColor.z, dirLightColorF3.z) };
 
 		dirLightColor = F3ToNi(dirLightColorF3);
 	}
@@ -773,7 +792,7 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 	}
 
 	{
-		static auto& volumetricLighting = (*(RE::BSVolumetricLightingRenderData*)(REL::RelocationID(527719, 414629).address() - offsetof(RE::BSVolumetricLightingRenderData, color)));
+		auto& volumetricLighting = GetGameVolumetricLighting();
 		volumetricLighting.intensity *= settingManager.GetInterpolatedTimeOfDayValue("Intensity", "GAMEVOLUMETRICRAYS");
 		volumetricLighting.samplingRepartition.rangeFactor *= settingManager.GetInterpolatedTimeOfDayValue("RangeFactor", "GAMEVOLUMETRICRAYS");
 	}

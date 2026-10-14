@@ -163,11 +163,19 @@ public:
 		uint VolumetricRaysSampleCount;
 		uint GameVolumetricRaysDisableDithering;
 		float2 GameVolumetricRaysPad0;
+
+		float3 GameVolumetricRaysLightScale;  ///< Ungraded over graded sunlight, so game VL stays lit by the weather's own sunlight
+		float GameVolumetricRaysCustomContribution;
+
+		float3 GameVolumetricRaysCustomColor;
+		float GameVolumetricRaysPad1;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
 	static_assert(offsetof(PerFrame, VolumetricFogColorFilter) % 16 == 0);
 	static_assert(offsetof(PerFrame, VolumetricRaysSkyColor) % 16 == 0);
 	static_assert(offsetof(PerFrame, VolumetricRaysSampleCount) % 16 == 0);
+	static_assert(offsetof(PerFrame, GameVolumetricRaysLightScale) % 16 == 0);
+	static_assert(offsetof(PerFrame, GameVolumetricRaysCustomColor) % 16 == 0);
 	static_assert(offsetof(PerFrame, EnableCloudsScattering) % 16 == 0);
 	static_assert(offsetof(PerFrame, SkyScatteringColor) % 16 == 0);
 	static_assert(offsetof(PerFrame, SkyScatteringDustTint) % 16 == 0);
@@ -208,6 +216,8 @@ public:
 	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
 	/** @brief Sun direction used for sky scattering; mirrored below the horizon while the sun disc is hidden. */
 	float3 scatteringSunDirection = { 0.0f, 0.0f, 1.0f };
+	/** @brief Per-channel sunlight before over after the [ENVIRONMENT] direct lighting grade, from the last OverrideWeather. */
+	float3 directLightingUngradeScale = { 1.0f, 1.0f, 1.0f };
 
 	PerFrame GetCommonBufferData();
 	/** @brief Fills the [SKYSCATTERING] and cloud lighting fields of the per-frame buffer. */
