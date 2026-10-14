@@ -1170,15 +1170,15 @@ namespace
 		if (!canLock)
 			return;
 		ImGui::SameLine();
-		const bool locked = editor.IsWeatherLocked() && editor.GetLockedWeather() == weatherWidget->weather;
+		const bool locked = editor.IsWeatherLockedByUser() && editor.GetLockedWeather() == weatherWidget->weather;
 		const char* tooltip = !EditorWindow::AreWeatherLockHooksInstalled() ?
 		                          T(TKEY("weather_lock_hooks_unavailable"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting") :
 		                          (locked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
 		if (Util::LockStatusBadgeButton("##InspectorLock", locked, tooltip)) {
 			if (locked)
-				editor.UnlockWeather();
+				editor.ReleaseUserWeatherLock();
 			else
-				editor.LockWeather(weatherWidget->weather);
+				editor.LockWeatherForUser(weatherWidget->weather);
 		}
 	}
 

@@ -1211,7 +1211,7 @@ void EditorWindow::RenderUI()
 			}
 
 			// Weather lock + name, and period title, centered in the header
-			const bool weatherLocked = IsWeatherLocked();
+			const bool weatherLocked = IsWeatherLockedByUser();
 			RE::TESWeather* statusWeather = GetLockedWeather();
 			if (!statusWeather) {
 				if (auto* sky = RE::Sky::GetSingleton())
@@ -1254,9 +1254,9 @@ void EditorWindow::RenderUI()
 				if (Util::LockStatusBadgeButton("##ActionBarWeatherLock", weatherLocked,
 						weatherLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"))) {
 					if (weatherLocked)
-						UnlockWeather();
+						ReleaseUserWeatherLock();
 					else if (statusWeather)
-						LockWeather(statusWeather);
+						LockWeatherForUser(statusWeather);
 				}
 				centerX += lockBadgeSize + weatherStatusGap;
 				if (ImGuiWindow* window = ImGui::GetCurrentWindow())
@@ -1508,6 +1508,12 @@ void EditorWindow::UpdateOpenState()
 		if (weatherLockedByOverlay) {
 			UnlockWeather();
 			weatherLockedByOverlay = false;
+		} else if (auto* locked = GetLockedWeather(); locked && IsWeatherLocked()) {
+			const char* name = locked->GetFormEditorID();
+			const std::string weatherName = name && *name ? name : T(TKEY("unknown"), "Unknown");
+			ShowNotification(
+				std::vformat(T(TKEY("weather_still_locked"), "Weather is still locked: {}"), std::make_format_args(weatherName)),
+				Util::Colors::GetWarning(), kLongNotificationDuration);
 		}
 	}
 
@@ -2054,6 +2060,29 @@ void EditorWindow::LockWeather(RE::TESWeather* weather)
 	MaintainWeatherLock();
 
 	logger::info("Weather locked: {}", weather->GetFormEditorID() ? weather->GetFormEditorID() : "Unknown");
+}
+
+bool EditorWindow::IsWeatherLockedByUser() const
+{
+	return IsWeatherLocked() && !weatherLockedByOverlay;
+}
+
+void EditorWindow::LockWeatherForUser(RE::TESWeather* weather)
+{
+	LockWeather(weather);
+	if (IsWeatherLocked()) {
+		weatherLockedByOverlay = false;
+		overlayWeatherLockPending = false;
+	}
+}
+
+void EditorWindow::ReleaseUserWeatherLock()
+{
+	// The editor keeps weather locked while open, so hand the lock back to it rather than letting the sky drift.
+	if (open && IsWeatherLocked())
+		weatherLockedByOverlay = true;
+	else
+		UnlockWeather();
 }
 
 void EditorWindow::LockWeatherForOverlay()

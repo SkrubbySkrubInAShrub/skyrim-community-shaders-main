@@ -362,7 +362,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 
 	// Force Weather / Unlock: lock badge matching the floating action bar
 	if (showForceWeather && weather) {
-		const bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
+		const bool isLocked = editorWindow->IsWeatherLockedByUser() && editorWindow->GetLockedWeather() == weather;
 		const char* tooltip = !EditorWindow::AreWeatherLockHooksInstalled() ?
 		                          T(TKEY("weather_lock_hooks_unavailable"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting") :
 		                          (isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
@@ -373,9 +373,9 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 		action.tooltip = tooltip;
 		action.onClick = [editorWindow, weather, isLocked]() {
 			if (isLocked)
-				editorWindow->UnlockWeather();
+				editorWindow->ReleaseUserWeatherLock();
 			else
-				editorWindow->LockWeather(weather);
+				editorWindow->LockWeatherForUser(weather);
 		};
 		actions.emplace_back(std::move(action));
 	}
@@ -688,15 +688,15 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		if (!showForceWeather || !weather)
 			return;
 		ImGui::SameLine();
-		bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
+		bool isLocked = editorWindow->IsWeatherLockedByUser() && editorWindow->GetLockedWeather() == weather;
 		const char* tooltip = !EditorWindow::AreWeatherLockHooksInstalled() ?
 		                          T(TKEY("weather_lock_hooks_unavailable"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting") :
 		                          (isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"));
 		if (Util::LockStatusBadgeButton("##InlineForceWeather", isLocked, tooltip)) {
 			if (isLocked)
-				editorWindow->UnlockWeather();
+				editorWindow->ReleaseUserWeatherLock();
 			else
-				editorWindow->LockWeather(weather);
+				editorWindow->LockWeatherForUser(weather);
 		}
 	};
 

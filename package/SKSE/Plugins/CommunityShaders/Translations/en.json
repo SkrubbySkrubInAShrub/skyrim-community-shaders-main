@@ -682,6 +682,7 @@
     "cs_editor.weather_lighting_browser": "CS Editor Browser",
     "cs_editor.weather_lock_hooks_unavailable": "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting",
     "cs_editor.weather_picker": "Weather Picker",
+    "cs_editor.weather_still_locked": "Weather is still locked: {}",
     "cs_editor.weathers_count": "Weathers: %d",
     "cs_editor.widget_type_cell_lighting": "Cell Lighting",
     "cs_editor.widget_type_imagespace": "ImageSpace",

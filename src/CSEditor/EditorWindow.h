@@ -186,6 +186,21 @@ public:
 	/** @brief Returns the currently locked weather form, or nullptr if none. */
 	RE::TESWeather* GetLockedWeather() const;
 
+	/**
+	 * @brief Returns true if the user explicitly locked the weather.
+	 * @details The editor silently locks weather while open; that implicit lock does not count.
+	 */
+	bool IsWeatherLockedByUser() const;
+
+	/**
+	 * @brief Lock a weather on the user's behalf; unlike the editor's implicit lock it survives closing the editor.
+	 * @param weather The weather form to lock.
+	 */
+	void LockWeatherForUser(RE::TESWeather* weather);
+
+	/** @brief Release the user's lock: while the editor is open it falls back to the implicit lock, otherwise it unlocks. */
+	void ReleaseUserWeatherLock();
+
 	/** @brief Redirect the engine's weather-change call sites to the locked weather. Call once during plugin init. */
 	static void InstallWeatherLockHooks();
 
