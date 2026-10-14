@@ -809,7 +809,9 @@ PS_OUTPUT main(PS_INPUT input)
 	[branch] if (isEnbVolumetricFog)
 	{
 		alpha = saturate(alpha * SharedData::enbSettings.VolumetricFogOpacity);
-		float volumetricFogShadow = GetViewRayShadow(input.WorldPosition.xyz, input.Position.xy, depth);
+		float volumetricFogShadow = 1.0;
+		[branch] if (SharedData::enbSettings.VolumetricFogEnableShadows)
+			volumetricFogShadow = GetViewRayShadow(input.WorldPosition.xyz, input.Position.xy, depth);
 		float3 volumetricFogScale = SharedData::enbSettings.VolumetricFogIntensity * SharedData::enbSettings.VolumetricFogColorFilter;
 		[branch] if (SharedData::enbSettings.VolumetricFogEnableLighting)
 		{

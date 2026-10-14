@@ -380,7 +380,11 @@ namespace SharedData
 		uint VolumetricFogEnableLighting;
 
 		float3 VolumetricRaysSkyColor;
-		float VolumetricRaysPad0;
+		uint VolumetricFogEnableShadows;
+
+		uint VolumetricRaysSampleCount;
+		uint GameVolumetricRaysDisableDithering;
+		float2 GameVolumetricRaysPad0;
 	};
 	struct TerrainBlendingSettings
 	{

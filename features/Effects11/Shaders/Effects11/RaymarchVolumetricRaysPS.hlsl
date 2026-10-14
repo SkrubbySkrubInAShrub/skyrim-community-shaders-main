@@ -33,12 +33,12 @@ float GetVolumetricRaysScattering(float3 positionMS, float noise, float3 cameraO
 	float rayLength = min(pixelDistance, MaxRayLength);
 	float3 sunDirection = SharedData::SunDirection.xyz;
 
-	const uint sampleCount = 16;
+	const uint sampleCount = SharedData::enbSettings.VolumetricRaysSampleCount;
 	const float rcpSampleCount = 1.0 / float(sampleCount);
 
 	float visibility = 0.0;
 
-	[unroll] for (uint i = 0; i < sampleCount; i++)
+	[loop] for (uint i = 0; i < sampleCount; i++)
 	{
 		float3 samplePos = rayDirection * ((float(i) + noise) * rcpSampleCount * rayLength);
 

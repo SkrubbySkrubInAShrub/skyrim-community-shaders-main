@@ -158,11 +158,16 @@ public:
 		uint VolumetricFogEnableLighting;
 
 		float3 VolumetricRaysSkyColor;  ///< The weather's horizon colour
-		float VolumetricRaysPad0;
+		uint VolumetricFogEnableShadows;
+
+		uint VolumetricRaysSampleCount;
+		uint GameVolumetricRaysDisableDithering;
+		float2 GameVolumetricRaysPad0;
 	};
 	static_assert(sizeof(PerFrame) % 16 == 0);
 	static_assert(offsetof(PerFrame, VolumetricFogColorFilter) % 16 == 0);
 	static_assert(offsetof(PerFrame, VolumetricRaysSkyColor) % 16 == 0);
+	static_assert(offsetof(PerFrame, VolumetricRaysSampleCount) % 16 == 0);
 	static_assert(offsetof(PerFrame, EnableCloudsScattering) % 16 == 0);
 	static_assert(offsetof(PerFrame, SkyScatteringColor) % 16 == 0);
 	static_assert(offsetof(PerFrame, SkyScatteringDustTint) % 16 == 0);

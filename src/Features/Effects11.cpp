@@ -286,7 +286,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.CloudsCurve = settingManager.GetInterpolatedTimeOfDayValue("CloudsCurve", "SKY");
 	data.CloudsDesaturation = settingManager.GetInterpolatedTimeOfDayValue("CloudsDesaturation", "SKY");
-	data.CloudsEdgeIntensity = settingManager.GetValue<float>("CloudsEdgeIntensity", "SKY");
+	data.CloudsEdgeIntensity = settingManager.GetValue<bool>("EnableCloudsEdge", "SKYSCATTERING") ? settingManager.GetValue<float>("CloudsEdgeIntensity", "SKY") : 0.0f;
 	data.CloudsEdgeMoonMultiplier = settingManager.GetInterpolatedTimeOfDayValue("CloudsEdgeMoonMultiplier", "SKY");
 
 	// StarsCurve 1..4 maps to a 0..1 blend from linear stars toward stars^4
@@ -318,6 +318,9 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.VolumetricFogOpacity = settingManager.GetInterpolatedTimeOfDayValue("Opacity", "VOLUMETRICFOG");
 	data.VolumetricFogShadowAmount = settingManager.GetInterpolatedTimeOfDayValue("ShadowAmount", "VOLUMETRICFOG");
 	data.VolumetricFogEnableLighting = settingManager.GetValue<bool>("EnableLighting", "VOLUMETRICFOG");
+	data.VolumetricFogEnableShadows = settingManager.GetValue<bool>("EnableShadows", "VOLUMETRICFOG");
+
+	data.GameVolumetricRaysDisableDithering = settingManager.GetValue<bool>("DisableGameDithering", "GAMEVOLUMETRICRAYS");
 
 	data.ParticleIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "PARTICLE");
 	data.ParticleLightingInfluence = settingManager.GetInterpolatedTimeOfDayValue("LightingInfluence", "PARTICLE");
@@ -328,6 +331,9 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.VolumetricRaysIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "VOLUMETRICRAYS");
 	data.VolumetricRaysDensity = settingManager.GetInterpolatedTimeOfDayValue("Density", "VOLUMETRICRAYS");
 	data.VolumetricRaysSkyColorAmount = settingManager.GetInterpolatedTimeOfDayValue("SkyColorAmount", "VOLUMETRICRAYS");
+	// Indexed by [VOLUMETRICRAYS] Quality + 1; lower Quality values are finer.
+	static constexpr uint32_t volumetricRaysSamples[4] = { 24, 16, 12, 8 };
+	data.VolumetricRaysSampleCount = volumetricRaysSamples[std::clamp(static_cast<int>(std::lround(settingManager.GetValue<float>("Quality", "VOLUMETRICRAYS"))) + 1, 0, 3)];
 	if (const auto sky = globals::game::sky) {
 		const auto& horizonColor = sky->skyColor[(uint)RE::TESWeather::ColorTypes::kHorizon];
 		data.VolumetricRaysSkyColor = { horizonColor.red, horizonColor.green, horizonColor.blue };
@@ -1242,13 +1248,13 @@ void Effects11::DrawSunRays()
 	if (!EnsureSunRaysResources(halfTexWidth, halfTexHeight))
 		return;
 
-	// Step counts are indexed by [RAYS] Quality + 2, blur factors by Type
+	// Step counts are indexed by [RAYS] Quality + 2, blur factors by Type, or MoonType for moon rays
 	static constexpr uint32_t blurSteps[3][5] = { { 7, 6, 5, 4, 4 }, { 7, 6, 6, 5, 4 }, { 7, 7, 6, 5, 4 } };
 	static constexpr uint32_t compositeSteps[5] = { 8, 8, 7, 6, 4 };
 	static constexpr float shortBlur[5] = { 0.15f, 0.3f, 0.6f, 0.3f, 0.9f };
 	static constexpr float longBlur[5] = { 0.4f, 0.7f, 0.6f, 1.0f, 0.9f };
 	const int qualityIndex = std::clamp(static_cast<int>(std::lround(settingManager.GetValue<float>("Quality", "RAYS"))) + 2, 0, 4);
-	const int type = std::clamp(static_cast<int>(std::lround(settingManager.GetValue<float>("Type", "RAYS"))), 0, 4);
+	const int type = std::clamp(static_cast<int>(std::lround(settingManager.GetValue<float>(light.isSun ? "Type" : "MoonType", "RAYS"))), 0, 4);
 
 	SunRaysData data{};
 	data.lightUV = { lightNdc.x * 0.5f + 0.5f, 0.5f - lightNdc.y * 0.5f };
