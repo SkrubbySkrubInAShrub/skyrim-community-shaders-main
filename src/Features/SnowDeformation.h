@@ -1334,7 +1334,7 @@ public:
 	Texture2D* undulationFieldTexture = nullptr;
 	ID3D11ComputeShader* undulationFieldCS = nullptr;
 	ID3D11ComputeShader* GetUndulationFieldCS();
-	/** @brief The churn's and rim teeth's value-noise hash, one R16 texel per cell of the 256-cell torus (UndulationFieldCS NoiseHashCS), baked once and bound at PS t109 for the ground and the trench patch: one fetch per octave where the live noise takes four hashes. */
+	/** @brief The rim teeth's value-noise hash, one R16 texel per cell of the 256-cell torus (UndulationFieldCS NoiseHashCS), baked once and bound at PS t109 for the ground and the trench patch: one fetch per octave where the live noise takes four hashes. */
 	static constexpr uint32_t kNoiseHashDim = 256;
 	static constexpr uint32_t kNoiseHashSlot = 109;
 	Texture2D* noiseHashTexture = nullptr;
@@ -1343,6 +1343,15 @@ public:
 	ID3D11ComputeShader* GetNoiseHashCS();
 	/** @brief Bakes the hash table on the first call after it was created; the bound SRV, or null until baked. */
 	ID3D11ShaderResourceView* NoiseHashSRV();
+	/** @brief The churn's two-octave sum over its 1024 q-unit period, one R16 texel per q-unit (UndulationFieldCS ChurnTileCS, SnowNoise.hlsli ChurnNoiseTorus), baked once and bound at PS t111 beside the hash table: churn and clods read it at their own scales, one fetch each. */
+	static constexpr uint32_t kChurnTileDim = 1024;
+	static constexpr uint32_t kChurnTileSlot = 111;
+	Texture2D* churnTileTexture = nullptr;
+	bool churnTileBaked = false;
+	ID3D11ComputeShader* churnTileCS = nullptr;
+	ID3D11ComputeShader* GetChurnTileCS();
+	/** @brief Bakes the churn tile on the first call after it was created; the bound SRV, or null until baked. */
+	ID3D11ShaderResourceView* ChurnTileSRV();
 	struct alignas(16) UndulationFieldCB
 	{
 		float2 FieldOriginWorld;

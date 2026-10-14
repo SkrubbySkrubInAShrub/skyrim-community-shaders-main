@@ -33,6 +33,14 @@ RWTexture2D<unorm float> NoiseHashTable : register(u1);
 	NoiseHashTable[id.xy] = ShapeNoiseHash(float2(id.xy));
 }
 
+// The churn tile ChurnNoiseUV reads (SnowFields.hlsli): texel i holds the
+// octave sum at q = i, baked once.
+RWTexture2D<unorm float> ChurnTile : register(u2);
+
+[numthreads(8, 8, 1)] void ChurnTileCS(uint3 id : SV_DispatchThreadID) {
+	ChurnTile[id.xy] = ChurnNoiseTorus(float2(id.xy));
+}
+
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	float2 w = FieldOriginWorld + float2(id.xy) * FieldTexel;
 	const float uStep = kUndulationGradStep;

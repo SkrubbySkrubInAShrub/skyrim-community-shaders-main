@@ -2448,14 +2448,19 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Churn gradient (same field the geometry displaces by). Untouched, carve
 	// and berm are 0 and so are both weights. Snow Climate's row at this
 	// height sets the churn's depth ramp; a fire or shock mark keeps the
-	// fixed one.
+	// fixed one. Churned by parallax, both fade out with the march.
+	float churnFade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
+#ifndef SNOW_TRENCH_PARALLAX
+	[flatten] if ((ShellFlags.x & 16) == 0)
+		churnFade = 1.0;
+#endif
 	float churnW = 0.0;
 	float clodW = 0.0;
-	[branch] if (!pixelUntouched)
+	[branch] if (!pixelUntouched && churnFade > 0.0)
 	{
-		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) *
+		churnW = ChurnWeight(pixelCarve, bermCenter, GridOrigin + gridLocal) * churnFade *
 		         max(ClimateChurnRamp(pixelDepth, SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z)), SampleSpellMark(gridLocal) * saturate(pixelDepth / 10.0));
-		clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
+		clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) * churnFade : 0.0;
 	}
 	// Churn by parallax (ShellFlags bit 4): the geometry leaves the churn and
 	// clod heights out, so the ray is marched through them here and the point
@@ -2470,9 +2475,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if ((ShellFlags.x & 16) != 0)
 	{
 #	endif
-		float fade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
-		float churnAmp = (ChurnHeightAmp > 0.01 ? ChurnHeightAmp * churnW : 0.0) * fade;
-		float clodAmp = RimStyle.z * clodW * fade;
+		float churnAmp = ChurnHeightAmp > 0.01 ? ChurnHeightAmp * churnW : 0.0;
+		float clodAmp = RimStyle.z * clodW;
 		[branch] if (churnAmp + clodAmp > 0.05)
 		{
 			float3 dir = normalize(input.WorldPos);
@@ -2483,27 +2487,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		}
 	}
 	[branch] if (churnW > 0.001 && ChurnHeightAmp > 0.01)
-	{
-		const float cStep = 3.0;
-		float cXP = ChurnNoise(worldXYPS + float2(cStep, 0.0));
-		float cXN = ChurnNoise(worldXYPS - float2(cStep, 0.0));
-		float cYP = ChurnNoise(worldXYPS + float2(0.0, cStep));
-		float cYN = ChurnNoise(worldXYPS - float2(0.0, cStep));
-		gradZ += float2(cXP - cXN, cYP - cYN) / (2.0 * cStep) * ChurnHeightAmp * churnW;
-	}
+		gradZ += ChurnNoiseGrad(worldXYPS, ChurnSizeScale, 3.0) * ChurnHeightAmp * churnW;
 
 	// P6 clod gradient (same field the VS displaces by; centre-weighted
 	// like the churn gradient - the clod frequency is far above the berm
 	// field's, so the noise gradient dominates).
 	[branch] if (clodW > 0.001)
-	{
-		const float kStep = 4.0;
-		float kXP = ChurnNoiseScaled(worldXYPS + float2(kStep, 0.0), kClodSizeScale);
-		float kXN = ChurnNoiseScaled(worldXYPS - float2(kStep, 0.0), kClodSizeScale);
-		float kYP = ChurnNoiseScaled(worldXYPS + float2(0.0, kStep), kClodSizeScale);
-		float kYN = ChurnNoiseScaled(worldXYPS - float2(0.0, kStep), kClodSizeScale);
-		gradZ += float2(kXP - kXN, kYP - kYN) / (2.0 * kStep) * RimStyle.z * clodW;
-	}
+		gradZ += ChurnNoiseGrad(worldXYPS, kClodSizeScale, 4.0) * RimStyle.z * clodW;
 #endif
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));

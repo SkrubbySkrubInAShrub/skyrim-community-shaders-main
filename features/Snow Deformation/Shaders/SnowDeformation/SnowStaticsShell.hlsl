@@ -3062,32 +3062,22 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// the ramp depth, not the carve): trench floors shade at full churn
 	// whenever the layer is deep enough to churn at all. The carved depth
 	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
-	[branch] if (max(ObjChurnHeightAmp, ChurnHeightAmp) > 0.01)
+	// Churned by parallax, churn and clods fade out with the march.
+	const float churnFade = PatchChurnParallax() ? 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w) : 1.0;
+	[branch] if (max(ObjChurnHeightAmp, ChurnHeightAmp) > 0.01 && churnFade > 0.0)
 	{
-		float churnWPix = ChurnWeight(pixelDeform, bermC, worldXY) * saturate(PatchSkinDepth(worldXY).x / 10.0);
+		float churnWPix = ChurnWeight(pixelDeform, bermC, worldXY) * saturate(PatchSkinDepth(worldXY).x / 10.0) * churnFade;
 		float churnAmpPix = churnWPix > 0.001 ? PatchChurnAmp(trenchGridLocal) : 0.0;
 		[branch] if (churnAmpPix > 0.01)
-		{
-			const float cStep = 3.0;
-			float2 churnGradPix = float2(
-				ChurnNoise(worldXY + float2(cStep, 0.0)) - ChurnNoise(worldXY - float2(cStep, 0.0)),
-				ChurnNoise(worldXY + float2(0.0, cStep)) - ChurnNoise(worldXY - float2(0.0, cStep))) / (2.0 * cStep);
-			normalWS = normalize(normalWS + float3(-churnGradPix * churnAmpPix * churnWPix, 0.0));
-		}
+			normalWS = normalize(normalWS + float3(-ChurnNoiseGrad(worldXY, ObjChurnSizeScale, 3.0) * churnAmpPix * churnWPix, 0.0));
 	}
 	// Clods left the geometry with the churn: shade them here, the landscape
 	// PS's centre-weighted clod gradient.
-	[branch] if (PatchChurnParallax() && RimStyle.z > 0.01)
+	[branch] if (PatchChurnParallax() && RimStyle.z > 0.01 && churnFade > 0.0)
 	{
-		float clodWPix = BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(PatchSkinDepth(worldXY).x);
+		float clodWPix = BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(PatchSkinDepth(worldXY).x) * churnFade;
 		[branch] if (clodWPix > 0.001)
-		{
-			const float kStep = 4.0;
-			float2 clodGrad = float2(
-				ChurnNoiseScaled(worldXY + float2(kStep, 0.0), kClodSizeScale) - ChurnNoiseScaled(worldXY - float2(kStep, 0.0), kClodSizeScale),
-				ChurnNoiseScaled(worldXY + float2(0.0, kStep), kClodSizeScale) - ChurnNoiseScaled(worldXY - float2(0.0, kStep), kClodSizeScale)) / (2.0 * kStep);
-			normalWS = normalize(normalWS + float3(-clodGrad * RimStyle.z * clodWPix, 0.0));
-		}
+			normalWS = normalize(normalWS + float3(-ChurnNoiseGrad(worldXY, kClodSizeScale, 4.0) * RimStyle.z * clodWPix, 0.0));
 	}
 #endif
 

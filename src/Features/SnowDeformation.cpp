@@ -548,6 +548,13 @@ void SnowDeformation::SetupResources()
 		noiseHashTexture->CreateSRV(hashSrvDesc);
 		noiseHashTexture->CreateUAV(hashUavDesc);
 		noiseHashBaked = false;
+
+		D3D11_TEXTURE2D_DESC churnDesc = hashDesc;
+		churnDesc.Width = churnDesc.Height = kChurnTileDim;
+		churnTileTexture = new Texture2D(churnDesc, "SnowDeformation::ChurnTile");
+		churnTileTexture->CreateSRV(hashSrvDesc);
+		churnTileTexture->CreateUAV(hashUavDesc);
+		churnTileBaked = false;
 	}
 
 	{
@@ -1947,6 +1954,30 @@ ID3D11ComputeShader* SnowDeformation::GetNoiseHashCS()
 	return noiseHashCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetChurnTileCS()
+{
+	if (!churnTileCS) {
+		logger::debug("Compiling UndulationFieldCS ChurnTileCS");
+		churnTileCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", {}, "cs_5_0", "ChurnTileCS"));
+	}
+	return churnTileCS;
+}
+
+namespace
+{
+	// One dispatch of a_cs over a_tex (8x8 groups) through its UAV at u<a_slot>.
+	void BakeNoiseTexture(ID3D11DeviceContext* a_context, ID3D11ComputeShader* a_cs, Texture2D* a_tex, UINT a_slot)
+	{
+		ID3D11UnorderedAccessView* uav = a_tex->uav.get();
+		a_context->CSSetUnorderedAccessViews(a_slot, 1, &uav, nullptr);
+		a_context->CSSetShader(a_cs, nullptr, 0);
+		a_context->Dispatch(a_tex->desc.Width / 8, a_tex->desc.Height / 8, 1);
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		a_context->CSSetUnorderedAccessViews(a_slot, 1, &nullUav, nullptr);
+		a_context->CSSetShader(nullptr, nullptr, 0);
+	}
+}
+
 ID3D11ShaderResourceView* SnowDeformation::NoiseHashSRV()
 {
 	auto context = globals::d3d::context;
@@ -1956,16 +1987,25 @@ ID3D11ShaderResourceView* SnowDeformation::NoiseHashSRV()
 		auto* cs = GetNoiseHashCS();
 		if (!cs || !context)
 			return nullptr;
-		ID3D11UnorderedAccessView* uav = noiseHashTexture->uav.get();
-		context->CSSetUnorderedAccessViews(1, 1, &uav, nullptr);
-		context->CSSetShader(cs, nullptr, 0);
-		context->Dispatch(kNoiseHashDim / 8, kNoiseHashDim / 8, 1);
-		ID3D11UnorderedAccessView* nullUav = nullptr;
-		context->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
-		context->CSSetShader(nullptr, nullptr, 0);
+		BakeNoiseTexture(context, cs, noiseHashTexture, 1);
 		noiseHashBaked = true;
 	}
 	return noiseHashTexture->srv.get();
+}
+
+ID3D11ShaderResourceView* SnowDeformation::ChurnTileSRV()
+{
+	auto context = globals::d3d::context;
+	if (!churnTileTexture || !churnTileTexture->srv)
+		return nullptr;
+	if (!churnTileBaked) {
+		auto* cs = GetChurnTileCS();
+		if (!cs || !context)
+			return nullptr;
+		BakeNoiseTexture(context, cs, churnTileTexture, 2);
+		churnTileBaked = true;
+	}
+	return churnTileTexture->srv.get();
 }
 
 void SnowDeformation::UpdateUndulationField()
@@ -2154,6 +2194,10 @@ void SnowDeformation::ClearShaderCache()
 		noiseHashCS->Release();
 	noiseHashCS = nullptr;
 	noiseHashBaked = false;
+	if (churnTileCS)
+		churnTileCS->Release();
+	churnTileCS = nullptr;
+	churnTileBaked = false;
 	// The next UpdateUndulationField rebakes with the fresh CS.
 	undulationFieldValid = false;
 	if (bermFieldCS)
