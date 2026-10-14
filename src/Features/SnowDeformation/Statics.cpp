@@ -5256,11 +5256,14 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					// lighting one. It is not a surface and must not carve snow.
 					auto* property = runtime.shaderProperty.get();
 					const bool lit = property && property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get();
-					if (hidden || !lit) {
+					// A refraction mesh is a distortion volume drawn only into the
+					// refraction mask: a master spell's ritual haze is 183 units across.
+					const bool refraction = lit && property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kRefraction);
+					if (hidden || !lit || refraction) {
 						if (contactSkinHiddenLogged.size() < 32 && contactSkinHiddenLogged.insert(a_geometry).second)
 							logger::info("[SNOW DEFORMATION] contact geometry '{}' on '{}' is {} (bound radius {:.0f}); not drawn",
 								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(),
-								hidden ? "hidden by the game" : (property ? "effect art, not a surface" : "without a shader"),
+								hidden ? "hidden by the game" : (refraction ? "a refraction volume, not a surface" : (property ? "effect art, not a surface" : "without a shader")),
 								a_geometry->worldBound.radius);
 						++(hidden ? tally.hidden : tally.unlit);
 						return RE::BSVisit::BSVisitControl::kContinue;
