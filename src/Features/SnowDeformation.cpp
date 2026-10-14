@@ -979,6 +979,7 @@ void SnowDeformation::PrepassSimulation()
 	// Frame boundary for the once-per-frame local shadow atlas copy.
 	pointShadowFrameIndex++;
 	TickVRAMLog();
+	TickRowSpikeLog();
 
 	auto context = globals::d3d::context;
 
@@ -2498,10 +2499,12 @@ namespace
 	}
 }
 
-void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB)
+void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB)
 {
 	a_usageMB = 0;
 	a_budgetMB = 0;
+	if (a_nonLocalMB)
+		*a_nonLocalMB = 0;
 	static winrt::com_ptr<IDXGIAdapter3> adapter3;
 	if (!adapter3 && globals::d3d::device) {
 		winrt::com_ptr<IDXGIDevice> dxgiDevice;
@@ -2517,6 +2520,8 @@ void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB
 			a_usageMB = info.CurrentUsage >> 20;
 			a_budgetMB = info.Budget >> 20;
 		}
+		if (a_nonLocalMB && SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &info)))
+			*a_nonLocalMB = info.CurrentUsage >> 20;
 	}
 }
 
@@ -2588,4 +2593,42 @@ void SnowDeformation::TickVRAMLog()
 	else
 		logger::info("[SNOW DEFORMATION] VRAM: adapter {}/{} MB ({}%), feature ~{} MB | {}",
 			usageMB, budgetMB, budgetMB ? usageMB * 100 / budgetMB : 0, featureMB, breakdown);
+}
+
+// A pass's GPU time is a timestamp pair, so paging and GPU idle (the CPU late
+// to submit) inside it count as its time; the line carries what tells those
+// apart from real work.
+void SnowDeformation::TickRowSpikeLog()
+{
+	constexpr float kSpikeMs = 4.0f;
+	if (vramTickCounter < rowSpikeQuietUntil)
+		return;
+	const auto& results = globals::profiler->GetResults();
+	const Profiler::TimerResult* spike = nullptr;
+	for (const auto& r : results)
+		if (r.valid && r.gpuTimeMs > kSpikeMs && r.name.starts_with("SnowDeformation::") && (!spike || r.gpuTimeMs > spike->gpuTimeMs))
+			spike = &r;
+	if (!spike)
+		return;
+	rowSpikeQuietUntil = vramTickCounter + 120;
+
+	uint64_t usageMB = 0, budgetMB = 0, nonLocalMB = 0;
+	QueryAdapterVRAM(usageMB, budgetMB, &nonLocalMB);
+	auto top = [&](bool a_cpu) {
+		std::vector<const Profiler::TimerResult*> rows;
+		for (const auto& r : results)
+			if (r.valid)
+				rows.push_back(&r);
+		const size_t n = std::min<size_t>(rows.size(), 4);
+		std::partial_sort(rows.begin(), rows.begin() + n, rows.end(), [a_cpu](auto* a, auto* b) {
+			return a_cpu ? a->cpuTimeMs > b->cpuTimeMs : a->gpuTimeMs > b->gpuTimeMs;
+		});
+		std::string line;
+		for (size_t i = 0; i < n; i++)
+			line += std::format("{}{} {:.2f}", i ? ", " : "", rows[i]->name, a_cpu ? rows[i]->cpuTimeMs : rows[i]->gpuTimeMs);
+		return line;
+	};
+	logger::warn("[SNOW DEFORMATION] Row spike: {} GPU {:.2f} ms (avg {:.2f}), CPU {:.2f} ms | all rows GPU {:.2f}, CPU {:.2f} ms | VRAM {}/{} MB, system {} MB | top GPU: {} | top CPU: {}",
+		spike->name, spike->gpuTimeMs, spike->avgMs, spike->cpuTimeMs, globals::profiler->GetTotalTimeMs(), globals::profiler->GetCpuTotalTimeMs(),
+		usageMB, budgetMB, nonLocalMB, top(false), top(true));
 }

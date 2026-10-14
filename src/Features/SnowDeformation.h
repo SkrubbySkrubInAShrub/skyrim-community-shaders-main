@@ -2398,7 +2398,7 @@ public:
 	uint32_t dbgLodAtlasSlices = 0;
 
 	/** @brief Queries adapter VRAM usage/budget in MB via IDXGIAdapter3 (zeros when unavailable). Usage above budget = driver demotion to system RAM = the large persistent FPS-loss mode that survives disabling features. */
-	void QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB);
+	void QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB = nullptr);
 	/** @brief Sums this feature's tracked GPU textures (approximate, from descriptors) and fills a per-category breakdown line. */
 	uint64_t SumFeatureTextureBytes(std::string& a_breakdown);
 	/** @brief Periodic VRAM log from Prepass: fires on a ~90 s cadence, on large usage deltas, and immediately (as a warning) when usage exceeds budget. */
@@ -2406,6 +2406,9 @@ public:
 	uint64_t vramTickCounter = 0;
 	uint64_t vramLastLoggedMB = 0;
 	uint64_t vramLastLogTick = 0;
+	/** @brief Logs a snow profiler row far over its usual cost, with the adapter's memory and the frame's heaviest rows. */
+	void TickRowSpikeLog();
+	uint64_t rowSpikeQuietUntil = 0;
 
 	/** @brief 4-entry structured buffer of PointShadowLightData (t38), uploaded each frame from the mask-time snapshots. */
 	Buffer* pointShadowLights = nullptr;
