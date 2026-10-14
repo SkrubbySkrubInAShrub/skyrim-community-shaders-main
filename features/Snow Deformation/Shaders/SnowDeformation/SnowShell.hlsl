@@ -2206,11 +2206,17 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// not the view-dependent proximity fade, decides it next to objects.
 	bool landFilm = false;
 	float landRemaining = 0.0;
+	// Bodies pack the snow down but never part it: against the land it keeps
+	// the depth only melt took from it, and only melt pushes it aside.
+	float landBurial = 0.0;
+	float landMelt = 0.0;
 #ifndef SNOW_SHELL_DEFERRED
 	[branch] if (coverageAlpha > 0.001)
 	{
 		landRemaining = CarveProfile(pixelCarve, pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
 		landFilm = landRemaining < kLandFilmDepth;
+		landMelt = min(SampleMelted(gridLocal), pixelCarve);
+		landBurial = landMelt > 0.0 ? CarveProfile(landMelt, landMelt, max(pixelEffDepth, 0.0), GridOrigin + gridLocal) : max(pixelEffDepth, 0.0);
 	}
 #endif
 	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
@@ -2234,13 +2240,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float landSide = 0.0;
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
-		landSide = LandSnowSide(landRemaining, pixelCarve);
+		landSide = LandSnowSide(landBurial, landMelt);
 		landContest = landSide < 16.0;
 	}
 #	else
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
-		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + LandSnowSide(landRemaining, pixelCarve) < 0.0)
+		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + LandSnowSide(landBurial, landMelt) < 0.0)
 			coverageAlpha = 0.0;
 	}
 #	endif
