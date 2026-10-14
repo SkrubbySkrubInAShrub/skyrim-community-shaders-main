@@ -271,7 +271,10 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float3 d0 = PreDecal0.Load(pixel).rgb;
 	// What the decals took off green and blue: 0 wherever nothing drew, however dark.
 	float2 taken = (d0.gb - p0.gb) / max(d0.gb, 1e-4);
-	float a = max(saturate(max(taken.x, taken.y)), DecalMask.Load(pixel));
+	// The mask counts only where the game's decal drew: under snow claimed
+	// before the game's draws it failed its depth test, and both copies hold
+	// the clear colour.
+	float a = max(saturate(max(taken.x, taken.y)), any(p0 != d0) ? DecalMask.Load(pixel) : 0.0);
 	if (a < 0.02)
 		discard;
 	OVERLAY_OUTPUT o;
