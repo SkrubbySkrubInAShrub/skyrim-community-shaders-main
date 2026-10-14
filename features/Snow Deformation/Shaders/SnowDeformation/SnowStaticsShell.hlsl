@@ -548,9 +548,13 @@ static const float kCoatSolidW = 0.15;
 // Edge Lump Reach 1: how far below the game's half blend the coat's cut sinks,
 // in projected weight. Under kRecolorWeightSpan, or reach 1 coats every face.
 static const float kEdgeReachWeightShift = 0.25;
-// Bare weights Lighting encodes, below the half blend (mirror: SnowLighting.hlsli
-// WriteMasksY). Covers the noise swap: 0.25 + 0.84 x ProjNoiseWeight.
+// Bare weights Lighting encodes below the half blend (mirror: SnowLighting.hlsli
+// WriteMasksY): [-kRecolorNearSpan, 0) over the top kRecolorNearShare of the
+// band, down to -kRecolorWeightSpan (the noise swap's 0.25 + 0.84 x
+// ProjNoiseWeight) below it.
 static const float kRecolorWeightSpan = 0.8;
+static const float kRecolorNearSpan = 0.3;
+static const float kRecolorNearShare = 5.0 / 6.0;
 // Reach at which the cut's noise term is fully the hex-tiled read.
 static const float kDetileRamp = 0.5;
 // Hex-tiled read: triangle-grid cells per noise-map tile (2 sqrt 3).
@@ -577,7 +581,10 @@ float SkinRecolorEnc(float enc)
 float SkinRecolorWeight(float enc)
 {
 	enc = enc >= 256.0 ? enc / 256.0 : enc;
-	return (enc >= 3.5 && enc < 40.0) ? (log2(enc * 0.25) / 3.0 - 1.0) * kRecolorWeightSpan : -1.0;
+	const float t = log2(enc * 0.25) / 3.0;
+	const float w = t >= 1.0 - kRecolorNearShare ? (t - 1.0) * (kRecolorNearSpan / kRecolorNearShare) :
+	                                               t * ((kRecolorWeightSpan - kRecolorNearSpan) / (1.0 - kRecolorNearShare)) - kRecolorWeightSpan;
+	return (enc >= 3.5 && enc < 40.0) ? w : -1.0;
 }
 #ifdef PSHADER
 // Projection noise map hex-tiled (Heitz & Neyret 2018): per-vertex hashed
