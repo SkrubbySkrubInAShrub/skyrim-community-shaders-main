@@ -1727,14 +1727,24 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		}
 		// Berm gradient, the same field the depth above piled by. The pixel
 		// shader's berm is skipped for the patch now that the geometry owns it.
+		// Differenced with the (1 - deformation) mask, as the landscape PS does:
+		// the berm drops with the wall. Meet depth like the profile.
 		float2 bermGrad = float2(0.0, 0.0);
 		[branch] if (ObjBermHeightAmp > 0.005 && bermD > 0.003)
 		{
 			const float bStep = BermGradStep();
+			float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
+			[branch] if (bStep < gStep - 0.01)
+			{
+				mXP = saturate(SampleDeformationSmooth(gridLocal + float2(bStep, 0.0)));
+				mXN = saturate(SampleDeformationSmooth(gridLocal - float2(bStep, 0.0)));
+				mYP = saturate(SampleDeformationSmooth(gridLocal + float2(0.0, bStep)));
+				mYN = saturate(SampleDeformationSmooth(gridLocal - float2(0.0, bStep)));
+			}
 			bermGrad = float2(
-				BermShape(BermField(gridLocal + float2(bStep, 0.0))) - BermShape(BermField(gridLocal - float2(bStep, 0.0))),
-				BermShape(BermField(gridLocal + float2(0.0, bStep))) - BermShape(BermField(gridLocal - float2(0.0, bStep)))) / (2.0 * bStep) *
-			          saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
+				BermShape(BermField(gridLocal + float2(bStep, 0.0))) * (1.0 - mXP) - BermShape(BermField(gridLocal - float2(bStep, 0.0))) * (1.0 - mXN),
+				BermShape(BermField(gridLocal + float2(0.0, bStep))) * (1.0 - mYP) - BermShape(BermField(gridLocal - float2(0.0, bStep))) * (1.0 - mYN)) / (2.0 * bStep) *
+			          profDepth * ObjBermHeightAmp * BermDepthGate(profDepth);
 		}
 		// The top's own slope. Without it a road climbing a hill shaded as
 		// flat while the landscape shell beside it carried the hill: ~16

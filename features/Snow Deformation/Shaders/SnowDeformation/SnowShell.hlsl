@@ -2345,6 +2345,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			}
 		}
 	}
+	// The relief's depth where the sheet meets a road's patch: halfway to the road's.
+	const float meetDepth = lerp(pixelDepth, roadMeetDepth, 0.5 * roadMeet);
 	// Untouched: every profile tap is pixelDepth and every berm tap zero, so
 	// both gradients and the centre are +0.
 	float2 profileGrad = 0.0;
@@ -2365,10 +2367,9 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
 				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
 		}
-		const float profileDepth = lerp(pixelDepth, roadMeetDepth, 0.5 * roadMeet);
 		profileGrad = float2(
-						  CarveProfile(saturate(dXP), blur.x, profileDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, profileDepth, GridOrigin + gridLocal - float2(step, 0.0)),
-						  CarveProfile(saturate(dYP), blur.z, profileDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, profileDepth, GridOrigin + gridLocal - float2(0.0, step))) /
+						  CarveProfile(saturate(dXP), blur.x, meetDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, meetDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+						  CarveProfile(saturate(dYP), blur.z, meetDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, meetDepth, GridOrigin + gridLocal - float2(0.0, step))) /
 		              (2.0 * step);
 		// Berm shading: numerical gradient of the SAME blurred hill the
 		// geometry displaces by, so the light/shadow break sits on the hill's
@@ -2402,7 +2403,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
 	macroGrad = lerp(macroGrad, objectMeet.yz, 0.5 * objectMeet.x);
 	macroGrad = lerp(macroGrad, roadMeetSlope, roadMeet);
-	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
+	float2 gradZ = macroGrad + profileGrad + bermGrad * meetDepth * BermHeightAmp * BermDepthGate(meetDepth);
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
