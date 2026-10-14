@@ -8,6 +8,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Plugin.h"
+#include "SaveManager.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "ThemeManager.h"
@@ -164,7 +165,7 @@ void MenuHeaderRenderer::RenderHeader(bool isDocked, bool showLogo, bool canShow
 			// Save Settings Button
 			ImGui::TableNextColumn();
 			if (Util::ButtonWithFlash(T("menu.save_settings", "Save Settings"), { -1, 0 })) {
-				globals::state->Save();
+				SaveManager::SaveAll();
 			}
 
 			// Restore Saved Settings Button
@@ -245,7 +246,7 @@ std::vector<MenuHeaderRenderer::ActionIcon> MenuHeaderRenderer::BuildActionIcons
 		actionIcons.push_back({ uiIcons.saveSettings.texture,
 			T("menu.save_settings", "Save Settings"),
 			[]() {
-				globals::state->Save();
+				SaveManager::SaveAll();
 			} });
 	}
 	if (uiIcons.loadSettings.texture) {

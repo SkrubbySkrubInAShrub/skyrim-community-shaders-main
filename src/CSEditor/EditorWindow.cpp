@@ -20,6 +20,7 @@
 #include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "Menu/Icons/helpers/WeatherTypeIcons.h"
 #include "PaletteWindow.h"
+#include "SaveManager.h"
 #include "SceneManager/ScenePresetExport.h"
 #include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
@@ -816,7 +817,7 @@ void EditorWindow::RenderUI()
 				if (ScenePresetExport::CanExport())
 					ScenePresetExport::Open();
 			} else {
-				SaveAll();
+				SaveManager::SaveEditor(SaveManager::Trigger::User);
 			}
 		}
 	}
@@ -884,27 +885,9 @@ void EditorWindow::RenderUI()
 
 			if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
 				if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
-					SaveAll();
+					SaveManager::SaveEditor(SaveManager::Trigger::User);
 				Util::AddTooltip(T(TKEY("save_tooltip"),
 					"Saves your edited widgets and scene settings on this PC. To share them, use Export Preset."));
-
-				// Save individual widgets submenu
-				if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
-					bool hasOpen = false;
-					for (auto* collection : GetWidgetCollections())
-						hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
-
-					if (currentCellLightingWidget && currentCellLightingWidget->IsOpen()) {
-						hasOpen = true;
-						if (ImGui::MenuItem(currentCellLightingWidget->GetEditorID().c_str()))
-							currentCellLightingWidget->Save();
-					}
-
-					if (!hasOpen)
-						ImGui::TextDisabled("%s", T(TKEY("no_open_widgets"), "No open widgets"));
-
-					ImGui::EndMenu();
-				}
 
 				ImGui::Separator();
 
@@ -1169,6 +1152,9 @@ void EditorWindow::RenderUI()
 			rightCursor -= iconSize;
 			const float xButtonX = rightCursor;
 
+			rightCursor -= itemSpacing + iconSize;
+			const float saveButtonX = rightCursor;
+
 			constexpr float kDividerThickness = 1.0f;
 			std::array<float, 2> dividerX{};
 			int dividerCount = 0;
@@ -1319,6 +1305,16 @@ void EditorWindow::RenderUI()
 				DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
 			}
 
+			// Save: the editor's own save, red while any widget has unsaved changes.
+			{
+				const bool unsaved = HasUnsavedChanges();
+				ImGui::SetCursorScreenPos(ImVec2(saveButtonX, iconY));
+				if (DrawToggleIconButton("##ActionBarSave", Icons::FA(ICON_FA_SAVE), false, enabledColor, iconButtonSize,
+						ImGui::GetColorU32(unsaved ? Util::Colors::GetUnsaved() : textColor)))
+					SaveManager::SaveEditor(SaveManager::Trigger::User);
+				Util::AddTooltip(SaveManager::GetEditorSaveTooltip(unsaved));
+			}
+
 			// Close: white cross, no red fill
 			ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
@@ -1461,15 +1457,10 @@ void EditorWindow::SetupResources()
 
 void EditorWindow::ReloadFormEdits(const FormEditSources::FormKeySet& keys)
 {
-	const auto reload = [&](Widget& widget) {
+	ForEachWidget([&](Widget& widget) {
 		if (keys.contains(widget.GetFormKey()))
 			widget.Load(false);
-	};
-	for (auto* collection : GetWidgetCollections())
-		for (auto& widget : *collection)
-			reload(*widget);
-	if (currentCellLightingWidget)
-		reload(*currentCellLightingWidget);
+	});
 	InvalidateJsonAttachmentCache();
 }
 
@@ -1586,22 +1577,31 @@ void EditorWindow::Draw()
 	RenderUI();
 }
 
-void EditorWindow::SaveAll()
+void EditorWindow::SaveUnsavedWidgets()
 {
-	auto saveDirtyOrOpen = [](auto& widgets) {
-		for (auto& w : widgets)
-			if (w->IsOpen() || w->HasUnsavedChanges())
-				w->Save();
-	};
-	for (auto* collection : GetWidgetCollections())
-		saveDirtyOrOpen(*collection);
-	if (currentCellLightingWidget && (currentCellLightingWidget->IsOpen() || currentCellLightingWidget->HasUnsavedChanges()))
-		currentCellLightingWidget->Save();
+	ForEachWidget([](Widget& widget) {
+		if (widget.HasUnsavedChanges())
+			widget.Save();
+	});
+	anyWidgetUnsaved = false;
+	lastUnsavedScan = -kUnsavedScanInterval;
+}
 
-	if (auto* sceneManager = SceneSettingsManager::GetSingleton())
-		sceneManager->SaveAllUserSettings();
+bool EditorWindow::HasUnsavedChanges()
+{
+	const double now = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0;
+	const bool fullPass = now - lastUnsavedScan >= kUnsavedScanInterval;
+	if (fullPass)
+		lastUnsavedScan = now;
 
-	Save();
+	bool found = false;
+	ForEachWidget([&](Widget& widget) {
+		if (!found && (fullPass || widget.IsOpen()))
+			found = widget.HasUnsavedChanges();
+	});
+	if (fullPass)
+		anyWidgetUnsaved = found;
+	return anyWidgetUnsaved || found;
 }
 
 void EditorWindow::SaveSettings()

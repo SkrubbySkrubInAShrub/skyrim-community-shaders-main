@@ -2187,6 +2187,13 @@ namespace Util
 			return globals::menu->GetTheme().StatusPalette.Error;
 		}
 
+		ImVec4 GetUnsaved()
+		{
+			auto color = GetError();
+			color.w = 0.75f;  // muted: a dirty save affordance without a separate label
+			return color;
+		}
+
 		ImVec4 GetInfo()
 		{
 			return globals::menu->GetTheme().StatusPalette.InfoColor;

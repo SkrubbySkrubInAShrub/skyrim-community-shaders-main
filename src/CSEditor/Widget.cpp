@@ -12,6 +12,7 @@
 #include "IconsFontAwesome5.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/Icons/helpers/WeatherTypeIcons.h"
+#include "SaveManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -158,7 +159,7 @@ void Widget::DrawMenu()
 	if (ImGui::BeginMenuBar()) {
 		if (ImGui::BeginMenu(T(TKEY("menu"), "Menu"))) {
 			if (ImGui::MenuItem(T(TKEY("save"), "Save"))) {
-				Save();
+				SaveManager::SaveEditor(SaveManager::Trigger::User);
 			}
 			if (ImGui::MenuItem(T(TKEY("load"), "Load"))) {
 				Load();
@@ -399,16 +400,11 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 		const size_t groupStart = actions.size();
 
 		const bool unsaved = HasUnsavedChanges();
-		const char* saveTooltip = unsaved ?
-		                              T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
-		                              T(TKEY("save_to_file"), "Save to file");
-		auto saveClick = [this]() { Save(); };
+		const char* saveTooltip = SaveManager::GetEditorSaveTooltip(unsaved);
+		auto saveClick = []() { SaveManager::SaveEditor(SaveManager::Trigger::User); };
 		std::optional<ImVec4> unsavedColor;
-		if (unsaved) {
-			auto color = statusPalette.Error;
-			color.w = 0.75f;  // muted red: dirty save affordance without a separate label
-			unsavedColor = color;
-		}
+		if (unsaved)
+			unsavedColor = Util::Colors::GetUnsaved();
 		if (useIcons) {
 			auto& action = addFaIcon("##TitleSave", ICON_FA_SAVE, saveTooltip, saveClick);
 			action.textColor = unsavedColor;
@@ -701,14 +697,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 	};
 
 	const bool unsaved = HasUnsavedChanges();
-	const char* saveTooltip = unsaved ?
-	                              T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
-	                              T(TKEY("save_to_file"), "Save to file");
-	ImVec4 unsavedSaveColor{};
-	if (unsaved && menu) {
-		unsavedSaveColor = menu->GetTheme().StatusPalette.Error;
-		unsavedSaveColor.w = 0.75f;
-	}
+	const char* saveTooltip = SaveManager::GetEditorSaveTooltip(unsaved);
+	const auto saveAll = []() { SaveManager::SaveEditor(SaveManager::Trigger::User); };
 
 	if (useIcons) {
 		const float iconSize = ImGui::GetFrameHeight() * WidgetUI::kIconButtonSizeRatio;
@@ -751,9 +741,9 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 			Util::ToolbarDivider(false);
 			ImGui::SameLine();
 			if (unsaved)
-				ImGui::PushStyleColor(ImGuiCol_Text, unsavedSaveColor);
+				ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetUnsaved());
 			if (Icons::Button(std::format("{}##_Save", searchId ? searchId : "").c_str(), Icons::FA(ICON_FA_SAVE)))
-				Save();
+				saveAll();
 			if (unsaved)
 				ImGui::PopStyleColor();
 			Util::AddTooltip(saveTooltip);
@@ -802,9 +792,9 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 				Util::ToolbarDivider(false);
 				ImGui::SameLine();
 				if (unsaved)
-					ImGui::PushStyleColor(ImGuiCol_Text, unsavedSaveColor);
+					ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetUnsaved());
 				if (Util::ButtonWithFlash(T(TKEY("save"), "Save")))
-					Save();
+					saveAll();
 				if (unsaved)
 					ImGui::PopStyleColor();
 				Util::AddTooltip(saveTooltip);

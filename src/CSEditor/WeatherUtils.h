@@ -374,27 +374,6 @@ namespace WidgetFactory
 	}
 
 	/**
-	 * @brief Draw save menu items for each open widget in a container.
-	 * @tparam Container A range of unique_ptr<Widget>.
-	 * @param  widgets   The widget container to iterate.
-	 * @param  hasOpen   Accumulator flag; true if any previous container had open widgets.
-	 * @return True if any open widget exists across all calls.
-	 */
-	template <typename Container>
-	bool DrawSaveWidgetMenuItems(Container& widgets, bool hasOpen = false)
-	{
-		for (auto& widget : widgets) {
-			if (widget->IsOpen()) {
-				hasOpen = true;
-				auto editorId = widget->GetEditorID();
-				if (ImGui::MenuItem(std::vformat(T("cs_editor.save_widget", "Save {}"), std::make_format_args(editorId)).c_str()))
-					widget->Save();
-			}
-		}
-		return hasOpen;
-	}
-
-	/**
 	 * @brief Draw a "Close All <Type> Widgets" menu item for a widget container.
 	 * @tparam Container A range of unique_ptr<Widget>.
 	 * @param  widgets   The widget container whose type name is used in the label.

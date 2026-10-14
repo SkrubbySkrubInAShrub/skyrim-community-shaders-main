@@ -293,8 +293,12 @@ public:
 
 	// --- Persistence ---
 
-	/// Save all user data (interior, TOD, weather) to unified SceneManager.json.
+	/// Commits a user edit: runs the CS editor's automatic save, which writes SceneManager.json.
 	void SaveAllUserSettings();
+
+	/// Writes all user data (interior, TOD, weather, location) to unified SceneManager.json. Only
+	/// SaveManager calls this; everything else goes through SaveAllUserSettings.
+	void WriteUserSettings();
 
 	/** @brief Replaces one scene type's overwrite entries with those found in the active pack. */
 	void DiscoverOverwrites(SceneType type);

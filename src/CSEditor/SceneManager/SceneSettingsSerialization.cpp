@@ -1,5 +1,6 @@
 #include "SceneSettingsManager.h"
 
+#include "SaveManager.h"
 #include "SceneSettingsInternal.h"
 #include "Utils/FileSystem.h"
 
@@ -105,6 +106,11 @@ static bool ShouldSerializeUserSection(const json& data, std::string_view key, b
 }
 
 void SceneSettingsManager::SaveAllUserSettings()
+{
+	SaveManager::SaveEditor(SaveManager::Trigger::Auto);
+}
+
+void SceneSettingsManager::WriteUserSettings()
 {
 	if (!userSettingsDocumentLoaded)
 		LoadAllUserSettings();

@@ -1119,6 +1119,8 @@ namespace Util
 		ImVec4 GetSecondary();
 		/** @brief The shared "active/selected" colour for rows, segments, and tabs. */
 		ImVec4 GetAccent();
+		/** @brief Muted error colour for a save button whose target has unsaved changes. */
+		ImVec4 GetUnsaved();
 
 	}
 

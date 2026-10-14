@@ -63,6 +63,27 @@ public:
 			&volumetricLightingWidgets, &precipitationWidgets, &lensFlareWidgets,
 			&referenceEffectWidgets };
 	}
+
+	/** @brief Calls fn on every editable widget, the cell lighting widget included. */
+	template <typename Fn>
+	void ForEachWidget(Fn&& fn)
+	{
+		for (auto* collection : GetWidgetCollections())
+			for (auto& widget : *collection)
+				fn(*widget);
+		if (currentCellLightingWidget)
+			fn(*currentCellLightingWidget);
+	}
+
+	/** @brief Saves every widget with unsaved changes; clean widgets are left untouched. */
+	void SaveUnsavedWidgets();
+
+	/**
+	 * @brief Returns true if any widget has unsaved changes.
+	 * @details Open widgets are checked every call since they are the ones being edited; the full
+	 *          pass, which catches closed widgets changed by Load or Undo, runs on a short interval.
+	 */
+	bool HasUnsavedChanges();
 	std::vector<std::unique_ptr<Widget>> artObjectWidgets;
 	std::vector<std::unique_ptr<Widget>> effectShaderWidgets;
 
@@ -451,7 +472,12 @@ public:
 private:
 	friend class Widget;
 
-	void SaveAll();
+	/// Seconds between full unsaved-change passes over every widget.
+	static constexpr double kUnsavedScanInterval = 0.5;
+	/// ImGui time of the last full pass; reset after a save so the indicator clears at once.
+	double lastUnsavedScan = -kUnsavedScanInterval;
+	bool anyWidgetUnsaved = false;
+
 	void SaveSettings();
 	void LoadSettings();
 	void ShowSettingsWindow();
