@@ -206,7 +206,13 @@ cbuffer ShellCB : register(b0)
 	float4 TrampleStyle;
 	// x = Tessellation Target px, yz = render viewport half size.
 	float4 TessScreen;
-	// FieldDims follows, landscape shell only: not declared here.
+	float4 FieldDims;  // landscape shell only (SnowShell.hlsl)
+	// Snow Climate (see SnowShell.hlsl): the road's wet print and the
+	// condition view read it.
+	float4 SnowClimate;
+	float4 SnowClimate2;
+	float4 SnowClimateOverride;
+	float4 SnowClimateLUT[3];
 }
 
 cbuffer StaticCB : register(b1)
@@ -3149,6 +3155,13 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Blood stains the landscape shell only (SnowShell.hlsl); on object snow
 	// the game's own decal is put back on top by the overlay (Blood.cpp), so
 	// a soak here would darken it twice.
+#ifdef PATCH
+	// Thin-snow and wet print, the ground's (SnowWetPrint), through the road layer.
+	const float wetRough = SnowWetPrint(kSnowAlbedo, pixelDeform, saturate(SampleExclusionField(worldXY).y), PatchSkinDepth(worldXY).x,
+		input.WorldPos.z + ShellCameraPosAdjust.z);
+#else
+	const float wetRough = 0.0;
+#endif
 	[branch] if (crustAmount > 0.001)
 		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
 	[branch] if (frost.valid)
@@ -3176,6 +3189,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
+	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
+	snowRoughness *= 1.0 - wetRough;
 	[branch] if (frost.valid)
 	{
 		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
@@ -5181,6 +5196,15 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	psout.Reflectance = float4(ssr.specularLobe, 1.0);
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ssr.ambientPart).x, 1.0);
 	psout.Masks2 = float4(1.0 - ssr.landVertexAO, 0.0, 0.0, 1.0);
+#ifdef SNOW_CONDITION_VIEW
+	// Debugging Options > Snow Condition, as the ground paints it.
+	{
+		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(rel.z + ShellCameraPosAdjust.z), SnowClimate2.z) * 2.0;
+		psout.Albedo.rgb = 0.0;
+		psout.Specular.rgb = 0.0;
+		psout.Reflectance.rgb = 0.0;
+	}
+#endif
 	return psout;
 }
 #endif

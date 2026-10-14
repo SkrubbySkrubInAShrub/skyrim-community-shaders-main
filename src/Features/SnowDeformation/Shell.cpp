@@ -1798,8 +1798,8 @@ void SnowDeformation::DrawShell()
 	if (shellChurnFree)
 		cbData.ChurnHeightAmp = 0.0f;
 	// Object trench detail follows the landscape set. The CB rows stay because
-	// both shells read them. The road patch reads no climate rows: its cover
-	// is the road layer's, so the ramp at that depth is folded in here.
+	// both shells read them. The road patch's churn reads no climate rows: its
+	// cover is the road layer's, so the ramp at that depth is folded in here.
 	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
 	cbData.ObjChurnHeightAmp = churnBase * look.roadChurn;
 	cbData.ObjChurnSizeScale = cbData.ChurnSizeScale;

@@ -3585,7 +3585,13 @@ public:
 	Texture2D* patchDeferredMark = nullptr;
 	/** @brief The mark target and the shading pass's depth-off state; false leaves the patch forward. */
 	bool EnsurePatchDeferredResources();
-	/** @brief One deferred patch PS (0 attribute pass, 1 shading pass), compiled now; null on failure. */
+	/** @brief The deferred patch shading PS with SNOW_CONDITION_VIEW, compiled off the render thread the first time the view is switched on. */
+	ID3D11PixelShader* patchConditionViewPS = nullptr;
+	std::future<ID3D11PixelShader*> patchConditionViewJob;
+	bool patchConditionViewTried = false;
+	/** @brief The condition view's patch shading PS while Debugging Options > Snow Condition is on and it has compiled; null otherwise. */
+	ID3D11PixelShader* PatchConditionViewPS();
+	/** @brief One deferred patch PS (0 attribute pass, 1 shading pass, 2 shading pass with the condition view), compiled now; null on failure. */
 	static ID3D11PixelShader* CompilePatchDeferredPS(int a_which);
 	/** @brief Shader-prime step (object snow group): compiles both deferred patch shaders on the prime worker. */
 	void PrimePatchDeferred();

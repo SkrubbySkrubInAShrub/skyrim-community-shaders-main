@@ -1556,12 +1556,13 @@ bool SnowDeformation::EnsurePatchDeferredResources()
 
 ID3D11PixelShader* SnowDeformation::CompilePatchDeferredPS(int a_which)
 {
-	static constexpr const char* kDefine[2] = { "SNOW_PATCH_ATTR", "SNOW_PATCH_DEFERRED" };
-	static constexpr const char* kName[2] = { "SnowDeformation::TrenchPatchPS Attributes", "SnowDeformation::TrenchPatchPS Deferred" };
+	static constexpr const char* kDefine[3] = { "SNOW_PATCH_ATTR", "SNOW_PATCH_DEFERRED", "SNOW_PATCH_DEFERRED" };
+	static constexpr const char* kName[3] = { "SnowDeformation::TrenchPatchPS Attributes", "SnowDeformation::TrenchPatchPS Deferred", "SnowDeformation::TrenchPatchPS Condition View" };
 	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
 	winrt::com_ptr<ID3DBlob> blob;
-	blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine, kDefine[a_which]));
+	blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine, kDefine[a_which],
+		a_which == 2 ? "SNOW_CONDITION_VIEW" : nullptr));
 	ID3D11PixelShader* ps = nullptr;
 	if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &ps)))
 		Util::SetResourceName(ps, kName[a_which]);
@@ -1601,6 +1602,22 @@ bool SnowDeformation::PatchDeferredCompiling() const
 	return patchDeferredJob[0].valid() || patchDeferredJob[1].valid();
 }
 
+ID3D11PixelShader* SnowDeformation::PatchConditionViewPS()
+{
+	if (debugConditionView <= 0)
+		return nullptr;
+	if (!patchConditionViewPS) {
+		if (patchConditionViewJob.valid()) {
+			if (patchConditionViewJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+				patchConditionViewPS = patchConditionViewJob.get();
+		} else if (!patchConditionViewTried) {
+			patchConditionViewTried = true;
+			patchConditionViewJob = std::async(std::launch::async, [] { return CompilePatchDeferredPS(2); });
+		}
+	}
+	return patchConditionViewPS;
+}
+
 void SnowDeformation::ReleasePatchDeferred()
 {
 	for (int i = 0; i < 2; i++) {
@@ -1614,6 +1631,14 @@ void SnowDeformation::ReleasePatchDeferred()
 		patchDeferredPS[i] = nullptr;
 		patchDeferredTried[i] = false;
 	}
+	if (patchConditionViewJob.valid()) {
+		if (auto* ps = patchConditionViewJob.get())
+			ps->Release();
+	}
+	if (patchConditionViewPS)
+		patchConditionViewPS->Release();
+	patchConditionViewPS = nullptr;
+	patchConditionViewTried = false;
 }
 
 ID3D11PixelShader* SnowDeformation::GetStaticsPSPrepassKeepHidden()
@@ -4441,7 +4466,8 @@ void SnowDeformation::DrawCapturedStatics()
 			context->OMSetDepthStencilState(patchDeferredDepthState.get(), 0);
 			context->RSSetState(shellRasterState.get());
 			context->VSSetShader(patchFillVS, nullptr, 0);
-			context->PSSetShader(patchDeferredPS[1], nullptr, 0);
+			ID3D11PixelShader* patchConditionView = PatchConditionViewPS();
+			context->PSSetShader(patchConditionView ? patchConditionView : patchDeferredPS[1], nullptr, 0);
 			ID3D11ShaderResourceView* savedAttrSRVs[4] = {};
 			context->PSGetShaderResources(91, 4, savedAttrSRVs);
 			ID3D11ShaderResourceView* attrSRVs[4] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get(), patchDeferredMark->srv.get() };

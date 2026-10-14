@@ -1029,14 +1029,7 @@ float ChurnNoise(float2 worldXY)
 }
 
 // ---- Snow Climate per pixel (TRACK-VARIATION-RESEARCH.md 3.3) ----
-// The CPU's climate rows lerped by the point's temperature offset from the
-// player's (height x lapse, clamped at the outer rows' 2 C). Fixed indices:
-// a per-pixel index into the constant buffer serialises the warp's reads.
-float4 SnowClimateRow(float worldZ)
-{
-	const float dT = clamp(SnowClimate.y * (SnowClimate.z - worldZ), -2.0, 2.0);
-	return lerp(SnowClimateLUT[1], dT < 0.0 ? SnowClimateLUT[0] : SnowClimateLUT[2], abs(dT) * 0.5);
-}
+// SnowClimateRow and the wet print live in SnowFields.hlsli.
 
 // The churn's weight by cover depth: the fixed ramp by 1 - Snow Climate, and
 // the climate's own (sticky clods from a hand deep, powder lumps only in very
@@ -2052,53 +2045,6 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 Texture2D<float2> DebugParallaxOffset : register(t99);
 #endif
 
-#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_CONDITION_VIEW)
-// Debugging Options > Snow Condition. Mirrors SnowDeformation::GetSnowCondition
-// (Accumulation.cpp): the player's values shifted by height. xyzw =
-// temperature (C), wetness, stickiness, firmness.
-float4 SnowConditionAt(float a_worldZ)
-{
-	const float playerT = SnowClimate.x;
-	const float t = playerT - SnowClimate.y * (a_worldZ - SnowClimate.z);
-	const float fresh = SnowClimate.w;
-	const float wind = SnowClimate2.x;
-	const float wet = SnowClimateOverride.x >= 0.0 ? saturate(SnowClimateOverride.x) :
-	                                                 saturate(SnowClimate2.y + smoothstep(-1.5, 1.5, t) - smoothstep(-1.5, 1.5, playerT));
-	const float freshDensity = t <= 0.0 ? 67.9 + 51.3 * exp(t / 2.6) : 125.0 + 40.0 * min(t, 3.0);
-	const float density = clamp(lerp(freshDensity, 290.0, 1.0 - fresh) + 110.0 * wet + 150.0 * wind, 50.0, 560.0);
-	const float sticky = SnowClimateOverride.y >= 0.0 ? saturate(SnowClimateOverride.y) :
-	                                                    saturate(0.1 + 0.62 * smoothstep(-20.0, -1.5, t) * (0.3 + 0.7 * (1.0 - fresh)) +
-																 0.45 * wet * (1.0 - smoothstep(0.75, 1.0, wet)) + 0.25 * wind);
-	const float firm = SnowClimateOverride.z >= 0.0 ? saturate(SnowClimateOverride.z) : smoothstep(150.0, 460.0, density);
-	return float4(t, wet, sticky, firm);
-}
-
-// 1 temperature (blue below freezing, white at it, orange above, a line
-// every 2 C), 2 wetness, 3 stickiness, 4 firmness, 5 all three as RGB.
-float3 SnowConditionColor(float4 a_condition, float a_view)
-{
-	const float t = a_condition.x;
-	const float band = t / 2.0;
-	const float bandWidth = fwidth(band);
-	float3 color;
-	[branch] if (a_view < 1.5)
-	{
-		const float3 cold = lerp(float3(1.0, 1.0, 1.0), float3(0.05, 0.25, 1.0), saturate(-t / 20.0));
-		const float3 warm = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.25, 0.0), saturate(t / 4.0));
-		const float isotherm = 1.0 - smoothstep(0.0, 1.5 * bandWidth, abs(frac(band + 0.5) - 0.5));
-		color = (t < 0.0 ? cold : warm) * (1.0 - 0.6 * isotherm);
-	}
-	else if (a_view < 2.5)
-		color = lerp(float3(0.95, 0.95, 0.95), float3(0.1, 0.35, 1.0), a_condition.y);
-	else if (a_view < 3.5)
-		color = lerp(float3(0.95, 0.95, 0.95), float3(1.0, 0.45, 0.05), a_condition.z);
-	else if (a_view < 4.5)
-		color = lerp(float3(0.95, 0.95, 0.95), float3(0.55, 0.1, 0.85), a_condition.w);
-	else
-		color = a_condition.yzw;
-	return color;
-}
-#endif
 
 #if defined(SNOW_SHELL_DEFERRED)
 PS_OUTPUT ShellShade(VS_OUTPUT input)
@@ -2714,24 +2660,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
 		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
 	}
-	// Thin-snow print: a boot through a dusting (thin classes) has no wall
-	// to light, so it reads by material - pressed wet, darker and smoother.
-	// Gone by ~6 units of cover, where relief takes over. Not on melted
-	// floors: a walked fire ring went dark as a whole. Wet snow (Snow
-	// Climate) presses darker and glossier at any depth; the warmest row
-	// says whether any snow in view is wet. Under Snow Climate the thin
-	// print is the wet look too, so it follows the wetness. wetRough is
-	// the roughness cut.
-	float wetRough = 0.0;
-	const float wetPress = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(0.1, 0.4, pixelMelt));
-	[branch] if (wetPress > 0.001 && (pixelDepth < 6.0 || SnowClimateLUT[2].w > 0.001))
-	{
-		const float climateWet = SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z).w;
-		const float thinPrint = (1.0 - smoothstep(1.5, 6.0, pixelDepth)) * saturate(SnowClimate2.w + climateWet);
-		const float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint);
-		wetRough = wetPrint * (0.24 + 0.26 * climateWet);
-	}
+	// Thin-snow and wet print (SnowWetPrint); wetRough is the roughness cut.
+	const float wetRough = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
