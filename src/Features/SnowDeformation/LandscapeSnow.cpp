@@ -738,7 +738,6 @@ void SnowDeformation::LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderReso
 	s[27] = ShellWaterSRV();
 	s[28] = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
 	s[29] = GetUndulationFieldSRV();
-	s[kExtentFieldSlot] = GetExtentFieldSRV();
 	s[kUntouchedTilesSlot] = untouchedTilesSRV.get();
 	s[kTerrainWetSlot] = TerrainWetSRV(a_cb.CompactLook.x > 0.5f);
 	s[kTerrainBareSlot] = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;

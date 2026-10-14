@@ -252,7 +252,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetBermFieldCS(); },
 		[&] { GetBermFieldTiledCS(); },
 		[&] { GetUntouchedTilesCS(); },
-		[&] { GetExtentFieldCS(); },
 		[&] { GetDeformationRingCS(); },
 		[&] { GetBloodRingCS(); },
 		[&] { GetDeformationEvolveCS(); },

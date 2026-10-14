@@ -372,8 +372,6 @@ int3 DeformTexel(int2 t, int2 dims)
 // deformation map, y = the carve's short blur, at the map's own resolution
 // and addressing.
 Texture2D<float2> BermFieldMap : register(t14);
-// Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
-Texture2D<float> ExtentFieldMap : register(t56);
 // 1 per 8x8 physical map tile where the map and the berm field read zero
 // within one tile (BermFieldCS UntouchedCS). Unbound reads 0 = touched.
 Texture2D<uint> UntouchedTiles : register(t57);

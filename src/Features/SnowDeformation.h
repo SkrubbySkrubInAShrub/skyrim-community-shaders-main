@@ -593,14 +593,8 @@ public:
 		float FreshSnowChurn = 0.33f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
 		float FreshSnowSettleHours = 24.0f;
-		/** @brief Trampled ground: multiplier on the churn height on trench floors inside a trampled area; berm churn is untouched. 1 = off. */
+		/** @brief Trampled ground: multiplier on the churn height on trench floors walked deeper than one pass; berm churn is untouched. 1 = off. */
 		float TrampledFlattening = 0.5f;
-		/** @brief Trampled ground: how much of Snow Resistance fades inside a trampled area - packed snow gives way, so heavy traffic carves as deep as bodies reach while a lone trail stays shallow. 0 = off. */
-		float TrampledResistFade = 1.0f;
-		/** @brief Trampled ground: disturbance-extent reading where the trampled shape begins. Promoted from a debug aid to a real setting 2026-09-21, so it ships and persists; the CPU mirror reads the same pair. */
-		float TrampleStart = 0.20f;
-		/** @brief Trampled ground: extent reading where the trampled shape is fully applied. Held at least 0.01 above TrampleStart. */
-		float TrampleFull = 0.50f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
@@ -856,8 +850,10 @@ public:
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
 		float HasRoadRaster;
-		/** @brief Snow Resistance's trampled fade: xy = TrampleBracket(), z = TrampledResistFade (0 while the extent bake is not live), w spare. Mirror in DeformationUpdateCS.hlsl. */
-		float4 TrampleResist;
+		/** @brief Body passes: the pass clock in half seconds (mod 1024), and the free time in the same units after which contact starts a new pass. Mirror in DeformationUpdateCS.hlsl. */
+		uint PassClock;
+		uint PassGap;
+		uint PassPad[2];
 		/** @brief Shout mark outline and depth along the reach: x ShoutMarkWaist, y ShoutMarkRoundness, z ShoutMarkFadeStart, w ShoutMarkFarDepth. */
 		float4 ShoutShape;
 		/** @brief Shout mark churn: x ShoutChurn, y ShoutStreakSize, z ShoutStreakLength, w spare. */
@@ -921,12 +917,10 @@ public:
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
 
-	/** @brief Trample extent: one texel per 8x8 map tile (physical layout), how two-dimensional the worked ground around it is. Rebuilt whole from the berm field whenever the berm bake runs; CarveProfile reads it at t56 to pick trail or trampled-field shape. */
-	Texture2D* extentFieldTexture = nullptr;
-	/** @brief SRV of the trample extent field; null before SetupResources. */
-	ID3D11ShaderResourceView* GetExtentFieldSRV() const { return extentFieldTexture ? extentFieldTexture->srv.get() : nullptr; }
-	/** @brief Shell SRV slot of the trample extent field, bound wherever the berm field (t14) is. */
-	static constexpr UINT kExtentFieldSlot = 56;
+	/** @brief The body pass each map texel last took (R16_UINT, physical layout): the carve it started from and when bodies last touched it. StampCS u7 only. */
+	Texture2D* passStateTexture = nullptr;
+	/** @brief Real seconds the body-pass clock has run; PerFrame::PassClock is it in half seconds, mod 1024. */
+	double passClockSeconds = 256.0;
 	/** @brief PS slot of the untouched-tile mask (BermFieldCS UntouchedCS), read by the shell PS's skip. */
 	static constexpr UINT kUntouchedTilesSlot = 57;
 	/** @brief SampleTerrain's terrain window (TerrainWetSRV), bound wherever the shell's t0 is. */
@@ -1476,9 +1470,6 @@ public:
 	/** @brief Returns the berm field bake compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetBermFieldCS();
 	ID3D11ComputeShader* bermFieldCS = nullptr;
-	/** @brief Returns the trample extent bake (BermFieldCS.hlsl:ExtentCS), compiling it on first use. */
-	ID3D11ComputeShader* GetExtentFieldCS();
-	ID3D11ComputeShader* extentFieldCS = nullptr;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Draws the ImGui settings UI, including the debug view of the deformation map. Implemented in SnowDeformation/Menu.cpp. */
@@ -1718,7 +1709,7 @@ public:
 		float4 BloodLook2;
 		/** @brief Blood detail tiles: xy spare (the retired soak), z = the tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
-		/** @brief Trampled ground: x spare (the retired Floor Lowering), y = Settings::TrampledFlattening (1 when the extent bake is not live), zw = the extent bracket trail -> field. Read through TrampleChurnScale. Appended last; mirror in both shells. */
+		/** @brief Trampled ground: x spare (the retired Floor Lowering), y = Settings::TrampledFlattening, z = BodyPrintScale() (one pass's share of the layer), w spare. Read through TrampleChurnScale. Appended last; mirror in both shells. */
 		float4 TrampleStyle;
 		/** @brief Shell tessellation screen-size cap: x = target pixels per segment (0 = the distance factor alone), yz = viewport half size in pixels, w = viewport depth range (MaxDepth - MinDepth). Appended last; mirror in both shells. */
 		float4 TessScreen;
@@ -2076,9 +2067,6 @@ public:
 	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11ComputeShader* GetDepthSyncCS();
 	ID3D11ComputeShader* depthSyncCS = nullptr;
-
-	/** @brief Skips the extent bake so the field keeps its last content: separates a field that really changes from a surface that only shimmers. */
-	bool debugTrampleFreeze = false;
 
 	/** @brief A/B measurement: gates the wide exclusion field off, returning clearings to the near mask's ~57 m reach. Runtime-only. */
 	bool shellDistantExclusionsDisabled = false;
@@ -2800,14 +2788,6 @@ public:
 	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
 	/** @brief 1 - Snow Resistance: the share of a body's reach into the layer that carves. */
 	float BodyPrintScale() const { return 1.0f - std::clamp(settings.SnowResistance, 0.0f, 100.0f) * 0.01f; }
-	/** @brief The trample extent bracket (TrampleStart, TrampleFull held 0.01 above it), shared by the shells and the stamp pass. */
-	float2 TrampleBracket() const
-	{
-		const float start = std::clamp(settings.TrampleStart, 0.0f, 0.98f);
-		return { start, std::clamp(settings.TrampleFull, start + 0.01f, 1.0f) };
-	}
-	/** @brief The extent field is baked from the berm field; without that bake it is stale. */
-	bool ExtentLive() const { return !shellBermBakeDisabled && bermFieldTexture && extentFieldTexture; }
 	/** @brief Interior cell: no landscape exists, so no ground shell and no trench can; object snow is unaffected. */
 	bool InInteriorCell() const
 	{

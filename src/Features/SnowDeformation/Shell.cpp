@@ -1770,12 +1770,8 @@ void SnowDeformation::DrawShell()
 		std::lerp(teethSlider * (1.0f - snowSoftness), teethSlider * look.teeth, look.strength),
 		std::lerp(clodSlider, clodSlider * look.clods, look.strength),
 		GetAccumulationDepthScale() };
-	// A stale extent field turns the class switch off with it.
-	const float2 trampleBracket = TrampleBracket();
-	cbData.TrampleStyle = { 0.0f,
-		ExtentLive() ? std::clamp(settings.TrampledFlattening, 0.0f, 1.0f) : 1.0f,
-		trampleBracket.x,
-		trampleBracket.y };
+	// Trampled ground: floors walked deeper than one pass flatten their churn.
+	cbData.TrampleStyle = { 0.0f, std::clamp(settings.TrampledFlattening, 0.0f, 1.0f), BodyPrintScale(), 0.0f };
 	// Loose snow holds no clods. Under Snow Climate the per-pixel ramp
 	// (SnowClimateLUT) scales the slider instead; roads take it below.
 	const float churnSlider = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
@@ -2239,11 +2235,6 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	context->PSSetShaderResources(14, 1, &bermSRV);
-	// Trample extent (t56): CarveProfile reads it, so it goes wherever the
-	// berm field does.
-	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
-	context->VSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
-	context->PSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
@@ -2413,7 +2404,6 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(8, 1, &dsHeightSRV);
 		context->DSSetShaderResources(11, 2, objectCapSRVs);
 		context->DSSetShaderResources(14, 1, &bermSRV);
-		context->DSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 		context->DSSetShaderResources(15, 1, &exclusionSRV);
 		context->DSSetShaderResources(29, 1, &undulationSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
@@ -2601,11 +2591,8 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);
 	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
-	// The extent field and the untouched mask are compute targets next Prepass.
-	context->PSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
+	// The untouched mask is a compute target next Prepass.
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullFinePS[0]);
-	context->VSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
-	context->DSSetShaderResources(kExtentFieldSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
 	UnbindMarchCaches();
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };

@@ -24,11 +24,6 @@ RWTexture2D<float2> OutBermField : register(u0);
 // changed within the tap reach. Consumed by BermTiledCS via indirect args.
 StructuredBuffer<uint> BermTilesIn : register(t1);
 
-// Trample extent bake (ExtentCS): reads the finished berm field, writes one
-// texel per 8x8 map tile. See TRENCH-MORPHOLOGY-RESEARCH.md P1.
-Texture2D<float> BermFieldIn : register(t2);
-RWTexture2D<float> OutExtentField : register(u1);
-
 // Per-tile "a berm texel is non-zero", written by every bake group for its own
 // tile, so a stale bake still reads as touched.
 RWTexture2D<uint> OutBermOccupancy : register(u2);
@@ -243,65 +238,8 @@ void UntouchedTile(uint2 tile)
 	OutUntouched[tile] = touched == 0 ? 1u : 0u;
 }
 
-// Alone only while the extent is frozen or absent; ExtentCS runs it otherwise.
 [numthreads(8, 8, 1)]
 void UntouchedCS(uint3 dtid : SV_DispatchThreadID)
 {
 	UntouchedTile(dtid.xy);
-}
-
-// ---- Trample extent ----
-// How two-dimensional the worked ground around a tile is. Per axis, the berm
-// field averaged along both directions; the result is the MINIMUM over axes.
-// A trail is high along itself and ~0 across it; a trampled area is high
-// every way. A plain mean cannot tell a trail from a sparse field.
-#define EXTENT_AXES 4
-#define EXTENT_RADII 3
-static const float2 kExtentAxis[EXTENT_AXES] = {
-	float2(1.0, 0.0), float2(0.7071, 0.7071), float2(0.0, 1.0), float2(-0.7071, 0.7071)
-};
-static const float kExtentRadius[EXTENT_RADII] = { 40.0, 84.0, 128.0 };
-
-// Point tap of the baked berm field in LOGICAL texel space; zero outside the
-// window, like Tap.
-float ExtentTap(int2 t, int2 dims)
-{
-	float v = 0.0;
-	if (all(t >= 0) && all(t < dims))
-		v = BermFieldIn.Load(DeformTexel(t, dims));
-	return v;
-}
-
-// The untouched tiles ride along: the same tile grid, inputs no part of
-// this pass writes.
-[numthreads(8, 8, 1)]
-void ExtentCS(uint3 dtid : SV_DispatchThreadID)
-{
-	UntouchedTile(dtid.xy);
-
-	uint2 outDims;
-	OutExtentField.GetDimensions(outDims.x, outDims.y);
-	if (any(dtid.xy >= outDims))
-		return;
-
-	int2 dims = int2(outDims) * 8;
-	float invTexel = 1.0 / max(TexelSize, 1e-4);
-	// Tiles are PHYSICAL (they never move on a scroll); the taps are a world
-	// rule, so they run in logical space from the tile's centre.
-	// Integer centre plus integer offsets: a tap rounded AFTER the scroll is
-	// added flips on exact ties as MapOrigin changes parity.
-	int2 centre = (int2(dtid.xy) * 8 + 4 - MapOrigin) & (dims - 1);
-
-	float extent = 1.0;
-	[unroll] for (uint a = 0; a < EXTENT_AXES; a++)
-	{
-		float along = 0.0;
-		[unroll] for (uint r = 0; r < EXTENT_RADII; r++)
-		{
-			int2 off = int2(floor(kExtentAxis[a] * (kExtentRadius[r] * invTexel) + 0.5));
-			along += ExtentTap(centre + off, dims) + ExtentTap(centre - off, dims);
-		}
-		extent = min(extent, along / (2.0 * EXTENT_RADII));
-	}
-	OutExtentField[dtid.xy] = saturate(extent);
 }

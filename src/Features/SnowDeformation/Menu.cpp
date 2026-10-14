@@ -842,7 +842,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("snow_resistance"), "Snow Resistance"), &settings.SnowResistance, 0.0f, 100.0f, "%.0f %%");
 		if (auto _ttResist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Dropped items, spells and melt keep their own depths; trampled ground fades it (Trampled Ground > Resistance Fade). Affects new trenches only."));
+			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Every new pass over the same snow carves the same share of what is left, so busy paths sink deeper the more they are walked. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
 
 		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
 		if (auto _ttClimate = Util::HoverTooltipWrapper())
@@ -864,16 +864,8 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttTrampleFlat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Where many trails overlap into a trampled area, the broken lumps on the trench floor are walked flatter: this multiplies Churn Height on the floor there, easing in the bigger the trampled area is. At 0.50x a Churn Height of 4 becomes 2. Lumps on the berms and in a single trail are never touched. 1.00x = off."));
+			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Snow walked over again and again is packed down, and the broken lumps on the trench floor are walked flatter: this multiplies Churn Height on floors deeper than one pass leaves them, easing in the deeper the traffic has packed them. At 0.50x a Churn Height of 1 becomes 0.5. Lumps on the berms and in a trail walked once are never touched. 1.00x = off."));
 
-		ImGui::SliderFloat(T(TKEY("trampled_resist_fade"), "Resistance Fade"), &settings.TrampledResistFade, 0.0f, 1.0f, "%.2f");
-		if (auto _ttTrampleResist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trampled_resist_fade_tooltip"), "Where many trails overlap into a trampled area, the snow is packed down and gives way: this much of Snow Resistance fades there, easing in the bigger the trampled area is. Battlefields and busy yards carve as deep as bodies reach while a lone trail stays shallow. 1.00 = the full fade; 0 = off."));
-
-		ImGui::SliderFloat(T(TKEY("trample_start"), "Trampled Area: Starts At"), &settings.TrampleStart, 0.0f, 0.9f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("trample_full"), "Trampled Area: Full At"), &settings.TrampleFull, 0.05f, 1.0f, "%.2f");
-		if (auto _ttTrampleBr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trample_bracket_tooltip"), "How much overlapping traffic counts as trampled ground: the two settings above begin at the first reading and are fully applied at the second. Lower Starts At to let smaller churned patches count as trampled; raise it to keep the change to wide, heavily walked areas only. A lone trail sits well below the default start, which is what keeps it untouched."));
 
 
 		ImGui::SeparatorText(T(TKEY("dropped_items_group"), "Dropped Items"));
@@ -1799,10 +1791,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttRuler = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
 
-
-			ImGui::Checkbox(T(TKEY("trample_freeze"), "Trampled Area: Freeze Field"), &debugTrampleFreeze);
-			if (auto _ttTrampleFz = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trample_freeze_tooltip"), "Stops rebuilding the trampled-area field, so it keeps what it last held. If trampled snow still flickers while this is on, the flicker is not in the field; if it stops, the field itself is changing."));
 
 			WrapTextF("Exclusion zones: %u, workspace clearings: %u, sealed containers: %u (Survival heat list %s)",
 				statExclusionCount, statTrampleCount, statSealedCount, survivalHeatSources ? "found" : "absent");

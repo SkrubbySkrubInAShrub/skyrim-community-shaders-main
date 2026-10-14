@@ -269,9 +269,11 @@ cbuffer PerFrame : register(b0)
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
 	float HasRoadRaster;
-	// Snow Resistance's trampled fade: xy the extent bracket, z the amount
-	// (0 = off), w spare.
-	float4 TrampleResist;
+	// Body passes: the clock in half seconds (mod 1024), and how long a texel
+	// must be free of bodies before contact counts as a new pass.
+	uint PassClock;
+	uint PassGap;
+	uint2 PassPad;
 	// Shout mark outline and depth along the reach: x waist (fraction of the
 	// reach where it is widest), y roundness (superellipse exponent, 1 =
 	// pointed, 2 = oval), z fraction of the reach held at full depth, w depth
@@ -323,8 +325,10 @@ Texture2D<float4> TerrainWindow : register(t8);
 // Object skin-depth raster (SnowHeightCapture RT2): x = class layer depth,
 // y = highest road top in the column, kNoRoadTop where no road drew.
 Texture2D<float2> ObjectSkinDepth : register(t9);
-// Trample extent (BermFieldCS ExtentCS): one texel per PHYSICAL 8x8 tile.
-Texture2D<float> TrampleExtentIn : register(t10);
+// The body pass each texel last took (StampCS): bits 0-5 the carve it
+// started from in 63rds, bits 6-15 the PassClock of its last contact.
+// Physical layout, like the map.
+RWTexture2D<uint> PassState : register(u7);
 #define CONTACT_NONE 1.0e30
 static const float kNoRoadTop = -1000000.0;
 // A scan's indirect args (bytes 0-11), its append counter (12) and its
@@ -875,29 +879,6 @@ float ContactAbove(float2 worldPos, float contact)
 	return above;
 }
 
-// A body's share of its reach at a texel: Snow Resistance, faded where the
-// ground is trampled. Bilinear between tile centres like the shells'
-// TrampleExtent, in physical space - the extent never moves on a scroll.
-float BodyPrintAt(uint2 phys)
-{
-	float print = BodyPrint;
-	[branch] if (TrampleResist.z > 0.0 && print < 1.0)
-	{
-		uint2 tiles;
-		TrampleExtentIn.GetDimensions(tiles.x, tiles.y);
-		float2 q = (float2(phys) - 4.0) / 8.0;
-		float2 qf = floor(q);
-		float2 f = q - qf;
-		int2 mask = int2(tiles) - 1;
-		int2 q0 = int2(qf) & mask;
-		int2 q1 = (int2(qf) + 1) & mask;
-		float extent = lerp(lerp(TrampleExtentIn.Load(int3(q0.x, q0.y, 0)), TrampleExtentIn.Load(int3(q1.x, q0.y, 0)), f.x),
-			lerp(TrampleExtentIn.Load(int3(q0.x, q1.y, 0)), TrampleExtentIn.Load(int3(q1.x, q1.y, 0)), f.x), f.y);
-		print = lerp(print, 1.0, smoothstep(TrampleResist.x, TrampleResist.y, extent) * TrampleResist.z);
-	}
-	return print;
-}
-
 bool StampTexel(uint2 phys)
 {
 	uint2 dims;
@@ -912,7 +893,9 @@ bool StampTexel(uint2 phys)
 	float crust = carried.z;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
-	const float bodyPrint = BodyPrintAt(phys);
+	// The deepest a body reaches into the layer here this frame, before Snow
+	// Resistance; the pass rule below turns it into carve.
+	float bodyReach = 0.0;
 
 	// Carve, melt and scorch accumulate separately so the result cannot depend
 	// on the order stamps happen to sit in the buffer.
@@ -1034,8 +1017,12 @@ bool StampTexel(uint2 phys)
 				// weight this shape puts through, unused by carves otherwise.
 				float force = saturate(StampEnds[i].w);
 				float resist = standingCrust * (1.0 - force);
-				float printed = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist) * (isBody ? bodyPrint : 1.0);
-				carve = max(carve, printed);
+				float reach = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist);
+				float printed = reach * (isBody ? BodyPrint : 1.0);
+				[flatten] if (isBody)
+					bodyReach = max(bodyReach, reach);
+				else
+					carve = max(carve, printed);
 
 				// Anything that CUTS a crust has broken the skin over it, not
 				// merely dented it - so the cut takes the glaze with it, in
@@ -1154,21 +1141,34 @@ bool StampTexel(uint2 phys)
 			[unroll] for (int oy = -1; oy <= 1; oy++)
 				[unroll] for (int ox = -1; ox <= 1; ox++)
 					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
-			// Bodies carve the Snow Resistance share of their reach; loose
-			// props all of it, the floor ItemSink rests them on.
-			float printed = 0.0;
+			// Bodies go through the pass rule below; loose props carve all of
+			// their reach, the floor ItemSink rests them on. Crust bears both like
+			// any carve of unknown weight: no force.
+			const float crustDepth = lerp(1.0, CrustPrintDepth, standingCrust);
+			float bodyContact = 0.0;
+			float propPrinted = 0.0;
 			[branch] if (contact.x < CONTACT_NONE * 0.5)
-				printed = saturate(1.0 - ContactAbove(worldPos, contact.x)) * bodyPrint;
+				bodyContact = saturate(1.0 - ContactAbove(worldPos, contact.x)) * crustDepth;
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
-				printed = max(printed, saturate(1.0 - ContactAbove(worldPos, contact.y)));
-			[branch] if (printed > 0.0)
-			{
-				// Crust bears it like any carve of unknown weight: no force.
-				printed *= lerp(1.0, CrustPrintDepth, standingCrust);
-				carve = max(carve, printed);
-				crustBreak = max(crustBreak, saturate(printed * CrustBreakOnCarve));
-			}
+				propPrinted = saturate(1.0 - ContactAbove(worldPos, contact.y)) * crustDepth;
+			bodyReach = max(bodyReach, bodyContact);
+			carve = max(carve, propPrinted);
+			crustBreak = max(crustBreak, saturate(max(bodyContact * BodyPrint, propPrinted) * CrustBreakOnCarve));
 		}
+	}
+
+	// Bodies pack the snow pass by pass: each pass carves the Snow Resistance
+	// share of what its reach finds left, from the depth the pass began at.
+	// A pass begins once the texel has been free of bodies for PassGap; a
+	// stored start deeper than the map (refill, a reused texel) is stale.
+	[branch] if (bodyReach > 0.0)
+	{
+		const uint state = PassState[phys];
+		float passStart = float(state & 63u) / 63.0;
+		[flatten] if (((PassClock - (state >> 6)) & 1023u) > PassGap || passStart > deformation + 1.0 / 63.0)
+			passStart = floor(saturate(deformation) * 63.0) / 63.0;
+		carve = max(carve, passStart + BodyPrint * max(bodyReach - passStart, 0.0));
+		PassState[phys] = ((PassClock & 1023u) << 6) | uint(passStart * 63.0 + 0.5);
 	}
 
 	float total = carve;

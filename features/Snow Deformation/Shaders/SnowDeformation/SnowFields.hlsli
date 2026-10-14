@@ -13,7 +13,7 @@
 // UndulationAmp/Scale, UndulationFieldWindow, TrampleStyle,
 // GridOrigin, DeformMapOrigin), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
-// (t14), ExtentFieldMap (t56), UntouchedTiles (t57), ExclusionFieldMap (t15), the frost patterns (t16/t17),
+// (t14), UntouchedTiles (t57), ExclusionFieldMap (t15), the frost patterns (t16/t17),
 // UndulationFieldMap (t29), SnowSampler
 // (PS) and the TerrainVariation include - all declared before this include.
 // Deliberately NOT shared: the deformation .x samplers (the landscape
@@ -244,47 +244,6 @@ bool ShellUntouched(float2 gridLocal)
 #endif
 }
 
-// Trample extent (ExtentCS in BermFieldCS.hlsl): one texel per 8x8 PHYSICAL
-// map tile, centred on physical texel index 8T+4, so the read goes
-// world -> logical texel -> physical -> tile. Unbound reads 0 = trail.
-float TrampleExtent(float2 worldXY)
-{
-	float2 uv = (GridToDeformOffset + worldXY - GridOrigin) * DeformInvWorldSize;
-	float inside = (all(uv >= 0.0) && all(uv <= 1.0)) ? 1.0 : 0.0;
-
-	float2 tiles;
-	ExtentFieldMap.GetDimensions(tiles.x, tiles.y);
-	float2 q = (uv * tiles * 8.0 - 0.5 + float2(DeformMapOrigin) - 4.0) / 8.0;
-	float2 qf = floor(q);
-	float2 f = q - qf;
-	int2 mask = int2(tiles) - 1;
-	int2 q0 = int2(qf) & mask;
-	int2 q1 = (int2(qf) + 1) & mask;
-
-	float s00 = ExtentFieldMap.Load(int3(q0.x, q0.y, 0));
-	float s10 = ExtentFieldMap.Load(int3(q1.x, q0.y, 0));
-	float s01 = ExtentFieldMap.Load(int3(q0.x, q1.y, 0));
-	float s11 = ExtentFieldMap.Load(int3(q1.x, q1.y, 0));
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) * inside;
-}
-
-// 0 = trail, 1 = trampled field. TrampleStyle.zw bracket the extent.
-float TrampleField(float2 worldXY)
-{
-	return smoothstep(TrampleStyle.z, TrampleStyle.w, TrampleExtent(worldXY));
-}
-
-// Trampled ground scales the churn on the trench floor; 1 = off. Open snow
-// (d = 0) never pays for the read.
-float TrampleChurnScale(float2 worldXY, float deformation)
-{
-	float scale = 1.0;
-	[branch] if (TrampleStyle.y < 0.999 && deformation > 0.001)
-		scale = lerp(1.0, saturate(TrampleStyle.y), TrampleField(worldXY));
-	return scale;
-}
-
 // Churn lump noise; the caller passes its size knob (ChurnSizeScale /
 // ObjChurnSizeScale), the only way the two shells differ here.
 float ChurnNoiseScaled(float2 worldXY, float sizeScale)
@@ -298,16 +257,6 @@ float ChurnNoiseScaled(float2 worldXY, float sizeScale)
 // scale 1.5), so berm clods and trench rubble read at visibly different
 // frequencies - the two-scale contrast of RDR2's O3.
 static const float kClodSizeScale = 1.5;
-
-// Trampled ground flattens the churn by how far INTO the trench a point is:
-// the floor takes the full scale, the berm outside it none. Scaling the
-// trench half alone does nothing - the berm field reads full across a
-// trampled area and wins the max.
-float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
-{
-	float trench = smoothstep(0.05, 0.5, deformation);
-	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleChurnScale(worldXY, deformation), trench);
-}
 
 // Churn plus clod heights at a point; sizeScale as for ChurnNoiseScaled.
 float ChurnHeights(float2 worldXY, float churnAmp, float clodAmp, float sizeScale)
@@ -472,6 +421,28 @@ float SampleSpellMark(float2 gridLocal)
 	float m01 = abs(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).y);
 	float m11 = abs(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).y);
 	return smoothstep(kSpellMarkChurnStart, 0.15, lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y));
+}
+
+// Trampled ground: snow walked deeper than one pass (TrampleStyle.z) is
+// packed, and its floor churn scales toward TrampleStyle.y (1 = off).
+// Melted depth is not packing.
+float TrampleChurnScale(float2 worldXY, float deformation)
+{
+	float scale = 1.0;
+	[branch] if (TrampleStyle.y < 0.999 && deformation > TrampleStyle.z + 0.001)
+	{
+		const float packed = saturate((deformation - SampleMelted(worldXY - GridOrigin) - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3));
+		scale = lerp(1.0, saturate(TrampleStyle.y), packed);
+	}
+	return scale;
+}
+
+// Trampled ground flattens the churn by how far INTO the trench a point is:
+// the floor takes the full scale, the berm outside it none.
+float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
+{
+	float trench = smoothstep(0.05, 0.5, deformation);
+	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleChurnScale(worldXY, deformation), trench);
 }
 
 // ---- Snow Climate per pixel (TRACK-VARIATION-RESEARCH.md 3.3) ----

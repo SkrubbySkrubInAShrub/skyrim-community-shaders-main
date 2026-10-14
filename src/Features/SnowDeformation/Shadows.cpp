@@ -509,11 +509,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// The land-exact height layer (t13).
 	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &casterFineSRV);
-	// The berm field (t14) and trample extent (t56).
+	// The berm field (t14).
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
-	ID3D11ShaderResourceView* extentSRV = GetExtentFieldSRV();
-	context->VSSetShaderResources(kExtentFieldSlot, 1, &extentSRV);
 	// The wide exclusion field (t15).
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
 	context->VSSetShaderResources(15, 1, &exclusionSRV);
@@ -654,7 +652,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// t14 was not saved (nothing else in the frame uses it); clear it.
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
-		context->VSSetShaderResources(kExtentFieldSlot, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
 		context->VSSetShaderResources(13, 1, &nullBermSRV);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);

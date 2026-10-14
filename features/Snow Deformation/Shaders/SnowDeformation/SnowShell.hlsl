@@ -259,8 +259,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float4 BloodLook2;
 	// xy spare; z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
-	// Trampled ground: x spare, y = floor churn scale (1 = off), zw = the
-	// extent bracket trail -> field. See TrampleChurnScale.
+	// Trampled ground: x spare, y = packed floor churn scale (1 = off), z = one
+	// pass's share of the layer, w spare. See TrampleChurnScale.
 	float4 TrampleStyle;
 	// x = tessellation target, pixels per segment (0 = distance only);
 	// yz = viewport half size in pixels, w = viewport depth range.
@@ -365,8 +365,6 @@ Texture2D<float3> LandMasksCopy : register(t10);
 // deformation map, y = the carve's short blur, at the map's own resolution
 // and addressing.
 Texture2D<float2> BermFieldMap : register(t14);
-// Trample extent (ExtentCS): one texel per 8x8 map tile, physical layout.
-Texture2D<float> ExtentFieldMap : register(t56);
 // 1 per 8x8 physical map tile where the map and the berm field read zero
 // within one tile (BermFieldCS UntouchedCS). Unbound reads 0 = touched.
 Texture2D<uint> UntouchedTiles : register(t57);
