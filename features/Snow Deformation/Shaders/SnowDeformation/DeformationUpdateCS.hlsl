@@ -894,8 +894,10 @@ bool StampTexel(uint2 phys)
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 	// The deepest a body reaches into the layer here this frame, before Snow
-	// Resistance; the pass rule below turns it into carve.
+	// Resistance; the pass rule below turns it into carve. The wide reach is
+	// what a repeat pass deepens by.
 	float bodyReach = 0.0;
+	float bodyReachWide = 0.0;
 
 	// Carve, melt and scorch accumulate separately so the result cannot depend
 	// on the order stamps happen to sit in the buffer.
@@ -1020,9 +1022,14 @@ bool StampTexel(uint2 phys)
 				float reach = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist);
 				float printed = reach * (isBody ? BodyPrint : 1.0);
 				[flatten] if (isBody)
+				{
 					bodyReach = max(bodyReach, reach);
+					bodyReachWide = max(bodyReachWide, reach);
+				}
 				else
+				{
 					carve = max(carve, printed);
+				}
 
 				// Anything that CUTS a crust has broken the skin over it, not
 				// merely dented it - so the cut takes the glaze with it, in
@@ -1152,6 +1159,27 @@ bool StampTexel(uint2 phys)
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
 				propPrinted = saturate(1.0 - ContactAbove(worldPos, contact.y)) * crustDepth;
 			bodyReach = max(bodyReach, bodyContact);
+			// A repeat pass deepens by the reach a map texel either side,
+			// tent-weighted: a channel walked into a packed floor eases in over
+			// texels instead of stepping one (square shadows on the floor).
+			[branch] if (bodyContact > 0.0)
+			{
+				const float k = TexelSize * ContactDim / (2.0 * ContactHalfExtent);
+				float tent = 4.0 * bodyContact;
+				[unroll] for (int ny = -1; ny <= 1; ny++)
+				{
+					[unroll] for (int nx = -1; nx <= 1; nx++)
+					{
+						if (nx != 0 || ny != 0)
+						{
+							const float c = ContactHeight.Load(int3(clamp(ct + int2(round(float2(nx, -ny) * k)), 0, dim - 1), 0)).x;
+							const float r = c < CONTACT_NONE * 0.5 ? saturate(1.0 - ContactAbove(worldPos + float2(nx, ny) * TexelSize, c)) * crustDepth : 0.0;
+							tent += (nx == 0 || ny == 0 ? 2.0 : 1.0) * r;
+						}
+					}
+				}
+				bodyReachWide = max(bodyReachWide, tent / 16.0);
+			}
 			carve = max(carve, propPrinted);
 			crustBreak = max(crustBreak, saturate(max(bodyContact * BodyPrint, propPrinted) * CrustBreakOnCarve));
 		}
@@ -1167,7 +1195,8 @@ bool StampTexel(uint2 phys)
 		float passStart = float(state & 63u) / 63.0;
 		[flatten] if (((PassClock - (state >> 6)) & 1023u) > PassGap || passStart > deformation + 1.0 / 63.0)
 			passStart = floor(saturate(deformation) * 63.0) / 63.0;
-		carve = max(carve, passStart + BodyPrint * max(bodyReach - passStart, 0.0));
+		const float passReach = passStart > 0.0 ? bodyReachWide : bodyReach;
+		carve = max(carve, passStart + BodyPrint * max(passReach - passStart, 0.0));
 		PassState[phys] = ((PassClock & 1023u) << 6) | uint(passStart * 63.0 + 0.5);
 	}
 
