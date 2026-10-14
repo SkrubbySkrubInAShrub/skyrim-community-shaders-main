@@ -307,6 +307,7 @@ bool Feature::ToggleAtBootSetting()
 	const std::string featureName = GetShortName();
 	auto disabled = state->IsFeatureDisabled(featureName);
 	state->SetFeatureDisabled(featureName, !disabled);
+	state->CheckCoreSettingsChanged();
 
 	return state->IsFeatureDisabled(featureName);  // Return the new state
 }

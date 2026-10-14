@@ -588,6 +588,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 		FeatureIssues::ScanForOrphanedFeatureINIs();
 
+		MarkSettingsSaved();
 		logger::info("Loading Settings Complete");
 	} catch (const json::exception& e) {
 		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
@@ -607,6 +608,18 @@ void State::SaveToJson(nlohmann::json& settings)
 	// Guard outlives the lock so its resolve-on-destruction does not run under m_mutex.
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 	std::lock_guard<std::mutex> lock(m_mutex);
+	SaveCoreToJson(settings);
+
+	auto& upscaling = globals::features::upscaling;
+	auto& upscalingJson = settings[upscaling.GetShortName()];
+	upscaling.SaveSettings(upscalingJson);
+
+	for (auto* feature : Feature::GetFeatureList())
+		feature->Save(settings);
+}
+
+void State::SaveCoreToJson(json& settings)
+{
 	const auto shaderCache = globals::shaderCache;
 
 	globals::menu->Save(settings["Menu"]);
@@ -635,10 +648,6 @@ void State::SaveToJson(nlohmann::json& settings)
 
 	settings["General"] = general;
 
-	auto& upscaling = globals::features::upscaling;
-	auto& upscalingJson = settings[upscaling.GetShortName()];
-	upscaling.SaveSettings(upscalingJson);
-
 	json originalShaders;
 	ForEachShaderTypeWithIndex([&](auto type, int classIndex) {
 		originalShaders[magic_enum::enum_name(type)] = enabledClasses[classIndex];
@@ -652,9 +661,28 @@ void State::SaveToJson(nlohmann::json& settings)
 	settings["Disable at Boot"] = disabledFeaturesJson;
 
 	settings["Version"] = Plugin::VERSION.string();
+}
 
-	for (auto* feature : Feature::GetFeatureList())
-		feature->Save(settings);
+size_t State::HashCoreSettings()
+{
+	json core;
+	{
+		std::lock_guard<std::mutex> lock(m_mutex);
+		SaveCoreToJson(core);
+	}
+	return std::hash<std::string>{}(core.dump());
+}
+
+void State::MarkSettingsSaved()
+{
+	settingsChanged = false;
+	coreSettingsChanged = false;
+	savedCoreHash = HashCoreSettings();
+}
+
+void State::CheckCoreSettingsChanged()
+{
+	coreSettingsChanged = HashCoreSettings() != savedCoreHash;
 }
 
 void State::LoadFromJson(nlohmann::json& settings)
@@ -762,6 +790,8 @@ void State::Save(ConfigMode a_configMode)
 
 	if (Util::FileHelpers::WriteJsonAtomically(configPath, settings, 1, "config")) {
 		logger::info("Saving settings to {}", configPath);
+		if (a_configMode == ConfigMode::USER)
+			MarkSettingsSaved();
 	}
 }
 
@@ -827,6 +857,7 @@ void State::ReapplySettingsLayers()
 
 void State::RestoreFeatureLayers(Feature* feature)
 {
+	MarkSettingsChanged();
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 	// Defaults first, so settings a partial base leaves out still reset.
 	feature->RestoreDefaultSettings();

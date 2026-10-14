@@ -164,6 +164,16 @@ public:
 	 */
 	void RestoreFeatureLayers(Feature* feature);
 
+	/** @brief Notes that feature settings were edited, so the main menu's Save shows them as unsaved. */
+	void MarkSettingsChanged() { settingsChanged = true; }
+
+	/** @brief Re-checks the sections that are not feature settings (Menu, General, ...) against the last save or
+	 *  load. Cheap enough to call on any frame the main menu edited something. */
+	void CheckCoreSettingsChanged();
+
+	/** @brief True when the user config has changes not yet saved. */
+	bool HasUnsavedChanges() const { return settingsChanged || coreSettingsChanged; }
+
 	/** @brief Loads the active theme preset from the menu settings. */
 	void LoadTheme();
 	/** @brief No-op kept for backward compatibility; theme is now saved with user settings. */
@@ -520,6 +530,17 @@ private:
 	nlohmann::json BuildFeatureBase(Feature* feature);
 	/** @brief Replaces each feature's full settings in a config with only the user's edits to it. */
 	void KeepOnlyUserEdits(nlohmann::json& settings);
+
+	/** @brief Writes the sections that are not feature settings; the caller holds m_mutex. */
+	void SaveCoreToJson(nlohmann::json& settings);
+	/** @brief Hash of what SaveCoreToJson writes, to tell whether those sections changed. */
+	size_t HashCoreSettings();
+	/** @brief Clears the unsaved state after the user config was written or read. */
+	void MarkSettingsSaved();
+
+	bool settingsChanged = false;
+	bool coreSettingsChanged = false;
+	size_t savedCoreHash = 0;
 
 	std::optional<TonemapOwner> tonemapOwner;
 	uint historyResetFrame = UINT_MAX;

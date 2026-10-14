@@ -5,6 +5,7 @@
 #include <cmath>
 #include <format>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <ranges>
 #include <unordered_map>
 #include <unordered_set>
@@ -881,7 +882,12 @@ void FeatureListRenderer::DrawFeatureBody(Feature* feat)
 		// Sketches live only while their feature is on screen; the next Update drops any other.
 		globals::sceneSettingsManager->RetainSketches(feat->GetShortName());
 		SceneWidgetInterceptor::Scope baselineScope({ .feature = feat, .baseline = true });
+		// ImGui raises this flag for any value edit; set only inside the call, it means this feature changed.
+		const auto& context = *ImGui::GetCurrentContext();
+		const bool editedBefore = context.ActiveIdHasBeenEditedThisFrame;
 		feat->DrawSettings();
+		if (!editedBefore && context.ActiveIdHasBeenEditedThisFrame && feat->UsesMainSettings())
+			globals::state->MarkSettingsChanged();
 	}
 	const ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 

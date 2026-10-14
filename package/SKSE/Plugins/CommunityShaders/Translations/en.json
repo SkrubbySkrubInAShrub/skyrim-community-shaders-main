@@ -3353,6 +3353,7 @@
     "menu.profiling.total": "Total",
     "menu.restore_settings": "Restore Saved Settings",
     "menu.save_settings": "Save Settings",
+    "menu.save_settings_unsaved": "Save Settings (unsaved changes)",
     "menu.settings.auto_hide_feature_list": "Auto-hide Feature List",
     "menu.settings.auto_hide_feature_list_tooltip": "Automatically hides the left feature list panel. Move cursor to the left edge to show it.",
     "menu.settings.background_blur": "Background Blur",
