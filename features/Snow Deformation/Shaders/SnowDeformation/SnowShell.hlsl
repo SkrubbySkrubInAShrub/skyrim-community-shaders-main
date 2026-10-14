@@ -868,6 +868,32 @@ float SampleObjectDepthCap(float2 worldXY)
 	return max(max(sd00.x, sd10.x), max(sd01.x, sd11.x));
 }
 
+// Road share of the ground around a point: the road raster's presence,
+// bilinear, at four corners `reach` out - a half on a road's edge, 0 or 1 a
+// little way off it. roadDepth: the deepest road layer seen, 0 with none.
+float RoadShareAround(float2 worldXY, float reach, out float roadDepth)
+{
+	roadDepth = 0.0;
+	float share = 0.0;
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		float2 dims;
+		bool valid;
+		const float2 t = ObjectMapTexel(worldXY + float2((k & 1) ? reach : -reach, (k & 2) ? reach : -reach), dims, valid);
+		const int2 t0 = (int2)t;
+		const float2 f = t - t0;
+		const int2 t1 = min(t0 + 1, int2(dims) - 1);
+		const float2 s00 = ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0));
+		const float2 s10 = ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0));
+		const float2 s01 = ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0));
+		const float2 s11 = ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0));
+		const float4 onRoad = (float4(s00.y, s10.y, s01.y, s11.y) > kNoRoadTop * 0.5) && valid ? 1.0 : 0.0;
+		share += lerp(lerp(onRoad.x, onRoad.y, f.x), lerp(onRoad.z, onRoad.w, f.x), f.y);
+		roadDepth = max(roadDepth, max(max(onRoad.x * s00.x, onRoad.y * s10.x), max(onRoad.z * s01.x, onRoad.w * s11.x)));
+	}
+	return share * 0.25;
+}
+
 // Bilinear raw object top at world XY; sentinel where a texel is empty.
 // a_skipRoads also returns it over road-owned columns (the patch's ground).
 float SampleObjectTopRaw(float2 worldXY, bool a_skipRoads)
@@ -2335,9 +2361,20 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
 				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
 		}
+		// Meeting a road's trench patch (Object Meeting Blend): the walls shade
+		// with half the road layer's depth at the seam, the patch takes the other
+		// half (SnowStaticsShell.hlsl PatchMeetLand). Shading only.
+		float profileDepth = pixelDepth;
+		[branch] if (ObjectMeetBand > 0.0 && ShellFlags.y != 0 && pixelCarve > 0.1 && shellZ < 2048.0)
+		{
+			float roadDepth;
+			const float share = RoadShareAround(GridOrigin + gridLocal, ObjectMeetBand * 0.25, roadDepth);
+			const float meet = (1.0 - abs(2.0 * share - 1.0)) * smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1024.0, 2048.0, shellZ));
+			profileDepth = lerp(pixelDepth, roadDepth, 0.5 * meet);
+		}
 		profileGrad = float2(
-						  CarveProfile(saturate(dXP), blur.x, pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
-						  CarveProfile(saturate(dYP), blur.z, pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) /
+						  CarveProfile(saturate(dXP), blur.x, profileDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, profileDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+						  CarveProfile(saturate(dYP), blur.z, profileDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, profileDepth, GridOrigin + gridLocal - float2(0.0, step))) /
 		              (2.0 * step);
 		// Berm shading: numerical gradient of the SAME blurred hill the
 		// geometry displaces by, so the light/shadow break sits on the hill's

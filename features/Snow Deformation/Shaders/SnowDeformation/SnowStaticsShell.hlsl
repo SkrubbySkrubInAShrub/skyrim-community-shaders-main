@@ -2727,6 +2727,60 @@ Texture2DArray<uint> DbgVoxHeightUnder : register(t54);
 Texture2D<float2> DbgShelter : register(t49);
 Texture2D<float> DbgSky : register(t51);
 
+#if defined(PSHADER) && defined(PATCH)
+// Road share of the ground around a point, SnowShell.hlsl RoadShareAround's
+// twin: a half on the road's edge.
+float PatchRoadShare(float2 worldXY, float reach)
+{
+	float2 dims;
+	ObjectSkinDepth.GetDimensions(dims.x, dims.y);
+	float share = 0.0;
+	[unroll] for (int k = 0; k < 4; ++k)
+	{
+		const float2 t = PatchTexel(worldXY + float2((k & 1) ? reach : -reach, (k & 2) ? reach : -reach), dims);
+		const int2 t0 = (int2)t;
+		const float2 f = t - t0;
+		const float4 onRoad = ObjectSkinDepth.GatherGreen(ShellLinearSampler, (float2(t0) + 1.0) / dims).wzxy > kNoRoadTop * 0.5 ? 1.0 : 0.0;
+		share += lerp(lerp(onRoad.x, onRoad.y, f.x), lerp(onRoad.z, onRoad.w, f.x), f.y);
+	}
+	return share * 0.25;
+}
+
+// Meeting the landscape trench (Object Meeting Blend): the patch's walls shade
+// with half the landscape layer's depth at the seam; the sheet takes the other
+// half (SnowShell.hlsl). Shading only.
+float3 PatchMeetLand(float3 normalWS, float2 gridLocal, float2 worldXY, float deform, float pixelDist)
+{
+	[branch] if (ObjectMeetBand > 0.0 && deform > 0.1 && pixelDist < 2048.0)
+	{
+		const float share = PatchRoadShare(worldXY, ObjectMeetBand * 0.25);
+		const float meet = (1.0 - abs(2.0 * share - 1.0)) * smoothstep(0.1, 0.5, deform) * (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
+		[branch] if (meet > 0.001)
+		{
+			const float roadDepth = PatchSkinDepth(worldXY).x;
+			const float meetDepth = lerp(roadDepth, max(SampleTerrainStatics(gridLocal).y, 0.0), 0.5 * meet);
+			const float step = 4.0;
+			const float4 d = saturate(float4(SampleDeformation(gridLocal + float2(step, 0.0)), SampleDeformation(gridLocal - float2(step, 0.0)),
+				SampleDeformation(gridLocal + float2(0.0, step)), SampleDeformation(gridLocal - float2(0.0, step))));
+			float4 blur = d;
+			[branch] if (CompactLook.w > 0.0)
+				blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
+					BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
+			// Without the teeth: their notch is the same on both sides of the difference.
+			const float2 own = float2(
+				CarveProfileNoTeeth(d.x, blur.x, roadDepth) - CarveProfileNoTeeth(d.y, blur.y, roadDepth),
+				CarveProfileNoTeeth(d.z, blur.z, roadDepth) - CarveProfileNoTeeth(d.w, blur.w, roadDepth));
+			const float2 met = float2(
+				CarveProfileNoTeeth(d.x, blur.x, meetDepth) - CarveProfileNoTeeth(d.y, blur.y, meetDepth),
+				CarveProfileNoTeeth(d.z, blur.z, meetDepth) - CarveProfileNoTeeth(d.w, blur.w, meetDepth));
+			const float2 grad = -normalWS.xy / max(normalWS.z, 0.1) + (met - own) / (2.0 * step);
+			normalWS = normalize(float3(-grad, 1.0));
+		}
+	}
+	return normalWS;
+}
+#endif
+
 // THE skin material and lighting, factored out of the skin's main: taps,
 // two-plane projection, parallax, normal map, frost/crust, RMAOS, cascades +
 // heightfield march + screen-space shadows, sun PBR, point lights,
@@ -2926,6 +2980,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	}
 
 #ifdef PATCH
+	normalWS = PatchMeetLand(normalWS, trenchGridLocal, worldXY, pixelDeform, pixelDist);
+
 	// Churn shading at PIXEL rate, the landscape PS's own recipe (weight =
 	// ChurnWeight x depth/10). Not in the vertex normal: at ChurnSize 0.25
 	// the lumps sit at 4/1.75 units, under even the dense band's vertex
