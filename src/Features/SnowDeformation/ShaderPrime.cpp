@@ -251,6 +251,9 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetDeformationStampAllCS(); },
 		[&] { GetDeformationScanEvolveCS(); },
 		[&] { GetDeformationScanBermCS(); },
+		[&] { GetPrintStampCS(); },
+		[&] { GetPrintRingCS(); },
+		[&] { GetPrintRefillCS(); },
 		[&] { GetUndulationFieldCS(); },
 		[&] { GetWindowFillCS(); },
 	};

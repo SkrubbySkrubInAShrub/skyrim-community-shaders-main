@@ -151,6 +151,7 @@ namespace
 	struct QualityPreset
 	{
 		uint32_t mapDim;
+		uint32_t objectTrenchDim;
 		float trenchesM;
 		float actorTrenchesM;
 		float skinsM;
@@ -164,9 +165,9 @@ namespace
 		bool castsShadows;
 	};
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
-		{ 1024u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
-		{ 2048u, 115.0f, 105.0f, 150.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
-		{ 4096u, 200.0f, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
+		{ 1024u, 512u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
+		{ 2048u, 1024u, 115.0f, 105.0f, 150.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
+		{ 4096u, 2048u, 200.0f, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
 	};
 }
 
@@ -181,6 +182,7 @@ void SnowDeformation::ApplyQualityPreset(int a_preset)
 		settings.RangeTrenchesM = p.trenchesM;
 		trenchRangeDirty = true;
 	}
+	settings.ObjectTrenchResolution = p.objectTrenchDim;
 	settings.RangeActorTrenchesM = p.actorTrenchesM;
 	settings.RangeSkinsM = p.skinsM;
 	settings.Tessellation = true;
@@ -199,7 +201,7 @@ int SnowDeformation::MatchingQualityPreset() const
 {
 	for (int i = 0; i < kQualityPresetCount; i++) {
 		const auto& p = kQualityPresets[i];
-		if (settings.DeformMapResolution == p.mapDim && settings.RangeTrenchesM == p.trenchesM &&
+		if (settings.DeformMapResolution == p.mapDim && settings.ObjectTrenchResolution == p.objectTrenchDim && settings.RangeTrenchesM == p.trenchesM &&
 			settings.RangeActorTrenchesM == p.actorTrenchesM && settings.RangeSkinsM == p.skinsM &&
 			settings.Tessellation && settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
 			settings.SkinTessCapPx == p.skinTessCapPx && !settings.VolumeSnow &&
@@ -223,7 +225,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m and a 24 px Object Snow Tessellation Cap. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m and a 32 px cap. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m, a 24 px Object Snow Tessellation Cap and Snow Trenches on Objects at 22 m. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m, a 32 px cap and Snow Trenches on Objects at 11 m. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[kQualityPresetCount] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < kQualityPresetCount; i++) {
@@ -783,6 +785,15 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("map_resolution_tooltip"), "Resolution of the map every trench, melt mark and berm lives in. The main performance dial for this section: cost scales with the square of it, so each step down roughly quarters the trench passes' GPU time. Detail follows the Trenches range too - at the default range, 2048 gives roughly 12 cm per texel, 1024 roughly 24 cm (footprints soften but trails stay). 4096 halves the texel again and costs roughly four times 2048's trench-pass time and video memory; the High preset uses it. Changing it clears the map; remembered trenches are re-injected from the store."));
 		}
 
+		{
+			static const uint kPrintDims[] = { 512u, 1024u, 2048u };
+			int printIndex = settings.ObjectTrenchResolution <= 512u ? 0 : (settings.ObjectTrenchResolution >= 2048u ? 2 : 1);
+			if (ImGui::Combo(T(TKEY("object_trench_reach"), "Snow Trenches on Objects"), &printIndex, "11 m\0" "22 m\0" "44 m\0"))
+				settings.ObjectTrenchResolution = kPrintDims[printIndex];
+			if (auto _ttObjectTrench = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_trench_reach_tooltip"), "How far around you footprints in the snow on objects - roofs, floorboards, rocks, logs, bridges - are kept: 11, 22 or 44 m. They are always on. Like trenches in the ground they refill while it snows, and with Remember Trenches on they are kept when you walk away and saved with the game. The print map takes 2, 8 or 32 MB of video memory. Changing it keeps remembered footprints and drops the last moments not yet stored."));
+		}
+
 		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 		if (auto _ttTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow and the road trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
@@ -1260,12 +1271,23 @@ void SnowDeformation::DrawSettings()
 			if (debugContactView) {
 				SliderFloatWrapped("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
 				CheckboxWrapped("Still corpses skip the draw (A/B; off = every rasterized corpse draws every frame; the living always draw)", &debugContactStillGate);
+				CheckboxWrapped("Object print view (Snow Trenches on Objects: each print texel's verdict left, the print map right)", &debugObjectPrintView);
 				// The half-extent the view CS ran with, not the live slider: dragging
 				// it rebuilds the image next frame, and drawing this frame's box at
 				// next frame's scale is what makes a correct silhouette look misplaced.
 				const float viewHalf = contactViewHalfUsed > 0.0f ? contactViewHalfUsed : std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
-				WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: the contact field as the carve pass samples it (red = carve fraction, green = hovering, MAGENTA = the surface reads below that column's ground, which carves full depth without touching anything, black = nothing drawn). RIGHT: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
-					2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);
+				if (debugObjectPrintView) {
+					WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: each print texel's verdict this frame (black = no body over it, BLUE = the body is in the ground's snow layer, so the trench map takes it, MAGENTA = no captured object's top at the contact's height, green to yellow = a print, brighter = deeper). RIGHT: the print map over the SAME ground (red = slot A depth, green = slot B, the second surface level; faint blue = print texel edges when zoomed in; grey = outside the window). Yellow box = the player's world bound on both.",
+						2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);
+					WrapTextF("  print map: %u texels a side (%.0f m reach), window corner (%.0f, %.0f) | %zu live tiles, %zu stored | last frame: %u stamp blocks, %u refill blocks, %u tiles mirrored, %u injected%s",
+						printMapDim, 0.5f * (float)printMapDim * kPrintTexel / kUnitsPerMeter,
+						(float)printWindowMin.x * kPrintTexel, (float)printWindowMin.y * kPrintTexel,
+						printLive.size(), printStoreTilesLast, printStampBlocksLast, printRefillBlocksLast, printMirrorsLast, printInjectsLast,
+						printCSFailed ? " | KERNELS FAILED TO COMPILE" : "");
+				} else {
+					WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: the contact field as the carve pass samples it (red = carve fraction, green = hovering, MAGENTA = the surface reads below that column's ground, which carves full depth without touching anything, black = nothing drawn). RIGHT: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
+						2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);
+				}
 				if (contactViewSRV) {
 					// Two squares side by side, sized to the window.
 					const float box = std::max(128.0f, std::floor((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f));

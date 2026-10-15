@@ -1378,6 +1378,7 @@ void SnowDeformation::PostPostLoad()
 	RegisterAccumulationCoSave();
 	RegisterSnowConditionCoSave();
 	RegisterItemSinkCoSave();
+	RegisterPrintCoSave();
 }
 
 // Cell-granular on purpose: the per-texel answer lives in a GPU texture, and a

@@ -147,6 +147,7 @@
 	X(BloodSheen) \
 	X(BloodSpreadSeconds) \
 	X(DeformMapResolution) \
+	X(ObjectTrenchResolution) \
 	X(RangeTrenchesM) \
 	X(RangeActorTrenchesM) \
 	X(RangeSkinsM) \
@@ -1641,8 +1642,9 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Stamps");
 			}
 			// Field view, while the contact SRVs are still bound: the same
-			// texels the stamp pass just read, painted as it read them.
-			if (debugContactView) {
+			// texels the stamp pass just read, painted as it read them. The
+			// print view paints the same texture in UpdateObjectPrints.
+			if (debugContactView && !debugObjectPrintView) {
 				EnsureContactViewTexture();
 				if (auto* viewCS = GetContactViewCS(); viewCS && contactViewUAV) {
 					ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
@@ -1781,6 +1783,9 @@ void SnowDeformation::PrepassSimulation()
 	}
 
 	spanClock.Lap(CpuCensus::kSpanDispatch);
+	// Snow Trenches on Objects: after the contact field and the trench pass,
+	// whose PerFrame upload its stamp reads.
+	UpdateObjectPrints(context, perFrameData, !deformIdleSkipped);
 	// After the passes, so it copies the map this frame just wrote - including
 	// anything the ring injected into it.
 	UpdateTrenchDebugTexture();
@@ -2130,6 +2135,7 @@ void SnowDeformation::ClearShaderCache()
 		deformationRingCS->Release();
 	deformationRingCS = nullptr;
 	ReleaseBloodShaders();
+	ReleaseObjectPrintShaders();
 	if (deformationEvolveCS)
 		deformationEvolveCS->Release();
 	deformationEvolveCS = nullptr;

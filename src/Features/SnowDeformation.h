@@ -627,6 +627,8 @@ public:
 		float BloodSpreadSeconds = 1.5f;
 		/** @brief Deformation map resolution (1024, 2048 or 4096, snapped to pow2 - the toroidal mask requires it). 4096 was retired 2026-09-21 (trenches looked worse at it, 4.71 ms) and is back since 2026-10-15 at Josef's call: the default and the High preset. The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 4096;
+		/** @brief Snow Trenches on Objects: the print map's texels a side (512, 1024 or 2048) at kPrintTexel units each, so the reach around the player is 11, 22 or 44 m. A quality-preset lever. */
+		uint32_t ObjectTrenchResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 200.0f;
 		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
@@ -4591,6 +4593,149 @@ protected:
 		const size_t swept = trenchStatSweptTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
 		return { trenchStatTiles, bytes, trenchEncodedTotal, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
 	}
+
+	// ---- Snow Trenches on Objects: the print map (ObjectPrints.cpp, MD plans\OBJECT-TOP-TRACKS-PLAN.md) ----
+
+	/** @brief World units per print texel: the contact field's own. Mirrors PRINT_TEXEL in DeformationUpdateCS.hlsl. */
+	static constexpr float kPrintTexel = 3.0f;
+	/** @brief Print texels per store tile edge, on a world-anchored grid; a tile is one contiguous block of the map at any of its dims. */
+	static constexpr int kPrintTileDim = 32;
+	static constexpr int kPrintTileTexels = kPrintTileDim * kPrintTileDim;
+	/** @brief Tiles the store keeps at most (8 KB each in memory); past it the furthest go first. */
+	static constexpr size_t kPrintStoreCap = 2048;
+	/** @brief Stamp and refill dispatch capacity, in 8x8 blocks. */
+	static constexpr uint32_t kPrintBlockCap = 16384;
+	/** @brief Tile mirror (map to store): staging slots, and dirty tiles queued per frame beyond the ones about to leave the window. */
+	static constexpr uint32_t kPrintStagingSlots = 16;
+	static constexpr uint32_t kPrintMirrorPerFrame = 4;
+	static constexpr uint32_t kPrintRecord = 'SNOP';
+	static constexpr uint32_t kPrintRecordVersion = 1;
+
+	/** @brief Per-frame constants of the print passes (b1). Layout must match PrintFrame in DeformationUpdateCS.hlsl. */
+	struct alignas(16) PrintFrameCB
+	{
+		/** @brief World print texel at the window's corner. */
+		DirectX::XMINT2 WindowMin;
+		uint RefillQuanta;
+		uint RingRectCount;
+		/** @brief Arriving texels in world print-texel space (x0, y0, w, h). */
+		DirectX::XMINT4 RingRects[2];
+		uint RingTotal;
+		uint Pad0;
+		uint Pad1[2];
+	};
+	STATIC_ASSERT_ALIGNAS_16(PrintFrameCB);
+	static_assert(sizeof(PrintFrameCB) == 64, "PrintFrameCB must match the fxc-reflected PrintFrame");
+
+	/** @brief One tile of the map known to hold prints or to have held them since its last write: the refill dispatch domain. */
+	struct PrintLiveTile
+	{
+		/** @brief Refill applied since the tile's last write; a full depth of it leaves nothing. */
+		float refillSince = 0.0f;
+		/** @brief Written since its last mirror to the store. */
+		bool dirty = false;
+	};
+	/** @brief A stored tile: both slices' texels (slice-major, row-major), and the decay clock reading they are current to. */
+	struct PrintStoreTile
+	{
+		std::vector<uint32_t> texels;
+		float clock = 0.0f;
+	};
+	struct PrintStagingSlot
+	{
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		TrenchTileKey key{};
+		/** @brief The window the copied texels belong to; texels outside it hold other ground. */
+		DirectX::XMINT2 windowMin{};
+		uint32_t dim = 0;
+		float clock = 0.0f;
+		uint64_t frame = 0;
+		/** @brief printStoreGeneration when queued; a copy from another timeline is never folded. */
+		uint32_t generation = 0;
+		bool busy = false;
+	};
+
+	Texture2D* printMap = nullptr;
+	ConstantBuffer* printFrameCB = nullptr;
+	winrt::com_ptr<ID3D11Buffer> printBlockBuffer;
+	winrt::com_ptr<ID3D11ShaderResourceView> printBlockSRV;
+	ID3D11ComputeShader* printStampCS = nullptr;
+	ID3D11ComputeShader* printRingCS = nullptr;
+	ID3D11ComputeShader* printRefillCS = nullptr;
+	ID3D11ComputeShader* printViewCS = nullptr;
+	bool printCSFailed = false;
+	uint32_t printMapDim = 0;
+	DirectX::XMINT2 printWindowMin = { 0, 0 };
+	bool printWindowValid = false;
+	uint32_t printWorldspace = 0;
+	/** @brief Refill not yet applied, in depth units: the map takes it in 1023rds. */
+	float printRefillBank = 0.0f;
+	/** @brief Set by the co-save load and revert (game thread): the next update clears the map and refills it from the store. */
+	std::atomic<bool> printReinjectRequested{ false };
+	std::unordered_map<uint64_t, PrintLiveTile> printLive;
+	/** @brief Guards printStore and printClockSnapshot: the co-save callbacks run on the game thread. */
+	std::mutex printStoreMutex;
+	std::unordered_map<TrenchTileKey, PrintStoreTile, TrenchTileKeyHash> printStore;
+	/** @brief trenchDecayClock as of this frame's update, for the co-save writer. */
+	float printClockSnapshot = 0.0f;
+	/** @brief Bumped under printStoreMutex by every co-save load and revert. */
+	std::atomic<uint32_t> printStoreGeneration{ 0 };
+	/** @brief The generation an update started under; its copies carry it. Render thread. */
+	uint32_t printQueueGeneration = 0;
+	std::array<PrintStagingSlot, kPrintStagingSlots> printStaging;
+	/** @brief One uint per window tile, set where the stamp changed a texel (PrintWrites, u1); read back to mark tiles live and dirty from what was written rather than from where bodies stood. */
+	winrt::com_ptr<ID3D11Buffer> printWriteBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> printWriteUAV;
+	struct PrintWriteReadback
+	{
+		winrt::com_ptr<ID3D11Buffer> staging;
+		/** @brief World tile of the flags' first entry, and entries per row. */
+		DirectX::XMINT2 tileOrigin{};
+		uint32_t rowTiles = 0;
+		uint32_t worldspace = 0;
+		uint64_t frame = 0;
+		bool busy = false;
+	};
+	static constexpr uint32_t kPrintWriteSlots = 4;
+	std::array<PrintWriteReadback, kPrintWriteSlots> printWriteReadbacks;
+	/** @brief Frame of the last full clear: write flags read back from before it describe a map that no longer exists. */
+	uint64_t printLastClearFrame = 0;
+	std::vector<uint32_t> printBlockScratch;
+	std::vector<uint8_t> printBlockSeen;
+	uint64_t printFrame = 0;
+	/** @brief Debug readout: last update's stamp and refill blocks, tiles mirrored and injected, store size. */
+	uint32_t printStampBlocksLast = 0;
+	uint32_t printRefillBlocksLast = 0;
+	uint32_t printMirrorsLast = 0;
+	uint32_t printInjectsLast = 0;
+	size_t printStoreTilesLast = 0;
+	/** @brief Runtime-only: the field view shows the print verdicts and the print map (PrintViewCS) instead of the trench pair. */
+	bool debugObjectPrintView = false;
+
+	/** @brief The print map's frame: window, mirror, ring, inject, refill, stamp, view. Runs after the trench dispatch; a_trenchPassRan says whether PerFrame (b0) holds this frame's values. */
+	void UpdateObjectPrints(ID3D11DeviceContext* a_context, const PerFrame& a_frame, bool a_trenchPassRan);
+	void CreatePrintResources(uint32_t a_dim);
+	bool EnsurePrintShaders();
+	ID3D11ComputeShader* GetPrintStampCS();
+	ID3D11ComputeShader* GetPrintRingCS();
+	ID3D11ComputeShader* GetPrintRefillCS();
+	ID3D11ComputeShader* GetPrintViewCS();
+	void ReleaseObjectPrintShaders();
+	/** @brief Queues one tile's copy into a free staging slot; false when none is free. */
+	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
+	/** @brief Folds finished copies into the store. */
+	void PollPrintMirrors(ID3D11DeviceContext* a_context);
+	/** @brief Marks the tiles finished write-flag readbacks name live and dirty. */
+	void PollPrintWrites(ID3D11DeviceContext* a_context);
+	/** @brief Uploads the stored texels of every tile inside a_rect (world print texels) that the store holds; returns tiles injected. */
+	uint32_t InjectPrintRect(ID3D11DeviceContext* a_context, const DirectX::XMINT4& a_rect, float a_clock);
+	/** @brief Brings a stored tile to a_clock; false when nothing is left in it. Caller holds printStoreMutex. */
+	static bool DecayPrintTile(PrintStoreTile& a_tile, float a_clock);
+	/** @brief Drops the furthest tiles past kPrintStoreCap. Caller holds printStoreMutex. */
+	void EnforcePrintStoreCap();
+	void RegisterPrintCoSave();
+	void SavePrintStore(const SKSE::SerializationInterface* a_intfc);
+	void LoadPrintStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
 public:
 	/** @brief Applies pending range-setting changes (trench window resize + map clear). Called at Prepass start; the first call applies loaded settings. */

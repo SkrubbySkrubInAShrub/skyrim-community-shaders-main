@@ -1334,3 +1334,254 @@ bool StampTexel(uint2 phys)
 		color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
 	ActivityView[DTid.xy] = color;
 }
+
+// ---- Snow Trenches on Objects: the print map ----
+// World-anchored: print texel (x, y) of the world lives at physical
+// (x, y) & (dim - 1), and the window holds one world texel per physical one.
+// Two slices hold two surface levels per column. A texel packs the print's
+// world Z in quarter units (bits 31-10, offset PRINT_Z_OFFSET) and its depth
+// in 1023rds (bits 9-0); 0 is empty. Mirrors kPrintTexel in SnowDeformation.h.
+#define PRINT_TEXEL 3.0
+#define PRINT_Z_OFFSET 524288.0
+// One surface: a stored print within this of a new contact's Z.
+#define PRINT_SAME_SURFACE 12.0
+// A contact prints where an object top lies in [contact - ABOVE, contact +
+// BELOW]. The raster keeps each texel's highest point, so a sloped top reads
+// up to a texel's rise above the surface under the sole.
+#define PRINT_GATE_BELOW 16.0
+#define PRINT_GATE_ABOVE 6.0
+// ContactAbove under this is the ground layer's print, not an object's.
+#define PRINT_FROM_ABOVE 0.5
+
+// Mirrors PrintFrameCB in SnowDeformation.h.
+cbuffer PrintFrame : register(b1)
+{
+	int2 PrintWindowMin;
+	uint PrintRefillQuanta;
+	uint PrintRingRectCount;
+	int4 PrintRingRects[2];
+	uint PrintRingTotal;
+	uint PrintPad0;
+	uint2 PrintPad1;
+}
+
+RWTexture2DArray<uint> PrintMap : register(u0);
+// One uint per world tile of PRINT_TILE texels the window touches, row-major
+// from the window's first tile; 1 where the stamp changed a texel.
+RWByteAddressBuffer PrintWrites : register(u1);
+#define PRINT_TILE_SHIFT 5
+// Physical 8x8 blocks, x | y << 16, deduplicated on the CPU.
+StructuredBuffer<uint> PrintBlocks : register(t2);
+// The object top raster's layer 1 and peeled layer 2, last frame's.
+Texture2D<float> PrintTops1 : register(t10);
+Texture2D<float> PrintTops2 : register(t11);
+Texture2DArray<uint> PrintMapIn : register(t12);
+
+uint PrintEncode(float a_z, uint a_depth)
+{
+	const uint zq = (uint)clamp(round((a_z + PRINT_Z_OFFSET) * 4.0), 1.0, 4194303.0);
+	return (zq << 10) | min(a_depth, 1023u);
+}
+
+float PrintZ(uint a_v)
+{
+	return float(a_v >> 10) * 0.25 - PRINT_Z_OFFSET;
+}
+
+int2 PrintWorldTexel(uint2 a_phys, uint a_dim)
+{
+	return PrintWindowMin + ((int2(a_phys) - PrintWindowMin) & int(a_dim - 1));
+}
+
+// The lowest body surface over a point this frame: the 2x2 contact texels
+// around it, MIN. CONTACT_NONE where no body drew.
+float PrintContact(float2 a_worldPos)
+{
+	float contact = CONTACT_NONE;
+	const float2 rel = (a_worldPos - ContactCenter) / ContactHalfExtent;
+	[branch] if (ContactDim > 0.5 && all(abs(rel) < 1.0))
+	{
+		const int dim = (int)ContactDim;
+		const int2 t0 = int2(floor(float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim - 0.5));
+		[unroll] for (int oy = 0; oy <= 1; oy++)
+			[unroll] for (int ox = 0; ox <= 1; ox++)
+				contact = min(contact, ContactHeight.Load(int3(clamp(t0 + int2(ox, oy), 0, dim - 1), 0)).x);
+	}
+	return contact;
+}
+
+// How far the contact stands above the nearest object top it can be standing
+// on: the smallest max(contact - top, 0) over the 2x2 raster texels of both
+// layers whose top lies in the gate band. Negative where none does.
+float PrintTopGap(float2 a_worldPos, float a_contact)
+{
+	float gap = -1.0;
+	const float2 local = (a_worldPos - HeightWindowCenter) / HeightHalfExtent;
+	[branch] if (all(abs(local) < 1.0))
+	{
+		float2 dims;
+		PrintTops1.GetDimensions(dims.x, dims.y);
+		const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+		const int2 t0 = int2(clamp(uv * dims - 0.5, 0.0, dims - 1.001));
+		const int2 t1 = min(t0 + 1, int2(dims) - 1);
+		const float tops[8] = {
+			PrintTops1.Load(int3(t0.x, t0.y, 0)), PrintTops1.Load(int3(t1.x, t0.y, 0)),
+			PrintTops1.Load(int3(t0.x, t1.y, 0)), PrintTops1.Load(int3(t1.x, t1.y, 0)),
+			PrintTops2.Load(int3(t0.x, t0.y, 0)), PrintTops2.Load(int3(t1.x, t0.y, 0)),
+			PrintTops2.Load(int3(t0.x, t1.y, 0)), PrintTops2.Load(int3(t1.x, t1.y, 0))
+		};
+		float best = 1e9;
+		[unroll] for (uint i = 0; i < 8; i++)
+		{
+			const float g = a_contact - tops[i];
+			[flatten] if (tops[i] > -50000.0 && g >= -PRINT_GATE_BELOW && g <= PRINT_GATE_ABOVE)
+				best = min(best, max(g, 0.0));
+		}
+		gap = best < 1e8 ? best : -1.0;
+	}
+	return gap;
+}
+
+// The print a point takes this frame. x = contact Z, y = depth 0-1, z = the
+// verdict: 0 no body, 1 the ground layer's, 2 no object top at that height,
+// 3 prints.
+float3 PrintVerdict(float2 a_worldPos)
+{
+	const float contact = PrintContact(a_worldPos);
+	float3 verdict = float3(contact, 0.0, 0.0);
+	[branch] if (contact < CONTACT_NONE * 0.5)
+	{
+		verdict.z = 1.0;
+		[branch] if (ContactAbove(a_worldPos, contact) >= PRINT_FROM_ABOVE)
+		{
+			const float gap = PrintTopGap(a_worldPos, contact);
+			verdict.z = gap < 0.0 ? 2.0 : 3.0;
+			verdict.y = gap < 0.0 ? 0.0 : BodyPrint * saturate(1.0 - gap / PRINT_GATE_ABOVE);
+		}
+	}
+	return verdict;
+}
+
+// Same surface merges (the deeper print keeps its Z), else an empty slot,
+// else the shallower slot is evicted by a deeper print. Returns the slot
+// written, or 2 when nothing changed.
+uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
+{
+	const uint a = PrintMap[uint3(a_phys, 0)];
+	const uint b = PrintMap[uint3(a_phys, 1)];
+	const uint da = a & 1023u;
+	const uint db = b & 1023u;
+	uint slot = 2u;
+	[branch] if (da > 0u && abs(a_z - PrintZ(a)) < PRINT_SAME_SURFACE)
+		slot = a_depth > da ? 0u : 2u;
+	else if (db > 0u && abs(a_z - PrintZ(b)) < PRINT_SAME_SURFACE)
+		slot = a_depth > db ? 1u : 2u;
+	else if (da == 0u)
+		slot = 0u;
+	else if (db == 0u)
+		slot = 1u;
+	else if (a_depth > min(da, db))
+		slot = da <= db ? 0u : 1u;
+	[branch] if (slot < 2u)
+		PrintMap[uint3(a_phys, slot)] = PrintEncode(a_z, a_depth);
+	return slot;
+}
+
+// This frame's prints over the CPU's block list.
+[numthreads(8, 8, 1)] void PrintStampCS(uint3 GTid
+										: SV_GroupThreadID, uint3 Gid
+										: SV_GroupID) {
+	uint3 dims;
+	PrintMap.GetDimensions(dims.x, dims.y, dims.z);
+	const uint packed = PrintBlocks[Gid.x];
+	const uint2 phys = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
+	const int2 world = PrintWorldTexel(phys, dims.x);
+	const float3 verdict = PrintVerdict((float2(world) + 0.5) * PRINT_TEXEL);
+	const uint depth = (uint)round(verdict.y * 1023.0);
+	[branch] if (verdict.z > 2.5 && depth > 0u && PrintWrite(phys, verdict.x, depth) < 2u)
+	{
+		const uint2 tile = uint2((world >> PRINT_TILE_SHIFT) - (PrintWindowMin >> PRINT_TILE_SHIFT));
+		PrintWrites.Store((tile.y * ((dims.x >> PRINT_TILE_SHIFT) + 1u) + tile.x) * 4u, 1u);
+	}
+}
+
+// Empties the texels whose world assignment the window's move changed: the
+// union of PrintRingRects (world texels), by flat index.
+[numthreads(64, 1, 1)] void PrintRingCS(uint3 DTid
+										: SV_DispatchThreadID) {
+	uint id = DTid.x;
+	[branch] if (id < PrintRingTotal && PrintRingRectCount > 0u)
+	{
+		int4 rect = PrintRingRects[0];
+		const uint rect0 = uint(rect.z * rect.w);
+		[flatten] if (id >= rect0)
+		{
+			id -= rect0;
+			rect = PrintRingRects[1];
+		}
+		uint3 dims;
+		PrintMap.GetDimensions(dims.x, dims.y, dims.z);
+		const int2 world = int2(rect.x + int(id % uint(rect.z)), rect.y + int(id / uint(rect.z)));
+		const uint2 phys = uint2(world & int(dims.x - 1));
+		PrintMap[uint3(phys, 0)] = 0u;
+		PrintMap[uint3(phys, 1)] = 0u;
+	}
+}
+
+// Refills every print in the listed blocks by PrintRefillQuanta 1023rds; a
+// print refilled to nothing empties its slot.
+[numthreads(8, 8, 1)] void PrintRefillCS(uint3 GTid
+										 : SV_GroupThreadID, uint3 Gid
+										 : SV_GroupID) {
+	const uint packed = PrintBlocks[Gid.x];
+	const uint2 phys = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
+	[unroll] for (uint s = 0; s < 2; s++)
+	{
+		const uint v = PrintMap[uint3(phys, s)];
+		PrintMap[uint3(phys, s)] = (v & 1023u) > PrintRefillQuanta ? v - PrintRefillQuanta : 0u;
+	}
+}
+
+// The field view's crop. Top half: each print texel's verdict this frame
+// (black no body, blue the ground layer's, magenta no object top at that
+// height, green to yellow printed by depth). Bottom half: the print map, slot
+// A red, slot B green, grey outside the window.
+[numthreads(8, 8, 1)] void PrintViewCS(uint3 DTid
+									   : SV_DispatchThreadID) {
+	[branch] if (all(DTid.xy < uint2(VIEW_PX, 2 * VIEW_PX)))
+	{
+		const bool mapHalf = DTid.y >= VIEW_PX;
+		const uint2 px = uint2(DTid.x, mapHalf ? DTid.y - VIEW_PX : DTid.y);
+		const float2 rel = float2((px.x + 0.5) / VIEW_PX * 2.0 - 1.0, 1.0 - (px.y + 0.5) / VIEW_PX * 2.0);
+		const float2 worldPos = ViewCenter + rel * ViewHalf;
+		uint3 dims;
+		PrintMapIn.GetDimensions(dims.x, dims.y, dims.z);
+		const int2 world = int2(floor(worldPos / PRINT_TEXEL));
+		float4 color = float4(0.0, 0.0, 0.0, 1.0);
+		[branch] if (!mapHalf)
+		{
+			const float3 verdict = PrintVerdict((float2(world) + 0.5) * PRINT_TEXEL);
+			[flatten] if (verdict.z > 2.5)
+				color.rgb = lerp(float3(0.1, 0.45, 0.1), float3(1.0, 1.0, 0.2), verdict.y);
+			else if (verdict.z > 1.5)
+				color.rgb = float3(0.8, 0.1, 0.8);
+			else if (verdict.z > 0.5)
+				color.rgb = float3(0.1, 0.2, 0.8);
+		}
+		else [branch] if (all(world >= PrintWindowMin) && all(world < PrintWindowMin + int(dims.x)))
+		{
+			const uint2 phys = uint2(world & int(dims.x - 1));
+			const uint a = PrintMapIn.Load(int4(phys, 0, 0));
+			const uint b = PrintMapIn.Load(int4(phys, 1, 0));
+			color.rgb = float3((a & 1023u) / 1023.0, (b & 1023u) / 1023.0, 0.0);
+			const float2 f = frac(worldPos / PRINT_TEXEL);
+			[flatten] if (ViewHalf < 400.0 && any(f < 0.08))
+				color.b = 0.3;
+		}
+		else
+			color.rgb = 0.15;
+		if (px.x == VIEW_PX / 2 || px.y == VIEW_PX / 2)
+			color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
+		ActivityView[DTid.xy] = color;
+	}
+}
