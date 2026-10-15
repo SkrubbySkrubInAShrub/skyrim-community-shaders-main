@@ -512,6 +512,9 @@ void LightEditor::DrawSettings()
 		ImGui::BeginDisabled();
 	}
 
+	if (selected.isSelected)
+		EditorWindow::GetSingleton()->undoHistory.Watch(MakeUndoTarget());
+
 	DrawToolbar();
 	ImGui::Spacing();
 
@@ -696,7 +699,7 @@ void LightEditor::DrawLightTable(const ImVec2& size)
 					const bool isSelected = light == selected;
 					if (Util::TableRowSelectable("##light", isSelected,
 							ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SelectOnNav))
-						selected = light;
+						RequestSelect(light);
 					// Flash only a flashable target: a ref/attached light (id != 0) other than the selected one
 					// (whose fade ApplyOverrides drives). Selected/Other hover leaves thisFrameHovered empty, clearing it.
 					if (ImGui::IsItemHovered()) {
@@ -1234,21 +1237,81 @@ bool LightEditor::BeginSearchableCombo(const char* label, const char* preview, c
 	return true;
 }
 
+bool LightEditor::LightSettings::operator==(const LightSettings& other) const
+{
+	const auto& lhs = data;
+	const auto& rhs = other.data;
+	return lhs.flags.underlying() == rhs.flags.underlying() && lhs.cutoffOverride == rhs.cutoffOverride &&
+	       lhs.lighFormId == rhs.lighFormId && lhs.diffuse.red == rhs.diffuse.red && lhs.diffuse.green == rhs.diffuse.green &&
+	       lhs.diffuse.blue == rhs.diffuse.blue && lhs.radius == rhs.radius && lhs.size == rhs.size && lhs.fade == rhs.fade &&
+	       pos.x == other.pos.x && pos.y == other.pos.y && pos.z == other.pos.z && tesFlags.underlying() == other.tesFlags.underlying();
+}
+
+bool LightEditor::LightEdits::operator==(const LightEdits& other) const
+{
+	return settings == other.settings && (!isLPLight || lpFlags == other.lpFlags) && shadowDepthBias == other.shadowDepthBias &&
+	       emittanceSource == other.emittanceSource && emittanceEdid == other.emittanceEdid &&
+	       useExternalEmittance == other.useExternalEmittance;
+}
+
+LightEditor::LightEdits LightEditor::GetEdits() const
+{
+	return { current, lpFlagSet, shadowDepthBias, activeEmittanceSource, externalEmittanceEdid, useExternalEmittance, lpInfo.isLPLight };
+}
+
+LightEditor::LightEdits LightEditor::GetOriginalEdits() const
+{
+	return { original, originalLpFlagSet, originalShadowDepthBias, originalEmittanceSource, originalExternalEmittanceEdid,
+		originalUseExternalEmittance, lpInfo.isLPLight };
+}
+
+void LightEditor::SetEdits(const LightEdits& edits)
+{
+	current = edits.settings;
+	lpFlagSet = edits.lpFlags;
+	shadowDepthBias = edits.shadowDepthBias;
+	ApplyShadowDepthBias();
+	activeEmittanceSource = edits.emittanceSource;
+	externalEmittanceEdid = edits.emittanceEdid;
+	useExternalEmittance = edits.useExternalEmittance;
+}
+
 bool LightEditor::HasUnwrittenChanges() const
 {
-	if (!selected.isSelected)
-		return false;
-	const auto& edited = current.data;
-	const auto& base = original.data;
-	const bool dataChanged = edited.flags.underlying() != base.flags.underlying() || edited.cutoffOverride != base.cutoffOverride ||
-	                         edited.lighFormId != base.lighFormId || edited.diffuse.red != base.diffuse.red ||
-	                         edited.diffuse.green != base.diffuse.green || edited.diffuse.blue != base.diffuse.blue ||
-	                         edited.radius != base.radius || edited.size != base.size || edited.fade != base.fade;
-	const bool moved = current.pos.x != original.pos.x || current.pos.y != original.pos.y || current.pos.z != original.pos.z;
-	return dataChanged || moved || current.tesFlags.underlying() != original.tesFlags.underlying() ||
-	       (lpInfo.isLPLight && lpFlagSet != originalLpFlagSet) || activeEmittanceSource != originalEmittanceSource ||
-	       externalEmittanceEdid != originalExternalEmittanceEdid || useExternalEmittance != originalUseExternalEmittance ||
-	       shadowDepthBias != originalShadowDepthBias;
+	return selected.isSelected && !(GetEdits() == GetOriginalEdits());
+}
+
+UndoHistory::Target LightEditor::MakeUndoTarget()
+{
+	// Valid only once the per-frame update has taken this light on (previous == selected), and only
+	// while it stays selected.
+	const LightInfo light = selected;
+	const auto isCurrent = [this, light] { return selected.isSelected && selected == light && previous == light; };
+	UndoHistory::Target target{ .key = std::format("light:{:X}:{}", light.id, light.index), .label = selected.name };
+	target.capture = [this, isCurrent]() -> UndoHistory::SnapshotPtr {
+		return isCurrent() ? UndoHistory::Capture(GetEdits()) : nullptr;
+	};
+	target.restore = [this, isCurrent](const UndoHistory::Snapshot& snapshot) {
+		if (isCurrent())
+			SetEdits(UndoHistory::Get<LightEdits>(snapshot));
+	};
+	return target;
+}
+
+void LightEditor::RequestSelect(const LightInfo& light)
+{
+	if (light == selected)
+		return;
+	const auto select = [this, light] {
+		// Neither the write's reselect nor the discard's saved selection should take it back.
+		pendingAutoSelect = false;
+		savedSelection = {};
+		selected = light;
+	};
+	if (HasUnwrittenChanges())
+		EditorWindow::GetSingleton()->RequestToolPrompt(*this, EditorWindow::ToolPromptReason::Switch, select);
+	else
+		select();
 }
 
 bool LightEditor::WriteChanges()
@@ -2212,6 +2275,8 @@ void LightEditor::UpdateSelectedLight(RE::TESObjectREFR* refr, RE::TESObjectLIGH
 	// and runs a dry-run save to determine whether a matching LP JSON entry exists.
 	if (previous != selected) {
 		RestoreOriginal();
+		// The last light's undo steps belong to edits RestoreOriginal just took back.
+		EditorWindow::GetSingleton()->undoHistory.Forget("light:");
 
 		original.tesFlags = tesFlags ? static_cast<LLFCommon::TES_LIGHT_FLAGS_EXT>(tesFlags->underlying()) : static_cast<LLFCommon::TES_LIGHT_FLAGS_EXT>(0);
 		original.data = *runtimeData;

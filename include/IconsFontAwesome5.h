@@ -15,6 +15,7 @@
 #define ICON_FA_TIMES "\xef\x80\x8d"	// U+f00d
 #define ICON_FA_HOME "\xef\x80\x95"	// U+f015
 #define ICON_FA_CLOCK "\xef\x80\x97"	// U+f017
+#define ICON_FA_REDO "\xef\x80\x9e"	// U+f01e
 #define ICON_FA_SYNC "\xef\x80\xa1"	// U+f021
 #define ICON_FA_LOCK "\xef\x80\xa3"	// U+f023
 #define ICON_FA_FLAG "\xef\x80\xa4"	// U+f024
@@ -84,6 +85,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf00d, 0xf00d,
 	0xf015, 0xf015,
 	0xf017, 0xf017,
+	0xf01e, 0xf01e,
 	0xf021, 0xf021,
 	0xf023, 0xf023,
 	0xf024, 0xf024,

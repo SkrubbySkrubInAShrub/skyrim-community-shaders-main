@@ -793,8 +793,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Restore clears the user's edits in the user config, which a feature with its own store does not use.
 	const bool canRestore = !isDisabled && isLoaded && feat->UsesMainSettings();
 
+	// Offered while the user's edits hide values one of their Baseline packs sets.
+	const bool canUseBaselines = canRestore && globals::state->HasEditsUnderBaselines(feat);
+
 	float totalButtonWidth = bootToggleWidth;
 	if (canRestore) {
+		totalButtonWidth += exportIconSize + buttonSpacing;
+	}
+	if (canUseBaselines) {
 		totalButtonWidth += exportIconSize + buttonSpacing;
 	}
 	if (canExport) {
@@ -831,6 +837,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Export overwrite (icon) sits left of the boot toggle
 	if (canExport) {
 		FeatureOverwritesPanel::DrawExportButton(feat, "##ExportOverwrite");
+		ImGui::SameLine();
+	}
+
+	if (canUseBaselines) {
+		RenderUseBaselinesButton(feat);
 		ImGui::SameLine();
 	}
 
@@ -884,11 +895,21 @@ void FeatureListRenderer::DrawFeatureBody(Feature* feat)
 		globals::sceneSettingsManager->RetainSketches(feat->GetShortName());
 		SceneWidgetInterceptor::Scope baselineScope({ .feature = feat, .baseline = true });
 		// ImGui raises this flag for any value edit; set only inside the call, it means this feature changed.
+		// Buttons that rewrite settings (a reset, a preset) raise no flag, so a finished click is checked instead.
 		const auto& context = *ImGui::GetCurrentContext();
 		const bool editedBefore = context.ActiveIdHasBeenEditedThisFrame;
 		feat->DrawSettings();
-		if (!editedBefore && context.ActiveIdHasBeenEditedThisFrame && feat->UsesMainSettings())
-			globals::state->MarkSettingsChanged();
+		if (feat->UsesMainSettings()) {
+			auto* state = globals::state;
+			const bool edited = !editedBefore && context.ActiveIdHasBeenEditedThisFrame;
+			if (edited)
+				state->MarkSettingsChanged();
+			if (Util::InteractionEndedThisFrame()) {
+				if (!edited)
+					state->CheckFeatureSettingsChanged(feat);
+				state->InvalidateEditsUnderBaselines(feat);
+			}
+		}
 	}
 	const ImVec2 cursorPosAfter = ImGui::GetCursorPos();
 
@@ -945,6 +966,22 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::Spacing();
 		SeparatorTextWithFont(T("menu.features.error_header", "Error"), Menu::FontRole::Subheading);
 		ImGui::TextColored(themeSettings.StatusPalette.Error, "%s", feat->failedLoadedMessage.c_str());
+	}
+}
+
+void FeatureListRenderer::DrawMenuVisitor::RenderUseBaselinesButton(Feature* feat)
+{
+	const float size = ImGui::GetFrameHeight();
+	{
+		auto style = Util::TransparentIconButtonStyle();
+		if (Icons::Button("##UseBaselines", Icons::FA(ICON_FA_LAYER_GROUP), ImVec2(size, size)))
+			globals::state->ClearFeatureEditsUnderBaselines(feat);
+	}
+
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.features.use_baselines_tooltip",
+							  "Use Baseline preset values: your changes override settings your Baseline presets set. "
+							  "Click to drop those changes and use the presets' values. Your other changes stay."));
 	}
 }
 

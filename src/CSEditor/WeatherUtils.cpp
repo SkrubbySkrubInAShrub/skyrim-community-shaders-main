@@ -87,7 +87,7 @@ auto DrawWithWidgetHighlight(Widget* widget, const std::string& settingId, DrawF
 }
 
 // Compose a per-widget-scoped key so global static maps in this file
-// (color caches, popup-open trackers, debounced trackers) don't collide
+// (color caches, popup-open trackers) don't collide
 // when two widgets share a label string (e.g. "Specular", "Fresnel Power").
 constexpr std::string_view kScopeSep = "::";
 
@@ -455,44 +455,16 @@ namespace WeatherUtils
 		g_currentWidget = widget;
 	}
 
-	// Static debounced trackers for undo and palette tracking
-	static DebouncedTracker<int> s_int8Tracker;
-	static DebouncedTracker<float> s_floatTracker;
-
 	bool DrawSliderInt8(const std::string& label, int& property)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
 		const auto displayLabel = BuildLocalizedControlLabel(label);
-
-		bool changed = DrawWithWidgetHighlight(g_currentWidget, label, [&]() {
+		return DrawWithWidgetHighlight(g_currentWidget, label, [&]() {
 			return ImGui::SliderInt(displayLabel.c_str(), &property, -127, 127);
 		});
-		bool isNowActive = ImGui::IsItemActive();
-
-		const std::string trackerKey = ScopedKey(label);
-
-		// Push undo state when slider becomes active
-		if (s_int8Tracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
-			if (g_currentWidget) {
-				EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
-			}
-		}
-
-		if (changed) {
-			s_int8Tracker.OnValueChanged(trackerKey, property, currentTime);
-		}
-
-		// Flush completed slider debounce entries (value palette tracking removed).
-		(void)s_int8Tracker.GetCompletedEntries(currentTime, debounceDelay);
-
-		return changed;
 	}
 
 	bool DrawColorEdit(const std::string& l, float3& property, Widget* widget)
 	{
-		static std::map<std::string, float3> colorCache;
-		static std::string activeColorId;
 		static std::map<std::string, bool> wasPickerOpen;
 
 		// Strip leading "##" so hidden-id callers still match highlight/search ids.
@@ -508,27 +480,6 @@ namespace WeatherUtils
 		const auto displayLabel = BuildLocalizedControlLabel(l);
 		bool isActive = ImGui::IsPopupOpen(displayLabel.c_str(), ImGuiPopupFlags_AnyPopupId);
 		bool wasActive = wasPickerOpen[cacheId];
-
-		// Cache the original color and push undo state when picker is first activated
-		if (isActive && activeColorId != cacheId) {
-			colorCache[cacheId] = property;
-			activeColorId = cacheId;
-			// Push undo state before change
-			if (effectiveWidget) {
-				EditorWindow::GetSingleton()->PushUndoState(effectiveWidget);
-			}
-		} else if (!isActive && activeColorId == cacheId) {
-			activeColorId.clear();
-		}
-
-		// Check for Ctrl+Z while picker is active
-		if (isActive && ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_Z)) {
-			if (colorCache.contains(cacheId)) {
-				property = colorCache[cacheId];
-				wasPickerOpen[cacheId] = isActive;
-				return true;
-			}
-		}
 
 		bool changed = DrawWithWidgetHighlight(effectiveWidget, hid, [&]() {
 			return ImGui::ColorEdit3(displayLabel.c_str(), (float*)&property);
@@ -574,9 +525,6 @@ namespace WeatherUtils
 
 	bool DrawSliderFloat(const std::string& label, float& property, float min, float max, Widget* widget, const char* format)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
-
 		// Strip leading "##" so hidden-label sliders still match highlight/search ids.
 		std::string hid = label.starts_with("##") ? label.substr(2) : label;
 		const auto displayLabel = BuildLocalizedControlLabel(label);
@@ -584,30 +532,9 @@ namespace WeatherUtils
 		if (w && !w->MatchesSearch(hid))
 			return false;
 
-		bool changed = DrawWithWidgetHighlight(w, hid, [&]() {
+		return DrawWithWidgetHighlight(w, hid, [&]() {
 			return ImGui::SliderFloat(displayLabel.c_str(), &property, min, max, format);
 		});
-		bool isNowActive = ImGui::IsItemActive();
-
-		const std::string trackerKey = w ?
-		                                   std::format("{}{}{}", static_cast<const void*>(w), kScopeSep, hid) :
-		                                   hid;
-
-		// Push undo state when slider becomes active
-		if (s_floatTracker.UpdateActiveState(trackerKey, isNowActive, currentTime, debounceDelay)) {
-			if (w) {
-				EditorWindow::GetSingleton()->PushUndoState(w);
-			}
-		}
-
-		if (changed) {
-			s_floatTracker.OnValueChanged(trackerKey, property, currentTime);
-		}
-
-		// Flush completed slider debounce entries (value palette tracking removed).
-		(void)s_floatTracker.GetCompletedEntries(currentTime, debounceDelay);
-
-		return changed;
 	}
 
 	bool DrawCheckbox(const std::string& label, bool& value, Widget* widget)
@@ -720,9 +647,6 @@ namespace TOD
 		}
 	}
 
-	// Static debounced tracker for TOD slider rows
-	static DebouncedTracker<float> s_todSliderTracker;
-
 	static void DrawCenteredLabel(const char* label)
 	{
 		ImGui::AlignTextToFramePadding();
@@ -747,9 +671,6 @@ namespace TOD
 
 	bool DrawTODSliderRow(const char* label, float values[4], float minValue, float maxValue, const char* format)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
-
 		float factors[4];
 		GetTimeOfDayFactors(factors);
 		bool changed = false;
@@ -773,13 +694,9 @@ namespace TOD
 
 			ImGui::PushItemWidth(sliderWidth);
 			std::string id = std::string("##") + label + std::to_string(i);
-			std::string valueName = std::string(label) + " " + GetPeriodName(i);
-			std::string trackerKey = ScopedKey(valueName);
 
-			if (ImGui::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format)) {
+			if (ImGui::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format))
 				changed = true;
-				s_todSliderTracker.OnValueChanged(trackerKey, values[i], currentTime);
-			}
 
 			Util::AddTooltip(std::format("{:.0f}%", factors[i] * 100.0f).c_str());
 			ImGui::PopItemWidth();
@@ -787,9 +704,6 @@ namespace TOD
 			if (!isActive)
 				ImGui::PopStyleVar();
 		}
-
-		// Flush completed TOD slider debounce entries (value palette tracking removed).
-		(void)s_todSliderTracker.GetCompletedEntries(currentTime, debounceDelay);
 
 		PopTODHighlight(label, highlighted);
 		return changed;
@@ -882,22 +796,7 @@ namespace TOD
 			bool isPopupOpen = ImGui::BeginPopup(id.c_str());
 			bool wasOpen = wasPopupOpen[scopedId];
 
-			// Push undo state when popup first opens
-			if (isPopupOpen && !wasOpen) {
-				if (g_currentWidget) {
-					EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
-				}
-			}
-
 			if (isPopupOpen) {
-				// Check for Ctrl+Z while picker is active
-				if (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) && ImGui::IsKeyPressed(ImGuiKey_Z)) {
-					if (colorCache.contains(scopedId)) {
-						colors[i] = colorCache[scopedId];
-						changed = true;
-					}
-				}
-
 				// Use ColorPicker4 with ref_col to show original color preview
 				float col4[4] = { colors[i].x, colors[i].y, colors[i].z, 1.0f };
 				float refCol[4] = { colorCache[scopedId].x, colorCache[scopedId].y, colorCache[scopedId].z, 1.0f };
@@ -926,14 +825,8 @@ namespace TOD
 		return changed;
 	}
 
-	// Static debounced tracker for TOD slider rows with inheritance
-	static DebouncedTracker<float> s_todSliderInheritTracker;
-
 	bool DrawTODSliderRow(const char* label, float values[4], bool inheritFlags[4], const float parentValues[4], float minValue, float maxValue, const char* format)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
-
 		float factors[4];
 		GetTimeOfDayFactors(factors);
 		bool changed = false;
@@ -987,23 +880,12 @@ namespace TOD
 
 			ImGui::PushItemWidth(sliderWidth);
 			std::string id = std::string("##") + label + std::to_string(i);
-			std::string itemKey = ScopedKey(std::string(label) + "_slider_" + std::to_string(i));
 
 			ImGui::BeginDisabled(isInherited);
 			if (ImGui::SliderFloat(id.c_str(), &values[i], minValue, maxValue, format)) {
 				changed = true;
 				if (inheritFlags)
 					inheritFlags[i] = false;
-				std::string valueName = ScopedKey(std::string(label) + " " + GetPeriodName(i));
-				s_todSliderInheritTracker.OnValueChanged(valueName, values[i], currentTime);
-			}
-
-			// Push undo state when slider becomes active
-			bool isNowActive = ImGui::IsItemActive();
-			if (s_todSliderInheritTracker.UpdateActiveState(itemKey, isNowActive, currentTime, debounceDelay)) {
-				if (g_currentWidget) {
-					EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
-				}
 			}
 
 			ImGui::EndDisabled();
@@ -1019,9 +901,6 @@ namespace TOD
 
 			ImGui::EndGroup();
 		}
-
-		// Flush completed TOD slider debounce entries (value palette tracking removed).
-		(void)s_todSliderInheritTracker.GetCompletedEntries(currentTime, debounceDelay);
 
 		PopTODHighlight(label, highlighted);
 		return changed;
@@ -1148,13 +1027,6 @@ namespace TOD
 			bool isPopupOpen = ImGui::BeginPopup(id.c_str());
 			bool wasOpen = wasPopupOpenInherit[scopedId];
 
-			// Push undo state when popup first opens
-			if (isPopupOpen && !wasOpen) {
-				if (g_currentWidget) {
-					EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
-				}
-			}
-
 			if (isPopupOpen) {
 				if (colorCache.find(scopedId) == colorCache.end()) {
 					colorCache[scopedId] = colors[i];
@@ -1196,13 +1068,8 @@ namespace TOD
 		return changed;
 	}
 
-	// Static debounced tracker for TOD float rows
-	static DebouncedTracker<float> s_todFloatTracker;
-
 	bool DrawTODFloatRow(const char* label, float values[4], float minValue, float maxValue, const char* format)
 	{
-		const double debounceDelay = 2.0;
-		double currentTime = ImGui::GetTime();
 		bool changed = false;
 		const bool highlighted = PushTODHighlight(label);
 
@@ -1220,20 +1087,9 @@ namespace TOD
 				ImGui::SameLine();
 			ImGui::PushID(i);
 
-			std::string itemId = ScopedKey(std::string(label) + "_" + std::to_string(i));
-
 			ImGui::SetNextItemWidth(columnWidth);
-			if (ImGui::SliderFloat("##value", &values[i], minValue, maxValue, format)) {
+			if (ImGui::SliderFloat("##value", &values[i], minValue, maxValue, format))
 				changed = true;
-			}
-
-			// Push undo state when slider becomes active
-			bool isNowActive = ImGui::IsItemActive();
-			if (s_todFloatTracker.UpdateActiveState(itemId, isNowActive, currentTime, debounceDelay)) {
-				if (g_currentWidget) {
-					EditorWindow::GetSingleton()->PushUndoState(g_currentWidget);
-				}
-			}
 
 			ImGui::PopID();
 		}

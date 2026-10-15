@@ -70,6 +70,28 @@ namespace
 		return nullptr;
 	}
 
+	/** @brief An undo target for a feature's own settings, read and written with the scene layer suspended. */
+	UndoHistory::Target MakeFeatureUndoTarget(Feature* feature)
+	{
+		UndoHistory::Target target{ .key = "feature:" + feature->GetShortName(), .label = feature->GetName() };
+		target.capture = [feature]() -> UndoHistory::SnapshotPtr {
+			if (!feature->loaded)
+				return nullptr;
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			nlohmann::json values;
+			feature->SaveSettings(values);
+			return UndoHistory::Capture(std::move(values));
+		};
+		target.restore = [feature](const UndoHistory::Snapshot& snapshot) {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			nlohmann::json values = UndoHistory::Get<nlohmann::json>(snapshot);
+			feature->LoadSettings(values);
+			globals::state->MarkSettingsChanged();
+			globals::state->InvalidateEditsUnderBaselines(feature);
+		};
+		return target;
+	}
+
 	/** @brief Boot enable pill only (label lives in the tooltip). Returns false when not drawn. */
 	bool DrawBootToggle(Feature* feature)
 	{
@@ -129,7 +151,10 @@ namespace
 
 		ImGui::Spacing();
 		if (ImGui::BeginChild("##FeatureSettingsBody")) {
-			Util::HideDebugSectionsGuard hideDebug(!EditorWindow::GetSingleton()->settings.showFeatureDebug);
+			auto* editor = EditorWindow::GetSingleton();
+			Util::HideDebugSectionsGuard hideDebug(!editor->settings.showFeatureDebug);
+			if (feature->UsesMainSettings())
+				editor->undoHistory.Watch(MakeFeatureUndoTarget(feature));
 			FeatureListRenderer::DrawFeatureBody(feature);
 		}
 		ImGui::EndChild();

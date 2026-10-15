@@ -68,10 +68,8 @@ void ReferenceEffectWidget::DrawWidget()
 					changed = true;
 			}
 
-			if (changed && editorWindow->settings.autoApplyChanges) {
-				editorWindow->PushUndoState(this);
+			if (changed && editorWindow->settings.autoApplyChanges)
 				ApplyChanges();
-			}
 		}
 		EndScrollableContent();
 	}

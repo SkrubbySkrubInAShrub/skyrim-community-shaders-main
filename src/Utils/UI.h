@@ -147,6 +147,13 @@ namespace Util
 		~DisableGuard();
 	};
 
+	/**
+	 * @brief Whether a mouse or keyboard interaction finished this frame: a click, drag or text entry was
+	 *        released, or focus moved on from it. Buttons, sliders and pickers all end this way, so it is
+	 *        the moment to check whether what they edit changed.
+	 */
+	bool InteractionEndedThisFrame();
+
 	/** @brief Hides feature Debug sections while alive (CS Editor Features window); restores the previous state. */
 	class HideDebugSectionsGuard
 	{

@@ -79,7 +79,7 @@ public:
 	void SaveUnsavedWidgets();
 
 	/**
-	 * @brief Returns true if any widget has unsaved changes.
+	 * @brief Returns true if any widget, or Scene Manager, has unsaved changes.
 	 * @details Open widgets are checked every call since they are the ones being edited; the full
 	 *          pass, which catches closed widgets changed by Load or Undo, runs on a short interval.
 	 */
@@ -94,6 +94,19 @@ public:
 
 	/** @brief Tools that write into other mods' files; the editor's save never writes them. */
 	std::array<ExternalTool*, 1> GetExternalTools() { return { &lightEditor }; }
+
+	/** @brief Why a tool's unwritten changes need an answer. */
+	enum class ToolPromptReason
+	{
+		Close,   ///< The editor is closing.
+		Switch,  ///< The tool is moving on to something else, such as another light.
+	};
+
+	/**
+	 * @brief Asks whether to write or discard a tool's unwritten changes before an action that would lose them.
+	 * @param proceed The action; runs once the changes are written or discarded, and not on Cancel.
+	 */
+	void RequestToolPrompt(ExternalTool& tool, ToolPromptReason reason, std::function<void()> proceed);
 
 	/** @brief When true, resets all window positions/sizes on next frame (auto-cleared). */
 	bool resetLayout = false;
@@ -347,27 +360,29 @@ public:
 	/** @brief Call every frame from the overlay renderer to track open/close transitions. */
 	void UpdateOpenState();
 
-	// Undo system
-	struct UndoState
-	{
-		Widget* widget;
-		json settings;
-		std::string widgetId;
-	};
-	std::vector<UndoState> undoStack;
-	static const size_t maxUndoStates = 50;
+	/// Undo and redo for everything edited in the editor.
+	UndoHistory undoHistory;
 
-	/**
-	 * @brief Capture the current settings of a widget and push them onto the undo stack.
-	 * @param widget The widget whose settings to snapshot.
-	 */
-	void PushUndoState(Widget* widget);
+	/** @brief An undo target for a widget, found again by form key so its entries outlive the widget object. */
+	UndoHistory::Target MakeUndoTarget(const Widget& widget);
 
-	/** @brief Pop the most recent undo state and restore its widget settings. */
+	/** @brief The widget editing this form, the cell lighting widget included, or null. */
+	Widget* FindWidget(const FormEditSources::FormKey& key);
+
+	/** @brief Steps the newest change back and says what it undid. */
 	void PerformUndo();
 
-	/** @brief Returns true if the undo stack contains at least one entry. */
-	bool CanUndo() const { return !undoStack.empty(); }
+	/** @brief Reapplies the newest undone change and says what it redid. */
+	void PerformRedo();
+
+	/**
+	 * @brief Discards a widget's unsaved changes by reloading its saved file (vanilla values when it
+	 *        has none). Undoable.
+	 */
+	void DiscardWidgetChanges(Widget& widget);
+
+	/** @brief Discards every widget's unsaved changes. Undoable, one step per widget. */
+	void DiscardAllWidgetChanges();
 
 	// Notification system
 	struct Notification
@@ -501,15 +516,15 @@ private:
 	/** @brief The main menu was open when the editor opened, so closing the editor reopens it. */
 	bool returnToMenu = false;
 
-	/// Asks what to do with a tool's unwritten changes before the editor closes.
-	Util::ConfirmationPopup toolClosePrompt;
+	/// Asks what to do with a tool's unwritten changes before an action that would lose them.
+	Util::ConfirmationPopup toolPrompt;
 	ExternalTool* promptedTool = nullptr;
+	/// What the prompted action does once the changes are written or discarded.
+	std::function<void()> toolPromptProceed;
 	/// The next close goes ahead without asking: the prompt was just answered.
 	bool skipToolPrompt = false;
-	/** @brief Opens toolClosePrompt for a tool's unwritten changes. */
-	void RequestToolClosePrompt(ExternalTool& tool);
-	/** @brief Acts on the answer to toolClosePrompt. */
-	void DrawToolClosePrompt();
+	/** @brief Acts on the answer to toolPrompt. */
+	void DrawToolPrompt();
 
 	/// True from overlay open until its weather lock engages or the overlay closes.
 	bool overlayWeatherLockPending = false;
