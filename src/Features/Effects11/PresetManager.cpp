@@ -108,7 +108,7 @@ void PresetManager::SelectDefaultPreset()
 void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks, std::vector<PresetInfo>& out)
 {
 	for (const auto& folder : Util::PathHelpers::ListCommunityShaderEntries(relativePath, true)) {
-		const auto packName = folder.filename().string();
+		const auto packName = Util::PathHelpers::ToUtf8(folder.filename());
 		auto libraryRoot = folder;
 		auto displayName = packName;
 
@@ -291,13 +291,13 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 	std::string sourceReason;
 	if (!ValidateLibraryPreset(sourceRoot, sourceReason)) {
 		logger::error("[Effects11] Export failed: active preset root '{}' is invalid ({})",
-			sourceRoot.string(), sourceReason);
+			Util::PathHelpers::ToUtf8(sourceRoot), sourceReason);
 		return false;
 	}
 
 	std::error_code ec;
 	if (std::filesystem::equivalent(sourceRoot, destRoot, ec)) {
-		logger::info("[Effects11] Export skipped copy; '{}' is already the active preset root", destRoot.string());
+		logger::info("[Effects11] Export skipped copy; '{}' is already the active preset root", Util::PathHelpers::ToUtf8(destRoot));
 		return true;
 	}
 
@@ -313,14 +313,14 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 
 	std::filesystem::copy_file(srcIni, destIni, std::filesystem::copy_options::overwrite_existing, ec);
 	if (ec) {
-		logger::error("[Effects11] Export failed copying '{}': {}", srcIni.string(), ec.message());
+		logger::error("[Effects11] Export failed copying '{}': {}", Util::PathHelpers::ToUtf8(srcIni), ec.message());
 		return false;
 	}
 
 	std::filesystem::copy(srcSeries, destSeries,
 		std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
 	if (ec) {
-		logger::error("[Effects11] Export failed copying '{}': {}", srcSeries.string(), ec.message());
+		logger::error("[Effects11] Export failed copying '{}': {}", Util::PathHelpers::ToUtf8(srcSeries), ec.message());
 		return false;
 	}
 
@@ -335,11 +335,11 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 
 	std::string destReason;
 	if (!ValidateLibraryPreset(destRoot, destReason)) {
-		logger::error("[Effects11] Export wrote an invalid layout at '{}': {}", destRoot.string(), destReason);
+		logger::error("[Effects11] Export wrote an invalid layout at '{}': {}", Util::PathHelpers::ToUtf8(destRoot), destReason);
 		return false;
 	}
 
 	logger::info("[Effects11] Exported active preset '{}' to '{}'",
-		FormatPresetIdForLog(activePresetId), destRoot.string());
+		FormatPresetIdForLog(activePresetId), Util::PathHelpers::ToUtf8(destRoot));
 	return true;
 }

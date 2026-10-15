@@ -122,9 +122,6 @@ namespace SceneSettingsInternal
 	bool IsBlacklistedSceneSetting(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
-	/** @brief Whether an overwrite document holds any non-metadata key. */
-	bool HasSceneOverwriteContent(const json& data);
-
 	/** @brief Whether value can replace featureValue: same JSON type, or both numbers. */
 	bool IsCompatibleSceneSettingValue(const json& featureValue, const json& value);
 

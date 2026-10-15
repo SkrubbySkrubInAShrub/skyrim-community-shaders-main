@@ -117,17 +117,24 @@ std::string Util::GetFormEditorID(const RE::TESForm* form)
 	if (!map)
 		return "";
 	std::scoped_lock indexLock(reverseIndexMutex);
-	{
-		RE::BSReadLockGuard locker(lock);
-		if (map->size() != indexedMapSize) {
-			reverseIndex.clear();
-			reverseIndex.reserve(map->size());
-			for (const auto& [name, mappedForm] : *map)
-				reverseIndex.emplace(mappedForm, name);
-			indexedMapSize = map->size();
+	RE::BSReadLockGuard locker(lock);
+	const auto rebuild = [](const auto& forms) {
+		reverseIndex.clear();
+		reverseIndex.reserve(forms.size());
+		for (const auto& [name, mappedForm] : forms)
+			reverseIndex.emplace(mappedForm, name);
+		indexedMapSize = forms.size();
+	};
+	if (map->size() != indexedMapSize)
+		rebuild(*map);
+	auto entry = reverseIndex.find(form);
+	// A freed form's address can come back as another form without the map changing size.
+	if (entry != reverseIndex.end()) {
+		if (const auto mapped = map->find(entry->second); mapped == map->end() || mapped->second != form) {
+			rebuild(*map);
+			entry = reverseIndex.find(form);
 		}
 	}
-	const auto entry = reverseIndex.find(form);
 	return entry != reverseIndex.end() ? std::string(entry->second.c_str()) : "";
 }
 

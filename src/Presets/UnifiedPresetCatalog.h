@@ -164,7 +164,8 @@ public:
 	const std::vector<std::string>& GetBaselinePackIds() const { return baselinePackIds; }
 	/** @brief Whether a pack's Baseline overwrites are enabled. */
 	bool IsBaselineEnabled(const std::string& id) const;
-	/** @brief Re-applies a pack that is active or has its Baseline enabled, so freshly exported files take effect. */
+	/** @brief Reloads the layers a pack that is active or has its Baseline enabled supplies, so freshly exported
+	 *  files take effect. The pipeline and the Baseline order stay as they are. */
 	void ReapplyIfInUse(const std::string& id);
 	/** @brief Asks, once for every pack enabled since the last answer, whether Baseline packs that set settings
 	 *  the user changed should replace those edits. Call every frame the menu or the CS editor is open. */
@@ -175,18 +176,17 @@ public:
 	 *  @return False when the pack was not enabled. */
 	bool RemoveBaseline(const std::string& id);
 
-	/**
-	 * @brief Sets whether a feature is disabled at boot in a pack's manifest disableAtBoot object.
-	 * Creating or clearing the last entry refreshes hasBaseline. Writes the manifest atomically.
-	 * @return False when the pack is missing or the manifest could not be written.
-	 */
-	bool SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled);
-
-	/** @brief Sets the Effects 11 handoff flags from the active pack's manifest sceneControl; no active pack hands nothing off. */
+	/** @brief Sets the Effects 11 handoff flags from the active pack's manifest sceneControl, overlaid with the
+	 *  user's choices for that pack; no active pack hands nothing off. */
 	void LoadSceneControl() const;
-	/** @brief Sets a feature's Effects 11 handoff flag and writes it to the active pack's manifest, when there is one.
-	 *  @return False when the active pack's manifest could not be updated; the runtime flag is set either way. */
-	bool SetSceneControl(E11Handoff::Feature feature, bool handedOff);
+	/** @brief Sets a feature's Effects 11 handoff flag and, with a pack active, keeps it as the user's choice for
+	 *  that pack. The pack's manifest is never written. */
+	void SetSceneControl(E11Handoff::Feature feature, bool handedOff);
+
+	/** @brief SettingsUser.json section holding the active pack state, written whenever it changes. */
+	static constexpr const char* kUserSettingsKey = "Presets";
+	/** @brief The active pack state as stored under kUserSettingsKey; State::Save writes it with the rest. */
+	nlohmann::json SerializeActiveState() const;
 
 	/** @brief Writes a starter manifest for a pack folder that has none, so an exported Baseline shows up as a preset.
 	 *  @return True when a manifest exists afterwards. */
@@ -212,9 +212,9 @@ public:
 private:
 	UnifiedPresetCatalog() { LoadActiveState(); }
 
-	/** @brief Reads the persisted active pack id and Baseline pack ids, clearing them when the state file is missing or bad. */
+	/** @brief Reads the persisted active pack state from SettingsUser.json, clearing it when missing or bad. */
 	void LoadActiveState();
-	/** @brief Writes the active pack id and Baseline pack ids next to the presets. */
+	/** @brief Writes the active pack state into its SettingsUser.json section, leaving the rest of the file alone. */
 	void SaveActiveState() const;
 
 	/** @brief Enables a pack's Baseline overwrites as the last layer and reapplies them to the loaded features. */
@@ -238,6 +238,8 @@ private:
 	std::vector<std::string> baselinePackIds;
 	std::optional<PostProcessingMode::Mode> activePipeline;
 	uint32_t pipelineRevision = 0;
+	/// Pack id → the user's Effects 11 handoff choices for it, over the pack's own sceneControl.
+	nlohmann::json sceneControlOverrides = nlohmann::json::object();
 
 	/// Packs, and the feature names they overlap, waiting on the overlap prompt.
 	std::vector<std::string> overlapPackIds;

@@ -516,11 +516,7 @@ namespace
 
 	std::string DisplayPath(const std::filesystem::path& path)
 	{
-		if (path.empty())
-			return {};
-		// u8string: string() throws on names outside the ANSI code page, and ImGui expects UTF-8.
-		const auto name = path.filename().u8string();
-		return { reinterpret_cast<const char*>(name.data()), name.size() };
+		return Util::PathHelpers::ToUtf8(path.filename());
 	}
 
 	/** @brief Opens the Windows image picker. @return Whether any file was chosen. */

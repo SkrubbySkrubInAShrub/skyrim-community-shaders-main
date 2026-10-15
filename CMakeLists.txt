@@ -418,7 +418,8 @@ target_sources(
 # # Scene settings catalog
 # #######################################################################################################################
 
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+# The generator's annotations (`str | None`) need 3.10.
+find_package(Python3 3.10 COMPONENTS Interpreter REQUIRED)
 set(SCENE_SETTINGS_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
 
 set(SCENE_SETTINGS_CATALOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -431,6 +432,12 @@ set(SCENE_SETTINGS_CATALOG_SOURCE
 set(SCENE_SETTINGS_ADAPTERS_SOURCE
     "${SCENE_SETTINGS_CATALOG_DIR}/FeatureSceneSettingsAdapters.generated.cpp"
 )
+set(SCENE_SETTINGS_CATALOG_STAMP
+    "${SCENE_SETTINGS_CATALOG_DIR}/SceneSettingsCatalog.stamp"
+)
+set(SCENE_SETTINGS_CATALOG_FLOORS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/scene_settings_catalog_floors.json"
+)
 
 file(
     GLOB_RECURSE SCENE_SETTINGS_CATALOG_INPUTS
@@ -442,8 +449,11 @@ file(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cxx"
 )
 
+# The generator rewrites only outputs whose text changed, so their objects survive an unrelated edit. The
+# stamp is the output instead, or MSBuild would see them older than the sources and rerun every build.
 add_custom_command(
-    OUTPUT
+    OUTPUT "${SCENE_SETTINGS_CATALOG_STAMP}"
+    BYPRODUCTS
         "${SCENE_SETTINGS_CATALOG_HEADER}"
         "${SCENE_SETTINGS_CATALOG_SOURCE}"
         "${SCENE_SETTINGS_ADAPTERS_SOURCE}"
@@ -452,9 +462,12 @@ add_custom_command(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
         --source-dir "${CMAKE_CURRENT_SOURCE_DIR}" --out-dir
         "${SCENE_SETTINGS_CATALOG_DIR}" --min-entries 645 --min-controllable 538
-        --min-controllable-features 30
+        --min-controllable-features 30 --feature-floors
+        "${SCENE_SETTINGS_CATALOG_FLOORS}" --stamp
+        "${SCENE_SETTINGS_CATALOG_STAMP}"
     DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
+        "${SCENE_SETTINGS_CATALOG_FLOORS}"
         ${SCENE_SETTINGS_CATALOG_INPUTS}
     COMMENT "Generating scene settings catalog"
     VERBATIM
@@ -468,6 +481,7 @@ target_include_directories(
 target_sources(
     "${PROJECT_NAME}"
     PRIVATE
+        "${SCENE_SETTINGS_CATALOG_STAMP}"
         "${SCENE_SETTINGS_CATALOG_HEADER}"
         "${SCENE_SETTINGS_CATALOG_SOURCE}"
         "${SCENE_SETTINGS_ADAPTERS_SOURCE}"

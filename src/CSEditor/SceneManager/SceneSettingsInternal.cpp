@@ -261,17 +261,6 @@ namespace SceneSettingsInternal
 		return MatchesSceneSettingPolicy(address, SceneSettingsPolicy::kSettingBlacklist);
 	}
 
-	bool HasSceneOverwriteContent(const json& data)
-	{
-		if (!data.is_object())
-			return false;
-
-		for (const auto& [key, _] : data.items())
-			if (!Util::Settings::IsMetadataKey(key))
-				return true;
-		return false;
-	}
-
 	bool IsCompatibleSceneSettingValue(const json& featureValue, const json& value)
 	{
 		if (featureValue.type() == value.type())
@@ -688,7 +677,9 @@ namespace SceneSettingsInternal
 	void CollectOverwriteEntries(const json& data, const std::vector<std::string>& settingPath,
 		const std::function<void(const std::vector<std::string>&, const std::string&, const json&)>& callback)
 	{
-		if (!data.is_object())
+		// Far deeper than any catalog path, and a pack file nested past it would exhaust the stack.
+		constexpr size_t kMaxOverwriteNesting = 32;
+		if (!data.is_object() || settingPath.size() >= kMaxOverwriteNesting)
 			return;
 
 		for (const auto& [key, value] : data.items()) {

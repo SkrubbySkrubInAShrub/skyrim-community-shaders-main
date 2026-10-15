@@ -120,29 +120,33 @@ void ReferenceEffectWidget::ApplyChanges()
 	if (!referenceEffect)
 		return;
 
-	referenceEffect->data.artObject = settings.artObject;
-	referenceEffect->data.effectShader = settings.effectShader;
+	auto& data = referenceEffect->data;
+	const auto previous = data;
+	data.artObject = settings.artObject;
+	data.effectShader = settings.effectShader;
 
-	referenceEffect->data.flags.reset();
+	data.flags.reset();
 	if (settings.faceTarget)
-		referenceEffect->data.flags.set(RE::BGSReferenceEffect::Flag::kFaceTarget);
+		data.flags.set(RE::BGSReferenceEffect::Flag::kFaceTarget);
 	if (settings.attachToCamera)
-		referenceEffect->data.flags.set(RE::BGSReferenceEffect::Flag::kAttachToCamera);
+		data.flags.set(RE::BGSReferenceEffect::Flag::kAttachToCamera);
 	if (settings.inheritRotation)
-		referenceEffect->data.flags.set(RE::BGSReferenceEffect::Flag::kInheritRotation);
+		data.flags.set(RE::BGSReferenceEffect::Flag::kInheritRotation);
 
-	RestartStaleSkyEffect();
+	RestartStaleSkyEffect(previous.artObject != data.artObject || previous.effectShader != data.effectShader ||
+						  previous.flags.underlying() != data.flags.underlying());
 }
 
-void ReferenceEffectWidget::RestartStaleSkyEffect() const
+void ReferenceEffectWidget::RestartStaleSkyEffect(bool a_recordChanged) const
 {
 	auto* sky = globals::game::sky;
 	if (!sky || !sky->currentWeather || sky->currentWeather->referenceEffect != referenceEffect)
 		return;
 
+	// The live effect was built from the record, so a shader or flag edit needs a restart as much as new art does.
 	auto& liveEffect = sky->currentReferenceEffect;
 	const auto* modelEffect = netimmerse_cast<RE::ModelReferenceEffect*>(liveEffect.get());
-	if (!modelEffect || modelEffect->artObject == settings.artObject)
+	if (!modelEffect || (!a_recordChanged && modelEffect->artObject == settings.artObject))
 		return;
 
 	// Mirrors the engine teardown: a controller-less effect plays stopEffect, then Sky::Update spawns one with the new art.

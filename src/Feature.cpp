@@ -163,8 +163,18 @@ void Feature::Load(json& o_json)
 			try {
 				LoadSettings(o_json[GetName()]);
 			} catch (...) {
-				logger::warn("Invalid settings for {}, using default.", GetName());
+				// Plain defaults would be saved back as the user's edits, so the layered base is tried first.
+				logger::warn("Invalid settings for {}, using its defaults and Baseline packs.", GetName());
 				RestoreDefaultSettings();
+				if (const auto* base = globals::state->GetFeatureBase(GetName())) {
+					try {
+						auto baseSettings = *base;
+						LoadSettings(baseSettings);
+					} catch (...) {
+						logger::warn("Invalid Baseline settings for {}, using default.", GetName());
+						RestoreDefaultSettings();
+					}
+				}
 			}
 		} else {
 			logger::info("Loading default settings for {}", GetName());

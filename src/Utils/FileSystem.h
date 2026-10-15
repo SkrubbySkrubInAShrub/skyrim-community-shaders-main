@@ -187,6 +187,14 @@ namespace Util
 		 */
 		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath);
 
+		/** @brief A path as UTF-8. path::string() converts through the ANSI code page, which mangles or throws
+		 *  on names outside it, while pack ids, JSON and ImGui all carry UTF-8. */
+		std::string ToUtf8(const std::filesystem::path& path);
+		/** @brief ToUtf8 with '/' separators, for paths stored in JSON. */
+		std::string ToGenericUtf8(const std::filesystem::path& path);
+		/** @brief A path from UTF-8 text; a path built from std::string reads it in the ANSI code page. */
+		std::filesystem::path FromUtf8(std::string_view text);
+
 		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
 		bool IsHiddenLibraryEntry(std::string_view name);
 		/** @brief Path overload: reads the native name, since path::string() throws outside the ANSI code page. */

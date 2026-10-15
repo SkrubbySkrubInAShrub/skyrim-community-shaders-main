@@ -15,8 +15,8 @@ namespace SaveManager
 
 	/**
 	 * @brief Saves the CS editor: widgets with unsaved changes and Scene Manager's settings.
-	 * @param trigger A user save also writes the editor's preferences; an automatic one leaves them,
-	 *        since they are written whenever they change.
+	 * @param trigger A user save also writes the widgets and the editor's preferences; an automatic one
+	 *        writes only Scene Manager's settings.
 	 */
 	void SaveEditor(Trigger trigger);
 

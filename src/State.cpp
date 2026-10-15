@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <codecvt>
+#include <unordered_set>
 
 #include <pystring/pystring.h>
 
@@ -30,6 +31,7 @@
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
 #include "PostProcessingMode.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
@@ -524,6 +526,11 @@ void State::Load(bool a_allowReload)
 			userSettings.erase(found);
 		}
 		json merged = BuildFeatureBase(feature);
+		// A value whose type changed between versions would make LoadSettings throw and lose every edit.
+		std::vector<std::string> mismatched;
+		Util::Settings::EraseMismatchedSettings(edits, merged, "", mismatched);
+		for (const auto& path : mismatched)
+			logger::warn("Dropped {} setting '{}': its saved type no longer matches", name, path);
 		featureBases[name] = merged;
 		Util::Settings::MergeSettings(merged, edits);
 		userFeatureEdits[name] = std::move(edits);
@@ -809,6 +816,9 @@ void State::Save()
 	try {
 		SaveToJson(settings);
 		KeepOnlyUserEdits(settings);
+		// The catalog writes its own section whenever it changes; this keeps it from being dropped here.
+		const auto& catalog = UnifiedPresetCatalog::GetSingleton();
+		settings[UnifiedPresetCatalog::kUserSettingsKey] = catalog.SerializeActiveState();
 	} catch (const std::exception& e) {
 		logger::error("Failed to serialize settings, leaving {} untouched. Error: {}", configPath, e.what());
 		return;
@@ -1482,13 +1492,24 @@ void State::ClearDisabledFeatures()
 	disabledFeatures.clear();
 }
 
+/** @brief Whether a feature can never be disabled at boot. GetShortName() allocates, so the set is built once. */
+static bool IsAlwaysEnabledFeature(const std::string& featureName)
+{
+	static const auto alwaysEnabled = [] {
+		std::unordered_set<std::string> names;
+		for (auto* feature : Feature::GetFeatureList())
+			if (feature->IsAlwaysEnabled())
+				names.insert(feature->GetShortName());
+		return names;
+	}();
+	return alwaysEnabled.contains(featureName);
+}
+
 bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
 {
-	for (auto* feature : Feature::GetFeatureList()) {
-		if (feature->GetShortName() == featureName && feature->IsAlwaysEnabled()) {
-			disabledFeatures.erase(featureName);
-			return false;
-		}
+	if (IsAlwaysEnabledFeature(featureName)) {
+		disabledFeatures.erase(featureName);
+		return false;
 	}
 	bool wasPreviouslyDisabled = disabledFeatures.count(featureName) > 0 ? disabledFeatures[featureName] : false;  // Properly check if it exists
 	disabledFeatures[featureName] = isDisabled;
@@ -1505,10 +1526,10 @@ bool State::SetFeatureDisabled(const std::string& featureName, bool isDisabled)
 
 bool State::IsFeatureDisabled(const std::string& featureName)
 {
-	for (auto* feature : Feature::GetFeatureList())
-		if (feature->GetShortName() == featureName && feature->IsAlwaysEnabled())
-			return false;
-	return disabledFeatures.contains(featureName) && disabledFeatures[featureName];
+	if (IsAlwaysEnabledFeature(featureName))
+		return false;
+	const auto found = disabledFeatures.find(featureName);
+	return found != disabledFeatures.end() && found->second;
 }
 
 std::unordered_map<std::string, bool>& State::GetDisabledFeatures()

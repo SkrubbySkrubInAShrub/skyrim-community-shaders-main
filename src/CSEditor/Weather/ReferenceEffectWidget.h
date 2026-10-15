@@ -61,8 +61,9 @@ public:
 private:
 	void LoadFromGameSettings();
 
-	/** @brief Restarts the current weather's sky effect when it still shows a different art object than this form. */
-	void RestartStaleSkyEffect() const;
+	/** @brief Restarts the current weather's sky effect when the form just changed or it still shows other art.
+	 *  @param a_recordChanged Whether the apply just rewrote the form's art, shader or flags. */
+	void RestartStaleSkyEffect(bool a_recordChanged) const;
 
 	std::vector<RE::BGSArtObject*> artObjectArray;
 	std::vector<RE::TESEffectShader*> effectShaderArray;

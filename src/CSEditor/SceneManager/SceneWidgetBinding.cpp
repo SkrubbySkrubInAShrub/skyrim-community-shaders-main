@@ -821,7 +821,7 @@ void SceneWidgetBinding::Guard::ResolveState()
 	if (!anyActive && !anyPaused) {
 		state = winningLayer == SceneSettingsManager::SettingLayer::Overwrite ? State::Overwritten : State::Absent;
 		// Nothing in this context holds the address, so a layer under this page may be driving it and
-		// the page has to say so. A tombstone here already suppressed everything below.
+		// the page has to say so.
 		if (winningLayer == SceneSettingsManager::SettingLayer::None)
 			lowerLayer = ResolveLowerLayer();
 	} else {
@@ -864,12 +864,9 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveLowerLayer(
 		switch (FoldContextLayer(lower, identity.featureShortName, identity, periods)) {
 		case SettingLayer::User:
 			return SettingLayer::User;
-		// A tombstone suppresses the layers under it and then supplies nothing itself, so this page
-		// is left free to author here.
-		case SettingLayer::Deleted:
-			return SettingLayer::None;
 		case SettingLayer::Overwrite:
 			return SettingLayer::Overwrite;
+		// A tombstone only takes the mod's value out of its own context, so the walk goes on beneath it.
 		default:
 			break;
 		}
@@ -881,12 +878,12 @@ SceneSettingsManager::SettingLayer SceneWidgetBinding::Guard::ResolveUpperLayer(
 {
 	const auto periods = CoveredPeriodMask();
 
-	// Highest first: the topmost supplier is the one that reaches the scene, and a tombstone up there
-	// suppresses everything beneath it, this page included.
+	// Highest first: the topmost supplier is the one that reaches the scene. A tombstone up there only
+	// empties its own context, so it outranks nothing.
 	const auto& upper = GetUpperContexts(contextId);
 	for (auto context = upper.rbegin(); context != upper.rend(); ++context)
 		if (const auto layer = FoldContextLayer(*context, identity.featureShortName, identity, periods);
-			layer != SettingLayer::None)
+			SuppliesValue(layer))
 			return layer;
 	return SettingLayer::None;
 }
@@ -959,11 +956,13 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
 
-	// AddContextSetting snapshots the feature member, so what the control showed before the call has
-	// to be in it, or the entry's original would be the value the scene resolved rather than its own.
+	// AddContextSetting may snapshot the feature as its base, so an edit an unbound widget already wrote
+	// into the member is undone for the call. A holding-bound widget never touched it.
 	ValueStorage live;
-	std::memcpy(live.bytes, value.data, valueSize);
-	std::memcpy(value.data, preCall.bytes, valueSize);
+	if (!boundToHolding) {
+		std::memcpy(live.bytes, value.data, valueSize);
+		std::memcpy(value.data, preCall.bytes, valueSize);
+	}
 
 	bool added = false;
 	ForEachCoveredSlot([&](const Component& a_component, int a_slot, const SceneContextId& a_slotContext) {
@@ -974,7 +973,8 @@ bool SceneWidgetBinding::Guard::EnsureEntries(bool a_deferSave)
 		added = added || created.has_value();
 	});
 
-	std::memcpy(value.data, live.bytes, valueSize);
+	if (!boundToHolding)
+		std::memcpy(value.data, live.bytes, valueSize);
 
 	// Insertion renumbers the entries behind it, so nothing may reuse the indices resolved earlier.
 	if (added)
@@ -988,10 +988,6 @@ void SceneWidgetBinding::Guard::BindDisplayValue()
 	// write into it would be snapshotted as the feature's base. Edits reach the scene via the resolver.
 	boundToHolding = true;
 	StoreHoldingValue();
-	// Entry creation snapshots the member, so its baseline has to be what the control showed. A paused
-	// entry never creates one, and its preCall is still the value the scene is running.
-	if (state != State::Paused)
-		std::memcpy(preCall.bytes, holding.bytes, valueSize);
 }
 
 void SceneWidgetBinding::Guard::StoreHoldingValue()
@@ -1016,13 +1012,10 @@ const json* SceneWidgetBinding::Guard::ResolveFallbackValue(const Component& a_c
 
 	const auto periods = CoveredPeriodMask();
 	for (const auto& lower : GetLowerContexts(contextId)) {
+		// A tombstone below only empties its own context, so the layers under it still supply.
 		const auto* supplier = FindSupplyingEntry(lower, setting, periods);
-		if (!supplier)
-			continue;
-		// A tombstone below suppresses everything under it, leaving the feature's base.
-		if (!supplier->deleted)
+		if (supplier && !supplier->deleted)
 			return &supplier->value;
-		break;
 	}
 	return manager->FindAppliedBaseline(setting);
 }

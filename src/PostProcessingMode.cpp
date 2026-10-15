@@ -91,11 +91,12 @@ namespace PostProcessingMode
 		pendingMode = savedMode.value_or(kDefaultMode);
 		pendingFromPack = false;
 
-		// A pack applied after these settings were saved chose the pipeline since, so its choice stands.
+		// A pack applied after these settings were saved chose the pipeline since, so its choice stands. Without
+		// a saved choice the revision merged in is the code default's, which always matches, so the pack wins too.
 		const auto& catalog = UnifiedPresetCatalog::GetSingleton();
 		const auto revision = a_general.find(kPackRevisionKey);
 		const auto savedRevision = revision != a_general.end() && revision->is_number_unsigned() ? revision->get<uint32_t>() : 0u;
-		if (const auto packPipeline = catalog.GetActivePipeline(); packPipeline && savedRevision != catalog.GetPipelineRevision()) {
+		if (const auto packPipeline = catalog.GetActivePipeline(); packPipeline && (detectPreset || savedRevision != catalog.GetPipelineRevision())) {
 			pendingMode = *packPipeline;
 			detectPreset = false;
 			pendingFromPack = true;

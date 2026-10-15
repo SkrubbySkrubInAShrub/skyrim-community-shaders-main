@@ -131,8 +131,9 @@ public:
 		json originalValue;                        // Value at time of creation, for revert
 		json serializedTemplate = json::object();  // Preserved forward-compatible fields
 		bool paused = false;                       // Temporarily disabled
-		/// Suppresses every lower layer at this address instead of supplying a value. An explicit
-		/// state, not an empty `value`: the resolve, copy and export paths all read `value` unguarded.
+		/// Removes this context's mod value at the address instead of supplying one, so the layers beneath
+		/// show through. An explicit state, not an empty `value`: the resolve, copy and export paths all
+		/// read `value` unguarded.
 		bool deleted = false;
 		EntrySource source = EntrySource::User;
 		std::string sourceFilename;                       // For overwrites: the filename it came from
@@ -344,7 +345,7 @@ public:
 	/// nullopt drops it, handing the value back to the presets.
 	void SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave = false);
 
-	/// Returns the period whose hour range contains the current game hour.
+	/// Returns the period the time-of-day blend is in: mid-blend, the outgoing one.
 	static TimeOfDayPeriod GetCurrentPeriod();
 
 	// --- Feature Metadata ---
@@ -397,10 +398,6 @@ public:
 
 	/// Get a UI-friendly display label for a setting key.
 	static std::string GetSettingDisplayName(const std::string& settingKey);
-
-	/// Get current value of a specific setting from a feature
-	static json GetFeatureSettingValue(const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
 	// --- Per-Weather Scene Settings ---
 
@@ -668,8 +665,8 @@ public:
 	/// Remove one entry from a context.
 	void RemoveContextSetting(const SceneContextId& context, size_t index);
 
-	/** @brief Suppresses every lower layer at an address by persisting a user tombstone.
-	 *  Never touches a mod's file; an existing user entry becomes the tombstone in place.
+	/** @brief Removes the mod's value at an address in one context by persisting a user tombstone; the
+	 *  layers beneath show through. Never touches a mod's file; an existing user entry becomes the tombstone.
 	 *  @return Whether a tombstone now covers the address. */
 	bool TombstoneContextSetting(const SceneContextId& context, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
@@ -695,7 +692,7 @@ public:
 		None,       // nothing supplies it: the feature's base applies
 		Overwrite,  // a discovered overwrite file wins
 		User,       // a user entry wins
-		Deleted,    // a user tombstone suppresses every lower layer
+		Deleted,    // a user tombstone removes this context's mod value
 	};
 
 	/** @brief Where the winning value at an address comes from. */
@@ -1035,6 +1032,8 @@ private:
 		bool transition = false;
 	};
 	std::map<std::string, PendingApplyVerification> pendingApplyVerifications;
+	/// Signature each feature last kept, verified once: later values of that update set are trusted.
+	std::map<std::string, size_t> verifiedApplySignatures;
 	bool resolverDirty = true;
 	bool resolverSuspended = false;
 	bool activeEntryCacheDirty = true;
@@ -1083,7 +1082,7 @@ private:
 	std::map<std::string, LocationTransitionBatch> locationTransitionBatches;
 	bool locationTransitionBatchesDirty = true;
 	float lastLocationTransitionTick = -1.0f;
-	float lastBlendResolveTime = -1.0f;
+	std::chrono::steady_clock::time_point lastBlendResolveTime{};
 	ResolvedSettingMap lastLocationOverrideValues;
 	std::map<SettingAddress, float> lastLocationTransitionDurations;
 	std::map<SettingAddress, float> pendingLocationTransitionDurations;
@@ -1119,6 +1118,8 @@ private:
 	};
 	/** @brief Starts shifted by the applied blend length, which is capped so every shifted period fits it. */
 	BlendedPeriods GetBlendedPeriods() const;
+	/** @brief The shifted period the current hour is in, the one whose blend out the weights describe. */
+	static PeriodLookup FindBlendPeriod(const BlendedPeriods& blended);
 
 	/// FindWinningContext's search against one period and weather (0 for none).
 	std::optional<SceneContextId> FindSupplyingContext(const SettingIdentity& setting, TimeOfDayPeriod period,
@@ -1136,17 +1137,11 @@ private:
 	void LoadWeatherData();
 	/** @brief The weather's config, created empty when it has none. */
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
-	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
+	/** @brief Removes one user entry. */
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
-	/**
-	 * @brief Removes one entry of a weather or location config. An overwrite is also stripped from its backing
-	 * file, along with every other entry that file supplied for the same setting.
-	 * @param overwritePath The backing file of one of the config's overwrite entries.
-	 * @param prepareUserEdit Readies the config's raw user settings before a user entry's removal is saved.
-	 */
-	void RemovePeriodicEntry(PeriodicSceneConfig& config, size_t index,
-		const std::function<std::filesystem::path(const SettingEntry&)>& overwritePath,
-		const std::function<void()>& prepareUserEdit);
+	/** @brief Removes one user entry of a weather or location config.
+	 *  @param prepareUserEdit Readies the config's raw user settings before the removal is saved. */
+	void RemovePeriodicEntry(PeriodicSceneConfig& config, size_t index, const std::function<void()>& prepareUserEdit);
 	/** @brief Whether the weather holds an entry for this setting and period, optionally of one source. */
 	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
@@ -1225,7 +1220,8 @@ private:
 	/** @brief Records the entry's transition duration, or the global one, for its address. */
 	void RecordLocationTransitionDuration(const SettingEntry& entry, const SettingAddress& address,
 		std::map<SettingAddress, float>& transitionDurations) const;
-	/** @brief Writes one source's resolvable entries over resolved; a tombstone erases its address instead. */
+	/** @brief Writes one source's resolvable entries over resolved; a tombstone erases its address, so the
+	 *  layers beneath show through. */
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, EntrySource source,
 		std::map<SettingAddress, float>* transitionDurations = nullptr) const;
@@ -1340,7 +1336,7 @@ private:
 	/** @brief The target's config, or null when it has none. */
 	const LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey);
-	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
+	/** @brief Removes one user entry. */
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
 	/** @brief Whether the target holds an entry for this setting and period, optionally of one source. */
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
@@ -1373,7 +1369,7 @@ private:
 	/** @brief The entry list of an interior or time-of-day scene type, empty for any other. */
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
-	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
+	/** @brief Removes one user entry. */
 	void RemoveSetting(SceneType type, size_t index);
 	/** @brief Saves the user document and re-resolves. */
 	void CommitSceneSettingChanges();

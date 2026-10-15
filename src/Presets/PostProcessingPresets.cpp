@@ -71,10 +71,10 @@ void PostProcessingPresets::MigrateLegacyPresets()
 	for (const auto& entry : std::filesystem::directory_iterator(legacyDir, ec)) {
 		const auto& source = entry.path();
 		if (!entry.is_regular_file(ec) || source.extension() != ".json" ||
-			_stricmp(source.stem().string().c_str(), kLegacyDefaultName) == 0)
+			_stricmp(Util::PathHelpers::ToUtf8(source.stem()).c_str(), kLegacyDefaultName) == 0)
 			continue;
 
-		const auto name = source.stem().string();
+		const auto name = Util::PathHelpers::ToUtf8(source.stem());
 		const auto packId = Util::FileHelpers::SanitizeFileName(name);
 		if (packId.empty())
 			continue;

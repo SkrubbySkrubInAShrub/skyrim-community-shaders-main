@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <format>
 #include <ranges>
+#include <utility>
 
 using namespace SKSE;
 
@@ -22,6 +23,33 @@ namespace
 	std::optional<json> ReadBaselineDocument(const std::filesystem::path& path)
 	{
 		return Util::FileHelpers::ReadJsonObject(path, "Baseline file", MAX_BASELINE_FILE_SIZE);
+	}
+
+	/** @brief Reports, once per session, files left where older builds read overrides: nothing reads them now. */
+	void ReportLegacyOverrides()
+	{
+		static bool reported = false;
+		if (std::exchange(reported, true))
+			return;
+		size_t count = 0;
+		try {
+			std::error_code ec;
+			for (const auto& entry : std::filesystem::directory_iterator(Util::PathHelpers::GetCommunityShaderPath() / "Overrides", ec))
+				count += entry.path().extension() == ".json" ? 1 : 0;
+		} catch (const std::filesystem::filesystem_error& e) {
+			logger::warn("Could not scan the legacy Overrides folder: {}", e.what());
+		}
+		if (count == 0)
+			return;
+
+		const auto message = std::format(
+			"{} file(s) in CommunityShaders/Overrides are no longer read. Move them into the Baseline folder of a "
+			"preset pack (Presets/<Name>/Baseline/) and enable that pack on the Presets page.",
+			count);
+		logger::warn("{}", message);
+		FeatureIssues::FeatureFileInfo fileInfo;
+		fileInfo.featureName = "Overrides";
+		FeatureIssues::AddFeatureIssue("Overrides", "unknown", message, FeatureIssues::FeatureIssueInfo::IssueType::BASELINE_FAILED, fileInfo);
 	}
 
 	/** @brief Erases one setting leaf, then any groups it leaves empty. */
@@ -39,6 +67,7 @@ namespace
 
 size_t BaselineManager::DiscoverFiles()
 {
+	ReportLegacyOverrides();
 	files.clear();
 	featureFileMap.clear();
 	++revision;
@@ -56,12 +85,12 @@ size_t BaselineManager::DiscoverFiles()
 
 std::string BaselineManager::ParseBaselineFeatureName(const std::filesystem::path& filePath)
 {
-	const auto filename = filePath.filename().string();
+	const auto filename = Util::PathHelpers::ToUtf8(filePath.filename());
 	if (filePath.extension() != ".json" || filename.empty() || filename[0] == '.' || filename[0] == '~') {
 		return {};
 	}
 
-	auto name = filePath.stem().string();
+	auto name = Util::PathHelpers::ToUtf8(filePath.stem());
 	if (const auto underscore = name.find_last_of('_'); underscore != std::string::npos) {
 		name.erase(0, underscore + 1);
 	}
@@ -71,11 +100,11 @@ std::string BaselineManager::ParseBaselineFeatureName(const std::filesystem::pat
 size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory, const std::string& packId)
 {
 	if (!std::filesystem::exists(directory)) {
-		logger::info("Baseline directory does not exist: {}", directory.string());
+		logger::info("Baseline directory does not exist: {}", Util::PathHelpers::ToUtf8(directory));
 		return 0;
 	}
 
-	logger::info("Discovering Baseline files in: {}", directory.string());
+	logger::info("Discovering Baseline files in: {}", Util::PathHelpers::ToUtf8(directory));
 
 	size_t filesProcessed = 0;
 	size_t filesLoaded = 0;
@@ -96,7 +125,7 @@ size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory
 			}
 
 			// Check filename length to prevent overly long names
-			std::string filename = entry.path().filename().string();
+			std::string filename = Util::PathHelpers::ToUtf8(entry.path().filename());
 			if (filename.length() > MAX_STRING_LENGTH) {
 				logger::info("Skipping Baseline file with overly long name: {}", filename.substr(0, 50) + "...");
 				continue;
@@ -112,14 +141,16 @@ size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory
 			// Checked against the build rather than load state: discovery runs before features load at boot.
 			const auto featureName = ParseBaselineFeatureName(entry.path());
 			if (!Feature::IsFeatureKnown(featureName)) {
-				logger::warn("Baseline file {} targets '{}', which is not a feature in this build; skipping", entry.path().string(), featureName);
+				logger::warn("Baseline file {} targets '{}', which is not a feature in this build; skipping", Util::PathHelpers::ToUtf8(entry.path()), featureName);
 				ReportFailure(packId, featureName, "Feature is not part of this Community Shaders build", entry.path());
 				continue;
 			}
 
 			try {
 				auto baselineFile = LoadFile(entry.path(), packId);
-				if (baselineFile) {
+				if (baselineFile && !baselineFile->enabled) {
+					logger::info("Skipping Baseline file {}: its _metadata disables it", Util::PathHelpers::ToUtf8(entry.path()));
+				} else if (baselineFile) {
 					size_t index = files.size();
 					files.push_back(std::move(*baselineFile));
 
@@ -133,7 +164,7 @@ size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory
 					ReportFailure(packId, featureName, "File could not be loaded or parsed", entry.path());
 				}
 			} catch (const std::exception& e) {
-				logger::info("Error loading Baseline file {}: {}", entry.path().string(), e.what());
+				logger::info("Error loading Baseline file {}: {}", Util::PathHelpers::ToUtf8(entry.path()), e.what());
 				ReportFailure(packId, featureName, e.what(), entry.path());
 				continue;
 			}
@@ -144,7 +175,7 @@ size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory
 		logger::info("Unexpected error during Baseline discovery: {}", e.what());
 	}
 
-	logger::info("Loaded {} Baseline files from {} ({} processed)", filesLoaded, directory.string(), filesProcessed);
+	logger::info("Loaded {} Baseline files from {} ({} processed)", filesLoaded, Util::PathHelpers::ToUtf8(directory), filesProcessed);
 	return filesProcessed;
 }
 
@@ -166,7 +197,7 @@ size_t BaselineManager::ApplyBaselines(const std::string& featureName, json& fea
 					appliedCount++;
 				} catch (const std::exception& e) {
 					logger::info("Failed to apply Baseline file from {} to {}: {}", file.packId, featureName, e.what());
-					ReportFailure(file.packId, featureName, "Failed to apply: " + std::string(e.what()), file.filePath);
+					ReportFailure(file.packId, featureName, "Failed to apply: " + std::string(e.what()), Util::PathHelpers::FromUtf8(file.filePath));
 				}
 			}
 		}
@@ -215,12 +246,13 @@ std::unique_ptr<BaselineManager::BaselineFile> BaselineManager::LoadFile(const s
 	baselineFile->packId = packId;
 	baselineFile->featureName = ParseBaselineFeatureName(filePath);
 	assert(Feature::IsFeatureKnown(baselineFile->featureName));
-	baselineFile->filePath = filePath.string();
+	baselineFile->filePath = Util::PathHelpers::ToUtf8(filePath);
 
 	// ValidateFormat has checked the metadata fields' types and lengths.
 	if (const auto metadata = fileJson->find("_metadata"); metadata != fileJson->end()) {
 		baselineFile->version = metadata->value("version", "");
 		baselineFile->description = metadata->value("description", "");
+		baselineFile->enabled = metadata->value("enabled", true);
 	}
 
 	baselineFile->values = SanitizeJsonData(*fileJson);
@@ -327,11 +359,11 @@ bool BaselineManager::ValidateFormat(const json& fileJson, const std::string& fi
 	}
 }
 
-bool BaselineManager::ValidateJsonDataTypes(const json& jsonData, const std::string& path, const std::string& filePath)
+bool BaselineManager::ValidateJsonDataTypes(const json& jsonData, const std::string& path, const std::string& filePath, size_t depth)
 {
 	try {
-		// Check nesting depth
-		if (std::count(path.begin(), path.end(), '.') > MAX_JSON_DEPTH) {
+		// Counted rather than read off the path, which arrays extend without a dot: this recursion is the stack.
+		if (depth > MAX_JSON_DEPTH) {
 			if (!filePath.empty()) {
 				logger::info("JSON nesting too deep at '{}' (max {}) in Baseline file: {}", path, MAX_JSON_DEPTH, filePath);
 			}
@@ -357,7 +389,7 @@ bool BaselineManager::ValidateJsonDataTypes(const json& jsonData, const std::str
 
 				// Recursively validate value
 				std::string newPath = path.empty() ? key : path + "." + key;
-				if (!ValidateJsonDataTypes(value, newPath, filePath)) {
+				if (!ValidateJsonDataTypes(value, newPath, filePath, depth + 1)) {
 					return false;
 				}
 			}
@@ -371,7 +403,7 @@ bool BaselineManager::ValidateJsonDataTypes(const json& jsonData, const std::str
 
 			for (size_t i = 0; i < jsonData.size(); ++i) {
 				std::string newPath = path + "[" + std::to_string(i) + "]";
-				if (!ValidateJsonDataTypes(jsonData[i], newPath, filePath)) {
+				if (!ValidateJsonDataTypes(jsonData[i], newPath, filePath, depth + 1)) {
 					return false;
 				}
 			}
@@ -481,7 +513,7 @@ bool BaselineManager::RejectsUnknownKeys(BaselineFile& file, const json& feature
 			for (const auto& key : file.unknownKeys)
 				keys += (keys.empty() ? "" : ", ") + key;
 			logger::warn("Skipped Baseline file from {} to {}: unrecognized keys {}", file.packId, file.featureName, keys);
-			ReportFailure(file.packId, file.featureName, "Unrecognized settings keys: " + keys, file.filePath);
+			ReportFailure(file.packId, file.featureName, "Unrecognized settings keys: " + keys, Util::PathHelpers::FromUtf8(file.filePath));
 		}
 	}
 	return !file.unknownKeys.empty();
@@ -496,10 +528,10 @@ void BaselineManager::ReportFailure(const std::string& packId, const std::string
 	std::error_code ec;
 	if (!filePath.empty() && std::filesystem::exists(filePath, ec)) {
 		fileInfo.hasINI = true;  // Using hasINI to indicate file exists (even though it's JSON)
-		fileInfo.iniPath = filePath.string();
+		fileInfo.iniPath = Util::PathHelpers::ToUtf8(filePath);
 
 		fileInfo.latestTimestamp = std::filesystem::last_write_time(filePath, ec);
-		fileInfo.latestTimestampFile = filePath.string();
+		fileInfo.latestTimestampFile = Util::PathHelpers::ToUtf8(filePath);
 		fileInfo.timestampDisplay = ec ? "Unknown" : FeatureIssues::FormatFileTimestamp(fileInfo.latestTimestamp);
 	}
 
@@ -521,7 +553,7 @@ bool BaselineManager::IsApplicable(const BaselineFile& info) const
 
 bool BaselineManager::IsValidDocument(const json& document, const std::filesystem::path& filePath)
 {
-	const auto path = filePath.string();
+	const auto path = Util::PathHelpers::ToUtf8(filePath);
 	return ValidateFormat(document, path) && ValidateJsonDataTypes(document, "", path);
 }
 
@@ -572,7 +604,7 @@ bool BaselineManager::ExportSettings(const std::string& packName, const std::str
 	// reading it raw so any _metadata the author wrote survives.
 	auto document = ReadExportTarget(destination);
 	if (!document) {
-		logger::error("Refusing to overwrite unreadable Baseline file {}", destination.string());
+		logger::error("Refusing to overwrite unreadable Baseline file {}", Util::PathHelpers::ToUtf8(destination));
 		return false;
 	}
 	for (const auto& path : removePaths) {
@@ -595,7 +627,6 @@ bool BaselineManager::ExportSettings(const std::string& packName, const std::str
 		return false;
 	}
 
-	logger::info("Exported {} setting(s) of {} to {}, removed {}", settingPaths.size(), featureName, destination.string(), removePaths.size());
-	Refresh();
+	logger::info("Exported {} setting(s) of {} to {}, removed {}", settingPaths.size(), featureName, Util::PathHelpers::ToUtf8(destination), removePaths.size());
 	return true;
 }

@@ -75,7 +75,7 @@ namespace SceneWidgetBinding
 		Overwritten,  // no user entry: a mod's overwrite supplies the value
 		Active,       // entry exists and applies
 		Paused,       // entry exists and is held back
-		Deleted,      // a tombstone suppresses every lower layer at this address
+		Deleted,      // a tombstone removes the mod's value here, so the layers beneath show through
 		Baseline      // the main menu's control: edits the feature's base and shows which layer wins
 	};
 
@@ -309,8 +309,8 @@ namespace SceneWidgetBinding
 		/// The periods and components this control spans do not agree on a value or on coverage.
 		bool mixedAcrossPeriods = false;
 
-		/// What the control showed before the call, so entry creation can restore it before the manager
-		/// snapshots the member. Re-seeded from `holding` once the control is bound to it.
+		/// The member before the call, so entry creation can undo an unbound control's write before the
+		/// manager snapshots the feature's base.
 		ValueStorage preCall;
 		/// Storage a bound scene control reads and writes, so no write reaches the feature member.
 		ValueStorage holding;

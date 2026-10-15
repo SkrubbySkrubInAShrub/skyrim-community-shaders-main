@@ -15,7 +15,10 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <span>
 #include <string>
@@ -517,6 +520,17 @@ namespace
 	bool RunExport()
 	{
 		auto* manager = BaselineManager::GetSingleton();
+		// One file per feature, so a failure puts the ones already written back as they were.
+		std::vector<std::pair<std::filesystem::path, std::optional<std::string>>> written;
+		const auto rollBack = [&] {
+			for (const auto& [path, previous] : written) {
+				std::error_code ec;
+				if (previous)
+					Util::FileHelpers::WriteFileAtomically(path, *previous, "Baseline rollback");
+				else
+					std::filesystem::remove(path, ec);
+			}
+		};
 		for (auto& entry : session.features) {
 			if (CountTicked(entry) == 0)
 				continue;
@@ -528,10 +542,17 @@ namespace
 				else if (IsRemoved(entry, index))
 					removePaths.push_back(entry.rows[index].path);
 			}
-			// A failed write may follow successful ones, so every file is compared afresh.
+			const auto destination = manager->GetExportDestination(target.name, entry.shortName);
+			std::optional<std::string> previous;
+			if (std::ifstream file(destination, std::ios::binary); file)
+				previous.emplace(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+			// Every file is compared afresh, the restored ones included.
 			entry.targetKey.clear();
-			if (!manager->ExportSettings(target.name, entry.shortName, paths, entry.values, removePaths))
+			if (!manager->ExportSettings(target.name, entry.shortName, paths, entry.values, removePaths)) {
+				rollBack();
 				return false;
+			}
+			written.emplace_back(destination, std::move(previous));
 			// The exported value is now the baseline's, so the scene resolves over it as it will after a reopen.
 			SceneSettingsManager::GetSingleton()->ReleaseSketches(entry.shortName);
 		}

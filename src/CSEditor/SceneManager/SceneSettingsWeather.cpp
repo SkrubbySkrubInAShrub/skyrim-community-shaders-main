@@ -1,13 +1,11 @@
 #include "SceneSettingsManager.h"
 
 #include "SceneSettingsInternal.h"
-#include "SceneSettingsOverwrites.h"
 
 #include <algorithm>
 #include <cmath>
 
 using namespace SceneSettingsInternal;
-using namespace SceneSettingsOverwrites;
 
 RE::FormID SceneSettingsManager::GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const
 {
@@ -96,33 +94,18 @@ void SceneSettingsManager::RemoveWeatherSetting(RE::FormID weatherId, size_t ind
 		return;
 
 	if (auto it = weatherSceneConfigs.find(weatherId); it != weatherSceneConfigs.end())
-		RemovePeriodicEntry(
-			it->second, index, [weatherId](const SettingEntry& entry) { return GetWeatherOverwritePath(weatherId, entry); },
-			[this, weatherId] { PrepareWeatherUserSettingsMutation(weatherId, false); });
+		RemovePeriodicEntry(it->second, index, [this, weatherId] { PrepareWeatherUserSettingsMutation(weatherId, false); });
 }
 
 void SceneSettingsManager::RemovePeriodicEntry(PeriodicSceneConfig& config, size_t index,
-	const std::function<std::filesystem::path(const SettingEntry&)>& overwritePath,
 	const std::function<void()>& prepareUserEdit)
 {
 	if (index >= config.entries.size())
 		return;
-	const auto entry = config.entries[index];
-	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty()) {
-		const auto backingPath = overwritePath(entry);
-		if (!RemoveSettingFromOverwriteFile(backingPath, entry.settingPath, entry.settingKey))
-			return;
-		std::erase_if(config.entries, [&](const SettingEntry& candidate) {
-			return candidate.source == EntrySource::Overwrite && overwritePath(candidate) == backingPath &&
-			       IsSameSetting(candidate, entry.featureShortName, entry.settingPath, entry.settingKey);
-		});
-	} else {
-		config.entries.erase(config.entries.begin() + static_cast<ptrdiff_t>(index));
-		if (entry.source == EntrySource::User) {
-			prepareUserEdit();
-			SaveAllUserSettings();
-		}
-	}
+	assert(config.entries[index].source == EntrySource::User && "a mod's entry is suppressed with a tombstone, never removed");
+	config.entries.erase(config.entries.begin() + static_cast<ptrdiff_t>(index));
+	prepareUserEdit();
+	SaveAllUserSettings();
 	BumpEntryPresentationRevision();
 	ReapplyIfActive();
 }

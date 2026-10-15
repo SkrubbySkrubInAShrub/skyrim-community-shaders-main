@@ -905,6 +905,9 @@ void FeatureListRenderer::DrawFeatureBody(Feature* feat)
 			if (edited)
 				state->MarkSettingsChanged();
 			if (Util::InteractionEndedThisFrame()) {
+				// Those buttons also bypass the interceptor, so the scene layer's cached apply document must
+				// take their values before anything replays it.
+				globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat, true);
 				if (!edited)
 					state->CheckFeatureSettingsChanged(feat);
 				state->InvalidateEditsUnderBaselines(feat);

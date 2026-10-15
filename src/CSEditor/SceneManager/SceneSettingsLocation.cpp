@@ -3,14 +3,12 @@
 #include "SceneSettingsContextRules.h"
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
-#include "SceneSettingsOverwrites.h"
 
 #include <algorithm>
 #include <cmath>
 #include <set>
 
 using namespace SceneSettingsInternal;
-using namespace SceneSettingsOverwrites;
 using namespace SceneSettingsLocationTargets;
 using namespace SceneSettingsContextRules;
 
@@ -18,7 +16,12 @@ const SceneSettingsManager::LocationSceneConfig SceneSettingsManager::kEmptyLoca
 
 std::string SceneSettingsManager::GetLocationConfigKey(LocationTargetType type, std::string_view formKey)
 {
-	return std::format("{}:{}", GetLocationTargetTypeName(type), NormalizeLocationFormKey(formKey));
+	// The UI asks per control per frame; normalizing parses the form key and depends on nothing else.
+	thread_local std::map<std::string, std::string, std::less<>> normalizedFormKeys;
+	auto normalized = normalizedFormKeys.find(formKey);
+	if (normalized == normalizedFormKeys.end())
+		normalized = normalizedFormKeys.emplace(formKey, NormalizeLocationFormKey(formKey)).first;
+	return std::format("{}:{}", GetLocationTargetTypeName(type), normalized->second);
 }
 
 const char* SceneSettingsManager::GetLocationSectionName(LocationTargetType type)
@@ -235,6 +238,8 @@ std::optional<SceneSettingsManager::ResolvedSettingMap> SceneSettingsManager::Bu
 	// The target being edited is not necessarily where the player stands, so its own chain decides
 	// which layers sit underneath it. An unresolved chain falls back to the general TOD/weather one.
 	const bool interior = GetLocationChainInteriorState(locationTargets).value_or(false);
+	// The resolvers read the shared snapshot, which the live resolve must get back untouched.
+	const SKSE::stl::scope_exit restoreSnapshot([this, liveSnapshot = blendSnapshot]() noexcept { blendSnapshot = liveSnapshot; });
 	RefreshBlendSnapshot(interior);
 	if (interior) {
 		ResolveInteriorSettings(lowerLayers);
@@ -298,9 +303,7 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index)
 {
 	if (auto* config = FindLocationConfig(type, formKey))
-		RemovePeriodicEntry(
-			*config, index, [&formKey](const SettingEntry& entry) { return GetLocationOverwritePath(formKey, entry); },
-			[this, type, &formKey] { PrepareLocationUserSettingsMutation(type, formKey, false); });
+		RemovePeriodicEntry(*config, index, [this, type, &formKey] { PrepareLocationUserSettingsMutation(type, formKey, false); });
 }
 
 std::vector<std::string> SceneSettingsManager::MatchingRawLocationKeys(const json& section,

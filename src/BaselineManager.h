@@ -25,12 +25,15 @@ public:
 		/// Presets pack the file belongs to.
 		std::string packId;
 		std::string featureName;
+		/// UTF-8; turn it back into a path with Util::PathHelpers::FromUtf8.
 		std::string filePath;
 		json values;
 
 		// Metadata from the file
 		std::string version;
 		std::string description;
+		/// `_metadata.enabled`; a disabled file is skipped at discovery.
+		bool enabled = true;
 
 		// Keys the feature does not serialize; while non-empty the file is not applied
 		std::vector<std::string> unknownKeys;
@@ -123,7 +126,8 @@ public:
 	 * @param packName Pack folder name; sanitized before use
 	 * @param settingPaths JSON pointers into featureSettings, as reported by Util::Settings::GetExportSettings
 	 * @param removePaths Settings to drop from the existing file, in the same form as settingPaths
-	 * @return True if the file was written
+	 * @return True if the file was written. The discovered files are not refreshed: only enabled packs are
+	 *         discovered, and UnifiedPresetCatalog::ReapplyIfInUse refreshes those.
 	 */
 	bool ExportSettings(const std::string& packName, const std::string& featureName,
 		std::span<const std::string> settingPaths, const json& featureSettings, std::span<const std::string> removePaths = {});
@@ -170,9 +174,10 @@ private:
 	 * @param jsonData The JSON data to validate
 	 * @param path Current path in the JSON (for error reporting)
 	 * @param filePath Path to the file being validated (for error reporting)
+	 * @param depth Nesting of jsonData below the document root, objects and arrays alike
 	 * @return True if all data types are safe
 	 */
-	bool ValidateJsonDataTypes(const json& jsonData, const std::string& path = "", const std::string& filePath = "");
+	bool ValidateJsonDataTypes(const json& jsonData, const std::string& path = "", const std::string& filePath = "", size_t depth = 0);
 
 	/**
 	 * @brief Sanitizes JSON data to prevent corruption

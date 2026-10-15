@@ -35,7 +35,10 @@ using json = nlohmann::json;
 
 namespace
 {
-	constexpr const char* kActiveStateFileName = "_active.json";
+	/// Where older builds kept the active pack state, read once if SettingsUser.json has none yet.
+	constexpr const char* kLegacyActiveStateFileName = "_active.json";
+	/// Matches State::Save, so a state write leaves the file formatted as the user config always is.
+	constexpr int kUserSettingsIndent = 1;
 	constexpr const char* kBaselinePackIdsKey = "baselinePackIds";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
 	constexpr const char* kEffects11PackSubdir = UnifiedPresetCatalog::kEffects11PackSubdir;
@@ -62,20 +65,11 @@ namespace
 		return PresetManager::MakeUnifiedPackPresetId(packId);
 	}
 
-	/** @brief Sets manifest[objectKey][entryKey], creating the object when missing, and writes the manifest atomically. */
-	bool WriteManifestFlag(const std::filesystem::path& manifestPath, json& manifest, const char* objectKey, const std::string& entryKey, bool value)
-	{
-		if (!manifest.contains(objectKey) || !manifest[objectKey].is_object())
-			manifest[objectKey] = json::object();
-		manifest[objectKey][entryKey] = value;
-		return Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest");
-	}
-
 	std::filesystem::path ResolveRelative(const std::filesystem::path& root, const std::string& rel)
 	{
 		if (rel.empty())
 			return {};
-		auto path = root / rel;
+		auto path = root / Util::PathHelpers::FromUtf8(rel);
 		return std::filesystem::exists(path) ? path : std::filesystem::path{};
 	}
 
@@ -141,7 +135,7 @@ namespace
 	bool IsImageExtension(const std::filesystem::path& path)
 	{
 		static constexpr std::array<std::string_view, 6> kImageExtensions = { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".dds" };
-		return std::ranges::contains(kImageExtensions, ToLower(path.extension().string()));
+		return std::ranges::contains(kImageExtensions, ToLower(Util::PathHelpers::ToUtf8(path.extension())));
 	}
 
 	std::string InferDescriptionFromReadme(const std::filesystem::path& packRoot)
@@ -273,7 +267,7 @@ json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoo
 	}
 	if (outError && !error.empty())
 		*outError = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
-			{ { "file", manifestPath.filename().string() }, { "error", error } }, "Invalid {file}: {error}");
+			{ { "file", Util::PathHelpers::ToUtf8(manifestPath.filename()) }, { "error", error } }, "Invalid {file}: {error}");
 	return json::object();
 }
 
@@ -289,7 +283,7 @@ std::filesystem::path UnifiedPresetCatalog::ResolveEffects11Root(const std::file
 	std::filesystem::path preferredRoot;
 	if (const auto effects11 = manifest.find("effects11"); effects11 != manifest.end() && effects11->is_object()) {
 		if (const auto path = effects11->find("path"); path != effects11->end() && path->is_string())
-			preferredRoot = packRoot / path->get<std::string>();
+			preferredRoot = packRoot / Util::PathHelpers::FromUtf8(path->get_ref<const std::string&>());
 	}
 
 	// Classic ENB drops (NAT.ENB-style) put enbseries at the pack root instead of effects11/.
@@ -326,10 +320,23 @@ void UnifiedPresetCatalog::LoadActiveState()
 	baselinePackIds.clear();
 	activePipeline.reset();
 	pipelineRevision = 0;
-	const auto state = Util::FileHelpers::ReadJsonObject(Util::PathHelpers::GetUnifiedPresetsRealPath() / kActiveStateFileName, "active pack state");
+	sceneControlOverrides = json::object();
+	// Older builds kept the state beside the presets, where updating the mod deleted it.
+	std::optional<json> state;
+	if (const auto userSettings = Util::FileHelpers::ReadJsonObject(Util::PathHelpers::GetSettingsUserPath(), "user config")) {
+		if (const auto section = userSettings->find(kUserSettingsKey); section != userSettings->end() && section->is_object())
+			state = *section;
+	}
+	if (!state)
+		state = Util::FileHelpers::ReadJsonObject(Util::PathHelpers::GetUnifiedPresetsRealPath() / kLegacyActiveStateFileName, "active pack state");
 	if (!state)
 		return;
 	try {
+		if (const auto overrides = state->find(kSceneControlKey); overrides != state->end() && overrides->is_object()) {
+			for (const auto& [packId, choices] : overrides->items())
+				if (IsActivePackId(packId) && choices.is_object())
+					sceneControlOverrides[packId] = choices;
+		}
 		activePackId = state->value("activePackId", "");
 		if (!IsActivePackId(activePackId))
 			activePackId.clear();
@@ -348,25 +355,46 @@ void UnifiedPresetCatalog::LoadActiveState()
 		baselinePackIds.clear();
 		activePipeline.reset();
 		pipelineRevision = 0;
+		sceneControlOverrides = json::object();
 	}
+}
+
+json UnifiedPresetCatalog::SerializeActiveState() const
+{
+	json state;
+	state["activePackId"] = activePackId;
+	state[kBaselinePackIdsKey] = baselinePackIds;
+	if (activePipeline) {
+		state[kPipelineKey] = magic_enum::enum_name(*activePipeline);
+		state[kPipelineRevisionKey] = pipelineRevision;
+	}
+	if (!sceneControlOverrides.empty())
+		state[kSceneControlKey] = sceneControlOverrides;
+	return state;
 }
 
 void UnifiedPresetCatalog::SaveActiveState() const
 {
-	const auto path = Util::PathHelpers::GetUnifiedPresetsRealPath() / kActiveStateFileName;
+	// Only this section is written now; the rest of the user config waits for Save Settings.
+	const auto path = Util::PathHelpers::GetSettingsUserPath();
+	std::error_code ec;
+	auto document = std::filesystem::exists(path, ec) ? Util::FileHelpers::ReadJsonObject(path, "user config") : json::object();
+	if (!document) {
+		logger::warn("[Presets] Active pack state not saved: {} could not be read", Util::PathHelpers::ToUtf8(path));
+		return;
+	}
 	try {
-		json j;
-		j["activePackId"] = activePackId;
-		j[kBaselinePackIdsKey] = baselinePackIds;
-		if (activePipeline) {
-			j[kPipelineKey] = magic_enum::enum_name(*activePipeline);
-			j[kPipelineRevisionKey] = pipelineRevision;
+		(*document)[kUserSettingsKey] = SerializeActiveState();
+		if (!Util::FileHelpers::WriteJsonAtomically(path, *document, kUserSettingsIndent, "user config")) {
+			logger::warn("[Presets] Failed to save active pack state to {}", Util::PathHelpers::ToUtf8(path));
+			return;
 		}
-		if (!Util::FileHelpers::WriteJsonAtomically(path, j, 4, "active pack state"))
-			logger::warn("[Presets] Failed to save active pack state to {}", path.string());
 	} catch (const std::exception& e) {
 		logger::warn("[Presets] Failed to save active pack state: {}", e.what());
+		return;
 	}
+	// Left behind, the old file would come back as the state the next time the user config goes missing.
+	std::filesystem::remove(Util::PathHelpers::GetUnifiedPresetsRealPath() / kLegacyActiveStateFileName, ec);
 }
 
 void UnifiedPresetCatalog::SetActivePackId(const std::string& id)
@@ -404,7 +432,7 @@ const UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::
 void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 {
 	for (const auto& packRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kUnifiedPresetsSubdir, true)) {
-		const auto packId = packRoot.filename().string();
+		const auto packId = Util::PathHelpers::ToUtf8(packRoot.filename());
 
 		std::string manifestError;
 		const auto meta = ReadPackManifest(packRoot, &manifestError);
@@ -531,32 +559,32 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 	// Read via filesystem::path so MO2 / Unicode paths work; stbi_load(char*) uses fopen and can fail.
 	std::ifstream file(path, std::ios::binary | std::ios::ate);
 	if (!file) {
-		logger::warn("[Presets] Failed to open artwork '{}'", path.string());
+		logger::warn("[Presets] Failed to open artwork '{}'", Util::PathHelpers::ToUtf8(path));
 		return false;
 	}
 	const auto fileSize = file.tellg();
 	if (fileSize <= 0) {
-		logger::warn("[Presets] Empty artwork '{}'", path.string());
+		logger::warn("[Presets] Empty artwork '{}'", Util::PathHelpers::ToUtf8(path));
 		return false;
 	}
 	file.seekg(0, std::ios::beg);
 	std::vector<unsigned char> bytes(static_cast<size_t>(fileSize));
 	if (!file.read(reinterpret_cast<char*>(bytes.data()), fileSize)) {
-		logger::warn("[Presets] Failed to read artwork '{}'", path.string());
+		logger::warn("[Presets] Failed to read artwork '{}'", Util::PathHelpers::ToUtf8(path));
 		return false;
 	}
 
 	ID3D11ShaderResourceView* srv = nullptr;
 	ImVec2 size{};
-	const auto ext = ToLower(path.extension().string());
+	const auto ext = ToLower(Util::PathHelpers::ToUtf8(path.extension()));
 	bool ok = false;
 	if (ext == ".dds") {
-		ok = Util::LoadDDSTextureFromFile(globals::d3d::device, path.string().c_str(), &srv, size);
+		ok = Util::LoadDDSTextureFromFile(globals::d3d::device, Util::PathHelpers::ToUtf8(path).c_str(), &srv, size);
 	} else {
 		int width = 0, height = 0;
 		unsigned char* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &width, &height, nullptr, kRgbaChannels);
 		if (!pixels) {
-			logger::warn("[Presets] stbi failed for '{}': {}", path.string(), stbi_failure_reason() ? stbi_failure_reason() : "unknown");
+			logger::warn("[Presets] stbi failed for '{}': {}", Util::PathHelpers::ToUtf8(path), stbi_failure_reason() ? stbi_failure_reason() : "unknown");
 			return false;
 		}
 
@@ -578,7 +606,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 		const HRESULT hrTex = globals::d3d::device->CreateTexture2D(&desc, &init, texture.put());
 		stbi_image_free(pixels);
 		if (FAILED(hrTex) || !texture) {
-			logger::warn("[Presets] CreateTexture2D failed for '{}' ({:x})", path.string(), static_cast<unsigned>(hrTex));
+			logger::warn("[Presets] CreateTexture2D failed for '{}' ({:x})", Util::PathHelpers::ToUtf8(path), static_cast<unsigned>(hrTex));
 			return false;
 		}
 		Util::SetResourceName(texture.get(), "UnifiedPresetCatalog::Artwork");
@@ -589,7 +617,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 		srvDesc.Texture2D.MipLevels = 1;
 		const HRESULT hrSrv = globals::d3d::device->CreateShaderResourceView(texture.get(), &srvDesc, &srv);
 		if (FAILED(hrSrv) || !srv) {
-			logger::warn("[Presets] CreateSRV failed for '{}' ({:x})", path.string(), static_cast<unsigned>(hrSrv));
+			logger::warn("[Presets] CreateSRV failed for '{}' ({:x})", Util::PathHelpers::ToUtf8(path), static_cast<unsigned>(hrSrv));
 			return false;
 		}
 		Util::SetResourceName(srv, "UnifiedPresetCatalog::Artwork SRV");
@@ -696,8 +724,15 @@ bool UnifiedPresetCatalog::IsBaselineEnabled(const std::string& id) const
 
 void UnifiedPresetCatalog::ReapplyIfInUse(const std::string& id)
 {
-	if (activePackId == id || IsBaselineEnabled(id))
-		ApplyPack(id);
+	// A refresh, not ApplyPack: that would also re-pick the pipeline and move the pack to the top of the Baseline order.
+	if (activePackId == id) {
+		globals::features::sceneManager.ReloadOverwrites();
+		CSEditor::ReloadFormEdits();
+	}
+	if (IsBaselineEnabled(id)) {
+		BaselineManager::GetSingleton()->Refresh();
+		globals::state->ReapplySettingsLayers();
+	}
 }
 
 void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
@@ -713,7 +748,8 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 	if (const auto edited = globals::state->FindEditsUnderPack(pack.id); !edited.empty())
 		QueueBaselineOverlap(pack.id, edited);
 
-	// Disable-at-boot entries take effect on the next game start; persist them with the rest of Settings.
+	// Disable-at-boot entries take effect on the next game start. Like a boot toggle they are saved with the
+	// rest of Settings, so enabling a pack never writes the user's unsaved edits.
 	if (!pack.disableAtBoot.empty()) {
 		auto* state = globals::state;
 		bool changed = false;
@@ -725,72 +761,34 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 			logger::info("[Presets] Baseline '{}': {} '{}' at boot", pack.id, disabled ? "disable" : "enable", featureName);
 		}
 		if (changed)
-			state->Save();
+			state->CheckCoreSettingsChanged();
 	}
-}
-
-bool UnifiedPresetCatalog::SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled)
-{
-	auto* pack = FindPack(packId);
-	if (!pack || featureShortName.empty())
-		return false;
-
-	const auto manifestPath = GetPackManifestPath(pack->rootPath);
-	std::string readError;
-	json manifest = ReadPackManifest(pack->rootPath, &readError);
-	if (!readError.empty() && !std::filesystem::exists(manifestPath)) {
-		if (!EnsureBaselineManifest(pack->rootPath, pack->name.empty() ? packId : pack->name))
-			return false;
-		manifest = ReadPackManifest(pack->rootPath, &readError);
-	}
-	if (!readError.empty()) {
-		logger::warn("[Presets] Cannot update disableAtBoot for '{}': {}", packId, readError);
-		return false;
-	}
-
-	if (!WriteManifestFlag(manifestPath, manifest, kDisableAtBootKey, featureShortName, disabled))
-		return false;
-
-	pack->disableAtBoot[featureShortName] = disabled;
-	pack->hasBaseline = !pack->baselineFeatures.empty() || !pack->disableAtBoot.empty() ||
-	                    (pack->type && *pack->type == PresetType::Baseline);
-	if (!pack->type)
-		pack->type = PresetType::Baseline;
-
-	logger::info("[Presets] Pack '{}': {} '{}' at boot in manifest", packId, disabled ? "disable" : "enable", featureShortName);
-	return true;
 }
 
 void UnifiedPresetCatalog::LoadSceneControl() const
 {
 	const auto packRoot = GetActivePackRoot();
 	const auto manifest = packRoot.empty() ? json::object() : ReadPackManifest(packRoot);
-	const auto sceneControl = manifest.find(kSceneControlKey);
-	E11Handoff::ApplyManifest(sceneControl != manifest.end() ? *sceneControl : json::object());
+	auto sceneControl = manifest.value(kSceneControlKey, json::object());
+	if (!sceneControl.is_object())
+		sceneControl = json::object();
+	// The pack's choices are its defaults; the user's own win.
+	if (const auto overrides = sceneControlOverrides.find(activePackId); overrides != sceneControlOverrides.end())
+		sceneControl.update(*overrides);
+	E11Handoff::ApplyManifest(sceneControl);
 }
 
-bool UnifiedPresetCatalog::SetSceneControl(E11Handoff::Feature feature, bool handedOff)
+void UnifiedPresetCatalog::SetSceneControl(E11Handoff::Feature feature, bool handedOff)
 {
 	globals::features::effects11.SetHandedOff(feature, handedOff);
+	if (activePackId.empty())
+		return;
 
-	const auto packRoot = GetActivePackRoot();
-	const auto manifestPath = GetPackManifestPath(packRoot);
-	std::error_code ec;
-	if (packRoot.empty() || !std::filesystem::exists(manifestPath, ec))
-		return true;
-
-	std::string readError;
-	json manifest = ReadPackManifest(packRoot, &readError);
-	if (!readError.empty()) {
-		logger::warn("[Presets] Cannot update sceneControl for '{}': {}", activePackId, readError);
-		return false;
-	}
+	// The pack's manifest stays its author's; the user's choice is kept per pack in the active pack state.
 	const std::string shortName(E11Handoff::GetShortName(feature));
-	if (!WriteManifestFlag(manifestPath, manifest, kSceneControlKey, shortName, handedOff))
-		return false;
-
-	logger::info("[Presets] Pack '{}': sceneControl '{}' = {} in manifest", activePackId, shortName, handedOff);
-	return true;
+	sceneControlOverrides[activePackId][shortName] = handedOff;
+	SaveActiveState();
+	logger::info("[Presets] Pack '{}': sceneControl '{}' = {}", activePackId, shortName, handedOff);
 }
 
 void UnifiedPresetCatalog::QueueBaselineOverlap(const std::string& packId, const std::vector<Feature*>& features)

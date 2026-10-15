@@ -15,8 +15,10 @@ namespace SaveManager
 	{
 		void WriteEditor(Trigger trigger)
 		{
+			// An automatic save commits only the scene edit behind it; widget edits wait for the user's save.
 			auto* editor = EditorWindow::GetSingleton();
-			editor->SaveUnsavedWidgets();
+			if (trigger == Trigger::User)
+				editor->SaveUnsavedWidgets();
 			if (auto* sceneManager = SceneSettingsManager::GetSingleton())
 				sceneManager->WriteUserSettings();
 			if (trigger == Trigger::User)
