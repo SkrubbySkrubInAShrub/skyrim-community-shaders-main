@@ -602,6 +602,16 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 							  "Intended for developing."));
 	}
 
+	if (ImGui::Button(T("menu.advanced.dump_feature_defaults", "Dump All Feature Defaults to JSON"), { -1, 0 })) {
+		if (const auto path = state->DumpFeatureDefaults(); !path.empty())
+			ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("menu.advanced.dump_feature_defaults_tooltip",
+							  "Writes every feature's built-in default settings to FeatureDefaults.json and opens it. "
+							  "Defaults come from the running build; Baseline packs and your edits are not included."));
+	}
+
 	// Debug addresses section (moved from Advanced/Logging)
 	if (ImGui::TreeNodeEx(T("menu.advanced.addresses", "Addresses"))) {
 		auto Renderer = globals::game::renderer;

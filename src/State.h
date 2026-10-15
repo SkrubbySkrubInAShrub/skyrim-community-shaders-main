@@ -79,14 +79,6 @@ public:
 	LARGE_INTEGER frameStartTime;
 	bool frameTimingActive = false;
 
-	enum ConfigMode
-	{
-		DEFAULT,
-		USER,
-		TEST,
-		THEME
-	};
-
 	/** @brief Per-draw-call hook: updates feature state, constant buffers, and overlay. */
 	void Draw();
 	/** @brief Accumulates per-shader-type draw call counts and frame timing for the performance overlay. */
@@ -130,16 +122,18 @@ public:
 	bool HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 
 	/**
-	 * @brief Loads settings from disk (default, then user, then overrides).
-	 * @param a_configMode Which config file to load.
+	 * @brief Loads settings: the code's defaults, then enabled Baseline packs, then the user's edits
+	 *        from SettingsUser.json.
 	 * @param a_allowReload If true, retries once after a parse error.
 	 */
-	void Load(ConfigMode a_configMode = ConfigMode::USER, bool a_allowReload = true);
+	void Load(bool a_allowReload = true);
+	/** @brief Writes the user's edits and the core settings to SettingsUser.json. */
+	void Save();
 	/**
-	 * @brief Persists current settings to the config file for the given mode.
-	 * @param a_configMode Which config file to write.
+	 * @brief Writes every feature's code defaults to FeatureDefaults.json, for reference.
+	 * @return The written file, or an empty path if the write failed.
 	 */
-	void Save(ConfigMode a_configMode = ConfigMode::USER);
+	std::filesystem::path DumpFeatureDefaults() const;
 
 	/**
 	 * @brief Serializes all settings to a JSON object (in-memory, no disk I/O).
@@ -534,7 +528,7 @@ public:
 	}
 
 private:
-	/// SettingsDefault.json as last loaded; the bottom settings layer.
+	/// The code's defaults, captured on the first load; the bottom settings layer.
 	nlohmann::json defaultSettings;
 	/// Per feature (keyed by GetName()): defaults with the enabled Baseline packs applied. The user's
 	/// edits are what a feature's settings differ from this by.

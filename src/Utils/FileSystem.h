@@ -87,24 +87,6 @@ namespace Util
 		std::filesystem::path GetSettingsUserPath();
 
 		/**
-		 * Gets the SettingsTest.json file path
-		 * @return CommunityShaderPath / "SettingsTest.json"
-		 */
-		std::filesystem::path GetSettingsTestPath();
-
-		/**
-		 * Gets the SettingsDefault.json file path
-		 * @return CommunityShaderPath / "SettingsDefault.json"
-		 */
-		std::filesystem::path GetSettingsDefaultPath();
-
-		/**
-		 * Gets the SettingsTheme.json file path
-		 * @return CommunityShaderPath / "SettingsTheme.json"
-		 */
-		std::filesystem::path GetSettingsThemePath();
-
-		/**
 		 * Gets the Themes directory path
 		 * @return CommunityShaderPath / "Themes"
 		 */
@@ -353,13 +335,5 @@ namespace Util
 		 */
 		std::vector<SettingsDiffEntry> DiffJson(const nlohmann::json& userJson, const nlohmann::json& testJson, float epsilon = 0.0001f);
 
-		/**
-		 * Loads and compares two JSON files, returning a list of differences
-		 * @param userPath Path to the first JSON file (USER variant)
-		 * @param testPath Path to the second JSON file (TEST variant)
-		 * @param epsilon Tolerance for floating-point comparisons (default: 0.0001f)
-		 * @return Vector of differences between the two JSON files
-		 */
-		std::vector<SettingsDiffEntry> LoadJsonDiff(const std::filesystem::path& userPath, const std::filesystem::path& testPath, float epsilon = 0.0001f);
 	}
 }

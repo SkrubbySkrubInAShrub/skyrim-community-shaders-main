@@ -3062,6 +3062,8 @@
     "menu.advanced.copy_info_tooltip": "Copy complete shader information including cache path to clipboard",
     "menu.advanced.copy_key": "Copy key",
     "menu.advanced.developer_mode_via_log_level": "Currently active because Log Level is debug/trace.",
+    "menu.advanced.dump_feature_defaults": "Dump All Feature Defaults to JSON",
+    "menu.advanced.dump_feature_defaults_tooltip": "Writes every feature's built-in default settings to FeatureDefaults.json and opens it. Defaults come from the running build; Baseline packs and your edits are not included.",
     "menu.advanced.dump_ini_settings": "Dump Ini Settings",
     "menu.advanced.dump_shaders": "Dump Shaders",
     "menu.advanced.dump_shaders_tooltip": "Dump shaders at startup. This should be used only when reversing shaders. Normal users don't need this.",

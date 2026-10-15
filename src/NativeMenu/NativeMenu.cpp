@@ -12,7 +12,7 @@ namespace NativeMenu
 	void __stdcall CommitAndSave(float)
 	{
 		if (auto* state = globals::state)
-			state->Save(State::ConfigMode::USER);
+			state->Save();
 	}
 
 	bool IsFeatureEditable(const std::string& featureShortName)
