@@ -72,21 +72,6 @@ namespace Util
 			return GetCommunityShaderPath() / "SettingsUser.json";
 		}
 
-		std::filesystem::path GetSettingsTestPath()
-		{
-			return GetCommunityShaderPath() / "SettingsTest.json";
-		}
-
-		std::filesystem::path GetSettingsDefaultPath()
-		{
-			return GetCommunityShaderPath() / "SettingsDefault.json";
-		}
-
-		std::filesystem::path GetSettingsThemePath()
-		{
-			return GetCommunityShaderPath() / "SettingsTheme.json";
-		}
-
 		std::filesystem::path GetThemesPath()
 		{
 			return GetCommunityShaderPath() / "Themes";
@@ -534,15 +519,4 @@ std::vector<SettingsDiffEntry> Util::FileSystem::DiffJson(const nlohmann::json& 
 	}
 
 	return diffEntries;
-}
-
-std::vector<SettingsDiffEntry> Util::FileSystem::LoadJsonDiff(const std::filesystem::path& userPath, const std::filesystem::path& testPath, float epsilon)
-{
-	const auto userJson = FileHelpers::ReadJsonFile(userPath, "user config");
-	const auto testJson = FileHelpers::ReadJsonFile(testPath, "test config");
-	if (!userJson || !testJson) {
-		logger::warn("Could not load JSON diff from '{}' and '{}'", userPath.string(), testPath.string());
-		return {};
-	}
-	return DiffJson(*userJson, *testJson, epsilon);
 }

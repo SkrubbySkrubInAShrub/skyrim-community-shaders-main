@@ -1218,15 +1218,11 @@ void PerformanceOverlay::DrawABTestSection(const std::vector<DrawCallRow>& allRo
 		// --- Settings diff section (inline, toggled) ---
 		if (showSettingsDiff) {
 			if (!this->settingsDiffLoaded) {
-				// Use cached memory data from ABTestingManager instead of loading from disk
-				if (abTestingManager && abTestingManager->HasCachedSnapshots()) {
-					// Pull structured diff entries directly from ABTestingManager (in-memory snapshots)
+				// Diff the in-memory snapshots ABTestingManager keeps of both configs
+				if (abTestingManager && abTestingManager->HasCachedSnapshots())
 					this->settingsDiff = abTestingManager->GetConfigDiffEntries();
-				} else {
-					this->settingsDiff = Util::FileSystem::LoadJsonDiff(
-						Util::PathHelpers::GetSettingsUserPath(),
-						Util::PathHelpers::GetSettingsTestPath());
-				}
+				else
+					this->settingsDiff.clear();
 				this->settingsDiffLoaded = true;
 			}
 			ImGui::TextUnformatted("Differences between USER (A) and TEST (B) configs:");

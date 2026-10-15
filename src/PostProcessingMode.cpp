@@ -85,7 +85,7 @@ namespace PostProcessingMode
 		const auto savedMode = saved != a_general.end() && saved->is_string() ?
 		                           magic_enum::enum_cast<Mode>(saved->get<std::string>()) :
 		                           std::nullopt;
-		// Without a user settings file, the merged value is the SettingsDefault.json one, not a user choice.
+		// Without a user settings file, the merged value is the code default, not a user choice.
 		std::error_code ec;
 		detectPreset = !savedMode || !std::filesystem::exists(Util::PathHelpers::GetSettingsUserPath(), ec);
 		pendingMode = savedMode.value_or(kDefaultMode);

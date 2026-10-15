@@ -467,75 +467,42 @@ namespace
 	}
 }
 
-static std::string GetConfigPath(State::ConfigMode a_configMode)
-{
-	switch (a_configMode) {
-	case State::ConfigMode::USER:
-		return Util::PathHelpers::GetSettingsUserPath().string();
-	case State::ConfigMode::TEST:
-		return Util::PathHelpers::GetSettingsTestPath().string();
-	case State::ConfigMode::THEME:
-		return Util::PathHelpers::GetSettingsThemePath().string();
-	case State::ConfigMode::DEFAULT:
-	default:
-		return Util::PathHelpers::GetSettingsDefaultPath().string();
-	}
-}
-
-void State::Load(ConfigMode a_configMode, bool a_allowReload)
+void State::Load(bool a_allowReload)
 {
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-	json settings;
 	bool errorDetected = false;
 
-	auto configFolderPath = std::filesystem::path(GetConfigPath(a_configMode)).parent_path().string();
-	auto defaultConfigFilePath = GetConfigPath(ConfigMode::DEFAULT);
-	auto userConfigFilePath = GetConfigPath(ConfigMode::USER);
+	const auto userConfigFilePath = Util::PathHelpers::GetSettingsUserPath();
 
 	try {
-		std::filesystem::create_directories(configFolderPath);
+		std::filesystem::create_directories(userConfigFilePath.parent_path());
 	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating directory during Load ({}) : {}\n", configFolderPath, e.what());
+		logger::warn("Error creating directory during Load ({}) : {}\n", userConfigFilePath.parent_path().string(), e.what());
 		errorDetected = true;
 	}
 
-	// Attempt to load the config file
-	auto tryLoadConfig = [&](const std::string& path) -> bool {
-		logger::info("Attempting to open config file: {}", path);
-		auto config = Util::FileHelpers::ReadJsonObject(path, "config");
-		if (!config)
-			return false;
-		settings = std::move(*config);
-		return true;
-	};
+	// LOADING ORDER, per feature: the code's defaults → enabled Baseline packs → the user's edits.
+	// Sections that are not feature settings (Menu, General, ...) come from the user's config as a whole.
 
-	// LOADING ORDER, per feature: Default → enabled Baseline packs → the user's edits. Sections that are
-	// not feature settings (Menu, General, ...) come from the user's config as a whole.
-
-	// Step 1: Always start with default settings
-	logger::info("Loading default settings from: {}", defaultConfigFilePath);
-	if (!tryLoadConfig(defaultConfigFilePath)) {
-		logger::info("No default config ({}), generating new one", defaultConfigFilePath);
-		std::fill(enabledClasses, enabledClasses + magic_enum::enum_integer(RE::BSShader::Type::Total) - 1, true);
-		Save(ConfigMode::DEFAULT);
-		// Attempt to load the newly created config
-		if (!tryLoadConfig(defaultConfigFilePath)) {
-			logger::error("Error opening newly created default config file ({})\n", defaultConfigFilePath);
-			return;
+	// Step 1: The code's defaults. Captured on the first load, before any settings are applied, so later
+	// loads (Restore Saved Settings, A/B testing) don't take the user's values for defaults.
+	if (defaultSettings.is_null()) {
+		try {
+			SaveToJson(defaultSettings);
+		} catch (const std::exception& e) {
+			logger::error("Failed to capture default settings: {}", e.what());
+			defaultSettings = json::object();
 		}
 	}
-
-	defaultSettings = settings;
+	json settings = defaultSettings;
 
 	// Step 2: Read the user's config
 	json userSettings = json::object();
-	if (a_configMode == ConfigMode::USER) {
-		if (auto loaded = Util::FileHelpers::ReadJsonObject(userConfigFilePath, "user config")) {
-			userSettings = std::move(*loaded);
-			logger::info("Applied user settings from: {}", userConfigFilePath);
-		} else {
-			logger::info("No usable user config at: {}", userConfigFilePath);
-		}
+	if (auto loaded = Util::FileHelpers::ReadJsonObject(userConfigFilePath, "user config")) {
+		userSettings = std::move(*loaded);
+		logger::info("Applied user settings from: {}", userConfigFilePath.string());
+	} else {
+		logger::info("No usable user config at: {}", userConfigFilePath.string());
 	}
 
 	// Step 3: Layer each feature's settings; the user's edits win over Baseline packs
@@ -622,7 +589,7 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 
 		if (settings["Version"].is_string() && settings["Version"].get<std::string>() != Plugin::VERSION.string()) {
 			logger::info("Found older config for version {}; upgrading to {}", (std::string)settings["Version"], Plugin::VERSION.string());
-			Save(a_configMode);  // Use original config mode
+			Save();
 		}
 
 		FeatureIssues::ScanForOrphanedFeatureINIs();
@@ -631,15 +598,15 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		logger::info("Loading Settings Complete");
 	} catch (const json::exception& e) {
 		logger::info("General JSON error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode);
+		Save();
 		errorDetected = true;
 	} catch (const std::exception& e) {
 		logger::info("General error accessing settings: {}; recreating config", e.what());
-		Save(a_configMode);
+		Save();
 		errorDetected = true;
 	}
 	if (errorDetected && a_allowReload)
-		Load(a_configMode, false);
+		Load(false);
 }
 
 void State::SaveToJson(nlohmann::json& settings)
@@ -812,16 +779,15 @@ void State::LoadFromJson(nlohmann::json& settings)
 	}
 }
 
-void State::Save(ConfigMode a_configMode)
+void State::Save()
 {
-	std::string configPath = GetConfigPath(a_configMode);
+	const auto configPath = Util::PathHelpers::GetSettingsUserPath().string();
 
 	// Serialize fully before touching the file: a throwing feature must not truncate the config.
 	json settings;
 	try {
 		SaveToJson(settings);
-		if (a_configMode == ConfigMode::USER)
-			KeepOnlyUserEdits(settings);
+		KeepOnlyUserEdits(settings);
 	} catch (const std::exception& e) {
 		logger::error("Failed to serialize settings, leaving {} untouched. Error: {}", configPath, e.what());
 		return;
@@ -829,9 +795,24 @@ void State::Save(ConfigMode a_configMode)
 
 	if (Util::FileHelpers::WriteJsonAtomically(configPath, settings, 1, "config")) {
 		logger::info("Saving settings to {}", configPath);
-		if (a_configMode == ConfigMode::USER)
-			MarkSettingsSaved();
+		MarkSettingsSaved();
 	}
+}
+
+std::filesystem::path State::DumpFeatureDefaults() const
+{
+	json dump = json::object();
+	for (auto* feature : Feature::GetFeatureList()) {
+		if (!feature->UsesMainSettings())
+			continue;
+		if (const auto found = defaultSettings.find(feature->GetName()); found != defaultSettings.end())
+			dump[feature->GetName()] = *found;
+	}
+	auto path = Util::PathHelpers::GetCommunityShaderPath() / "FeatureDefaults.json";
+	if (!Util::FileHelpers::WriteJsonAtomically(path, dump, 2, "feature defaults"))
+		return {};
+	logger::info("Dumped feature defaults to {}", path.string());
+	return path;
 }
 
 json State::BuildFeatureBase(Feature* feature)
