@@ -296,8 +296,9 @@ public:
 	/// Commits a user edit: runs the CS editor's automatic save, which writes SceneManager.json.
 	void SaveAllUserSettings();
 
-	/// Writes all user data (interior, TOD, weather, location) to unified SceneManager.json. Only
-	/// SaveManager calls this; everything else goes through SaveAllUserSettings.
+	/// Writes all user data (interior, TOD, weather, location) to unified SceneManager.json, unless it
+	/// matches what was last written. Only SaveManager calls this; everything else goes through
+	/// SaveAllUserSettings.
 	void WriteUserSettings();
 
 	/** @brief Replaces one scene type's overwrite entries with those found in the active pack. */
@@ -905,6 +906,29 @@ public:
 	/// Sample the full resolver state. Built on demand, only for the debug UI.
 	DebugSnapshot GetDebugSnapshot() const;
 
+	/// The user's scene settings at one moment, for undo. Two snapshots are equal when they would save
+	/// the same SceneManager.json.
+	struct UserSettingsSnapshot
+	{
+		std::map<SceneType, std::vector<SettingEntry>> entries;
+		std::map<RE::FormID, WeatherSceneConfig> weatherSceneConfigs;
+		std::map<std::string, LocationSceneConfig> locationSceneConfigs;
+		std::optional<float> userTimeOfDayTransitionHours;
+		float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
+		json document;
+
+		bool operator==(const UserSettingsSnapshot& other) const { return document == other.document; }
+	};
+
+	/** @brief Copies the user's scene settings, for undo. */
+	UserSettingsSnapshot CaptureUserSettings();
+
+	/** @brief Puts back scene settings CaptureUserSettings copied, then saves and reapplies them. */
+	void RestoreUserSettings(const UserSettingsSnapshot& snapshot);
+
+	/** @brief Whether an edit is waiting on the deferred save, or a failed save is being retried. */
+	bool HasUnsavedChanges() const { return deferredSceneChangesPending; }
+
 protected:
 	SceneSettingsManager();
 	~SceneSettingsManager();
@@ -1113,6 +1137,9 @@ private:
 	bool TryEnsureWeatherDataLoaded();
 	/** @brief Loads location overwrites and user settings once game data is ready; false until then. */
 	bool TryEnsureLocationDataLoaded();
+	/** @brief The SceneManager.json document the user's settings amount to, over the preserved one.
+	 *  @param weatherLoaded, locationLoaded Whether those sections' data is loaded, and so can be written. */
+	json BuildUserSettingsDocument(bool weatherLoaded, bool locationLoaded);
 	/** @brief Discovers weather overwrites and loads the weather user settings. */
 	void LoadWeatherData();
 	/** @brief The weather's config, created empty when it has none. */

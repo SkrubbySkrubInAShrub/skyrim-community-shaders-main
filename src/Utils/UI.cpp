@@ -148,6 +148,13 @@ namespace Util
 			ImGui::EndDisabled();
 	}
 
+	bool InteractionEndedThisFrame()
+	{
+		// NewFrame copies ActiveId into ActiveIdPreviousFrame, so a change since then is an item letting go.
+		const auto& context = *ImGui::GetCurrentContext();
+		return context.ActiveIdPreviousFrame != 0 && context.ActiveId != context.ActiveIdPreviousFrame;
+	}
+
 	namespace
 	{
 		bool debugSectionsHidden = false;

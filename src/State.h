@@ -164,8 +164,26 @@ public:
 	/** @brief Drops the user's edits to every setting a Baseline pack sets, so the pack shows as authored. */
 	void ClearEditsUnderPack(const std::string& packId);
 
+	/**
+	 * @brief Whether the user's edits to a feature override settings an enabled Baseline pack sets.
+	 * @details Cached per feature; InvalidateEditsUnderBaselines marks the answer stale after an edit.
+	 */
+	bool HasEditsUnderBaselines(Feature* feature);
+
+	/** @brief Forgets the cached HasEditsUnderBaselines answer for one feature, or every feature when null. */
+	void InvalidateEditsUnderBaselines(Feature* feature = nullptr);
+
+	/** @brief Drops the user's edits to every setting an enabled Baseline pack sets on one feature. */
+	void ClearFeatureEditsUnderBaselines(Feature* feature);
+
 	/** @brief Notes that feature settings were edited, so the main menu's Save shows them as unsaved. */
 	void MarkSettingsChanged() { settingsChanged = true; }
+
+	/**
+	 * @brief Marks the settings changed if a feature's settings now differ from what was last saved or
+	 *        loaded. For actions ImGui does not flag as edits, such as a button that resets or applies a preset.
+	 */
+	void CheckFeatureSettingsChanged(Feature* feature);
 
 	/** @brief Re-checks the sections that are not feature settings (Menu, General, ...) against the last save or
 	 *  load. Cheap enough to call on any frame the main menu edited something. */
@@ -533,6 +551,8 @@ private:
 	/// Per feature (keyed by GetName()): defaults with the enabled Baseline packs applied. The user's
 	/// edits are what a feature's settings differ from this by.
 	std::unordered_map<std::string, nlohmann::json> featureBases;
+	/// Per feature: the cached HasEditsUnderBaselines answer.
+	std::unordered_map<std::string, bool> editsUnderBaselines;
 	/// Per feature: the edits SettingsUser.json holds, kept for features that are not loaded so a save
 	/// carries them over untouched.
 	std::unordered_map<std::string, nlohmann::json> userFeatureEdits;
@@ -548,6 +568,9 @@ private:
 	size_t HashCoreSettings();
 	/** @brief Clears the unsaved state after the user config was written or read. */
 	void MarkSettingsSaved();
+	/** @brief Drops a feature's edits to the settings packData sets, so those show the pack's values.
+	 *  The caller holds a SceneLayerGuard. */
+	void DropEditsUnder(Feature* feature, const nlohmann::json& packData);
 
 	bool settingsChanged = false;
 	bool coreSettingsChanged = false;

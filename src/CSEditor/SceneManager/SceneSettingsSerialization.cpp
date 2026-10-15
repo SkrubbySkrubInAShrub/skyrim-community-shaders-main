@@ -110,23 +110,8 @@ void SceneSettingsManager::SaveAllUserSettings()
 	SaveManager::SaveEditor(SaveManager::Trigger::Auto);
 }
 
-void SceneSettingsManager::WriteUserSettings()
+json SceneSettingsManager::BuildUserSettingsDocument(bool weatherLoaded, bool locationLoaded)
 {
-	if (!userSettingsDocumentLoaded)
-		LoadAllUserSettings();
-	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
-	const bool locationLoaded = TryEnsureLocationDataLoaded();
-	if (!userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object()) {
-		if (!userSettingsWriteBlockedWarning) {
-			logger::error("[SceneSettings] Refusing to overwrite SceneManager.json because its existing document is invalid");
-			userSettingsWriteBlockedWarning = true;
-		}
-		deferredSceneChangesPending = ++deferredSaveFailures < kMaxDeferredSaveRetries;
-		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
-		return;
-	}
-
-	auto path = GetUserSettingsFilePath();
 	json data = preservedUserSettingsRoot;
 	if (userTimeOfDayTransitionHours)
 		data[kTimeOfDayTransitionHoursKey] = *userTimeOfDayTransitionHours;
@@ -201,7 +186,30 @@ void SceneSettingsManager::WriteUserSettings()
 		data["location"] = std::move(locationObj);
 	}
 
-	const bool saved = Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "SceneManager.json");
+	return data;
+}
+
+void SceneSettingsManager::WriteUserSettings()
+{
+	if (!userSettingsDocumentLoaded)
+		LoadAllUserSettings();
+	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
+	const bool locationLoaded = TryEnsureLocationDataLoaded();
+	if (!userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object()) {
+		if (!userSettingsWriteBlockedWarning) {
+			logger::error("[SceneSettings] Refusing to overwrite SceneManager.json because its existing document is invalid");
+			userSettingsWriteBlockedWarning = true;
+		}
+		deferredSceneChangesPending = ++deferredSaveFailures < kMaxDeferredSaveRetries;
+		deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
+		return;
+	}
+
+	auto path = GetUserSettingsFilePath();
+	json data = BuildUserSettingsDocument(weatherLoaded, locationLoaded);
+	// Unchanged since the last write (or load): nothing to put on disk.
+	const bool unchanged = data == preservedUserSettingsRoot;
+	const bool saved = unchanged || Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "SceneManager.json");
 	if (saved) {
 		preservedUserSettingsRoot = data;
 		if (locationLoaded && locationTransitionModified) {
@@ -216,7 +224,8 @@ void SceneSettingsManager::WriteUserSettings()
 		locationTransitionModified = false;
 		userSettingsWriteBlockedWarning = false;
 		deferredSaveFailures = 0;
-		logger::info("[SceneSettings] Saved SceneManager.json");
+		if (!unchanged)
+			logger::info("[SceneSettings] Saved SceneManager.json");
 		deferredSceneChangesPending = false;
 		return;
 	}
@@ -229,6 +238,40 @@ void SceneSettingsManager::WriteUserSettings()
 	}
 	deferredSceneChangesPending = true;
 	deferredSceneChangesDeadline = std::chrono::steady_clock::now() + kDeferredSaveRetryDelay;
+}
+
+SceneSettingsManager::UserSettingsSnapshot SceneSettingsManager::CaptureUserSettings()
+{
+	if (!userSettingsDocumentLoaded)
+		LoadAllUserSettings();
+	const bool weatherLoaded = TryEnsureWeatherDataLoaded();
+	const bool locationLoaded = TryEnsureLocationDataLoaded();
+	return {
+		.entries = entries,
+		.weatherSceneConfigs = weatherSceneConfigs,
+		.locationSceneConfigs = locationSceneConfigs,
+		.userTimeOfDayTransitionHours = userTimeOfDayTransitionHours,
+		.locationTransitionSeconds = locationTransitionSeconds,
+		.document = BuildUserSettingsDocument(weatherLoaded, locationLoaded),
+	};
+}
+
+void SceneSettingsManager::RestoreUserSettings(const UserSettingsSnapshot& snapshot)
+{
+	entries = snapshot.entries;
+	weatherSceneConfigs = snapshot.weatherSceneConfigs;
+	locationSceneConfigs = snapshot.locationSceneConfigs;
+	userTimeOfDayTransitionHours = snapshot.userTimeOfDayTransitionHours;
+	locationTransitionSeconds = snapshot.locationTransitionSeconds;
+	RefreshTimeOfDayTransitionHours();
+	// Every section may differ from the document now, so each is written over rather than kept.
+	interiorUserSettingsModified = true;
+	timeOfDayUserSettingsModified = true;
+	weatherUserSettingsModified = true;
+	locationUserSettingsModified = true;
+	locationTransitionModified = true;
+	BumpEntryPresentationRevision();
+	CommitSceneSettingChanges();
 }
 
 /** @brief How an entry section treats the `period` field. */

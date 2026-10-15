@@ -437,11 +437,11 @@ namespace
 	}
 
 	/** @brief What one Baseline pack sets for a feature, merged across its files. */
-	json GetPackFeatureData(const std::string& packId, const std::string& featureShortName)
+	json GetPackFeatureData(std::string_view packId, const std::string& featureShortName)
 	{
 		json data = json::object();
 		for (const auto* info : BaselineManager::GetSingleton()->GetFeatureFiles(featureShortName))
-			if (info->packId == packId && info->unknownKeys.empty())
+			if ((packId.empty() || info->packId == packId) && info->unknownKeys.empty())
 				MergeInto(data, info->values);
 		return data;
 	}
@@ -508,6 +508,7 @@ void State::Load(bool a_allowReload)
 	// Step 3: Layer each feature's settings; the user's edits win over Baseline packs
 	BaselineManager::GetSingleton()->DiscoverFiles();
 	featureBases.clear();
+	InvalidateEditsUnderBaselines();
 	userFeatureEdits.clear();
 	for (auto* feature : Feature::GetFeatureList()) {
 		if (!feature->UsesMainSettings())
@@ -686,6 +687,23 @@ void State::MarkSettingsSaved()
 	savedCoreHash = HashCoreSettings();
 }
 
+void State::CheckFeatureSettingsChanged(Feature* feature)
+{
+	if (settingsChanged || !feature->loaded || !feature->UsesMainSettings())
+		return;
+	const auto name = feature->GetName();
+	const auto base = featureBases.find(name);
+	const auto edits = userFeatureEdits.find(name);
+	json saved = base != featureBases.end() ? base->second : json::object();
+	if (edits != userFeatureEdits.end())
+		MergeInto(saved, edits->second);
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	json current;
+	feature->SaveSettings(current);
+	if (!DiffFromBase(current, saved).empty())
+		settingsChanged = true;
+}
+
 void State::CheckCoreSettingsChanged()
 {
 	coreSettingsChanged = HashCoreSettings() != savedCoreHash;
@@ -848,6 +866,7 @@ void State::ReapplySettingsLayers()
 {
 	// Base values are read and rewritten, so the scene's values must be out of the way.
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	InvalidateEditsUnderBaselines();
 	for (auto* feature : Feature::GetFeatureList()) {
 		if (!feature->loaded || !feature->UsesMainSettings())
 			continue;
@@ -893,33 +912,77 @@ std::vector<Feature*> State::FindEditsUnderPack(const std::string& packId)
 	return features;
 }
 
+void State::DropEditsUnder(Feature* feature, const json& packData)
+{
+	const auto& base = featureBases[feature->GetName()];
+	json current;
+	feature->SaveSettings(current);
+	auto edits = DiffFromBase(current, base);
+	RemoveSharedSettings(edits, packData);
+	json layered = base;
+	MergeInto(layered, edits);
+	try {
+		feature->LoadSettings(layered);
+	} catch (const std::exception& e) {
+		logger::warn("Could not apply Baseline values to {}, keeping its settings: {}", feature->GetName(), e.what());
+		try {
+			feature->LoadSettings(current);
+		} catch (...) {
+		}
+	}
+}
+
 void State::ClearEditsUnderPack(const std::string& packId)
 {
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-	for (auto* feature : FindEditsUnderPack(packId)) {
-		const auto& base = featureBases[feature->GetName()];
-		json current;
-		feature->SaveSettings(current);
-		auto edits = DiffFromBase(current, base);
-		RemoveSharedSettings(edits, GetPackFeatureData(packId, feature->GetShortName()));
-		json layered = base;
-		MergeInto(layered, edits);
-		try {
-			feature->LoadSettings(layered);
-		} catch (const std::exception& e) {
-			logger::warn("Could not apply Baseline {} to {}, keeping its settings: {}", packId, feature->GetName(), e.what());
-			try {
-				feature->LoadSettings(current);
-			} catch (...) {
-			}
+	for (auto* feature : FindEditsUnderPack(packId))
+		DropEditsUnder(feature, GetPackFeatureData(packId, feature->GetShortName()));
+	MarkSettingsChanged();
+	InvalidateEditsUnderBaselines();
+}
+
+bool State::HasEditsUnderBaselines(Feature* feature)
+{
+	const auto name = feature->GetName();
+	if (const auto found = editsUnderBaselines.find(name); found != editsUnderBaselines.end())
+		return found->second;
+	bool shared = false;
+	if (feature->loaded && feature->UsesMainSettings()) {
+		const auto packData = GetPackFeatureData({}, feature->GetShortName());
+		if (!packData.empty()) {
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+			json current;
+			feature->SaveSettings(current);
+			const auto base = featureBases.find(name);
+			shared = SharesSettings(DiffFromBase(current, base != featureBases.end() ? base->second : json::object()), packData);
 		}
 	}
+	editsUnderBaselines[name] = shared;
+	return shared;
+}
+
+void State::InvalidateEditsUnderBaselines(Feature* feature)
+{
+	if (feature)
+		editsUnderBaselines.erase(feature->GetName());
+	else
+		editsUnderBaselines.clear();
+}
+
+void State::ClearFeatureEditsUnderBaselines(Feature* feature)
+{
+	{
+		SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+		DropEditsUnder(feature, GetPackFeatureData({}, feature->GetShortName()));
+	}
 	MarkSettingsChanged();
+	InvalidateEditsUnderBaselines(feature);
 }
 
 void State::RestoreFeatureLayers(Feature* feature)
 {
 	MarkSettingsChanged();
+	InvalidateEditsUnderBaselines(feature);
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 	// Defaults first, so settings a partial base leaves out still reset.
 	feature->RestoreDefaultSettings();

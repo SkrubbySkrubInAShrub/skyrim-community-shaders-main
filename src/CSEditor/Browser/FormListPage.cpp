@@ -709,7 +709,8 @@ namespace
 		const bool open = row.widget->IsOpen();
 		slot(open, BrowserUI::GlyphIcon(Icons::FA(ICON_FA_EXTERNAL_LINK_ALT)), ImGui::GetColorU32(Util::Colors::GetAccent()),
 			T(TKEY("state_open_tooltip"), "Its editor window is open"));
-		slot(row.unsaved, BrowserUI::DotIcon(), ImGui::GetColorU32(Util::Colors::GetWarning()),
+		// Checked live rather than from the cached row, so the dot follows edits, saves and undo at once.
+		slot(row.widget->HasUnsavedChanges(), BrowserUI::DotIcon(), ImGui::GetColorU32(Util::Colors::GetUnsaved()),
 			T(TKEY("state_unsaved_tooltip"), "Edited since it was last saved"));
 		slot(row.hasSavedFile, BrowserUI::GlyphIcon(Icons::FA(ICON_FA_SAVE)), ImGui::GetColorU32(Util::Colors::GetSecondary()),
 			T(TKEY("state_saved_tooltip"), "Has a JSON override on disk"));

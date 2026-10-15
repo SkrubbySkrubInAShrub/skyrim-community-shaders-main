@@ -1190,11 +1190,9 @@ void WeatherWidget::DrawCloudSettings()
 	}
 	if (enableChanged) {
 		// Apply enable/disable immediately for instant feedback, regardless of autoApplyChanges.
-		editorWindow->PushUndoState(this);
 		pendingReinit = true;
 		ApplyChanges();
 	} else if (changed && editorWindow->settings.autoApplyChanges) {
-		editorWindow->PushUndoState(this);
 		ApplyChanges();
 	}
 }

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "FormEditSources.h"
+#include "UndoHistory.h"
 #include "Util.h"
 #include "Utils/Form.h"
 #include <array>
@@ -212,10 +213,10 @@ public:
 		open = state;
 	}
 
-	/** @brief Returns a window title with unique ImGui ID: "EditorID###FormID". */
+	/** @brief Returns a window title with unique ImGui ID: "EditorID###FormID", marked with a dot while unsaved. */
 	std::string GetWindowTitle() const
 	{
-		return std::format("{}###{}", GetEditorID(), GetFormID());
+		return std::format("{}{}###{}", HasUnsavedChanges() ? "\xE2\x80\xA2 " : "", GetEditorID(), GetFormID());
 	}
 
 	/** @brief Save the widget's current settings to its JSON file on disk. */
@@ -258,6 +259,12 @@ public:
 
 	/** @brief Returns true if the widget has unsaved modifications relative to its saved file. */
 	virtual bool HasUnsavedChanges() const { return false; }
+
+	/** @brief The settings being edited, for undo; null for a widget with nothing to undo. */
+	virtual UndoHistory::SnapshotPtr CaptureEdits() const { return nullptr; }
+
+	/** @brief Puts back settings CaptureEdits returned, and applies them to the form. */
+	virtual void RestoreEdits(const UndoHistory::Snapshot&) {}
 
 	/**
 	 * @brief Reinitialize a weather form to apply form references that are only read at load time.

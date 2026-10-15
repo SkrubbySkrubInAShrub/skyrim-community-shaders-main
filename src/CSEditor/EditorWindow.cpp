@@ -767,13 +767,21 @@ void EditorWindow::ShowViewportWindow()
 
 void EditorWindow::ShowWidgetWindow()
 {
-	// Global shortcut for closing focused widget (Ctrl+W)
-	if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-		if (lastFocusedWidget && lastFocusedWidget->IsOpen()) {
+	const auto& io = ImGui::GetIO();
+	if (io.KeyCtrl && !io.WantTextInput && lastFocusedWidget && lastFocusedWidget->IsOpen()) {
+		// Ctrl+W closes the focused widget; Ctrl+R discards its unsaved changes.
+		if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
 			lastFocusedWidget->SetOpen(false);
 			lastFocusedWidget = nullptr;
+		} else if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+			DiscardWidgetChanges(*lastFocusedWidget);
 		}
 	}
+
+	ForEachWidget([this](Widget& widget) {
+		if (widget.IsOpen())
+			undoHistory.Watch(MakeUndoTarget(widget));
+	});
 
 	// Draw all open widgets using WidgetFactory template
 	for (auto* collection : GetWidgetCollections())
@@ -805,12 +813,11 @@ void EditorWindow::RenderUI()
 
 	// Global shortcuts yield to a focused text field so typing isn't hijacked.
 	if (!io.WantTextInput) {
-		// Check for Ctrl+Z to undo
-		if ((ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-			if (CanUndo()) {
-				PerformUndo();
-			}
-		}
+		// Ctrl+Z undoes; Ctrl+Y and Ctrl+Shift+Z redo.
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
+			io.KeyShift ? PerformRedo() : PerformUndo();
+		else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
+			PerformRedo();
 
 		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
 			if (io.KeyShift) {
@@ -888,6 +895,11 @@ void EditorWindow::RenderUI()
 					SaveManager::SaveEditor(SaveManager::Trigger::User);
 				Util::AddTooltip(T(TKEY("save_tooltip"),
 					"Saves your edited widgets and scene settings on this PC. To share them, use Export Preset."));
+				if (ImGui::MenuItem(T(TKEY("discard_unsaved"), "Discard Unsaved Widget Changes"), nullptr, false, HasUnsavedChanges()))
+					DiscardAllWidgetChanges();
+				Util::AddTooltip(T(TKEY("discard_unsaved_tooltip"),
+									 "Puts every widget with unsaved changes back to its saved file. Undo (Ctrl+Z) brings the changes back."),
+					Util::kTooltipWhenDisabled);
 
 				ImGui::Separator();
 
@@ -1015,10 +1027,12 @@ void EditorWindow::RenderUI()
 			if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
 				ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
-				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save local WIP"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save every CS editor change"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_shift_s"), "Ctrl+Shift+S: Export preset"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_r"), "Ctrl+R: Discard the focused widget's unsaved changes"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_z"), "Ctrl+Z: Undo"));
+				ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_y"), "Ctrl+Y or Ctrl+Shift+Z: Redo"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
 				ImGui::BulletText("%s", T(TKEY("shortcut_esc"), "Esc: Close editor"));
 				ImGui::Separator();
@@ -1053,26 +1067,37 @@ void EditorWindow::RenderUI()
 
 			ImGui::SameLine();
 
-			// Undo: FA glyph (not theme PNG)
-			{
-				const bool canUndo = CanUndo();
+			// Undo and redo: FA glyphs (not theme PNGs)
+			const auto drawHistoryButton = [&](const char* id, const char* glyph, bool enabled, const std::string& tooltip, auto&& action) {
 				ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
 				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 				{
 					auto _style = Util::TransparentIconButtonStyle();
-					ImGui::InvisibleButton("##GlobalUndo", iconButtonSize);
+					ImGui::InvisibleButton(id, iconButtonSize);
 					const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-					if (ImGui::IsItemClicked() && canUndo)
-						PerformUndo();
-					ImVec4 undoCol = canUndo ? textColor : statusPalette.Disable;
-					if (!canUndo)
-						undoCol.w = 0.5f;
-					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
-						Icons::FA(ICON_FA_UNDO), ImGui::GetColorU32(undoCol));
+					if (ImGui::IsItemClicked() && enabled)
+						action();
+					ImVec4 color = enabled ? textColor : statusPalette.Disable;
+					if (!enabled)
+						color.w = 0.5f;
+					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(), Icons::FA(glyph), ImGui::GetColorU32(color));
 				}
 				ImGui::PopStyleVar(2);
-				Util::AddTooltip(canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoStack.size()) } }, "Undo (Ctrl+Z) - {count} states").c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
+				Util::AddTooltip(tooltip.c_str());
+			};
+			{
+				const bool canUndo = undoHistory.CanUndo();
+				drawHistoryButton("##GlobalUndo", ICON_FA_UNDO, canUndo,
+					canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoHistory.GetUndoCount()) } }, "Undo (Ctrl+Z) - {count} states") :
+							  T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"),
+					[this] { PerformUndo(); });
+				ImGui::SameLine(0.0f, style.ItemSpacing.x);
+				const bool canRedo = undoHistory.CanRedo();
+				drawHistoryButton("##GlobalRedo", ICON_FA_REDO, canRedo,
+					canRedo ? I18n::GetSingleton()->Format(TKEY("redo_states"), { { "count", std::to_string(undoHistory.GetRedoCount()) } }, "Redo (Ctrl+Y) - {count} states") :
+							  T(TKEY("redo_no_changes"), "Redo (Ctrl+Y) - Nothing to redo"),
+					[this] { PerformRedo(); });
 			}
 
 			// Export preset: the one on-screen entry to the universal export dialog. It covers every
@@ -1404,19 +1429,22 @@ void EditorWindow::RenderUI()
 	if (featuresWasOpen != settings.showFeaturesWindow)
 		Save();
 
-	DrawToolClosePrompt();
+	DrawToolPrompt();
 
 	if (deleteSceneChangesConfirmation.Draw()) {
 		if (auto* sceneManager = globals::sceneSettingsManager) {
 			// An export earlier this session left the mod layer holding what was on disk before it.
 			sceneManager->ReloadOverwrites();
-			sceneManager->ClearAllUserEntries();
+			undoHistory.Change(SceneSettingsUI::MakeUndoTarget(), [sceneManager] { sceneManager->ClearAllUserEntries(); });
 		}
 	}
 
 	if (resetLayout)
 		ResetWidgetTypeSizes();
 	resetLayout = false;
+
+	// Every target is drawn by now, so an interaction that ended this frame can be judged.
+	undoHistory.EndFrame();
 
 	// Render notifications on top of everything
 	RenderNotifications();
@@ -1489,7 +1517,10 @@ void EditorWindow::UpdateOpenState()
 		if (const auto found = std::ranges::find_if(tools, [](ExternalTool* tool) { return tool->HasUnwrittenChanges(); }); found != tools.end()) {
 			if (CanBeOpen()) {
 				open = true;
-				RequestToolClosePrompt(**found);
+				RequestToolPrompt(**found, ToolPromptReason::Close, [this] {
+					skipToolPrompt = true;
+					open = false;
+				});
 			} else {
 				const auto what = (*found)->DescribeChanges();
 				const std::string target = (*found)->GetTargetName();
@@ -1608,6 +1639,10 @@ void EditorWindow::SaveUnsavedWidgets()
 
 bool EditorWindow::HasUnsavedChanges()
 {
+	// Scene Manager saves itself as it goes; it is unsaved only while an edit waits on that save.
+	if (auto* sceneManager = SceneSettingsManager::GetSingleton(); sceneManager && sceneManager->HasUnsavedChanges())
+		return true;
+
 	const double now = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0;
 	const bool fullPass = now - lastUnsavedScan >= kUnsavedScanInterval;
 	if (fullPass)
@@ -2624,53 +2659,57 @@ bool EditorWindow::ClosePopupOnEscape()
 	return true;
 }
 
-void EditorWindow::PushUndoState(Widget* widget)
+Widget* EditorWindow::FindWidget(const FormEditSources::FormKey& key)
 {
-	if (!widget)
-		return;
+	Widget* found = nullptr;
+	ForEachWidget([&](Widget& widget) {
+		if (!found && widget.GetFormKey() == key)
+			found = &widget;
+	});
+	return found;
+}
 
-	UndoState state;
-	state.widget = widget;
-	state.widgetId = widget->GetEditorID();
-	state.settings = widget->js;
-
-	undoStack.push_back(state);
-
-	if (undoStack.size() > maxUndoStates) {
-		undoStack.erase(undoStack.begin());
-	}
+UndoHistory::Target EditorWindow::MakeUndoTarget(const Widget& widget)
+{
+	const auto key = widget.GetFormKey();
+	UndoHistory::Target target{ .key = std::format("widget:{}/{}", key.first, key.second), .label = widget.GetEditorID() };
+	target.capture = [this, key]() -> UndoHistory::SnapshotPtr {
+		auto* found = FindWidget(key);
+		return found ? found->CaptureEdits() : nullptr;
+	};
+	target.restore = [this, key](const UndoHistory::Snapshot& snapshot) {
+		if (auto* found = FindWidget(key))
+			found->RestoreEdits(snapshot);
+	};
+	return target;
 }
 
 void EditorWindow::PerformUndo()
 {
-	if (undoStack.empty())
+	if (const auto label = undoHistory.Undo())
+		ShowNotification(std::vformat(T(TKEY("undone_changes_to"), "Undone changes to {}"), std::make_format_args(*label)),
+			Util::Colors::GetInfo(), 2.0f);
+}
+
+void EditorWindow::PerformRedo()
+{
+	if (const auto label = undoHistory.Redo())
+		ShowNotification(std::vformat(T(TKEY("redone_changes_to"), "Redone changes to {}"), std::make_format_args(*label)),
+			Util::Colors::GetInfo(), 2.0f);
+}
+
+void EditorWindow::DiscardWidgetChanges(Widget& widget)
+{
+	if (!widget.HasUnsavedChanges())
 		return;
+	undoHistory.Change(MakeUndoTarget(widget), [&] { widget.Load(false); });
+}
 
-	UndoState state = undoStack.back();
-	undoStack.pop_back();
-
-	if (!state.widget) {
-		for (auto* collection : GetWidgetCollections()) {
-			for (auto& w : *collection) {
-				if (w->GetEditorID() == state.widgetId) {
-					state.widget = w.get();
-					break;
-				}
-			}
-			if (state.widget)
-				break;
-		}
-	}
-
-	if (state.widget) {
-		state.widget->js = state.settings;
-		state.widget->LoadSettings();
-		state.widget->ApplyChanges();
-		ShowNotification(
-			std::vformat(T(TKEY("undone_changes_to"), "Undone changes to {}"), std::make_format_args(state.widgetId)),
-			Menu::GetSingleton()->GetSettings().Theme.StatusPalette.InfoColor,
-			2.0f);
-	}
+void EditorWindow::DiscardAllWidgetChanges()
+{
+	ForEachWidget([this](Widget& widget) { DiscardWidgetChanges(widget); });
+	anyWidgetUnsaved = false;
+	lastUnsavedScan = -kUnsavedScanInterval;
 }
 
 void EditorWindow::ShowNotification(const std::string& message, const ImVec4& color, float duration)
@@ -2689,50 +2728,55 @@ void EditorWindow::ShowNotification(const std::string& message, const ImVec4& co
 	notifications.push_back(notif);
 }
 
-void EditorWindow::RequestToolClosePrompt(ExternalTool& tool)
+void EditorWindow::RequestToolPrompt(ExternalTool& tool, ToolPromptReason reason, std::function<void()> proceed)
 {
 	promptedTool = &tool;
+	toolPromptProceed = std::move(proceed);
+	const bool closing = reason == ToolPromptReason::Close;
 	const auto what = tool.DescribeChanges();
 	const std::string target = tool.GetTargetName();
-	toolClosePrompt.title = T(TKEY("tool_close_title"), "Unwritten Changes");
+	toolPrompt.title = T(TKEY("tool_close_title"), "Unwritten Changes");
 	if (tool.CanWriteChanges()) {
-		toolClosePrompt.message = std::vformat(T(TKEY("tool_close_message"), "{}: changes not written to {}. Write them before closing?"),
+		toolPrompt.message = std::vformat(closing ? T(TKEY("tool_close_message"), "{}: changes not written to {}. Write them before closing?") :
+													T(TKEY("tool_switch_message"), "{}: changes not written to {}. Write them before switching?"),
 			std::make_format_args(what, target));
-		toolClosePrompt.confirmLabel = std::vformat(T(TKEY("tool_close_write"), "Write to {}"), std::make_format_args(target));
-		toolClosePrompt.primaryConfirm = true;
-		toolClosePrompt.focus = Util::ConfirmationPopup::Focus::Confirm;
+		toolPrompt.confirmLabel = std::vformat(T(TKEY("tool_close_write"), "Write to {}"), std::make_format_args(target));
+		toolPrompt.primaryConfirm = true;
+		toolPrompt.focus = Util::ConfirmationPopup::Focus::Confirm;
 	} else {
-		toolClosePrompt.message = std::vformat(T(TKEY("tool_close_preview_message"), "{}: these edits are a preview and cannot be written to {}. Closing discards them."),
+		toolPrompt.message = std::vformat(closing ? T(TKEY("tool_close_preview_message"), "{}: these edits are a preview and cannot be written to {}. Closing discards them.") :
+													T(TKEY("tool_switch_preview_message"), "{}: these edits are a preview and cannot be written to {}. Switching discards them."),
 			std::make_format_args(what, target));
-		toolClosePrompt.confirmLabel.clear();
-		toolClosePrompt.primaryConfirm = false;
-		toolClosePrompt.focus = Util::ConfirmationPopup::Focus::Cancel;
+		toolPrompt.confirmLabel.clear();
+		toolPrompt.primaryConfirm = false;
+		toolPrompt.focus = Util::ConfirmationPopup::Focus::Cancel;
 	}
-	toolClosePrompt.alternateLabel = T(TKEY("tool_close_discard"), "Discard");
-	toolClosePrompt.cancelLabel = T(TKEY("cancel"), "Cancel");
-	toolClosePrompt.Request();
+	toolPrompt.alternateLabel = T(TKEY("tool_close_discard"), "Discard");
+	toolPrompt.cancelLabel = T(TKEY("cancel"), "Cancel");
+	toolPrompt.Request();
 }
 
-void EditorWindow::DrawToolClosePrompt()
+void EditorWindow::DrawToolPrompt()
 {
 	using Choice = Util::ConfirmationPopup::Choice;
-	switch (toolClosePrompt.DrawChoice()) {
+	switch (toolPrompt.DrawChoice()) {
 	case Choice::Confirm:
-		// A failed write keeps the editor open; the tool has already said why.
-		if (promptedTool && promptedTool->WriteChanges()) {
-			skipToolPrompt = true;
-			open = false;
-		}
+		// A failed write leaves things as they were; the tool has already said why.
+		if (!promptedTool || !promptedTool->WriteChanges())
+			return;
 		break;
 	case Choice::Alternate:
 		if (promptedTool)
 			promptedTool->DiscardChanges();
-		skipToolPrompt = true;
-		open = false;
 		break;
+	case Choice::Cancel:
+		toolPromptProceed = nullptr;
+		return;
 	default:
-		break;
+		return;
 	}
+	if (auto proceed = std::exchange(toolPromptProceed, nullptr))
+		proceed();
 }
 
 void EditorWindow::RenderNotifications()

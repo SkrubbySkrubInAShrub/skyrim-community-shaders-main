@@ -85,6 +85,12 @@ public:
 
 	/** @brief Returns true if the current settings differ from the last saved state. */
 	bool HasUnsavedChanges() const override;
+	UndoHistory::SnapshotPtr CaptureEdits() const override { return UndoHistory::Capture(settings); }
+	void RestoreEdits(const UndoHistory::Snapshot& snapshot) override
+	{
+		settings = UndoHistory::Get<Settings>(snapshot);
+		ApplyChanges();
+	}
 
 	/** @brief Collects all searchable lighting template settings for the search dropdown. */
 	std::vector<SearchResult> CollectSearchableSettings() const override;

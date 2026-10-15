@@ -2,6 +2,7 @@
 #include "../Features/LightLimitFix/Common.h"
 #include "ExternalTool.h"
 #include "LightPicker.h"
+#include "UndoHistory.h"
 #include <chrono>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -48,6 +49,9 @@ struct LightEditor : ExternalTool
 	bool WriteChanges() override;
 	void DiscardChanges() override { ResetOverrides(); }
 
+	/** @brief The undo target for the selected light's edits; it lapses once another light is selected. */
+	UndoHistory::Target MakeUndoTarget();
+
 private:
 	struct LightInfo
 	{
@@ -90,7 +94,34 @@ private:
 		stl::enumeration<LLFCommon::TES_LIGHT_FLAGS_EXT, uint32_t> tesFlags;
 		LLFCommon::RuntimeLightDataExt data = {};
 		RE::NiPoint3 pos = {};
+
+		/// Compares what the editor changes and Reset puts back; the rest of data is the game's.
+		bool operator==(const LightSettings& other) const;
 	};
+
+	/** @brief Everything the editor changes on the selected light, as a whole. */
+	struct LightEdits
+	{
+		LightSettings settings;
+		std::set<std::string> lpFlags;
+		float shadowDepthBias = 0.0f;
+		RE::TESForm* emittanceSource = nullptr;
+		std::string emittanceEdid;
+		bool useExternalEmittance = false;
+		/// Light Placer flags only count for a Light Placer light.
+		bool isLPLight = false;
+
+		bool operator==(const LightEdits& other) const;
+	};
+
+	/** @brief The selected light's edits as they stand. */
+	LightEdits GetEdits() const;
+	/** @brief The selected light's state when it was selected. */
+	LightEdits GetOriginalEdits() const;
+	/** @brief Puts edits back on the selected light; the per-frame update carries them to the game. */
+	void SetEdits(const LightEdits& edits);
+	/** @brief Selects a light, first asking about the selected light's unwritten changes. */
+	void RequestSelect(const LightInfo& light);
 
 	bool extendedLogMode = false;
 	bool saveColorToLP = false;
