@@ -12,6 +12,7 @@
 #include "Presets/UnifiedPresetCatalog.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/SettingsCatalog.h"
 
 namespace
 {
@@ -35,12 +36,7 @@ namespace
 		if (!settings.is_object())
 			return json::object();
 		settings.erase("preset_name");
-		for (auto it = settings.begin(); it != settings.end();) {
-			if (it.key().starts_with('_'))
-				it = settings.erase(it);
-			else
-				++it;
-		}
+		Util::Settings::EraseMetadataKeys(settings);
 		return settings;
 	}
 

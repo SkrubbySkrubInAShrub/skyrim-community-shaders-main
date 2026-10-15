@@ -62,14 +62,8 @@ namespace
 
 	constexpr size_t kSearchBufferSize = 256;
 
-	constexpr ImGuiTableFlags kListTableFlags =
-		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
 	constexpr ImGuiTableFlags kDetailsTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY;
-	/// Rows keep the modal open, span the table, and let the tick box drawn over them take its own clicks.
-	constexpr ImGuiSelectableFlags kRowFlags = ImGuiSelectableFlags_NoAutoClosePopups |
-	                                           ImGuiSelectableFlags_SpanAllColumns |
-	                                           ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick;
 
 	constexpr std::array kContextTypes{ SceneContextType::TimeOfDay, SceneContextType::Weather,
 		SceneContextType::Location, SceneContextType::Interior };
@@ -770,7 +764,7 @@ namespace
 	{
 		if (row.current)
 			BrowserUI::RowStripe(ImGui::GetColorU32(Util::Colors::GetSuccess()), BrowserUI::RowHeight());
-		const bool pressed = Util::TableRowSelectable("##row", isCursor, kRowFlags);
+		const bool pressed = Util::TableRowSelectable("##row", isCursor, BrowserUI::kTickRowFlags | ImGuiSelectableFlags_AllowDoubleClick);
 		session.enterCommits |= ImGui::IsItemFocused();
 		const bool doubleClicked = pressed && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
 		if (pressed)
@@ -813,18 +807,9 @@ namespace
 	bool DrawList(const VisibleList& list, int cursorLine, float reservedHeight)
 	{
 		const bool to = filters.direction == CopyDirection::To;
-		BrowserUI::RowShadeScope shade;
-		// An empty list takes one column, so its hint centres across the whole table.
-		const int columnCount = list.lines.empty() ? 1 : (to ? 4 : 3);
-		if (!ImGui::BeginTable("##rows", columnCount, kListTableFlags, ImVec2(0.0f, -reservedHeight)))
+		if (!BrowserUI::BeginListTable("##rows", to ? 4 : 3, ImVec2(0.0f, -reservedHeight), list.lines.empty(),
+				T(TKEY("scene_copy_empty"), "Nothing matches.")))
 			return false;
-		if (list.lines.empty()) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			BrowserUI::EmptyState(T(TKEY("scene_copy_empty"), "Nothing matches."));
-			ImGui::EndTable();
-			return false;
-		}
 
 		if (to)
 			ImGui::TableSetupColumn("##tick", ImGuiTableColumnFlags_WidthFixed);
@@ -867,7 +852,7 @@ namespace
 				ImGui::PopID();
 			}
 		}
-		ImGui::EndTable();
+		BrowserUI::EndListTable();
 		return commitRequested;
 	}
 

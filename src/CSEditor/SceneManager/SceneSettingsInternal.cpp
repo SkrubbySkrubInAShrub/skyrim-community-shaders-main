@@ -152,11 +152,6 @@ namespace SceneSettingsInternal
 		return true;
 	}
 
-	bool IsSceneMetadataKey(std::string_view key)
-	{
-		return !key.empty() && key.front() == '_';
-	}
-
 	bool ReadBoundedSceneJson(const std::filesystem::path& path, json& data)
 	{
 		auto document = Util::FileHelpers::ReadJsonObject(path, "scene settings", kMaxSceneOverwriteFileSize);
@@ -244,7 +239,7 @@ namespace SceneSettingsInternal
 			return false;
 
 		for (const auto& [key, _] : data.items())
-			if (!IsSceneMetadataKey(key))
+			if (!Util::Settings::IsMetadataKey(key))
 				return true;
 		return false;
 	}
@@ -659,7 +654,7 @@ namespace SceneSettingsInternal
 			return;
 
 		for (const auto& [key, value] : data.items()) {
-			if (IsSceneMetadataKey(key))
+			if (Util::Settings::IsMetadataKey(key))
 				continue;
 			if (IsSceneSettingPrimitive(value)) {
 				callback(settingPath, key, value);

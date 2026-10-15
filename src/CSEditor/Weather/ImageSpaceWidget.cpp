@@ -160,18 +160,10 @@ void ImageSpaceWidget::DrawWidget()
 
 void ImageSpaceWidget::LoadSettings()
 {
-	try {
-		if (!js.empty() && js.contains("Settings") && js["Settings"].is_object()) {
-			settings = js["Settings"];
-		} else {
-			settings = vanillaSettings;
-		}
-	} catch (const std::exception& e) {
-		logger::error("Failed to load ImageSpace settings for {}: {}", GetEditorID(), e.what());
-		settings = vanillaSettings;
-	}
-	originalSettings = settings;
-	ApplyChanges();
+	LoadSavedSettings([this] {
+		if (const auto saved = js.find("Settings"); saved != js.end() && saved->is_object())
+			settings = *saved;
+	});
 }
 
 void ImageSpaceWidget::SaveSettings()

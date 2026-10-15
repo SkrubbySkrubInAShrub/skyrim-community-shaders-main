@@ -2,6 +2,8 @@
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(LensFlareSettings, fadeDistRadiusScale, colorInfluence)
+
 namespace
 {
 	namespace LensFlareSetting
@@ -42,25 +44,8 @@ void LensFlareWidget::DrawWidget()
 
 void LensFlareWidget::LoadSettings()
 {
-	if (!lensFlare)
-		return;
-
-	if (!js.empty()) {
-		settings = vanillaSettings;
-		try {
-			if (js.contains("fadeDistRadiusScale"))
-				settings.fadeDistRadiusScale = js["fadeDistRadiusScale"];
-			if (js.contains("colorInfluence"))
-				settings.colorInfluence = js["colorInfluence"];
-		} catch (const std::exception& e) {
-			logger::error("LensFlare {}: Failed to load from JSON: {}", GetEditorID(), e.what());
-			settings = vanillaSettings;
-		}
-	} else {
-		settings = vanillaSettings;
-	}
-	originalSettings = settings;
-	ApplyChanges();
+	if (lensFlare)
+		LoadSavedSettings();
 }
 
 void LensFlareWidget::LoadFromGameSettings()
@@ -73,9 +58,7 @@ void LensFlareWidget::LoadFromGameSettings()
 
 void LensFlareWidget::SaveSettings()
 {
-	js["fadeDistRadiusScale"] = settings.fadeDistRadiusScale;
-	js["colorInfluence"] = settings.colorInfluence;
-	originalSettings = settings;
+	SaveSettingsToJson();
 }
 
 void LensFlareWidget::ApplyChanges()

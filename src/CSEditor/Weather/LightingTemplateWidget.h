@@ -1,21 +1,7 @@
 #pragma once
 
 #include "../Widget.h"
-
-struct LightingTemplateDirectionalColor
-{
-	float3 min;
-	float3 max;
-	bool operator==(const LightingTemplateDirectionalColor&) const = default;
-};
-
-struct LightingTemplateDALC
-{
-	LightingTemplateDirectionalColor directional[3];
-	float3 specular;
-	float fresnelPower;
-	bool operator==(const LightingTemplateDALC&) const = default;
-};
+#include "DALCSettings.h"
 
 /** @brief The BGSLightingTemplate fields a LightingTemplateWidget edits. */
 struct LightingTemplateSettings
@@ -34,7 +20,7 @@ struct LightingTemplateSettings
 	float fogClamp;
 	float lightFadeStart;
 	float lightFadeEnd;
-	LightingTemplateDALC dalc;
+	DALCSettings dalc;
 	bool operator==(const LightingTemplateSettings&) const = default;
 };
 
@@ -47,9 +33,6 @@ struct LightingTemplateSettings
 class LightingTemplateWidget : public SettingsWidget<LightingTemplateSettings>
 {
 public:
-	using DirectionalColor = LightingTemplateDirectionalColor;
-	using DALC = LightingTemplateDALC;
-
 	RE::BGSLightingTemplate* lightingTemplate = nullptr;
 
 	/**

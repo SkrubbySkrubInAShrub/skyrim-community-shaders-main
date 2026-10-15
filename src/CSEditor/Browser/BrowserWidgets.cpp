@@ -430,18 +430,50 @@ namespace BrowserUI
 		ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + width, y1), color, width * 0.5f);
 	}
 
+	namespace
+	{
+		void PushRowShade()
+		{
+			ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
+			if (shade.w < kMinRowShadeAlpha) {
+				shade = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+				shade.w = kMinRowShadeAlpha;
+			}
+			ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, shade);
+		}
+	}
+
 	RowShadeScope::RowShadeScope()
 	{
-		ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
-		if (shade.w < kMinRowShadeAlpha) {
-			shade = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-			shade.w = kMinRowShadeAlpha;
-		}
-		ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, shade);
+		PushRowShade();
 	}
 
 	RowShadeScope::~RowShadeScope()
 	{
+		ImGui::PopStyleColor();
+	}
+
+	bool BeginListTable(const char* id, int columns, const ImVec2& size, bool empty, const char* emptyHint)
+	{
+		constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
+		PushRowShade();
+		// The hint takes a single column so it centres across the whole table.
+		if (!ImGui::BeginTable(id, empty ? 1 : columns, kFlags, size)) {
+			ImGui::PopStyleColor();
+			return false;
+		}
+		if (!empty)
+			return true;
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		EmptyState(emptyHint);
+		EndListTable();
+		return false;
+	}
+
+	void EndListTable()
+	{
+		ImGui::EndTable();
 		ImGui::PopStyleColor();
 	}
 

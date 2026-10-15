@@ -75,9 +75,6 @@ namespace SceneSettingsInternal
 	bool ReadOptionalStringField(const json& object, std::string_view field, std::string& value,
 		std::string_view context);
 
-	/** @brief Whether a key is scene metadata (underscore-prefixed) rather than a setting. */
-	bool IsSceneMetadataKey(std::string_view key);
-
 	/** @brief Parses a JSON object file, refusing files over kMaxSceneOverwriteFileSize. */
 	bool ReadBoundedSceneJson(const std::filesystem::path& path, json& data);
 

@@ -2,7 +2,6 @@
 
 #include "CSEditor/EditorWindow.h"
 #include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
-#include "Features/CSEditor.h"
 #include "IconsFontAwesome5.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/PresetsPageRenderer.h"
@@ -84,19 +83,8 @@ void PostProcessing::DrawSettings()
 				"Export Preset in the CS Editor with Post Processing ticked."));
 
 		// Inside the CS Editor (its Base Settings window draws this page too) the editor is already open.
-		if (const auto* editor = EditorWindow::GetSingleton(); !editor || !editor->open) {
-			const ImGuiStyle& style = ImGui::GetStyle();
-			const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
-			const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
-			const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
-			                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
-			ImGui::SameLine();
-			if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
-				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
-			if (Icons::LabeledButton("##PostProcessingOpenCSEditor", brush, csEditorTitle))
-				CSEditor::OpenEditorWindow();
-			Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
-		}
+		if (const auto* editor = EditorWindow::GetSingleton(); !editor || !editor->open)
+			PresetsPageRenderer::DrawOpenCSEditorButton("##PostProcessingOpenCSEditor");
 
 		ImGui::Separator();
 	}

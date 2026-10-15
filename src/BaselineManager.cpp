@@ -223,10 +223,8 @@ std::unique_ptr<BaselineManager::BaselineFile> BaselineManager::LoadFile(const s
 		baselineFile->description = metadata->value("description", "");
 	}
 
-	// Underscore keys are file metadata, never settings.
-	auto& values = baselineFile->values = SanitizeJsonData(*fileJson);
-	for (auto it = values.begin(); it != values.end();)
-		it = it.key().starts_with('_') ? values.erase(it) : std::next(it);
+	baselineFile->values = SanitizeJsonData(*fileJson);
+	Util::Settings::EraseMetadataKeys(baselineFile->values);
 	return baselineFile;
 }
 

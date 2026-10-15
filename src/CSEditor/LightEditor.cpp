@@ -491,12 +491,6 @@ namespace
 	{
 		return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
 	}
-
-	float LabeledButtonWidth(Icons::GlyphRef glyph, const char* label)
-	{
-		const auto& style = ImGui::GetStyle();
-		return Icons::CalcGlyphSize(glyph).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
-	}
 }
 
 void LightEditor::DrawSettings()
@@ -564,7 +558,7 @@ void LightEditor::DrawToolbar()
 	}
 
 	const char* markersLabel = T(TKEY("toggle_lp_markers"), "Toggle LP Markers");
-	SameLineIfFits(LabeledButtonWidth(Icons::FA(ICON_FA_EYE), markersLabel));
+	SameLineIfFits(Icons::MeasureLabeledButton(Icons::FA(ICON_FA_EYE), markersLabel));
 	if (Icons::LabeledButton("##ToggleMarkers", Icons::FA(ICON_FA_EYE), markersLabel)) {
 		ScheduleConsoleCommand("tlp 1");
 	}
@@ -573,7 +567,7 @@ void LightEditor::DrawToolbar()
 	}
 
 	const char* reloadLabel = T(TKEY("reload_lp"), "Reload LP");
-	SameLineIfFits(LabeledButtonWidth(Icons::FA(ICON_FA_SYNC), reloadLabel));
+	SameLineIfFits(Icons::MeasureLabeledButton(Icons::FA(ICON_FA_SYNC), reloadLabel));
 	if (Icons::LabeledButton("##ReloadLP", Icons::FA(ICON_FA_SYNC), reloadLabel)) {
 		QueueReselectCurrentLP();  // capture before RestoreOriginal clears lpInfo/activeRefr
 		RestoreOriginal();

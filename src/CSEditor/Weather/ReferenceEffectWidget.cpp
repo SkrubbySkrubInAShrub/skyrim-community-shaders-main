@@ -83,43 +83,20 @@ void ReferenceEffectWidget::LoadSettings()
 	if (!referenceEffect)
 		return;
 
-	if (!js.empty()) {
-		settings = vanillaSettings;
-		try {
-			if (js.contains("artObject")) {
-				std::string formIDStr = js["artObject"].get<std::string>();
-				if (formIDStr != "00000000") {
-					uint32_t formID = std::stoul(formIDStr, nullptr, 16);
-					settings.artObject = RE::TESForm::LookupByID<RE::BGSArtObject>(formID);
-				} else {
-					settings.artObject = nullptr;
-				}
-			}
-			if (js.contains("effectShader")) {
-				std::string formIDStr = js["effectShader"].get<std::string>();
-				if (formIDStr != "00000000") {
-					uint32_t formID = std::stoul(formIDStr, nullptr, 16);
-					settings.effectShader = RE::TESForm::LookupByID<RE::TESEffectShader>(formID);
-				} else {
-					settings.effectShader = nullptr;
-				}
-			}
-			if (js.contains("faceTarget"))
-				settings.faceTarget = js["faceTarget"];
-			if (js.contains("attachToCamera"))
-				settings.attachToCamera = js["attachToCamera"];
-			if (js.contains("inheritRotation"))
-				settings.inheritRotation = js["inheritRotation"];
-		} catch (const std::exception& e) {
-			logger::error("ReferenceEffect {}: Failed to load from JSON: {}", GetEditorID(), e.what());
-			settings = vanillaSettings;
-		}
-	} else {
-		settings = vanillaSettings;
-	}
-
-	originalSettings = settings;
-	ApplyChanges();
+	LoadSavedSettings([this] {
+		// Forms are saved as hex form IDs; zero means none.
+		auto readForm = [this]<class T>(const char* key, T*& form) {
+			if (!js.contains(key))
+				return;
+			const auto formID = static_cast<RE::FormID>(std::stoul(js[key].get<std::string>(), nullptr, 16));
+			form = formID ? RE::TESForm::LookupByID<T>(formID) : nullptr;
+		};
+		readForm("artObject", settings.artObject);
+		readForm("effectShader", settings.effectShader);
+		ReadSaved("faceTarget", settings.faceTarget);
+		ReadSaved("attachToCamera", settings.attachToCamera);
+		ReadSaved("inheritRotation", settings.inheritRotation);
+	});
 }
 
 void ReferenceEffectWidget::LoadFromGameSettings()

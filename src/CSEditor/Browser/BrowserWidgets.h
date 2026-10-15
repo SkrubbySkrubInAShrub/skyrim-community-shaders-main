@@ -120,6 +120,20 @@ namespace BrowserUI
 	 */
 	void RowStripe(ImU32 color, float rowHeight);
 
+	/** @brief Selectable flags for a list row in a modal that has a tick box drawn over its start. */
+	inline constexpr ImGuiSelectableFlags kTickRowFlags = ImGuiSelectableFlags_NoAutoClosePopups |
+	                                                      ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap;
+
+	/**
+	 * @brief Opens a scrolling, outlined list table with shaded alternate rows. An empty list instead shows
+	 * emptyHint across a single column and closes the table again.
+	 * @return True when the caller should draw rows and then call EndListTable().
+	 */
+	bool BeginListTable(const char* id, int columns, const ImVec2& size, bool empty, const char* emptyHint);
+
+	/** @brief Closes a table BeginListTable left open. */
+	void EndListTable();
+
 	/** @brief Keeps the alternate row tint visible under themes that clear it. */
 	class RowShadeScope
 	{

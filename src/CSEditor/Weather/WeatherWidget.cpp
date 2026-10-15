@@ -13,8 +13,6 @@
 #define I18N_KEY_PREFIX "cs_editor."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Atmosphere, colorTimes)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::DirectionalColor, max, min)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::DALC, specular, fresnelPower, directional)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherWidget::Cloud, cloudLayerSpeedY, cloudLayerSpeedX, color, cloudAlpha, enabled, texturePath)
 
 namespace
@@ -594,23 +592,8 @@ void WeatherWidget::SetWeatherValues()
 		}
 	}
 
-	//DALC
-	for (size_t i = 0; i < ColorTimes::kTotal; i++) {
-		auto& dalc = weather->directionalAmbientLightingColors[i];
-		auto& settingsDalc = settings.dalc[i];
-		dalc.fresnelPower = settingsDalc.fresnelPower;
-
-		Float3ToColor(settingsDalc.specular, dalc.specular);
-
-		Float3ToColor(settingsDalc.directional[0].max, dalc.directional.x.max);
-		Float3ToColor(settingsDalc.directional[0].min, dalc.directional.x.min);
-
-		Float3ToColor(settingsDalc.directional[1].max, dalc.directional.y.max);
-		Float3ToColor(settingsDalc.directional[1].min, dalc.directional.y.min);
-
-		Float3ToColor(settingsDalc.directional[2].max, dalc.directional.z.max);
-		Float3ToColor(settingsDalc.directional[2].min, dalc.directional.z.min);
-	}
+	for (size_t i = 0; i < ColorTimes::kTotal; i++)
+		settings.dalc[i].Write(weather->directionalAmbientLightingColors[i]);
 
 	// Clouds
 	uint32_t disabledBits = 0;
@@ -751,23 +734,8 @@ void WeatherWidget::LoadWeatherValues()
 		}
 	}
 
-	// DALC
-	for (size_t i = 0; i < ColorTimes::kTotal; i++) {
-		auto& dalc = weather->directionalAmbientLightingColors[i];
-		auto& settingsDalc = settings.dalc[i];
-		settingsDalc.fresnelPower = dalc.fresnelPower;
-
-		ColorToFloat3(dalc.specular, settingsDalc.specular);
-
-		ColorToFloat3(dalc.directional.x.max, settingsDalc.directional[0].max);
-		ColorToFloat3(dalc.directional.x.min, settingsDalc.directional[0].min);
-
-		ColorToFloat3(dalc.directional.y.max, settingsDalc.directional[1].max);
-		ColorToFloat3(dalc.directional.y.min, settingsDalc.directional[1].min);
-
-		ColorToFloat3(dalc.directional.z.max, settingsDalc.directional[2].max);
-		ColorToFloat3(dalc.directional.z.min, settingsDalc.directional[2].min);
-	}
+	for (size_t i = 0; i < ColorTimes::kTotal; i++)
+		settings.dalc[i].Read(weather->directionalAmbientLightingColors[i]);
 
 	// Clouds
 	for (size_t i = 0; i < TESWeather::kTotalLayers; i++) {

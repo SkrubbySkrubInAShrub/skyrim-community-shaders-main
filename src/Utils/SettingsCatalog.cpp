@@ -99,6 +99,14 @@ namespace Util::Settings
 		return displayName;
 	}
 
+	void EraseMetadataKeys(nlohmann::json& settings)
+	{
+		if (!settings.is_object())
+			return;
+		for (auto it = settings.begin(); it != settings.end();)
+			it = IsMetadataKey(it.key()) ? settings.erase(it) : std::next(it);
+	}
+
 	std::vector<ExportSetting> GetExportSettings(std::string_view featureShortName, const nlohmann::json& settings)
 	{
 		using json = nlohmann::json;
@@ -118,7 +126,7 @@ namespace Util::Settings
 		std::vector<ExportSetting> result;
 		const auto visit = [&](auto&& self, const json& node, const json::json_pointer& parent, const std::string& context) -> void {
 			for (const auto& [key, value] : node.items()) {
-				if (key.starts_with('_'))
+				if (IsMetadataKey(key))
 					continue;
 				auto path = parent / key;
 				auto label = JoinLabelParts({ context, NormalizeDisplayPart(key) });
@@ -148,7 +156,7 @@ namespace Util::Settings
 			if (!node.is_object())
 				return result;
 			for (const auto& [key, value] : node.items()) {
-				if (key.starts_with('_'))
+				if (IsMetadataKey(key))
 					continue;
 				const auto path = parent / key;
 				if (value.is_object()) {
@@ -170,7 +178,7 @@ namespace Util::Settings
 		if (!incoming.is_object())
 			return;
 		for (const auto& [key, value] : incoming.items()) {
-			if (key.starts_with('_'))
+			if (IsMetadataKey(key))
 				continue;
 			const auto path = prefix.empty() ? key : prefix + "." + key;
 			if (!known.is_object() || !known.contains(key))

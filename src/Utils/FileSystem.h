@@ -259,7 +259,7 @@ namespace Util
 		 */
 		void EnsureDirectoryExists(const std::filesystem::path& path);
 
-		/** @brief Opens a file or folder with its default handler, Explorer for folders. @return Whether the shell accepted it. */
+		/** @brief Opens a file, folder or URL with its default handler, Explorer for folders. @return Whether the shell accepted it. */
 		bool OpenWithShell(const std::filesystem::path& path);
 
 		/**

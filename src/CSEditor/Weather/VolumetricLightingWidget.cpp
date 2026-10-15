@@ -6,6 +6,10 @@
 
 #define I18N_KEY_PREFIX "cs_editor."
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(VolumetricLightingSettings, intensity, customColorContribution, red, green, blue,
+	densityContribution, densitySize, densityWindSpeed, densityFallingSpeed, phaseFunctionContribution,
+	phaseFunctionScattering, samplingRangeFactor)
+
 namespace
 {
 	namespace VolumetricLightingTab
@@ -107,46 +111,8 @@ void VolumetricLightingWidget::DrawWidget()
 
 void VolumetricLightingWidget::LoadSettings()
 {
-	if (!volumetricLighting)
-		return;
-
-	if (!js.empty()) {
-		settings = vanillaSettings;
-		try {
-			if (js.contains("intensity"))
-				settings.intensity = js["intensity"];
-			if (js.contains("customColorContribution"))
-				settings.customColorContribution = js["customColorContribution"];
-			if (js.contains("red"))
-				settings.red = js["red"];
-			if (js.contains("green"))
-				settings.green = js["green"];
-			if (js.contains("blue"))
-				settings.blue = js["blue"];
-			if (js.contains("densityContribution"))
-				settings.densityContribution = js["densityContribution"];
-			if (js.contains("densitySize"))
-				settings.densitySize = js["densitySize"];
-			if (js.contains("densityWindSpeed"))
-				settings.densityWindSpeed = js["densityWindSpeed"];
-			if (js.contains("densityFallingSpeed"))
-				settings.densityFallingSpeed = js["densityFallingSpeed"];
-			if (js.contains("phaseFunctionContribution"))
-				settings.phaseFunctionContribution = js["phaseFunctionContribution"];
-			if (js.contains("phaseFunctionScattering"))
-				settings.phaseFunctionScattering = js["phaseFunctionScattering"];
-			if (js.contains("samplingRangeFactor"))
-				settings.samplingRangeFactor = js["samplingRangeFactor"];
-		} catch (const std::exception& e) {
-			logger::error("VolumetricLighting {}: Failed to load from JSON: {}", GetEditorID(), e.what());
-			settings = vanillaSettings;
-		}
-	} else {
-		settings = vanillaSettings;
-	}
-
-	originalSettings = settings;
-	ApplyChanges();
+	if (volumetricLighting)
+		LoadSavedSettings();
 }
 
 void VolumetricLightingWidget::LoadFromGameSettings()
@@ -169,19 +135,7 @@ void VolumetricLightingWidget::LoadFromGameSettings()
 
 void VolumetricLightingWidget::SaveSettings()
 {
-	js["intensity"] = settings.intensity;
-	js["customColorContribution"] = settings.customColorContribution;
-	js["red"] = settings.red;
-	js["green"] = settings.green;
-	js["blue"] = settings.blue;
-	js["densityContribution"] = settings.densityContribution;
-	js["densitySize"] = settings.densitySize;
-	js["densityWindSpeed"] = settings.densityWindSpeed;
-	js["densityFallingSpeed"] = settings.densityFallingSpeed;
-	js["phaseFunctionContribution"] = settings.phaseFunctionContribution;
-	js["phaseFunctionScattering"] = settings.phaseFunctionScattering;
-	js["samplingRangeFactor"] = settings.samplingRangeFactor;
-	originalSettings = settings;
+	SaveSettingsToJson();
 }
 
 void VolumetricLightingWidget::ApplyChanges()

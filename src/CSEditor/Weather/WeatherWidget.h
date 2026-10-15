@@ -1,26 +1,12 @@
 #pragma once
 
 #include "../Widget.h"
+#include "DALCSettings.h"
 
 using TESWeather = RE::TESWeather;
 using ColorTypes = TESWeather::ColorTypes;
 using ColorTimes = TESWeather::ColorTimes;
 using FogData = TESWeather::FogData;
-
-struct WeatherDirectionalColor
-{
-	float3 min;
-	float3 max;
-	bool operator==(const WeatherDirectionalColor&) const = default;
-};
-
-struct WeatherDALC
-{
-	WeatherDirectionalColor directional[3];
-	float3 specular;
-	float fresnelPower;
-	bool operator==(const WeatherDALC& o) const { return std::equal(std::begin(directional), std::end(directional), std::begin(o.directional)) && specular == o.specular && fresnelPower == o.fresnelPower; }
-};
 
 struct WeatherAtmosphere
 {
@@ -58,7 +44,7 @@ struct WeatherSettings
 	std::map<std::string, float> fogProperties;
 
 	WeatherAtmosphere atmosphereColors[ColorTypes::kTotal];
-	WeatherDALC dalc[ColorTimes::kTotal];
+	DALCSettings dalc[ColorTimes::kTotal];
 	WeatherCloud clouds[TESWeather::kTotalLayers];
 
 	// Record form references
@@ -81,8 +67,7 @@ struct WeatherSettings
 class WeatherWidget : public SettingsWidget<WeatherSettings>
 {
 public:
-	using DirectionalColor = WeatherDirectionalColor;
-	using DALC = WeatherDALC;
+	using DALC = DALCSettings;
 	using Atmosphere = WeatherAtmosphere;
 	using Cloud = WeatherCloud;
 

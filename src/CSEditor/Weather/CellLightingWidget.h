@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Widget.h"
+#include "DALCSettings.h"
 
 /** @brief The INTERIOR_DATA fields a CellLightingWidget edits. */
 struct CellLightingSettings
@@ -21,15 +22,7 @@ struct CellLightingSettings
 	uint32_t directionalXY = 0;
 	uint32_t directionalZ = 0;
 
-	// Directional ambient lighting colors (DALC equivalent)
-	float3 directionalXPlus = { 1.0f, 1.0f, 1.0f };
-	float3 directionalXMinus = { 1.0f, 1.0f, 1.0f };
-	float3 directionalYPlus = { 1.0f, 1.0f, 1.0f };
-	float3 directionalYMinus = { 1.0f, 1.0f, 1.0f };
-	float3 directionalZPlus = { 1.0f, 1.0f, 1.0f };
-	float3 directionalZMinus = { 1.0f, 1.0f, 1.0f };
-	float3 directionalSpecular = { 1.0f, 1.0f, 1.0f };
-	float fresnelPower = 1.0f;
+	DALCSettings dalc;
 
 	// Inheritance flags
 	bool inheritAmbientColor = false;

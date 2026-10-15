@@ -44,12 +44,6 @@ namespace
 	constexpr size_t kSearchBufferSize = 256;
 	constexpr std::string_view kGroupSeparator = " / ";
 
-	constexpr ImGuiTableFlags kListTableFlags =
-		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
-	/// Rows keep the modal open, span the table, and let the tick box drawn over them take its own clicks.
-	constexpr ImGuiSelectableFlags kRowFlags = ImGuiSelectableFlags_NoAutoClosePopups |
-	                                           ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap;
-
 	/// CheckboxFlags states: every bit set reads as ticked, some as mixed.
 	constexpr int kTickNone = 0;
 	constexpr int kTickSome = 1;
@@ -308,7 +302,7 @@ namespace
 	void DrawFeatureList()
 	{
 		const float em = ImGui::GetFontSize();
-		if (!ImGui::BeginTable("##features", 1, kListTableFlags, ImVec2(em * kFeatureListWidthEm, em * kListHeightEm)))
+		if (!BrowserUI::BeginListTable("##features", 1, ImVec2(em * kFeatureListWidthEm, em * kListHeightEm), false, nullptr))
 			return;
 		// An auto-resizing modal fits columns to content, which the ellipsized label measures against.
 		ImGui::TableSetupColumn("##feature", ImGuiTableColumnFlags_WidthStretch);
@@ -317,7 +311,7 @@ namespace
 			ImGui::PushID(entry.shortName.c_str());
 			ImGui::TableNextRow();
 			ImGui::TableNextColumn();
-			if (Util::TableRowSelectable("##row", index == session.viewed, kRowFlags) && session.viewed != index) {
+			if (Util::TableRowSelectable("##row", index == session.viewed, BrowserUI::kTickRowFlags) && session.viewed != index) {
 				session.viewed = index;
 				session.group.reset();
 			}
@@ -331,7 +325,7 @@ namespace
 			BrowserUI::EllipsizedText(entry.label.c_str(), 0.0f, ImGui::GetStyleColorVec4(ImGuiCol_Text));
 			ImGui::PopID();
 		}
-		ImGui::EndTable();
+		BrowserUI::EndListTable();
 	}
 
 	/** @brief Search, a chip per group, and the in-file toggle. */
@@ -416,7 +410,7 @@ namespace
 	void DrawSettingRow(FeatureExport& entry, size_t index)
 	{
 		const auto& row = entry.rows[index];
-		if (Util::TableRowSelectable("##row", false, kRowFlags))
+		if (Util::TableRowSelectable("##row", false, BrowserUI::kTickRowFlags))
 			entry.ticked[index] ^= 1;
 		ImGui::SameLine(0.0f, 0.0f);
 		bool ticked = entry.ticked[index] != 0;
@@ -451,18 +445,10 @@ namespace
 
 	void DrawSettingTable(FeatureExport& entry, const std::vector<Line>& lines)
 	{
-		BrowserUI::RowShadeScope shade;
 		const float em = ImGui::GetFontSize();
-		const int columnCount = lines.empty() ? 1 : 4;
-		if (!ImGui::BeginTable("##settings", columnCount, kListTableFlags, ImVec2(0.0f, em * kListHeightEm)))
+		if (!BrowserUI::BeginListTable("##settings", 4, ImVec2(0.0f, em * kListHeightEm), lines.empty(),
+				T("cs_editor.scene_copy_empty", "Nothing matches.")))
 			return;
-		if (lines.empty()) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			BrowserUI::EmptyState(T("cs_editor.scene_copy_empty", "Nothing matches."));
-			ImGui::EndTable();
-			return;
-		}
 
 		ImGui::TableSetupColumn("##tick", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn(T(TKEY("export.column_setting"), "Setting"), ImGuiTableColumnFlags_WidthStretch);
@@ -488,7 +474,7 @@ namespace
 				ImGui::PopID();
 			}
 		}
-		ImGui::EndTable();
+		BrowserUI::EndListTable();
 	}
 
 	/** @brief Ticks every listed setting, and a count of the ticks, including hidden ones, that clears them. */

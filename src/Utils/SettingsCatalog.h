@@ -21,6 +21,12 @@ namespace Util::Settings
 	/** @brief Returns the translated setting label shared by settings selectors. */
 	std::string GetCatalogLeafDisplayName(const SceneSettingsCatalog::SettingMetadata& setting);
 
+	/** @brief Whether a settings key is file metadata (`_`-prefixed) rather than a setting. */
+	inline bool IsMetadataKey(std::string_view key) { return key.starts_with('_'); }
+
+	/** @brief Removes the top-level metadata keys from a settings object. */
+	void EraseMetadataKeys(nlohmann::json& settings);
+
 	/** @brief One exportable setting: its JSON pointer path and display label. */
 	struct ExportSetting
 	{

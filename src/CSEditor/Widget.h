@@ -525,6 +525,51 @@ protected:
 	 *  constructor has read them from the game. */
 	void CaptureVanillaSettings() { vanillaSettings = originalSettings = settings; }
 
+	/**
+	 * @brief Resets settings to vanilla, lets readSaved overlay the saved js on them, records the result as saved
+	 * and applies it. A save that makes readSaved throw is dropped for vanilla.
+	 */
+	template <class ReadSaved>
+	void LoadSavedSettings(ReadSaved&& readSaved)
+	{
+		settings = vanillaSettings;
+		if (!js.empty()) {
+			try {
+				readSaved();
+			} catch (const std::exception& e) {
+				logger::error("{} {}: Failed to load from JSON: {}", GetWidgetTypeName(), GetEditorID(), e.what());
+				settings = vanillaSettings;
+			}
+		}
+		originalSettings = settings;
+		ApplyChanges();
+	}
+
+	/** @brief LoadSavedSettings for Settings with JSON serializers: saved keys override vanilla, missing ones keep it. */
+	void LoadSavedSettings()
+	{
+		LoadSavedSettings([this] {
+			json merged = vanillaSettings;
+			merged.update(js, true);
+			settings = merged.template get<Settings>();
+		});
+	}
+
+	/** @brief Reads js[key] into field when the save has that key, for LoadSavedSettings callbacks. */
+	template <class T>
+	void ReadSaved(const char* key, T& field) const
+	{
+		if (const auto it = js.find(key); it != js.end())
+			it->get_to(field);
+	}
+
+	/** @brief Stores settings in js through their JSON serializers and records them as saved. */
+	void SaveSettingsToJson()
+	{
+		js = settings;
+		originalSettings = settings;
+	}
+
 	Settings settings;
 	/// The last loaded or saved state.
 	Settings originalSettings;
