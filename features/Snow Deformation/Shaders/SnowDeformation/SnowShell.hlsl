@@ -838,8 +838,7 @@ static const float kRoadOwnsTop = 8.0;
 // step-aside path (coverage dies with the depth), which the patch then fills
 // by construction. ALL FOUR texels must be road-owned - one-texel erosion, so
 // the verge keeps today's overlap and a jitter-shaped gap cannot open at the
-// road edge. The G channel is written only while the road heightfield is on,
-// so this path is inert with the feature off.
+// road edge. Only road captures write the G channel.
 float SampleObjectDepthCap(float2 worldXY)
 {
 	float2 dims;

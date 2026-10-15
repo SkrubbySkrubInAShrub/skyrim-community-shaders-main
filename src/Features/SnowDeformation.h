@@ -403,10 +403,6 @@ public:
 		float LightningArcBrightness = 10.0f;
 		float LightningArcLife = 0.30f;
 		std::array<float, 3> LightningArcTint = { 0.698f, 0.620f, 1.0f };
-		/** @brief DDS for the bolt, relative to Data. The shader draws a real core-and-falloff channel on its own, so a path that fails to resolve costs detail rather than leaving a black band in the air - which is why a default can be shipped at all. Verified present in Skyrim's own effects set. */
-		std::string LightningArcTexturePath = "Textures\\Effects\\fxlightningbolt01.dds";
-		/** @brief Off by default: the procedural core-and-falloff channel is the primary look and the texture is the alternate. The path above stays filled so enabling this needs no typing. */
-		bool LightningArcUseTexture = false;
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
 		/** @brief How fast frost sets a crust, for a spell of Frostbite's strength. */
@@ -542,8 +538,6 @@ public:
 		float SkinEdgeFlankWidth = 0.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
-		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
-		bool RoadHeightfield = true;
 		/** @brief Landscape shell, road class and trench patch inside child worldspaces (the walled cities). Off by default (Josef, 2026-09-17): where those shells meet city meshes they never sit right, and the volume snow takes the ground over there. Object snow stays. */
 		bool CityShells = false;
 		/** @brief The road patch past the object raster: a road-only top map over the loaded-cell square (heightTopRawFar), read by PatchTop and RoadOwnsColumn outside the coarse window, so the road surface runs to the loaded grid's edge instead of handing back to the flat skin at ObjectRasterReachM. */
@@ -664,9 +658,7 @@ public:
 		bool UnprojectedShapesBare = true;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
-		/** @brief "Enclosed Shelter": cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)). Tents, not overhangs. */
-		bool ShelterDriftCone = true;
-		/** @brief "Snow Drift Angle" (degrees from vertical): sizes the enclosure disc; higher asks for deeper cover before the band shelters. */
+		/** @brief "Snow Drift Angle" (degrees from vertical). Cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)): tents, not overhangs. Higher asks for deeper cover before the band shelters. */
 		float ShelterDriftAngle = 30.0f;
 		/** @brief "Object Meeting Blend" (units): thickness of snow over a captured object across which the landscape sheet and an object's coat meet, half on each side of the junction: the sheet's macro slope goes halfway to the object's over its half, the coat's normal halfway to the sheet's over the other. 0 = off. */
 		float ObjectMeetBand = 12.0f;
@@ -692,8 +684,6 @@ public:
 		float VolumeDetailDistance = 1000.0f;
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
 		bool VolumeSkipEmptyCells = true;
-		/** @brief "Conservative Capture": the voxeliser pushes each triangle's edges out by half a voxel so it marks every column it touches, not only those whose centre it covers - on the far rings a rock's triangles are a fraction of a voxel and were hit-or-miss. */
-		bool VolumeConservativeCapture = false;
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
 		float VolumeForwardBias = 0.45f;
 		/** @brief "Ring Shape": 0 = cubic (256 voxels a side), 1 = wide (512 x 512 x 256: twice the reach sideways and ahead for twice the memory), 2 = wide and flat (512 x 512 x 128: the reach of wide at the memory of cubic, half the height). Every ring shares the shape, so each still doubles the one inside it in every axis. */
@@ -706,10 +696,6 @@ public:
 		bool VolumeStaggeredCapture = true;
 		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */
 		bool VolumeDirtyBricks = true;
-		/** @brief "Sparse Bricks": within a rebuilt column, a brick no snow field can reach skips its loads (the seed, X, Y and flag passes) and only writes the zeros its persistent outputs need. Off loads every brick of every rebuilt column, for comparing. */
-		bool VolumeSparseBricks = true;
-		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
-		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
 		float VolumeVoxelSize = 1.0f;
 		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the object's own normal, packed into the voxel at capture. Josef's tuned default. */
@@ -2021,25 +2007,21 @@ public:
 		float4 ArcFrom;
 		float4 ArcTo;
 		float4 ArcParams;
+		/** @brief rgb = colour, w = spare. */
 		float4 ArcTint;
 	};
 	ConstantBuffer* arcCB = nullptr;
 	ID3D11VertexShader* arcVS = nullptr;
 	ID3D11PixelShader* arcPS = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> arcTextureSRV;
 	winrt::com_ptr<ID3D11BlendState> arcBlendState;
 	winrt::com_ptr<ID3D11DepthStencilState> arcDepthState;
 	winrt::com_ptr<ID3D11RasterizerState> arcRasterState;
-	winrt::com_ptr<ID3D11SamplerState> arcSampler;
-	bool arcTextureAttempted = false;
-	std::string arcTextureLoaded;
 
-	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow, frost and arc textures - a second copy would drift. */
+	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and frost textures - a second copy would drift. */
 	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
 	ID3D11VertexShader* GetLightningArcVS();
 	ID3D11PixelShader* GetLightningArcPS();
 	bool EnsureLightningArcResources();
-	void EnsureLightningArcTexture();
 
 	/** @brief Records an arc for this frame's draw. Called from the shock cloak's own discharge, which already knows both ends. */
 	void EmitLightningArc(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
@@ -2450,7 +2432,7 @@ public:
 		float FullCoat;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
 		float FadeExempt;
-		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief >0.5: this capture or skin draw is a road (not a bridge): the capture writes the per-texel road bit and the skin steps aside where the trench patch owns the column. 1 on the patch draw, which does not read it. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float RoadField;
 		/** @brief Vanilla projected-UV mask threshold (BSLightingShaderProperty::projectedUVParams.w) for this draw; -1 when the property carries no kProjectedUV (or kTreeAnim, whose vertex alpha is wind weight, not a snow mask). Feeds the S0 debug view and the S2 placement suppressor (SKIN-PLACEMENT-PLAN.md). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjThreshold;
@@ -2842,7 +2824,7 @@ public:
 	Texture2D* heightTopRawFar = nullptr;
 	float2 farWindowCenter = { 0, 0 };
 	float farHalfExtentLive = 0.0f;
-	bool FarLevelActive() const { return settings.RoadHeightfield && settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
+	bool FarLevelActive() const { return settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
 	bool fineLevelDisabled = false;
 	/** @brief Measurement, runtime-only: run every cone pass, including the ones the seed bound proves are no-ops. */
@@ -2980,13 +2962,13 @@ public:
 		/** @brief kOverheadIgnore - the seed's rise-rim upper bound: surfaces further above do not split the plane when this plane continues beneath them (the next layer's top says). */
 		float OverheadIgnore;
 
-		/** @brief Top of the enclosure band (units), >= ShelterMaxHeight; read only while ShelterConeTan > 0. */
+		/** @brief Top of the enclosure band (units), >= ShelterMaxHeight. */
 		float ShelterBandHeight;
 		/** @brief kDiffuseLambda - per-iteration Jacobi blend toward the 4-neighbour average over the finished cone fields. */
 		float DiffuseLambda;
 		/** @brief A floating structure whose underside is this far above the ground stops sheltering it (fade over the next 100 units). Mirror in HeightMapProcessCS.hlsl. */
 		float ShelterMaxHeight;
-		/** @brief tan(ShelterDriftAngle); 0 = no enclosure band. */
+		/** @brief tan(ShelterDriftAngle), always > 0: sizes the enclosure disc. */
 		float ShelterConeTan;
 
 		/** @brief CombineCS writes the base field (ObjectHeights, t4) only for the ground-lift debug view, its sole reader. */
@@ -3062,7 +3044,7 @@ public:
 		float CentreVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
-		/** @brief Bit 0: every brick column is rebuilt this time (the toggle off, the periodic refresh, or a level with nothing built). Bit 1: dense - the active-brick gates in every field pass say yes. */
+		/** @brief 1: every brick column is rebuilt this time (Dirty Bricks off, the periodic refresh, or a level with nothing built). */
 		float ForceDirty;
 		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded: the cap's reach past a snow column. */
 		float OverhangVox;
@@ -3070,14 +3052,14 @@ public:
 		float HeadroomVox;
 		/** @brief x = 0 (Edge Noise retired; the lip's end no longer wanders), y = kVoxelEdgeNoiseCell, z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
 		float EdgeParams[4];
-		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). y = the capture's conservative expansion in voxels (Settings::VolumeConservativeCapture ? 0.5 : 0). */
+		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). y, z, w spare. */
 		float LipParams[4];
 		/** @brief xyz = voxels a side per axis (pow2 each); w unused. */
 		int Dims[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
-	/** @brief Frames between a level's rebuilds: 2^L with Settings::VolumeLazyRings, else 1. */
+	/** @brief Frames between a level's rebuilds: 2^L. */
 	uint32_t VoxelLevelPeriod(uint a_level) const;
 	/** @brief The field's value at the snow top on this level: Coverage times a gain (up to 8) where air neighbours do not vote, so a far ring's third-of-a-voxel layer is not three R8 steps; capped so the threshold stays under 0.5. */
 	float VoxelThresholdForLevel(uint a_level) const;

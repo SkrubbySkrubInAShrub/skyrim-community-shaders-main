@@ -257,10 +257,9 @@ cbuffer StaticCB : register(b1)
 	// whose own baked snow never matches the shell). Mirror in
 	// SnowDeformation.h StaticsCB.
 	float FadeExempt;
-	// >0.5: road heightfield on. On skin draws it also means THIS draw is a
-	// road-heightfield object, so the skin steps aside for the patch; on the
-	// patch's own draw it is the global gate and the per-texel bit comes from
-	// the skin-depth raster's y channel. Mirror in SnowDeformation.h.
+	// >0.5: this skin draw is a road, so the skin steps aside where the patch
+	// owns the column. The patch takes its per-texel bit from the skin-depth
+	// raster's y channel and does not read this. Mirror in SnowDeformation.h.
 	float RoadField;
 	// Vanilla projected-UV threshold (projectedUVParams.w) for this draw;
 	// -1 = no kProjectedUV on the property (or a tree-anim mesh, whose
@@ -1321,9 +1320,8 @@ float SheetSurfaceZ(float2 gridLocal, float zFloor, out float a_depth)
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
 // Patch surface evaluation, shared by the legacy VS and the tessellated
-// domain shader. dense = tessellated call sites: generated vertices sit a
-// unit or two apart, so the trail-margin test uses a cheap 5-tap cross
-// instead of the 16-ray star the coarse 8-unit grid needs.
+// domain shader. dense = tessellated call sites, whose vertices sit
+// between the raster texels and read them bilinear.
 struct PatchVertex
 {
 	float3 WorldAbs;
@@ -1351,8 +1349,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	float skinDepth;
 	float skinEdgeMin;
 	// Highest road surface in this cell, kNoRoadTop where no road drew. Tested
-	// against `top` below: a road-OWNED column drops the trample gate, so the
-	// patch covers the whole road surface rather than only trails.
+	// against `top` below: only a road-OWNED column carries the patch.
 	float roadTop;
 	[branch] if (dense)
 	{
@@ -1371,10 +1368,8 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		top = lerp(lerp(t00, t10, f.x), lerp(t01, t11, f.x), f.y);
 		// A sentinel lattice corner poisons the bilinear, and a large drop
 		// across the cell (roof or wall edge) would interpolate vertices
-		// midway down the facade, which the rim test then kills erratically
-		// at tessellated density (sawtooth facade teeth). Both fall back to
-		// the center sample so the whole cell resolves like the legacy grid
-		// and dies or lives coherently.
+		// midway down the facade. Both fall back to the center sample so the
+		// whole cell resolves like the legacy grid.
 		float tMin = min(min(t00, t10), min(t01, t11));
 		float tMax = max(max(t00, t10), max(t01, t11));
 		[flatten] if (tMin < -50000.0 || (tMax - tMin) > 100.0)
@@ -1400,165 +1395,32 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	}
 	float2 gridLocal = v.GridLocal;
 
-	// Everything below reads the raster 30-50 more times per vertex, and on a
-	// grid that now reaches the raster's full extent MOST vertices stand over
-	// nothing. Two loads already answered that, so gate on them: a sentinel
-	// top or a dead class depth can never reach the carve branch anyway.
-	bool rim = false;
-	float aliveDeform = 0.0;
-	bool roadField = false;
+	// The patch is the road's snow: it covers every road-owned column,
+	// trampled or not (untrampled road resolves to deform 0 below, a flat
+	// full-depth surface), and nothing else. A sentinel top or a dead class
+	// depth never qualifies, so ownership is asked only past those loads.
+	//
+	// OWNERSHIP, not presence: a road's footprint reaches every column it
+	// overlaps in plan view, including those whose top belongs to a rock,
+	// cairn, wall or building standing on it. The road owns the column only
+	// where the column's top IS the road - the RoadOwnsColumn predicate,
+	// against this vertex's already-sampled top/roadTop. The depth channel
+	// bleeds the same way (a road's footprint MAX-blends its class depth
+	// across every column it overlaps), so an unowned column never carves.
 	bool owns = false;
 	[branch] if (top > -50000.0 && skinDepth >= 1.0)
 	{
-		// OWNERSHIP FIRST, because the facade kills below must not fire on
-		// a road. Same predicate as RoadOwnsColumn, against this vertex's
-		// already-sampled top/roadTop. Evaluated before the de-jut can
-		// lower `top`, which only makes it more conservative: a real road
-		// column reads top == roadTop either way.
 		owns = roadTop > kNoRoadTop * 0.5;
 		// Under a wall or a house the column's top is the building; the road
 		// patch keeps going on the road's own top instead (clipping through).
 		[flatten] if (owns && (top - roadTop) >= kRoadOwnsTop)
 			top = roadTop;
-
-	// With the road heightfield on, an owned vertex never rims and always
-	// tramples, and an unowned one always dies: nothing below can change it.
-	[branch] if (RoadField < 0.5)
-	{
-	// Rim test: a vertex whose column towers over a neighbour is the top edge
-	// of a tall structure, whose triangles stretch down the facade as white
-	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
-	// rim, or the patch's edge ring is culled along every road chunk. Facade
-	// sheets still die by their own sentinel top.
-	float topXP = PatchTop(worldXY + float2(kHeightTexel, 0.0));
-	float topXN = PatchTop(worldXY - float2(kHeightTexel, 0.0));
-	float topYP = PatchTop(worldXY + float2(0.0, kHeightTexel));
-	float topYN = PatchTop(worldXY - float2(0.0, kHeightTexel));
-	float minNeighborTop = 1e9;
-	if (topXP > -50000.0)
-		minNeighborTop = min(minNeighborTop, topXP);
-	if (topXN > -50000.0)
-		minNeighborTop = min(minNeighborTop, topXN);
-	if (topYP > -50000.0)
-		minNeighborTop = min(minNeighborTop, topYP);
-	if (topYN > -50000.0)
-		minNeighborTop = min(minNeighborTop, topYN);
-	// 100 units: house facades still cull (wall drops are 300+), but steep
-	// boulder crests do not lose their trench-edge vertices (small notch
-	// triangles at rock rims).
-	rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
-	// Facade slope kill: tall walls whose raster drop is SMEARED over
-	// several texels evade the single-step rim threshold (the debug view
-	// showed the patch draped down building walls as sawtooth sheets). A
-	// steep central gradient marks them regardless of how the drop is
-	// distributed; trench-bearing boulder tops stay under the threshold.
-	[flatten] if (topXP > -50000.0 && topXN > -50000.0 && topYP > -50000.0 && topYN > -50000.0)
-	{
-		// 0.5 (~27 degrees): the whole smeared flank dies, not just its
-		// steep core; the surviving band was the jagged wall-base sheath.
-		// Trench-bearing surfaces (roads, walkable boulder tops) sit well
-		// under this; steep flanks belong to the skin.
-		float2 topGrad = float2(topXP - topXN, topYP - topYN) / (2.0 * kHeightTexel);
-		rim = rim || length(topGrad) > 0.5;
 	}
-	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
-	// still samples tops partway up the smeared ramp and rises as a jagged
-	// rim along the wall. Clamping to the lowest valid neighbor plus a
-	// normal-slope allowance flattens the rim to the ground it belongs to.
-	// NOT on a road: at a road's own edge the lowest valid neighbour is the
-	// terrain beside it, and clamping to it drags the road's snow down by
-	// the whole kerb height - the mismatched/floating road edges.
-	[flatten] if (minNeighborTop < 1e8 && !owns)
-		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
-
-	// Untrenchable band around much-taller structures: the raster smear
-	// leaves elevated plateaus hugging walls that evade both the slope
-	// kill (locally flat) and the neighbor clamp (all neighbors on the
-	// plateau). Any surface towering over this vertex within the band
-	// kills it outright. The height threshold is the building detector:
-	// houses, walls and cliffs tower by hundreds of units; benches and
-	// low rocks can never trigger it.
-	static const float2 kTallRays[8] = {
-		{ 24.0, 0.0 }, { 17.0, 17.0 }, { 0.0, 24.0 }, { -17.0, 17.0 },
-		{ -24.0, 0.0 }, { -17.0, -17.0 }, { 0.0, -24.0 }, { 17.0, -17.0 }
-	};
-	bool nearTall = false;
-	[unroll] for (uint tallI = 0; tallI < 8; tallI++)
-	{
-		float tallTop = PatchTop(worldXY + kTallRays[tallI]);
-		[flatten] if (tallTop > -50000.0 && (tallTop - top) > 100.0)
-			nearTall = true;
-	}
-	rim = rim || nearTall;
-
-	// A ROAD NEVER RIMS (Josef: road shells must never have holes, "even
-	// at their own edges"). Every kill above exists to keep the patch off
-	// building facades and off plateaus hugging walls - and a road's OWN
-	// edge trips the facade slope test by construction, since a RoadChunk
-	// stands proud of the terrain and drops far more than four units
-	// across the eight the gradient measures. The killed vertex takes the
-	// six triangles around it with it, and the road skin has already
-	// stepped aside on that column (RoadOwnsColumn is true there, the road
-	// IS the top), so nothing is left: the hexagonal holes photographed
-	// from underneath. The patch's silhouette dissolve still clips a real
-	// overhang in the PS, so dropping the vertex kill costs no protection.
-	rim = rim && !owns;
-
-	// Neighborhood trample test: the patch lives only around trails. The
-	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
-	// radius 12 the rays sit 22.5 degrees apart, so even the thinnest trail
-	// cannot slip between rays); dense tessellated vertices sit a unit or
-	// two apart and a 5-tap cross covers their footprint.
-	aliveDeform = SampleDeformation(gridLocal);
-	if (dense) {
-		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(6.0, 0.0)));
-		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(6.0, 0.0)));
-		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(0.0, 6.0)));
-		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(0.0, 6.0)));
-	} else {
-		static const float2 kAliveRays[16] = {
-			{ 12.0, 0.0 }, { 11.09, 4.59 }, { 8.49, 8.49 }, { 4.59, 11.09 },
-			{ 0.0, 12.0 }, { -4.59, 11.09 }, { -8.49, 8.49 }, { -11.09, 4.59 },
-			{ -12.0, 0.0 }, { -11.09, -4.59 }, { -8.49, -8.49 }, { -4.59, -11.09 },
-			{ 0.0, -12.0 }, { 4.59, -11.09 }, { 8.49, -8.49 }, { 11.09, -4.59 }
-		};
-		[unroll] for (uint rayI = 0; rayI < 16; rayI++)
-			aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + kAliveRays[rayI]));
-	}
-	}  // RoadField < 0.5
-
-	// Road heightfield: the patch IS the road's snow, so it must exist over
-	// the whole surface, not just around trails. Untrampled road resolves to
-	// deform 0 below, i.e. a flat full-depth surface - the same expression,
-	// evaluated everywhere.
-	//
-	// OWNERSHIP, not presence: a road's footprint reaches every column it
-	// overlaps in plan view, including those whose top belongs to a rock,
-	// cairn, wall or building standing on it - and draping road-depth snow
-	// over those was the plate regression. The road owns the column only
-	// where the column's top IS the road.
-	// `owns` is computed at the top of this block now - the facade kills
-	// have to know about it before they run.
-	roadField = RoadField > 0.5 && owns;
-
-	}  // end cheap gate
-
-	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
-	// MAX-blends its class depth across every column it overlaps, so a rock or
-	// cairn standing on a road inherits a carvable depth it was never granted
-	// (its own capture writes zero). Ownership fixed the untrampled case;
-	// without it here too, walking on such a rock still cut a trench into it.
-	//
-	// So while the heightfield owns roads, a road is the only thing allowed to
-	// carve, and a trampled column no road owns is raster bleed. Turning the
-	// heightfield OFF restores the pre-heightfield behaviour exactly.
-	bool mayTrample = (RoadField < 0.5) || owns;
-	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample);
-	v.RoadBit = roadField ? 1.0 : 0.0;
+	v.RoadBit = owns ? 1.0 : 0.0;
 
 	// Single-return structure: an early return inside a [branch] trips
 	// fxc's X4000 and CI enforces zero warnings.
-	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled)
+	[branch] if (top > -50000.0 && skinDepth >= 1.0 && owns)
 	{
 		// Road verge: ride the repose cone down to the landscape class depth.
 		// A trench crossing the road edge then keeps ONE cross-section - the
@@ -1570,7 +1432,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// the accumulation scale, so the verge stays continuous as depths
 		// grow. Undisturbed verges change from a step to a bank, which is
 		// what snow does at a cleared edge anyway.
-		[branch] if (roadField)
 		{
 			float landDepth = max(SampleTerrainStatics(gridLocal).y, 0.0);
 			float cone = ObjectConeDepth(worldXY);

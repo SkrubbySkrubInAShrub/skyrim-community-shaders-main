@@ -486,8 +486,7 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
 	a_cb.LipParams[0] = airWeight;
-	a_cb.LipParams[1] = settings.VolumeConservativeCapture ? 0.5f : 0.0f;
-	a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
+	a_cb.LipParams[1] = a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
@@ -512,7 +511,7 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 
 uint32_t SnowDeformation::VoxelLevelPeriod(uint a_level) const
 {
-	return settings.VolumeLazyRings ? (1u << a_level) : 1u;
+	return 1u << a_level;
 }
 
 float SnowDeformation::VoxelThresholdForLevel(uint a_level) const
@@ -661,7 +660,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		mix(cbHash, &voxelMemorySeconds, sizeof(voxelMemorySeconds));
 		mix(cbHash, &settings.VolumeStaggeredCapture, sizeof(settings.VolumeStaggeredCapture));
 		mix(cbHash, &settings.VolumeDirtyBricks, sizeof(settings.VolumeDirtyBricks));
-		mix(cbHash, &settings.VolumeSparseBricks, sizeof(settings.VolumeSparseBricks));
 		const uint64_t exclusionHash = empty ? 0ull : exclusionListHash;
 		const bool originSame = empty || (origin.x == lv.origin.x && origin.y == lv.origin.y && origin.z == lv.origin.z);
 		uint32_t blockers = 0;
@@ -951,7 +949,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		FillVoxelCB(L, cb);
 		lv.rebuilds++;
 		const bool forceAll = !settings.VolumeDirtyBricks || (lv.rebuilds % kVoxelFullRefreshRebuilds) == 0;
-		cb.ForceDirty = float((forceAll ? 1u : 0u) | (settings.VolumeSparseBricks ? 0u : 2u));
+		cb.ForceDirty = forceAll ? 1.0f : 0.0f;
 		Texture3D* scratch = lv.volume[1];
 		Texture3D* occupancy = lv.volume[0];
 		ID3D11ShaderResourceView* occSRV = occupancy->srv.get();

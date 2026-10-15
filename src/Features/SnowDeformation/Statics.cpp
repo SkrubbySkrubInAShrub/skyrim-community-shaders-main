@@ -1176,9 +1176,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			if (auto textureSet = logMaterial->textureSet.get())
 				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
 					diffusePath = path;
-		logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}) heightfield={} tex='{}'",
-			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia,
-			(road && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
+		logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}) tex='{}'",
+			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia, diffusePath);
 	}
 
 	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
@@ -1398,9 +1397,9 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
 	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
-	// Global gate here, not a per-draw class: the patch is one draw and
-	// reads the road bit per texel from the raster's G channel.
-	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
+	// The patch is road snow throughout; it reads the road bit per texel from
+	// the raster's G channel, not from here.
+	a_scb.RoadField = 1.0f;
 }
 
 uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const
@@ -2155,7 +2154,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.DiffuseLambda = kDiffuseLambda;
 	processData.ShelterMaxHeight = std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
 	processData.ShelterBandHeight = std::max(kShelterBandHeight, processData.ShelterMaxHeight);
-	processData.ShelterConeTan = settings.ShelterDriftCone ? std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f)) : 0.0f;
+	processData.ShelterConeTan = std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f));
 	processData.WriteBaseField = groundLiftDebug ? 1u : 0u;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
@@ -2417,7 +2416,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
-		scb.RoadField = (settings.RoadHeightfield && cap.road) ? 1.0f : 0.0f;
+		scb.RoadField = cap.road ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		{
 			// The S4 path no longer depends on the 3D toggle: that toggle is
@@ -2987,7 +2986,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
 	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
-	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road) ? 1.0f : 0.0f;
+	a_scb.RoadField = a_cap.road ? 1.0f : 0.0f;
 	a_scb.ProjThreshold = a_cap.projThreshold;
 	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
 	a_scb.ProjNoiseScale = a_cap.projNoiseScale;

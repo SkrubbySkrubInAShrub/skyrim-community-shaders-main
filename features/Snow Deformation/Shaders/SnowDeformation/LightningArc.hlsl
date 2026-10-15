@@ -26,16 +26,13 @@ cbuffer ArcCB : register(b0)
 	float4 ArcTo;               ///< xyz = the spot that was struck
 	/// x = width in world units, y = brightness, z = 0-1 age, w = per-arc seed
 	float4 ArcParams;
-	float4 ArcTint;             ///< rgb = colour, a = 1 when a texture is bound
+	float4 ArcTint;             ///< rgb = colour, a = spare
 };
-
-Texture2D<float4> ArcTexture : register(t0);
-SamplerState LinearSampler : register(s0);
 
 struct VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
-	float2 TexCoord : TEXCOORD0;
+	float Across : TEXCOORD0;  ///< 0 at one ribbon edge, 1 at the other
 	float Taper : TEXCOORD1;
 };
 
@@ -121,11 +118,7 @@ VS_OUTPUT main(uint a_vertexID : SV_VertexID)
 	const float halfWidth = ArcParams.x * 0.5 * taper;
 
 	vsout.Position = mul(CameraViewProj, float4(rel + ribbon * side * halfWidth, 1.0));
-	// The vanilla art here is a TILE (shockbolttile01 and friends), so U repeats
-	// at a fixed world rate rather than stretching once over the whole bolt - a
-	// long strike would otherwise smear the pattern and a short one squash it.
-	// Sampler wraps on U for exactly this.
-	vsout.TexCoord = float2(t * max(axisLen / 192.0, 1.0), side * 0.5 + 0.5);
+	vsout.Across = side * 0.5 + 0.5;
 	vsout.Taper = taper;
 	return vsout;
 }
@@ -135,23 +128,13 @@ VS_OUTPUT main(uint a_vertexID : SV_VertexID)
 float4 main(VS_OUTPUT input) : SV_TARGET
 {
 	// Across the ribbon: a hot core with a soft falloff. This is what makes it
-	// read as light rather than as a painted strip, and it is also why the
-	// effect stands up with no texture at all - a guessed vanilla path that
-	// resolves to nothing must not leave a black band in the air.
-	const float across = abs(input.TexCoord.y * 2.0 - 1.0);
+	// read as light rather than as a painted strip.
+	const float across = abs(input.Across * 2.0 - 1.0);
 	float profile = saturate(1.0 - across);
 	profile = profile * profile;
 	const float core = pow(profile, 8.0);
 
-	float shape = profile * 0.35 + core;
-
-	if (ArcTint.a > 0.5) {
-		// A texture, when one is supplied, modulates the channel rather than
-		// replacing it: a lightning sheet is mostly empty, and multiplying
-		// keeps the bolt continuous where the art happens to be blank.
-		const float4 tex = ArcTexture.SampleLevel(LinearSampler, input.TexCoord, 0);
-		shape *= 0.35 + 0.65 * max(tex.a, dot(tex.rgb, float3(0.299, 0.587, 0.114)));
-	}
+	const float shape = profile * 0.35 + core;
 
 	// Flare in, fade out. A strike is not a fade-up.
 	const float age = saturate(ArcParams.z);

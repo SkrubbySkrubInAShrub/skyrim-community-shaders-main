@@ -79,21 +79,6 @@ ID3D11PixelShader* SnowDeformation::GetLightningArcPS()
 	return arcPS;
 }
 
-void SnowDeformation::EnsureLightningArcTexture()
-{
-	if (arcTextureAttempted && arcTextureLoaded == settings.LightningArcTexturePath)
-		return;
-	arcTextureAttempted = true;
-	arcTextureLoaded = settings.LightningArcTexturePath;
-	arcTextureSRV = nullptr;
-	if (settings.LightningArcTexturePath.empty())
-		return;
-	// Through the game's own lookup, so a path inside a BSA resolves and a
-	// modlist's retexture still wins - the same route the snow and frost
-	// textures take.
-	LoadGameDDS(settings.LightningArcTexturePath, arcTextureSRV);
-}
-
 bool SnowDeformation::EnsureLightningArcResources()
 {
 	auto* device = globals::d3d::device;
@@ -147,17 +132,6 @@ bool SnowDeformation::EnsureLightningArcResources()
 			return false;
 	}
 
-	if (!arcSampler) {
-		D3D11_SAMPLER_DESC desc{};
-		desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-		desc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-		desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-		desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-		desc.MaxLOD = D3D11_FLOAT32_MAX;
-		if (FAILED(device->CreateSamplerState(&desc, arcSampler.put())))
-			return false;
-	}
-
 	return GetLightningArcVS() && GetLightningArcPS();
 }
 
@@ -171,8 +145,6 @@ void SnowDeformation::DrawLightningArcs()
 		return;
 	if (!EnsureLightningArcResources())
 		return;
-
-	EnsureLightningArcTexture();
 
 	auto* context = globals::d3d::context;
 	auto* renderer = globals::game::renderer;
@@ -214,12 +186,6 @@ void SnowDeformation::DrawLightningArcs()
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
 
-	const bool useTexture = settings.LightningArcUseTexture && arcTextureSRV;
-	ID3D11ShaderResourceView* srv = useTexture ? arcTextureSRV.get() : nullptr;
-	context->PSSetShaderResources(0, 1, &srv);
-	ID3D11SamplerState* samplers[1] = { arcSampler.get() };
-	context->PSSetSamplers(0, 1, samplers);
-
 	// The same rebased space the shell draws in: the camera's own position is
 	// subtracted before transform, so world coordinates never reach the matrix
 	// at a magnitude that costs float precision.
@@ -231,7 +197,7 @@ void SnowDeformation::DrawLightningArcs()
 	data.CameraViewProj = fb.GetCameraViewProj();
 	data.ArcCameraPosAdjust = fb.GetCameraPosAdjust();
 	data.ArcTint = { settings.LightningArcTint[0], settings.LightningArcTint[1],
-		settings.LightningArcTint[2], useTexture ? 1.0f : 0.0f };
+		settings.LightningArcTint[2], 0.0f };
 
 	// One draw per arc. There are never many, and the alternative is an array
 	// in the constant buffer for no gain.
@@ -247,8 +213,6 @@ void SnowDeformation::DrawLightningArcs()
 	}
 
 	// Leave the pipeline as it was found.
-	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-	context->PSSetShaderResources(0, 1, nullSRV);
 	context->VSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->OMSetRenderTargets(0, nullptr, nullptr);

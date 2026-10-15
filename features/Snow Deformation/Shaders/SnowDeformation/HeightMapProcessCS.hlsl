@@ -49,13 +49,13 @@ cbuffer HeightProcessCB : register(b0)
 	float OverheadIgnore;
 
 	// Undersides between ShelterMaxHeight and this shelter only where the
-	// spot is enclosed (ShelterConeTan > 0).
+	// spot is enclosed.
 	float ShelterBandHeight;
 	// P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour
 	// average, applied to the finished cone depth fields (0 = off).
 	float DiffuseLambda;
 	float ShelterMaxHeight;  // underside height above ground past which a structure stops sheltering
-	float ShelterConeTan;  // tan(drift angle from vertical); 0 = no enclosure band
+	float ShelterConeTan;  // tan(drift angle from vertical), > 0: sizes the enclosure disc
 
 	uint WriteBaseField;  // CombineCS: write OutA (the shell reads it only in the ground-lift debug view)
 	uint3 HeightProcessPad;
@@ -378,7 +378,7 @@ groupshared uint combineElevated;
 		float shelterFrac = ringFrac.x;
 		// The band's own shelter, only where there is any and only as far as
 		// the spot is enclosed.
-		[branch] if (ShelterConeTan > 0.0 && ringFrac.y - ringFrac.x > 0.001)
+		[branch] if (ringFrac.y - ringFrac.x > 0.001)
 			shelterFrac = lerp(ringFrac.x, ringFrac.y, ShelterEnclosure(texel, dimsI, terrain));
 		// Deliberately no edge noise: roofline sinks read best smooth (fire
 		// bowls keep their noisy rims; sheltered snow follows the structure).

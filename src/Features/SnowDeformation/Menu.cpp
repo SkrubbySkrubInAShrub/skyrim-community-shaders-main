@@ -291,14 +291,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("shelter_max_height"), "Shelter Max Height"), &settings.ShelterMaxHeight, 100.0f, 1000.0f, "%.0f units");
 			if (auto _ttShelterMax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shelter_max_height_tooltip"), "Snow under a roof, bridge or archway thins out, because the structure keeps the snowfall off. A structure whose underside is higher above the ground than this no longer counts: a wide archway with plenty of air under it is as open as the sky, and the snow beneath it keeps its full depth. Fades out over the next 100 units. 70 units is about a metre."));
-			ImGui::Checkbox(T(TKEY("shelter_drift_cone"), "Shelter Enclosed Spaces"), &settings.ShelterDriftCone);
-			if (auto _ttShelterCone = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shelter_drift_cone_tooltip"), "Shelter Max Height alone cannot tell a tent from a cliff overhang: both sit at about the same height. With this on, cover higher than Shelter Max Height (up to about 250 units) still keeps the snow off, but only where the spot is enclosed - cover all around it, like the inside of a tent. A spot that is open along one side, like the strip under an overhang, keeps its snow. Cover below Shelter Max Height shelters as it always did. On by default."));
-			ImGui::BeginDisabled(!settings.ShelterDriftCone);
 			ImGui::SliderFloat(T(TKEY("shelter_drift_angle"), "Snow Drift Angle"), &settings.ShelterDriftAngle, 5.0f, 70.0f, "%.0f deg");
-			ImGui::EndDisabled();
 			if (auto _ttShelterAngle = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shelter_drift_angle_tooltip"), "How far from straight down the snow blows in, which sets how much cover a spot needs around it to count as enclosed. Higher = snow reaches further in, so only deep cover shelters; lower = a smaller roof is enough. Default 30."));
+				ImGui::Text("%s", T(TKEY("shelter_drift_angle_tooltip"), "Cover higher than Shelter Max Height (up to about 250 units) still keeps the snow off where the spot is enclosed - cover all around it, like the inside of a tent; a spot open along one side, like the strip under an overhang, keeps its snow. This angle is how far from straight down the snow blows in, which sets how much cover a spot needs around it to count as enclosed. Higher = snow reaches further in, so only deep cover shelters; lower = a smaller roof is enough. Default 30."));
 			ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
 			if (auto _ttWcs = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second."));
@@ -402,9 +397,11 @@ void SnowDeformation::DrawSettings()
 				WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("voxel_status_failed"), "NOT RUNNING: a voxel shader failed to compile - see CommunityShaders.log. The picture below is stale."));
 			else if (!voxelLevels[0].valid)
 				WrapTextDisabledF("%s", T(TKEY("voxel_status_waiting"), "Waiting for the first frame."));
+#if !SNOW_ALPHA_BUILD
 			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
 			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
+#endif
 			ImGui::SliderFloat(T(TKEY("volume_snow_depth"), "Depth"), &settings.VolumeSnowDepth, 8.0f, 25.0f, "%.0f u");
 			if (auto _ttVoxDepth = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "How high the snow surface sits over an object's top - the same on every ring, near or far, whatever that ring's voxel size. Toward an edge it rounds down over Edge Rounding."));
@@ -458,21 +455,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_max_distance"), "Max Distance"), &settings.VolumeMaxDistance, 500.0f, 8000.0f, "%.0f u");
 			if (auto _ttVoxMaxDist = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_max_distance_tooltip"), "Past this the volume snow dithers out and the object shell carries the object alone. The outermost rings sample a rock at 32 units a column, and there is a range at which the shell's own smooth cover simply looks better than that. 8000 = never."));
-			ImGui::Checkbox(T(TKEY("volume_conservative_capture"), "Conservative Capture"), &settings.VolumeConservativeCapture);
-			if (auto _ttVoxCons = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_conservative_capture_tooltip"), "When an object is drawn into a ring's grid, each triangle is widened by half a voxel so it marks every voxel it touches - not only those whose centre it happens to cover. On the far rings a rock's triangles are smaller than a voxel and were hit-or-miss, which is the faceted, gappy far snow. Off for comparing."));
 			ImGui::Checkbox(T(TKEY("volume_staggered_capture"), "Staggered Capture"), &settings.VolumeStaggeredCapture);
 			if (auto _ttVoxStagger = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_staggered_capture_tooltip"), "An object already in a ring's volume is re-drawn into it only every 8th rebuild on the nearest ring (4th and 2nd on the next two); its memory keeps it there between. Everything you have not seen yet still draws within that many rebuilds - a few frames near you. Off draws every object into every ring every rebuild, for comparing the VoxelRaster row."));
 			ImGui::Checkbox(T(TKEY("volume_dirty_bricks"), "Dirty Bricks"), &settings.VolumeDirtyBricks);
 			if (auto _ttVoxDirty = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_dirty_bricks_tooltip"), "A rebuild recomputes the snow only in the columns of bricks whose captured shape changed since the last one - something newly seen, faded, or scrolled in - plus the blur's reach around them; everywhere else keeps last time's snow, which is world-anchored and does not move. Standing still, almost nothing is rebuilt. Every 120th rebuild is whole. Off rebuilds everything every time, for comparing."));
-			ImGui::Checkbox(T(TKEY("volume_sparse_bricks"), "Sparse Bricks"), &settings.VolumeSparseBricks);
-			if (auto _ttVoxSparse = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_sparse_bricks_tooltip"), "A rebuilt column is still a stack of 32 bricks, most of them air. Each pass knows which bricks hold shape or snow and skips the ones its reach cannot touch, writing only the zeros the kept-between-frames textures need. No visible change; off for comparing cost."));
-			ImGui::Checkbox(T(TKEY("volume_lazy_rings"), "Lazy Far Rings"), &settings.VolumeLazyRings);
-			if (auto _ttVoxLazy = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_lazy_rings_tooltip"), "Each level rebuilds its snow only every 2nd, 4th, 8th... frame the further out it is - a step is nothing at a far ring's voxel size - and keeps drawing what it last built. No frame rebuilds more than two levels, so six levels cost about what two do. Off rebuilds every level every frame, for comparing."));
 			ImGui::SliderFloat(T(TKEY("volume_snow_overhang"), "Overhang"), &settings.VolumeSnowOverhang, 0.0f, 16.0f, "%.0f u");
 			if (auto _ttVoxOverhang = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_overhang_tooltip"), "How far past an edge the snow may jut sideways, in units, whatever its depth - past this it only grows up. Also how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps and caps posts wider."));
@@ -485,6 +473,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
 			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));
+#if !SNOW_ALPHA_BUILD
 			if (voxelOccupancyValid) {
 				const auto d0 = VoxelDimsForLevel(0);
 				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(d0.x) * d0.y * d0.z);
@@ -538,6 +527,7 @@ void SnowDeformation::DrawSettings()
 					draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
 				}
 			}
+#endif
 		}
 
 		ImGui::TreePop();
@@ -682,9 +672,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttClasses = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Starting height for each snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). This is the DEFAULT a texture uses until it is given its own value below. Negative values submerge the shell below the surface. Retunes live from cached data."));
 		ImGui::SeparatorText(T(TKEY("roads_group"), "Roads"));
-		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
-		if (auto _ttRhf = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it."));
 		ImGui::Checkbox(T(TKEY("city_shells"), "Landscape And Road Snow In Cities"), &settings.CityShells);
 		if (auto _ttCity = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("city_shells_tooltip"), "Draws the landscape shell and road snow inside the walled cities (their own worldspaces). Off, cities keep object snow only; the ground there is left to the volume snow."));
@@ -1120,14 +1107,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::ColorEdit3(T(TKEY("arc_tint"), "Arc Colour"), settings.LightningArcTint.data());
 			if (auto _ttArcC = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("arc_tint_tooltip"), "Colour of the discharge."));
-
-			ImGui::Checkbox(T(TKEY("arc_use_texture"), "Use Arc Texture"), &settings.LightningArcUseTexture);
-			if (auto _ttArcU = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("arc_use_texture_tooltip"), "Off, the bolt is drawn as a pure light channel - a hot core with a soft falloff. On, the texture below shapes that channel; it modulates rather than replaces, so the bolt stays continuous where the art is blank."));
-
-			ImGui::InputText(T(TKEY("arc_texture_path"), "Arc Texture"), &settings.LightningArcTexturePath);
-			if (auto _ttArcT = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("arc_texture_path_tooltip"), "Optional DDS path relative to Data. EMPTY by default and deliberately so: the bolt is drawn as a real core-and-falloff channel that stands on its own, and a guessed vanilla path that resolves to nothing would leave a dark band hanging in the air. Supply one to shape the channel; it modulates rather than replaces."));
 
 			ImGui::SliderFloat(T(TKEY("shock_cloak_radius"), "Lightning Cloak Radius"), &settings.ShockCloakRadius, 30.0f, 300.0f, "%.0f");
 			if (auto _ttShockCloak = Util::HoverTooltipWrapper())

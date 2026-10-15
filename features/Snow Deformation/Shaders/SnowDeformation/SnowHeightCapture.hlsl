@@ -36,8 +36,8 @@ cbuffer StaticCB : register(b1)
 
 	float FullCoat;
 	float FadeExempt;           // layout sync with SnowStaticsShell; unused here
-	// >0.5: this draw is a road-heightfield object; RT2.g carries the bit so
-	// the patch can own the column outright.
+	// >0.5: this draw is a road; RT2.g carries the bit so the patch can own
+	// the column outright.
 	float RoadField;
 	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
 	float ProjNoiseWeight;   // layout sync with SnowStaticsShell; unused here
@@ -121,8 +121,8 @@ struct VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
 	float WorldZ : TEXCOORD0;
-	// x = class layer depth, y = >0.5 when this draw is a road-heightfield
-	// object (the PS turns it into the road's top height).
+	// x = class layer depth, y = >0.5 when this draw is a road (the PS turns
+	// it into the road's top height).
 	float2 SkinDepth : TEXCOORD1;
 	float2 WorldXY : TEXCOORD2;
 	// World-space normal z: the peel passes reject surfaces that cannot

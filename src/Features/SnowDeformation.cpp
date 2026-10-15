@@ -96,8 +96,6 @@
 	X(LightningArcBrightness) \
 	X(LightningArcLife) \
 	X(LightningArcTint) \
-	X(LightningArcTexturePath) \
-	X(LightningArcUseTexture) \
 	X(FrostPatternStrength) \
 	X(FrostPatternScale) \
 	X(AtronachFireReach) \
@@ -155,7 +153,6 @@
 	X(SkinSlopeDepthBias) \
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
-	X(RoadHeightfield) \
 	X(CityShells) \
 	X(RoadPatchFarLevel) \
 	X(LODSnowSensitivity) \
@@ -164,7 +161,6 @@
 	X(SeasonsSnowMaxAngle) \
 	X(MultipassSnowFollowsPaint) \
 	X(ShelterMaxHeight) \
-	X(ShelterDriftCone) \
 	X(ShelterDriftAngle) \
 	X(ObjectMeetBand) \
 	X(LODObjectSnow) \
@@ -181,15 +177,12 @@
 	X(VolumeSnowRounding) \
 	X(VolumeLevels) \
 	X(VolumeFineLevels) \
-	X(VolumeLazyRings) \
 	X(VolumeDirtyBricks) \
 	X(VolumeStaggeredCapture) \
-	X(VolumeConservativeCapture) \
 	X(VolumeForwardBias) \
 	X(VolumeVerticalBias) \
 	X(VolumeMaxDistance) \
 	X(VolumeRingShape) \
-	X(VolumeSparseBricks) \
 	X(VolumeMarchStep) \
 	X(VolumeDetailDistance) \
 	X(VolumeSkipEmptyCells) \

@@ -1626,7 +1626,7 @@ void SnowDeformation::DrawShell()
 	RefreshShellGridPlacement(cbData);
 	// Bit 0: a road can write road tops into the skin-depth raster this frame
 	// (the skin march's road taps read nothing else).
-	cbData.ShellFlags.y = (objectRoadGateOff || (settings.RoadHeightfield && capturedRoads > 0)) ? 1 : 0;
+	cbData.ShellFlags.y = (objectRoadGateOff || capturedRoads > 0) ? 1 : 0;
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
 	cbData.BloodLook = { std::clamp(settings.BloodIntensity, 0.0f, 2.0f), bloodBurialClock,
