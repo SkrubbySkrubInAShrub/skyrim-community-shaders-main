@@ -222,20 +222,12 @@ namespace
 		return std::clamp((a_factor - 0.1f) / 0.9f, 0.0f, 1.0f);
 	}
 
-	// Churn depth ramps in cover units: sticky clods from a hand's depth,
-	// loose powder a finer crumble from a little deeper.
-	constexpr float kChurnClumpStart = 2.0f;
-	constexpr float kChurnClumpFull = 10.0f;
-	constexpr float kChurnPowderStart = 4.0f;
-	constexpr float kChurnPowderFull = 16.0f;
-	// Powder's crumble against the slider; sticky clods take all of it.
-	constexpr float kChurnCrumble = 0.4f;
 	// Loose snow falls back into the print; the rest of the wall stands.
 	constexpr float kSloughMax = 0.5f;
 
 	struct ClimateLookTerms
 	{
-		float berm, lip, teeth, clods, slough, churnScale, churnPowder;
+		float berm, lip, teeth, slough;
 	};
 
 	// Every term is 1 in settled sticky dry snow (stickiness 0.7 and up),
@@ -249,22 +241,9 @@ namespace
 		look.berm = std::max(ClimateSmoothstep(0.25f, 0.65f, a_stickiness), 0.8f * ClimateSmoothstep(0.30f, 0.80f, a_wetness));
 		look.lip = ClimateSmoothstep(0.35f, 0.65f, a_stickiness) * (1.0f - 0.6f * ClimateSmoothstep(0.70f, 1.0f, dryFirm));
 		look.teeth = ClimateSmoothstep(0.45f, 0.70f, std::max(a_stickiness, dryFirm)) * (1.0f - 0.6f * a_wetness);
-		look.clods = std::min(ClimateSmoothstep(0.40f, 0.70f, a_stickiness), look.berm);
 		look.slough = kSloughMax * (1.0f - std::max(sticky, ClimateSmoothstep(0.50f, 0.85f, dryFirm)));
-		const float firmDamp = 1.0f - 0.75f * ClimateSmoothstep(0.60f, 1.0f, dryFirm);
-		const float clump = sticky * (1.0f - 0.5f * a_wetness) * firmDamp;
-		const float powder = kChurnCrumble * (1.0f - sticky) * (1.0f - a_wetness) * firmDamp;
-		look.churnScale = std::max(clump, powder);
-		look.churnPowder = clump + powder > 1e-4f ? powder / (clump + powder) : 1.0f;
 		return look;
 	}
-
-	// The condition takes at most half the churn.
-	constexpr float kChurnConditionFloor = 0.5f;
-	float ConditionChurn(float a_churnScale) { return std::lerp(kChurnConditionFloor, 1.0f, ClimateHardZero(a_churnScale)); }
-
-	float ChurnRampStart(float a_powder) { return std::lerp(kChurnClumpStart, kChurnPowderStart, a_powder); }
-	float ChurnRampFull(float a_powder) { return std::lerp(kChurnClumpFull, kChurnPowderFull, a_powder); }
 
 	float WeatherCloudiness(RE::TESWeather* a_weather)
 	{
@@ -302,7 +281,6 @@ void SnowDeformation::TickSnowClimate()
 			const auto position = player->GetPosition();
 			if (const float share = LandSnowShareAround(position.x, position.y); share >= 0.0f)
 				climate.landSnowShare = share;
-			climate.maxLandSnowDepth = MaxLandSnowDepth();
 		}
 		climate.rainHeld = ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kRainy);
 	}
@@ -393,37 +371,13 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 	look.berm = ClimateHardZero(terms.berm);
 	look.lip = ClimateHardZero(terms.lip);
 	look.teeth = ClimateHardZero(terms.teeth);
-	look.clods = ClimateHardZero(terms.clods);
 	look.slough = terms.slough;
-	look.churnScale = ConditionChurn(terms.churnScale);
-	look.churnPowder = terms.churnPowder;
-
-	// The class sliders floor it until the land's own textures are registered;
-	// 6 is the object lift's drift floor.
-	const float accumScale = GetAccumulationDepthScale();
-	const float classMax = *std::max_element(settings.SnowClassDepths.begin(), settings.SnowClassDepths.end());
-	look.coverMax = std::max({ snowClimate.maxLandSnowDepth, classMax, 6.0f }) * accumScale;
-	const float roadCover = std::max(settings.RoadMeshesDepth, 0.0f) * accumScale;
-	const float roadRamp = ClimateSmoothstep(ChurnRampStart(look.churnPowder), ChurnRampFull(look.churnPowder), roadCover);
-	look.roadChurn = std::lerp(1.0f, std::min(look.churnScale * roadRamp / std::max(std::min(roadCover / 10.0f, 1.0f), 1e-3f), 1.0f), look.strength);
 
 	// Rows by the pixel's temperature offset; the shader lerps between them.
-	bool anyChurn = look.strength < 1.0f;
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
 		const SnowCondition row = SnowConditionAt(player.temperature + (float(i) - 1.0f) * kClimateLUTStep);
-		const ClimateLookTerms rowTerms = ClimateLookOf(row.stickiness, row.firmness, row.wetness);
-		const float weight = look.strength * ConditionChurn(rowTerms.churnScale);
-		float start = ChurnRampStart(rowTerms.churnPowder);
-		const float full = ChurnRampFull(rowTerms.churnPowder);
-		// A weightless row keeps its start past the deepest cover, so the lerp
-		// toward a weighted neighbour churns nowhere the neighbour does not.
-		if (weight <= 0.0f)
-			start = std::max(start, look.coverMax);
-		else if (start < look.coverMax)
-			anyChurn = true;
-		look.lut[i] = { start, 1.0f / std::max(full - start, 1.0f), weight, look.strength * row.wetness };
+		look.lut[i] = { 0.0f, 0.0f, 0.0f, look.strength * row.wetness };
 	}
-	look.churnNowhere = !anyChurn;
 	return look;
 }
 

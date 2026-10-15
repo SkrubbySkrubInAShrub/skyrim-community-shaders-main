@@ -10,7 +10,7 @@
 // their ShellCB context. Both shells reach these through SnowFields.hlsli.
 
 // World-anchored value noise, shared by the border domain warp, the dune
-// undulation and the churn (and any other organic-edge shaping).
+// undulation and the rim teeth (and any other organic-edge shaping).
 float ShapeNoiseHash(float2 cell)
 {
 	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
@@ -43,19 +43,6 @@ float ShapeNoiseTorus(float2 p, float a_cells)
 	c1 -= a_cells * floor(c1 / a_cells);
 	return lerp(lerp(ShapeNoiseHash(c0), ShapeNoiseHash(float2(c1.x, c0.y)), f.x),
 		lerp(ShapeNoiseHash(float2(c0.x, c1.y)), ShapeNoiseHash(c1), f.x), f.y);
-}
-
-// The churn's two octaves (16 and ~7 q-units a cell) on tori that both close
-// at kChurnTileTexels, so their sum tiles: UndulationFieldCS ChurnTileCS bakes
-// it at one texel per q-unit, and the shading reads it in one fetch per scale.
-static const float kChurnTileTexels = 1024.0;
-static const float2 kChurnOctaveCells = float2(64.0, 146.0);
-
-// In [0, 1].
-float ChurnNoiseTorus(float2 q)
-{
-	return ShapeNoiseTorus(q * (kChurnOctaveCells.x / kChurnTileTexels), kChurnOctaveCells.x) * 0.65 +
-	       ShapeNoiseTorus(q * (kChurnOctaveCells.y / kChurnTileTexels), kChurnOctaveCells.y) * 0.35;
 }
 
 // The dune field's amp-free core: two octaves in [-1, 1]. The shells apply

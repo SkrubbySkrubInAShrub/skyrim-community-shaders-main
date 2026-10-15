@@ -739,15 +739,6 @@ float SnowDeformation::LandSnowShareAround(float a_x, float a_y)
 	return samples ? float(snow / samples) : -1.0f;
 }
 
-float SnowDeformation::MaxLandSnowDepth()
-{
-	float deepest = 0.0f;
-	const std::shared_lock lock(landTextureMutex);
-	for (const auto& entry : landTextures)
-		deepest = std::max(deepest, entry.depth);
-	return deepest;
-}
-
 float SnowDeformation::LandBlendDepth(float a_depth, float a_snowWeight) const
 {
 	if (a_depth <= 0.0f || !LandBlendActive())

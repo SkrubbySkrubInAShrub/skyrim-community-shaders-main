@@ -82,7 +82,7 @@ cbuffer ShellCB : register(b0)
 	float WarpedHalfSpan;
 	uint GridDim;
 	uint TerrainDim;
-	uint ShellDebugData;
+	uint TrenchDetailView;
 
 	float DeformInvWorldSize;
 	uint HasSnowTexture;
@@ -97,11 +97,11 @@ cbuffer ShellCB : register(b0)
 
 	float SnowSpecularLevel;
 	float EnableGlints;
-	float BorderNoise;
-	float BorderSmooth;
+	float TrenchDetailRelief;
+	float TrenchDetailRoughness;
 
 	float ShellTriHeight;  // was BorderTrampledFade; landscape shell only, unread here
-	float BorderUntrampledFade;
+	float TrenchDetailCoverage;
 	float ShellCullBare;   // was SeamFadeUnused; landscape shell only, unread here
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
@@ -138,23 +138,25 @@ cbuffer ShellCB : register(b0)
 	float StaticsDebugView;
 	float BermHeightAmp;
 
-	float ChurnHeightAmp;
-	float ChurnSizeScale;
+	// Layout keepers (the retired churn), 0.
+	float LayoutKeeper0;
+	float LayoutKeeper1;
 	// Landscape-shell C3 A/B flags; declared so ShellCB's layout matches.
 	float DebugNoFarPad;
 	float DebugParallaxView;
 
 	float ObjBermHeightAmp;
-	float ObjChurnHeightAmp;
-	float ObjChurnSizeScale;
+	// Layout keepers (the retired object churn), 0.
+	float LayoutKeeper2;
+	float LayoutKeeper3;
 	// The meeting with the landscape sheet (SnowShell.hlsl): band in units,
 	// half on each side of the junction.
 	float ObjectMeetBand;
 
 	// 1 / Berm Steepness (see SnowShell.hlsl).
 	float BermReach;
-	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
-	uint ShellLODDebug;
+	// Trench detail tile slice: 0 powder, 1 firm, 2 wet.
+	uint TrenchDetailSlice;
 	float SeamRampInv;
 	// >0.5: read the berm field from the bake at t14 instead of recomputing
 	// its 17 taps per call.
@@ -190,7 +192,7 @@ cbuffer ShellCB : register(b0)
 
 	// Toroidal deformation-map addressing (see SnowShell.hlsl).
 	int2 DeformMapOrigin;
-	int2 ShellFlags;  // x bit 0: horizon march on, bit 4: churn by parallax (see SnowShell.hlsl)
+	int2 ShellFlags;  // x bit 0: horizon march on (see SnowShell.hlsl)
 
 	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
 	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
@@ -202,7 +204,7 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook;
 	float4 BloodLook2;
 	float4 BloodLook3;  // landscape shell only (SnowShell.hlsl)
-	// Trampled ground (see SnowShell.hlsl); consumed inside ChurnWeight.
+	// Trampled ground (see SnowShell.hlsl); consumed inside TrampleDetailScale.
 	float4 TrampleStyle;
 	// x = Tessellation Target px, yz = render viewport half size.
 	float4 TessScreen;
@@ -352,12 +354,6 @@ cbuffer StaticCB : register(b1)
 #	define StaticsDebugView 0.0
 #endif
 
-// The patch leaves churn and clods out of its geometry; its PS marches them.
-bool PatchChurnParallax()
-{
-	return (ShellFlags.x & 16) != 0;
-}
-
 Texture2D<float4> DeformationMap : register(t1);
 
 // Toroidal map fetch: logical texel (already clamped by the caller) to
@@ -451,7 +447,7 @@ Texture2D<float4> SnowHeightMap : register(t8);
 SamplerState SnowSampler : register(s0);
 #endif
 
-// Shared trench-detail shaping (noise, berm shape/bake tap, churn) - the
+// Shared trench-detail shaping (noise, berm shape/bake tap, detail) - the
 // verbatim-identical pieces of both shells live in one file (M8).
 // The road patch paints rune glyphs as the landscape shell does; the skins
 // leave them to the decal overlay.
@@ -459,7 +455,8 @@ SamplerState SnowSampler : register(s0);
 #	define SNOW_RUNE_GLYPHS
 #endif
 #if defined(PSHADER) && defined(PATCH)
-// The patch's churn reads the noise hash table, as the ground's shading does.
+// The patch's shading reads the noise hash table and the trench detail tiles,
+// as the ground's does.
 #	define SNOW_NOISE_TABLE
 #endif
 #if defined(PSHADER) && defined(SNOW_PATCH_DEFERRED)
@@ -705,7 +702,7 @@ float SampleDeformation(float2 gridLocal)
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
-// ---- Object trench detail (berm shading, churn, crisp grain) ----
+// ---- Object trench detail (berm shading, crisp grain) ----
 // The landscape shell's recipes with the independent Obj* knobs. Berm is
 // shading-only on objects: skin topology is the source mesh's (no vertices
 // to carry a ridge) and a geometry berm would straddle the patch/skin
@@ -738,27 +735,12 @@ float BermField(float2 gridLocal)
 	return BermFieldPair(gridLocal).x;
 }
 
-float ChurnNoise(float2 worldXY)
-{
-	return ChurnNoiseScaled(worldXY, ObjChurnSizeScale);
-}
-
 // Spell-mark readers (SampleScorch/SampleCrust/SampleMelted), the wide
 // exclusion field, kFireMeltFloor, Undulation, CarveProfile and the frost
 // pattern all live in SnowFields.hlsli, shared with the
 // landscape shell.
 
 #ifdef PATCH
-// Road churn: the climate's amplitude at the road cover, the slider's under
-// a fire or shock mark (the landscape's fixed ramp).
-float PatchChurnAmp(float2 gridLocal)
-{
-	float amp = ObjChurnHeightAmp;
-	[branch] if (ChurnHeightAmp > amp + 0.01)
-		amp = lerp(amp, ChurnHeightAmp, SampleSpellMark(gridLocal));
-	return amp;
-}
-
 // B-spline bicubic deformation sample; the landscape shell's smoothing,
 // ported so patch trench walls CURVE the way landscape trench walls do
 // instead of showing bilinear facets.
@@ -1635,24 +1617,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float pad = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(0.25, 2.0, skinEdgeMin);
 		depth = max(depth, pad);
 
-		// Churn: broken lumps on carved snow, the landscape shell's weighting
-		// verbatim (ChurnWeight x depth/10) so trench floors read trampled
-		// exactly as the ground's do. The old room factor (headroom above the
-		// floor) zeroed churn AT the floor, and fully trampled road floors
-		// shaded as pristine top snow. The object-exposure guard is now the
-		// pad clamp instead: lumps dig toward the pad, never through it.
-		const bool churnInGeometry = !PatchChurnParallax();
-		float churnW = ChurnWeight(deform, bermD, worldXY) * saturate(depth / 10.0);
-		[branch] if (churnInGeometry && max(ObjChurnHeightAmp, ChurnHeightAmp) > 0.01 && churnW > 0.001)
-			depth = max(depth + ChurnNoise(worldXY) * PatchChurnAmp(gridLocal) * churnW, pad);
-
-		// Berm clods: a coarser octave weighted by BermShape rather than the churn
-		// weight, since spoil lands on the crest while churn peaks in the trench.
-		// Mirrors ShellSurfaceZ; the self-shadow march skips it, as it skips churn.
-		[branch] if (churnInGeometry && RimStyle.z > 0.01 && bermD > 0.003)
-			depth += ClodNoise(worldXY, ObjChurnSizeScale) * RimStyle.z *
-			         BermShape(bermD) * saturate(1.0 - deform) * BermDepthGate(skinDepth);
-
 		// Undulation, on the landscape shell's own terms (SnowShell.hlsl's
 		// ShellSurfaceZ): same shared field, same depth scaling. Without it
 		// the patch is geometrically DEAD FLAT while the ground beside it
@@ -1677,11 +1641,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// genuinely soft and the two curves agree. The march debug view
 		// cleared the shadow path first: engagement green, wall-base
 		// shadow landing - the band was never the march's.
-		// Churn shading moved to the PS: at ChurnSize 0.25 the lumps sit at
-		// 4/1.75 units, under even the dense band's vertex spacing, so the
-		// vertex-rate gradient interpolated to smooth and trampled floors
-		// shaded as pristine top snow (Josef's road-floor report). Geometry
-		// keeps the coarse displacement above; the normal carries the look.
 		// The caster is depth-only: no normal.
 #ifndef SNOW_SHADOW_CAST
 		const float gStep = 4.0;
@@ -2902,42 +2861,45 @@ struct SkinShadeResult
 	float dbgMarchRan;
 	float landVertexAO;
 	float snowRoughness;
+	// The trench detail's mask (patch), for its coverage view.
+	float detailMask;
 };
 SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 {
 	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
 	float3 shadePos = input.WorldPos;
 #ifdef PATCH
-	// The churn tile's uvs at the shaded point (xy churn, zw clods), set by the
-	// march or on first use, so the gradients keep the march's cell offsets.
-	const float2 churnScale = float2(ChurnTileScale(ObjChurnSizeScale), ChurnTileScale(kClodSizeScale));
-	float4 churnUV = 0.0;
-	bool churnUVSet = false;
-	// Churn and clods by parallax, the landscape shell's march: the patch
-	// geometry left them out, and the point the view ray meets is shaded.
-	[branch] if (PatchChurnParallax())
+	// Trench detail tiles, the ground's own: the mask across the trench profile
+	// at the sheet point, the ray marched through the detail heights and the
+	// point it meets shaded.
+#	ifdef SNOW_PATCH_DEFERRED
+	const float detailLodHere = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
+#	else
+	const float detailLodHere = TrenchDetailLod(ddx(input.worldXY), ddy(input.worldXY));
+#	endif
+	const float detailFade = 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w);
+	float detailMask = 0.0;
+	float detailRelief = 0.0;
+	float3 detailUV = 0.0;
+	[branch] if (detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
-		float bermP = ObjBermHeightAmp > 0.005 ? BermField(input.trenchGridLocal) : 0.0;
-		float layerDepth = PatchSkinDepth(input.worldXY).x;
-		float churnW = ChurnWeight(input.pixelDeform, bermP, input.worldXY) * saturate(layerDepth / 10.0);
-		float clodW = RimStyle.z > 0.01 ? BermShape(bermP) * saturate(1.0 - input.pixelDeform) * BermDepthGate(layerDepth) : 0.0;
-		float fade = 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w);
-		float patchAmp = churnW > 0.001 ? PatchChurnAmp(input.trenchGridLocal) : 0.0;
-		float churnAmp = (patchAmp > 0.01 ? patchAmp * churnW : 0.0) * fade;
-		float clodAmp = RimStyle.z * clodW * fade;
-		[branch] if (churnAmp + clodAmp > 0.05)
+		detailMask = TrenchDetailMask(input.pixelDeform, BermFieldPair(input.trenchGridLocal), TrenchDetailCoverage) * detailFade;
+		[branch] if (detailMask > 0.001)
 		{
-			float3 dir = normalize(input.WorldPos);
-			float2 slope = -normalWS.xy / max(normalWS.z, 0.1);
-			churnUV = ChurnTileUVs(input.worldXY, ObjChurnSizeScale);
-			churnUVSet = true;
-			float t = ChurnParallaxT(dir, slope, churnAmp, clodAmp, churnUV, churnScale);
-			shadePos = input.WorldPos + dir * t;
-			input.worldXY += dir.xy * t;
-			input.trenchGridLocal += dir.xy * t;
-			input.GridLocal += dir.xy * t;
-			churnUV += dir.xyxy * churnScale.xxyy * t;
+			detailRelief = TrenchDetailRelief * detailMask * saturate(PatchSkinDepth(input.worldXY).x / 10.0) * TrampleDetailScale(input.worldXY, input.pixelDeform);
+			detailUV = float3(TrenchDetailUV(input.worldXY), (float)TrenchDetailSlice);
 		}
+	}
+	[branch] if (detailRelief > 0.05)
+	{
+		float3 dir = normalize(input.WorldPos);
+		float2 slope = -normalWS.xy / max(normalWS.z, 0.1);
+		float t = TrenchDetailParallaxT(dir, slope, float4(detailUV.xy, dir.xy / kTrenchDetailTile), float3(detailRelief, detailUV.z, detailLodHere));
+		shadePos = input.WorldPos + dir * t;
+		input.worldXY += dir.xy * t;
+		input.trenchGridLocal += dir.xy * t;
+		input.GridLocal += dir.xy * t;
+		detailUV.xy += dir.xy * (t / kTrenchDetailTile);
 	}
 #endif
 	const float2 trenchGridLocal = input.trenchGridLocal;
@@ -3002,7 +2964,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
 	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 #ifdef SNOW_PATCH_DEFERRED
-	// The attribute pass's derivatives (the churn-parallax shift's own is
+	// The attribute pass's derivatives (the detail-parallax shift's own is
 	// dropped, as on the ground).
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXY);
 	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
@@ -3045,51 +3007,17 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// Centre-masked rather than per-tap: this berm is shading-only, and
 		// the mask's job is just to keep the ridge off the dug floor.
 		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
-		// P6 clods, shading-only like this whole ridge (geometry berm
-		// waits for the skin rework); same weight recipe as the landscape.
-		[branch] if (RimStyle.z > 0.01)
-			normalWS = normalize(normalWS + float3(-ChurnNoiseGradUV(ChurnTileUVs(GridOrigin + trenchGridLocal, ObjChurnSizeScale).zw, ChurnTileScale(kClodSizeScale), bStep) *
-				RimStyle.z * BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(bermDepth), 0.0));
 	}
 
 #ifdef PATCH
-	// Churn shading at PIXEL rate, the landscape PS's own recipe (weight =
-	// ChurnWeight x depth/10). Not in the vertex normal: at ChurnSize 0.25
-	// the lumps sit at 4/1.75 units, under even the dense band's vertex
-	// spacing, and the interpolated gradient shaded trampled floors as
-	// pristine top snow. Geometry keeps its coarse displacement; the normal
-	// carries the look, as with the landscape's dunes.
-	// UNCARVED depth, exactly as the landscape weighs it (its pixelDepth is
-	// the ramp depth, not the carve): trench floors shade at full churn
-	// whenever the layer is deep enough to churn at all. The carved depth
-	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
-	// Churned by parallax, churn and clods fade out with the march.
-	const float churnFade = PatchChurnParallax() ? 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w) : 1.0;
-	[branch] if (max(ObjChurnHeightAmp, ChurnHeightAmp) > 0.01 && churnFade > 0.0)
+	// The detail tile's slopes at the shaded point, scaled with its height:
+	// the ground's gradient, so the two agree where they meet.
+	[branch] if (detailRelief > 0.001)
 	{
-		float churnWPix = ChurnWeight(pixelDeform, bermC, worldXY) * saturate(PatchSkinDepth(worldXY).x / 10.0) * churnFade;
-		float churnAmpPix = churnWPix > 0.001 ? PatchChurnAmp(trenchGridLocal) : 0.0;
-		[branch] if (churnAmpPix > 0.01)
-		{
-			[branch] if (!churnUVSet)
-			{
-				churnUV = ChurnTileUVs(worldXY, ObjChurnSizeScale);
-				churnUVSet = true;
-			}
-			normalWS = normalize(normalWS + float3(-ChurnNoiseGradUV(churnUV.xy, churnScale.x, 3.0) * churnAmpPix * churnWPix, 0.0));
-		}
-	}
-	// Clods left the geometry with the churn: shade them here, the landscape
-	// PS's centre-weighted clod gradient.
-	[branch] if (PatchChurnParallax() && RimStyle.z > 0.01 && churnFade > 0.0)
-	{
-		float clodWPix = BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(PatchSkinDepth(worldXY).x) * churnFade;
-		[branch] if (clodWPix > 0.001)
-		{
-			[branch] if (!churnUVSet)
-				churnUV = ChurnTileUVs(worldXY, ObjChurnSizeScale);
-			normalWS = normalize(normalWS + float3(-ChurnNoiseGradUV(churnUV.zw, churnScale.y, 4.0) * RimStyle.z * clodWPix, 0.0));
-		}
+		const float2 dn = SnowTrenchDetailN.SampleLevel(SnowSampler, detailUV, detailLodHere) * 2.0 - 1.0;
+		float2 g = -normalWS.xy / max(normalWS.z, 0.1);
+		g -= dn / max(sqrt(saturate(1.0 - dot(dn, dn))), 0.25) * detailRelief;
+		normalWS = normalize(float3(-g, 1.0));
 	}
 #endif
 
@@ -3258,6 +3186,10 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
+#ifdef PATCH
+	// Trench detail: its roughness crank over the mask.
+	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
+#endif
 
 	// Crust polishes whatever the material ended up being; after the RMAOS
 	// block or an installed map silently discards it (landscape lesson).
@@ -3562,6 +3494,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	r.dbgMarchRan = dbgMarchRan;
 	r.landVertexAO = landVertexAO;
 	r.snowRoughness = snowRoughness;
+#ifdef PATCH
+	r.detailMask = detailMask;
+#else
+	r.detailMask = 0.0;
+#endif
 	return r;
 }
 
@@ -5302,6 +5239,15 @@ PS_OUTPUT main(float4 pos : SV_Position)
 		psout.Reflectance.rgb = 0.0;
 	}
 #endif
+	[branch] if (TrenchDetailView != 0)
+	{
+		// Orange where the trench detail tiles apply, over grey shading (the ground's view).
+		const float shade = dot(psout.Diffuse.rgb, float3(0.2126, 0.7152, 0.0722));
+		psout.Diffuse.rgb = lerp(shade.xxx, float3(1.0, 0.35, 0.08) * (shade * 1.6 + 0.08), ssr.detailMask);
+		psout.Albedo.rgb = 0.0;
+		psout.Specular.rgb = 0.0;
+		psout.Reflectance.rgb = 0.0;
+	}
 	return psout;
 }
 #endif

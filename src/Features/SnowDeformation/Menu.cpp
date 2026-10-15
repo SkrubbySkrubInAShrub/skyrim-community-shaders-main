@@ -808,7 +808,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("trench_detail_group"), "Trench Detail"));
 		if (auto _ttDetail = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The shape and surface of disturbed snow: the raised berm along trench edges, the chunky churned surface and the broken rim. Snow sitting on objects follows these too."));
+			ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The shape and surface of disturbed snow: the raised berm along trench edges, the broken snow in and around trenches and the broken rim. Road trenches wear all of it; snow on objects takes the berm."));
 
 		ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttBh = Util::HoverTooltipWrapper())
@@ -818,17 +818,33 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("berm_steepness_tooltip"), "How tightly the berm hugs the trench, at the same crest height. 1.00 = the default apron, reaching about 40 units out; 0 spreads it twice as wide and gentle, 2 packs it into half the width - a steep ridge."));
 
-		ImGui::SliderFloat(T(TKEY("berm_clods"), "Berm Clods"), &settings.BermClods, 0.0f, 6.0f, "%.1f units");
-		if (auto _ttClods = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("berm_clods_tooltip"), "Breaks the berm crest into coarse thrown chunks - spoil is clumps, not a smooth mound. Coarser than the trench's churn rubble on purpose, so berm and trench read at different scales. 0 = off."));
+		ImGui::SliderFloat(T(TKEY("trench_detail_relief"), "Detail Relief"), &settings.TrenchDetailRelief, 0.0f, 2.0f, "%.2fx");
+		if (auto _ttTdRelief = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height and slopes of the broken snow in and around trenches, on the ground and on roads: the clods, crumbs and slabs the light picks out. It eases off on thin snow and on trampled floors (Flattening). 1 = as authored, 0 = off."));
 
-		ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
-		if (auto _ttCh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
+		ImGui::SliderFloat(T(TKEY("trench_detail_roughness"), "Detail Roughness"), &settings.TrenchDetailRoughness, 0.3f, 1.5f, "%.2fx");
+		if (auto _ttTdRough = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_detail_roughness_tooltip"), "Snow roughness where the detail applies, as a multiplier. Lower is glossier, for wet snow; 1 leaves the snow set's own roughness."));
 
-		ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
-		if (auto _ttCs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
+		ImGui::SliderFloat(T(TKEY("trench_detail_coverage"), "Detail Coverage"), &settings.TrenchDetailCoverage, 0.0f, 2.5f, "%.2f");
+		if (auto _ttTdCover = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_detail_coverage_tooltip"), "How far across a trench the detail reaches. 0 = the trench floor only, 1 = the floor and walls to just past the rim, 2 = out over the berm, 2.5 = the berm's whole apron. The edge fades softly at every setting and every snow depth, and the detail fades out where a trench meets an object."));
+
+		{
+			const char* sets[] = { "By Snow Condition", "Powder", "Firm", "Wet" };
+			ImGui::Combo(T(TKEY("trench_detail_set"), "Detail Set"), &settings.TrenchDetailSet, sets, 4);
+			if (auto _ttTdSet = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition picks wet in wet snow, powder in fresh snow and firm otherwise; the others force one set for comparison."));
+			if (settings.TrenchDetailSet == 0)
+				ImGui::TextDisabled("%s %s", T(TKEY("trench_detail_set_now"), "Now:"), sets[1 + TrenchDetailSlice()]);
+		}
+#if !SNOW_ALPHA_BUILD
+		ImGui::Checkbox(T(TKEY("trench_detail_view"), "Detail View"), &debugTrenchDetailView);
+		if (auto _ttTdView = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_detail_view_tooltip"), "Paints the snow orange where the trench detail applies, over grey shading, on the ground and on roads, to judge Coverage at a glance."));
+#endif
+		if (trenchDetailAttempted && !trenchDetailNormalSRV)
+			ImGui::TextDisabled("%s", T(TKEY("trench_detail_missing"), "Trench detail textures not found: Shaders\\SnowDeformation\\TrenchDetailN.dds and TrenchDetailH.dds."));
 
 		ImGui::SliderFloat(T(TKEY("rim_lip"), "Rim Lip"), &settings.RimLip, 0.0f, 0.3f, "%.2f");
 		if (auto _ttLip = Util::HoverTooltipWrapper())
@@ -846,15 +862,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
 		if (auto _ttClimate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge, loose snow fallen back into them and a fine crumble; settled snow just below freezing keeps the full ridge, lip, teeth and churn; wet snow leaves dark prints with crisp walls and clumps. Churn needs depth: sticky clods from a hand deep, powder's crumble from a little deeper. Each trench slider is the most the snow can give, and churn keeps at least half of it. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
+			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge and loose snow fallen back into them; settled snow just below freezing keeps the full ridge, lip and teeth; wet snow leaves dark prints with crisp walls. Each trench slider is the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, new trenches get sloped sides instead of sharp walls, the ridge beside them shrinks, and the rim loses its lip and teeth. As the snow settles over the following days, the look you set with Trench Wall Sharpness, Berm Height, Rim Lip and Rim Teeth comes back. Trenches keep the walls they were cut with. 0 = off, the snow is always firm. Snow Climate takes over from this as it rises: at 1.00 fresh snow acts through its stickiness and density instead."));
-
-		ImGui::SliderFloat(T(TKEY("fresh_snow_churn"), "Fresh Snow Churn"), &settings.FreshSnowChurn, 0.0f, 1.0f, "%.2fx");
-		if (auto _ttFreshChurn = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fresh_snow_churn_tooltip"), "Loose new snow does not break into lumps, so the churn in trenches and on berms is smoother while the snow is fresh: this multiplies Churn Height in fully fresh snow, easing back to the full height as the snow settles. At 0.50x a Churn Height of 4 becomes 2 during a storm. It stacks with Flattening on trampled ground. 1.00x = off. Snow Climate takes over from this as it rises."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_settle"), "Fresh Snow Settles In"), &settings.FreshSnowSettleHours, 6.0f, 168.0f, "%.0f game hours");
 		if (auto _ttSettle = Util::HoverTooltipWrapper())
@@ -864,7 +876,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttTrampleFlat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Snow walked over again and again is packed down, and the broken lumps on the trench floor are walked flatter: this multiplies Churn Height on floors deeper than one pass leaves them, easing in the deeper the traffic has packed them. At 0.50x a Churn Height of 1 becomes 0.5. Lumps on the berms and in a trail walked once are never touched. 1.00x = off."));
+			ImGui::Text("%s", T(TKEY("trampled_flattening_tooltip"), "Snow walked over again and again is packed down, and the broken snow on the trench floor is walked flatter: this multiplies Detail Relief on floors deeper than one pass leaves them, easing in the deeper the traffic has packed them. At 0.50x a Detail Relief of 1 becomes 0.5. The berms and a trail walked once are never touched. 1.00x = off."));
 
 
 
@@ -1719,10 +1731,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("shell_tess_target_px"), "Tessellation Target"), &shellTessTargetPx, 0.0f, 16.0f, shellTessTargetPx > 0.0f ? "%.0f px" : "off");
 			if (auto _ttTessTarget = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "Trampled snow, on the ground and on roads: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each (a road's far edges at a quarter of that). Default 16 px, paired with the churn parallax (see Disable Churn Parallax); off is the old distance-only rule. Lower keeps more real relief at a higher cost; trench and berm shapes hold at every setting. Measured on a trampled battlefield at 1720x720: 16 px with parallax took the snow shell from 3.34 to 2.11 ms."));
-			ImGui::Checkbox(T(TKEY("shell_churn_parallax_off"), "Disable Churn Parallax"), &shellChurnParallaxOff);
-			if (auto _ttChurnParallax = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_churn_parallax_off_tooltip"), "A/B for trampled snow, on the ground and on roads. By default the churn lumps and berm clods are drawn by a short ray march in the pixel shader, not by geometry, so they need no small triangles; tick this to put them back into the geometry. Seen from above the two match. At low, grazing views the geometry also gives the lumps their outlines, which the march cannot; with the default 16 px Tessellation Target that detail is mostly gone either way. Trench and berm shapes are real geometry in both."));
+				ImGui::Text("%s", T(TKEY("shell_tess_target_px_tooltip"), "Trampled snow, on the ground and on roads: each tessellated edge keeps no more segments than its on-screen length holds at this many pixels each (a road's far edges at a quarter of that). Default 16 px; off is the old distance-only rule. Lower keeps more real relief at a higher cost; trench and berm shapes hold at every setting. Measured on a trampled battlefield at 1720x720: 16 px took the snow shell from 3.34 to 2.11 ms."));
 
 
 			ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Pipeline Statistics"), &shellPipelineStatsEnabled);
@@ -2103,12 +2112,10 @@ void SnowDeformation::DrawSettings()
 				debugAgeingRateOverride >= 0.0f ? " (override)" : "");
 			{
 				const SnowClimateLook look = ComputeSnowClimateLook();
-				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, clods %.2f, wall slough %.2f", look.strength,
-					look.berm, look.lip, look.teeth, look.clods, look.slough);
-				WrapTextF("Churn %.2f, %.0f%% powder crumble (ramp %.0f-%.0f units of cover); roads %.2f; deepest cover %.0f units", look.churnScale,
-					look.churnPowder * 100.0f, look.lut[1].x, look.lut[1].x + 1.0f / std::max(look.lut[1].y, 1e-4f), look.roadChurn, look.coverMax);
-				static const char* kShading[] = { "full shader", "full shader (churn-free shader off)", "churn-free shader (no churn, clods or teeth in the window)" };
-				WrapTextF("Ground shading: %s; fire/shock mark texels %u", kShading[shellChurnFree ? 2 : (debugChurnFreeOff ? 1 : 0)], spellMarkTexels);
+				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, wall slough %.2f", look.strength,
+					look.berm, look.lip, look.teeth, look.slough);
+				static const char* kDetailSets[] = { "powder", "firm", "wet" };
+				WrapTextF("Trench detail: %s set%s", kDetailSets[TrenchDetailSlice()], settings.TrenchDetailSet == 0 ? " (by the snow condition)" : " (forced)");
 			}
 
 			ImGui::Checkbox(T(TKEY("climate_temperature_override_on"), "Override Temperature"), &debugClimateTemperatureOn);
@@ -2149,9 +2156,6 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("Sun march cache, last %u updates: rebuilt whole %u near, %u far (settings key changed %u)",
 					marchCensusFilled, nearFull, farFull, keyed);
 			}
-			ImGui::Checkbox(T(TKEY("churn_free_off"), "Churn-Free Shader Off (A/B)"), &debugChurnFreeOff);
-			if (auto _ttChurnFree = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("churn_free_off_tooltip"), "Not saved. When the climate leaves no churn, clods or rim teeth anywhere in the trench window, the ground snow draws with a shader built without them. On: the full shader draws anyway, for timing the two in Ground - Shell Shading."));
 			ImGui::TreePop();
 		}
 

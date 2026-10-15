@@ -126,15 +126,15 @@
 	X(BermSteepness) \
 	X(SnowResistance) \
 	X(FreshSnowSoftness) \
-	X(FreshSnowChurn) \
 	X(SnowClimateStrength) \
 	X(FreshSnowSettleHours) \
 	X(TrampledFlattening) \
 	X(RimLip) \
 	X(RimTeeth) \
-	X(BermClods) \
-	X(ChurnHeight) \
-	X(ChurnSize) \
+	X(TrenchDetailRelief) \
+	X(TrenchDetailRoughness) \
+	X(TrenchDetailCoverage) \
+	X(TrenchDetailSet) \
 	X(ShellHorizonMarch) \
 	X(SnowGlints) \
 	X(SnowScreenSpaceShadows) \
@@ -548,13 +548,6 @@ void SnowDeformation::SetupResources()
 		noiseHashTexture->CreateSRV(hashSrvDesc);
 		noiseHashTexture->CreateUAV(hashUavDesc);
 		noiseHashBaked = false;
-
-		D3D11_TEXTURE2D_DESC churnDesc = hashDesc;
-		churnDesc.Width = churnDesc.Height = kChurnTileDim;
-		churnTileTexture = new Texture2D(churnDesc, "SnowDeformation::ChurnTile");
-		churnTileTexture->CreateSRV(hashSrvDesc);
-		churnTileTexture->CreateUAV(hashUavDesc);
-		churnTileBaked = false;
 	}
 
 	{
@@ -808,7 +801,6 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint evolveFlag = value[10];
 			const uint evolveTiles = value[11];
 			const uint bermTiles = value[12];
-			const uint spellMarks = value[13];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			// Evolve's own verdict, only from frames it actually ran (the
 			// buffer is cleared per frame, so a skipped evolve reads 0 there).
@@ -816,7 +808,6 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 				evolveVerdictSeq = deformActivitySlotSeq[i];
 				evolveFlagActive = evolveFlag != 0;
 				evolveTilesLast = evolveTiles;
-				spellMarkTexels = spellMarks;
 			}
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
@@ -1954,15 +1945,6 @@ ID3D11ComputeShader* SnowDeformation::GetNoiseHashCS()
 	return noiseHashCS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetChurnTileCS()
-{
-	if (!churnTileCS) {
-		logger::debug("Compiling UndulationFieldCS ChurnTileCS");
-		churnTileCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", {}, "cs_5_0", "ChurnTileCS"));
-	}
-	return churnTileCS;
-}
-
 namespace
 {
 	// One dispatch of a_cs over a_tex (8x8 groups) through its UAV at u<a_slot>.
@@ -1991,21 +1973,6 @@ ID3D11ShaderResourceView* SnowDeformation::NoiseHashSRV()
 		noiseHashBaked = true;
 	}
 	return noiseHashTexture->srv.get();
-}
-
-ID3D11ShaderResourceView* SnowDeformation::ChurnTileSRV()
-{
-	auto context = globals::d3d::context;
-	if (!churnTileTexture || !churnTileTexture->srv)
-		return nullptr;
-	if (!churnTileBaked) {
-		auto* cs = GetChurnTileCS();
-		if (!cs || !context)
-			return nullptr;
-		BakeNoiseTexture(context, cs, churnTileTexture, 2);
-		churnTileBaked = true;
-	}
-	return churnTileTexture->srv.get();
 }
 
 void SnowDeformation::UpdateUndulationField()
@@ -2194,10 +2161,6 @@ void SnowDeformation::ClearShaderCache()
 		noiseHashCS->Release();
 	noiseHashCS = nullptr;
 	noiseHashBaked = false;
-	if (churnTileCS)
-		churnTileCS->Release();
-	churnTileCS = nullptr;
-	churnTileBaked = false;
 	// The next UpdateUndulationField rebakes with the fresh CS.
 	undulationFieldValid = false;
 	if (bermFieldCS)

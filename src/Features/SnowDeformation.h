@@ -585,22 +585,22 @@ public:
 		float RimTeeth = 0.33f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
 		float SnowResistance = 33.0f;
-		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth, clods, churn and wall softness follow the snow, each with its slider as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
+		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth and wall softness follow the snow, each with its slider as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
 		float SnowClimateStrength = 1.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
-		/** @brief Snow condition: multiplier on Churn Height in fully fresh snow - loose snow holds no clods. Eased in by the same softness as the other levers; 1 = off. */
-		float FreshSnowChurn = 0.33f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
 		float FreshSnowSettleHours = 24.0f;
-		/** @brief Trampled ground: multiplier on the churn height on trench floors walked deeper than one pass; berm churn is untouched. 1 = off. */
+		/** @brief Trampled ground: multiplier on the trench detail's relief on floors walked deeper than one pass; the berm keeps its own. 1 = off. */
 		float TrampledFlattening = 0.5f;
-		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
-		float BermClods = 2.0f;
-		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
-		float ChurnHeight = 1.0f;
-		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
-		float ChurnSize = 0.25f;
+		/** @brief Trench detail tiles (tools/churn-tiles): height and slopes of the per-condition broken snow in and around trenches, x the authored relief. 0 = off. */
+		float TrenchDetailRelief = 1.0f;
+		/** @brief Trench detail: snow roughness multiplier over the detail mask (lower = glossier). 1 = the snow set's own. */
+		float TrenchDetailRoughness = 1.0f;
+		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
+		float TrenchDetailCoverage = 2.0f;
+		/** @brief Trench detail set: 0 by the snow condition, 1 powder, 2 firm, 3 wet. */
+		int TrenchDetailSet = 0;
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades and the SSS mask shade the snow. A/B for dark blotches on open snow at a low sun. */
 		bool ShellHorizonMarch = true;
 		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */
@@ -1343,15 +1343,16 @@ public:
 	ID3D11ComputeShader* GetNoiseHashCS();
 	/** @brief Bakes the hash table on the first call after it was created; the bound SRV, or null until baked. */
 	ID3D11ShaderResourceView* NoiseHashSRV();
-	/** @brief The churn's two-octave sum over its 1024 q-unit period, one R16 texel per q-unit (UndulationFieldCS ChurnTileCS, SnowNoise.hlsli ChurnNoiseTorus), baked once and bound at PS t111 beside the hash table: churn and clods read it at their own scales, one fetch each. */
-	static constexpr uint32_t kChurnTileDim = 1024;
-	static constexpr uint32_t kChurnTileSlot = 111;
-	Texture2D* churnTileTexture = nullptr;
-	bool churnTileBaked = false;
-	ID3D11ComputeShader* churnTileCS = nullptr;
-	ID3D11ComputeShader* GetChurnTileCS();
-	/** @brief Bakes the churn tile on the first call after it was created; the bound SRV, or null until baked. */
-	ID3D11ShaderResourceView* ChurnTileSRV();
+	/** @brief Trench detail tiles (tools/churn-tiles/pack_game.py): BC5 arrays, slices powder / firm / wet; normal at PS t112, (height, cavity) at t113, read by the ground's and the road patch's shading. Absent files leave the detail off. */
+	static constexpr uint32_t kTrenchDetailSlot = 112;
+	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailNormalSRV;
+	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailHeightSRV;
+	bool trenchDetailAttempted = false;
+	void EnsureTrenchDetailTextures();
+	/** @brief This frame's detail slice: Settings::TrenchDetailSet, or by the snow condition (wet, else powder while fresher than firm, else firm). */
+	uint32_t TrenchDetailSlice() const;
+	/** @brief Runtime-only: the trench detail coverage view (ShellCB::TrenchDetailView). */
+	bool debugTrenchDetailView = false;
 	struct alignas(16) UndulationFieldCB
 	{
 		float2 FieldOriginWorld;
@@ -1557,12 +1558,10 @@ public:
 	void BuildTerrainFineWindow();
 	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
 	bool shellLandHeightDisabled = false;
-	/** @brief Runtime-only: the ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many display pixels each (0 = distance factor alone). Default 16, with the churn parallax on (Josef, 2026-09-25). */
+	/** @brief Runtime-only: the ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many display pixels each (0 = distance factor alone). Default 16 (Josef, 2026-09-25). */
 	float shellTessTargetPx = 16.0f;
 	/** @brief shellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
 	float ShellTessTargetRenderPx() const;
-	/** @brief Runtime-only A/B, "Disable Churn Parallax": the churn and berm clods go back into the shell geometry. Off (default) = churn by parallax (ShellFlags bit 4): the geometry leaves their heights out and the shading pass marches the view ray through them, so they need no triangles. */
-	bool shellChurnParallaxOff = false;
 
 	/** @brief Rows of ShellCB::SnowClimateLUT: 2 C below the player's temperature, at it, 2 C above. */
 	static constexpr uint32_t kClimateLUTRows = 3;
@@ -1593,8 +1592,8 @@ public:
 		float WarpedHalfSpan;
 		uint GridDim;
 		uint TerrainDim;
-		/** @brief Layout keeper (the retired forward PS's debug planes), uploaded as 0. */
-		uint ShellDebugData;
+		/** @brief 1 = the trench detail coverage view (debugTrenchDetailView). Claims the retired debug-planes keeper. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		uint TrenchDetailView;
 
 		float DeformInvWorldSize;
 		uint HasSnowTexture;
@@ -1609,14 +1608,14 @@ public:
 
 		float SnowSpecularLevel;
 		float EnableGlints;
-		/** @brief Layout keepers (the retired Border Noise and Border Smoothness), uploaded as 0. */
-		float BorderNoise;
-		float BorderSmooth;
+		/** @brief Trench detail: relief (0 = off or no textures) and roughness multiplier (Settings::TrenchDetailRelief / TrenchDetailRoughness). Claim the retired Border Noise / Smoothness keepers. */
+		float TrenchDetailRelief;
+		float TrenchDetailRoughness;
 
 		/** @brief Terrain height follows the landscape mesh's triangulation instead of bilinear, which averages the two and sits below both. Claims the retired BorderTrampledFade slot, so the buffer layout is untouched. */
 		float ShellTriHeight;
-		/** @brief Layout keeper (the retired Border Fade), uploaded as 0. */
-		float BorderUntrampledFade;
+		/** @brief Trench detail: the coverage cut across the trench profile (Settings::TrenchDetailCoverage). Claims the retired Border Fade keeper. */
+		float TrenchDetailCoverage;
 		/** @brief Cull replayed landscape triangles whose depth has reached the -8 bare floor everywhere. Claims the retired SeamFadeUnused slot, so the buffer layout is untouched. */
 		float ShellCullBare;
 		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
@@ -1653,25 +1652,25 @@ public:
 		/** @brief Edge berm crest height as a fraction of local snow depth. */
 		float BermHeightAmp;
 
-		/** @brief Churn lump amplitude in world units on disturbed snow. */
-		float ChurnHeightAmp;
-		/** @brief Multiplier on the churn lump wavelengths. */
-		float ChurnSizeScale;
+		/** @brief Layout keepers (the retired churn's amplitude and size), uploaded as 0. */
+		float LayoutKeeper0;
+		float LayoutKeeper1;
 		/** @brief DebugNoFarPad: layout keeper, uploaded as 0. DebugParallaxView: the trench parallax offset view (trenchParallaxView); 0 = off. */
 		float DebugNoFarPad;
 		float DebugParallaxView;
 
-		/** @brief Object-snow variants of the trench-detail knobs (independent of the landscape set). */
+		/** @brief The object snow's berm height (the landscape's). */
 		float ObjBermHeightAmp;
-		float ObjChurnHeightAmp;
-		float ObjChurnSizeScale;
+		/** @brief Layout keepers (the retired object churn's amplitude and size), uploaded as 0. */
+		float LayoutKeeper2;
+		float LayoutKeeper3;
 		/** @brief settings.ObjectMeetBand, read by the landscape shell and the drape. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float ObjectMeetBand;
 
 		/** @brief BermReachScale() (Berm Steepness), for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float BermReach;
-		/** @brief Layout keeper (the retired distant-snow debug views), uploaded as 0. */
-		uint ShellLODDebug;
+		/** @brief Trench detail slice: 0 powder, 1 firm, 2 wet (TrenchDetailSlice()). Claims the retired distant-snow debug keeper. */
+		uint TrenchDetailSlice;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
 		float SeamRampInv;
 		/** @brief >0.5: the shells read the baked berm field (t14) instead of recomputing its 17 taps per call. */
@@ -1696,7 +1695,7 @@ public:
 		float4 BorderStyle;
 		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w = trench wall slough, 0-1: how far CarveProfile takes the berm field's short blur over the carve (Snow Climate). Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
-		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z spare (the retired berm clods), uploaded as 0, w = GetAccumulationDepthScale(). xy consumed inside CarveProfile. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
 
 		/** @brief Baked undulation window (UndulationFieldCS, t29): xy = world centre, z = 1/half-extent, w > 0.5 when the bake is live. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
@@ -1704,7 +1703,7 @@ public:
 
 		/** @brief Toroidal deformation-map addressing: physical position of logical texel (0,0). Every DeformationMap Load adds this and masks by dim-1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 DeformMapOrigin;
-		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch), bit 2 = land-exact height off, bit 4 = churn by parallax; y: bit 0 = road tops in the skin-depth raster this frame. Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch), bit 2 = land-exact height off; y: bit 0 = road tops in the skin-depth raster this frame. Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 ShellFlags;
 		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
 		float4 FineWindow;
@@ -1718,7 +1717,7 @@ public:
 		float4 BloodLook2;
 		/** @brief Blood detail tiles: xy spare (the retired soak), z = the tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
-		/** @brief Trampled ground: x spare (the retired Floor Lowering), y = Settings::TrampledFlattening, z = BodyPrintScale() (one pass's share of the layer), w spare. Read through TrampleChurnScale. Appended last; mirror in both shells. */
+		/** @brief Trampled ground: x spare (the retired Floor Lowering), y = Settings::TrampledFlattening, z = BodyPrintScale() (one pass's share of the layer), w spare. Read through TrampleDetailScale. Appended last; mirror in both shells. */
 		float4 TrampleStyle;
 		/** @brief Shell tessellation screen-size cap: x = target pixels per segment (0 = the distance factor alone), yz = viewport half size in pixels, w = viewport depth range (MaxDepth - MinDepth). Appended last; mirror in both shells. */
 		float4 TessScreen;
@@ -1726,11 +1725,11 @@ public:
 		float4 FieldDims;
 		/** @brief Snow climate at the player (TRACK-VARIATION-RESEARCH.md 3.2): x = air temperature (C), y = cooling per world unit of height, z = the player's world z, w = freshness. Overrides applied. SnowShell.hlsl only; appended last. */
 		float4 SnowClimate;
-		/** @brief x = wind packing, y = wetness at the player, z = condition view (0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all), w = 1 - Snow Climate: the weight of the fixed churn depth ramp. */
+		/** @brief x = wind packing, y = wetness at the player, z = condition view (0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all), w = 1 - Snow Climate: the weight of the fixed thin print. */
 		float4 SnowClimate2;
 		/** @brief Overrides painted everywhere, below 0 = derived per pixel: x wetness, y stickiness, z firmness; w spare. */
 		float4 SnowClimateOverride;
-		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: x, y = the churn depth ramp's start and 1/width (cover units), z = its weight (Snow Climate x churn scale), w = Snow Climate x wetness. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
+		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: xyz spare (the retired churn ramp), uploaded as 0; w = Snow Climate x wetness. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
 		float4 SnowClimateLUT[kClimateLUTRows];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -1800,21 +1799,16 @@ public:
 	ShellStatsResult patchStatsLast;
 	bool EnsureShellStatsQueries();
 	void ReadShellStatsQueries(ID3D11DeviceContext* a_context);
-	/** @brief The ground snow drew this frame: the prepass writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners. The position is rebuilt from the view depth, the derivatives are the prepass's, the churn-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. */
+	/** @brief The ground snow drew this frame: the prepass writes GridLocal, the terrain normal, the view depth and its own coarse derivatives, and one full-screen triangle (LESS against the fill's private depth at z 0) shades exactly the prepass's winners. The position is rebuilt from the view depth, the derivatives are the prepass's, the detail-parallax shift's own derivative is dropped, and the shading trusts the prepass's alpha cut. */
 	bool shellDeferredThisFrame = false;
 	/** @brief The deferred pass's inputs, display-size like shellRasterDepth: [0] GridLocal.xy + normal.xy (RGBA32F), [1] GridLocal's coarse derivatives (RGBA16F), [2] view depth + WorldPos.z's coarse derivatives (RGBA32F). */
 	Texture2D* shellDeferredAttr[3] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
 	bool EnsureDeferredResources();
-	/** @brief The deferred PS [tessellated trenches, Screen-Space Parallax Trenches, churn-free]. The churn-free one (SNOW_NO_CHURN) compiles out the churn march, the churn and clod gradients and the rim teeth; it draws in place of the first when no texel of the window can churn (shellChurnFree). */
-	ID3D11PixelShader* shellPSDeferred[3] = {};
-	uint32_t shellPSDeferredLegacyBits[3] = {};
-	/** @brief a_churnFree applies without parallax only. */
-	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false, bool a_churnFree = false);
-	/** @brief This frame's climate leaves no churn, clods or teeth anywhere in the window: the churn-free deferred PS draws. Set by the ShellCB fill. */
-	bool shellChurnFree = false;
-	/** @brief Debug A/B, not saved: always draw the full deferred PS. */
-	bool debugChurnFreeOff = false;
+	/** @brief The deferred PS [tessellated trenches, Screen-Space Parallax Trenches]. */
+	ID3D11PixelShader* shellPSDeferred[2] = {};
+	uint32_t shellPSDeferredLegacyBits[2] = {};
+	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false);
 	/** @brief The deferred PS with SNOW_CONDITION_VIEW (tessellated trenches only), compiled off the render thread the first time the view is switched on. */
 	ID3D11PixelShader* shellPSDeferredConditionView = nullptr;
 	std::atomic<int> conditionViewShaderState = 0;
@@ -4089,8 +4083,6 @@ protected:
 	bool deformActivitySlotEvolveRan[kDeformActivitySlots] = {};
 	/** @brief Evolve pass's own verdict: the last executed evolve changed nothing at stored precision. Starts active (errs toward running). */
 	bool evolveFlagActive = true;
-	/** @brief Texels holding a fire or shock mark at the last executed evolve; while any do, the ground keeps its churn shader (those marks churn whatever the climate). */
-	uint32_t spellMarkTexels = 0;
 	/** @brief Seq of the newest consumed evolve verdict. */
 	uint64_t evolveVerdictSeq = 0;
 	/** @brief Seq of the last frame that re-armed evolve: an external write landed (ring or stamps) so the settled verdict is stale. RefillAmount > 0 arms directly, per frame. */
@@ -4402,8 +4394,6 @@ protected:
 		float windPacking = 0.0f;
 		/** @brief Share of the loaded land painted with snow textures; below 0 until measured. */
 		float landSnowShare = -1.0f;
-		/** @brief Deepest snow any known land texture carries (units, before accumulation), refreshed with the share. */
-		float maxLandSnowDepth = 0.0f;
 		float rainHeld = 0.0f;
 		float ageingClock = kAgeingClockStart;
 		/** @brief Clock units per game hour, last tick. */
@@ -4442,18 +4432,8 @@ protected:
 		float berm = 1.0f;
 		float lip = 1.0f;
 		float teeth = 1.0f;
-		float clods = 1.0f;
 		/** @brief Wall softness: how far loose snow falls back into a print, toward the berm field's short blur. */
 		float slough = 0.0f;
-		float churnScale = 1.0f;
-		/** @brief Share of the churn that is powder's fine crumble rather than sticky clods. */
-		float churnPowder = 0.0f;
-		/** @brief Road churn multiplier at the road cover, Snow Climate applied. */
-		float roadChurn = 1.0f;
-		/** @brief Deepest cover the window can hold, accumulation applied. */
-		float coverMax = 0.0f;
-		/** @brief No texel of the window can churn at any height in the table, and Snow Climate is full. */
-		bool churnNowhere = false;
 		std::array<float4, kClimateLUTRows> lut{};
 	};
 	SnowClimateLook ComputeSnowClimateLook() const;
@@ -4461,8 +4441,6 @@ protected:
 	void TickSnowClimate();
 	/** @brief Mean snow-texture weight of the loaded land around a point, from the baked cells; below 0 when none are baked. */
 	float LandSnowShareAround(float a_x, float a_y);
-	/** @brief The deepest snow any known land texture carries, 0 when none does. */
-	float MaxLandSnowDepth();
 	/** @brief Debug overrides, not saved. Temperature has its own switch; the others replace the live value at 0 or above. */
 	bool debugClimateTemperatureOn = false;
 	float debugClimateTemperature = -5.0f;

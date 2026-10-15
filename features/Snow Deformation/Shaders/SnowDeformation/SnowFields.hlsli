@@ -25,12 +25,15 @@
 // context. Callers here are unchanged.
 #include "SnowDeformation/SnowNoise.hlsli"
 
-// The rim teeth's value noise and the churn's octave sum. Pixel passes that
-// bind the hash table (t109) and the churn tile (t111, DrawShell) read each in
-// one fetch; every other stage evaluates the same torus noise from the hash.
+// The rim teeth's value noise. Pixel passes that bind the hash table (t109,
+// DrawShell) read it in one fetch; every other stage evaluates the same torus
+// noise from the hash.
 #if defined(SNOW_NOISE_TABLE)
 Texture2D<float> SnowNoiseHash : register(t109);
-Texture2D<float> SnowChurnTile : register(t111);
+// Trench detail tiles (tools/churn-tiles), slices powder / firm / wet: N = normal
+// xy (DirectX), H = (height about the tile mean, cavity).
+Texture2DArray<float2> SnowTrenchDetailN : register(t112);
+Texture2DArray<float2> SnowTrenchDetailH : register(t113);
 
 float SnowDetailNoise(float2 p)
 {
@@ -38,35 +41,17 @@ float SnowDetailNoise(float2 p)
 	float2 f = frac(p);
 	return SnowNoiseHash.SampleLevel(SnowSampler, (i + f * f * (3.0 - 2.0 * f) + 0.5) / kNoiseTorusCells, 0.0);
 }
-
-// The octave sum in [0, 1] at a churn tile uv (ChurnTileUVs).
-float ChurnNoiseUV(float2 uv)
-{
-	return SnowChurnTile.SampleLevel(SnowSampler, uv, 0.0);
-}
 #else
 float SnowDetailNoise(float2 p)
 {
 	return ShapeNoiseTorus(p, kNoiseTorusCells);
 }
-
-float ChurnNoiseUV(float2 uv)
-{
-	return ChurnNoiseTorus(uv * kChurnTileTexels - 0.5);
-}
 #endif
-
-// Churn tile uv per world unit for a size knob: q = worldXY / sizeScale, one
-// texel per q-unit, texel centres on whole q.
-float ChurnTileScale(float sizeScale)
-{
-	return 1.0 / (kChurnTileTexels * max(sizeScale, 0.05));
-}
 
 // Tiles the lattice input wraps after: the stochastic hash multiplies the
 // cell index by ~3300 and needs it small to keep a fraction (the frost
 // lattice below, same reason).
-static const float kChurnLatticeWrap = 32.0;
+static const float kTrenchDetailLatticeWrap = 32.0;
 
 // Field map sizes. The landscape shell (SNOW_FIELD_DIMS) takes them from
 // ShellCB.FieldDims, GetDimensions of what DrawShell binds (0 where unbound);
@@ -268,80 +253,71 @@ bool ShellUntouched(float2 gridLocal)
 #endif
 }
 
-// P6 clod cells: ~2.8x the default churn rubble (24/10-unit cells at
-// scale 1.5), so berm clods and trench rubble read at visibly different
-// frequencies - the two-scale contrast of RDR2's O3.
-static const float kClodSizeScale = 1.5;
+// Trench detail tile: 64 units on 1024 texels, its height stored as 0.5 + h / 6
+// about the tile mean (reach +2.44 / -1.06 at most), one stochastic offset per
+// tile cell (CS's sampler, one lattice cell per tile).
+static const float kTrenchDetailTile = 64.0;
+static const float kTrenchDetailSpan = 6.0;
+static const float kTrenchDetailReach = 2.5;
 
-// The churn tile's uvs at a world point, xy for the churn at its size knob
-// (ChurnSizeScale / ObjChurnSizeScale, the only way the two shells differ
-// here), zw for the clods. Both move by the stochastic offset of the churn's
-// tile cell there (CS's sampler, one lattice cell per tile): one offset per
-// cell keeps every read one fetch, and churn and clods cut together at the
-// cell borders.
-float4 ChurnTileUVs(float2 worldXY, float churnSize)
+float2 TrenchDetailUV(float2 worldXY)
 {
-	float4 uv = worldXY.xyxy * float4(ChurnTileScale(churnSize).xx, ChurnTileScale(kClodSizeScale).xx);
-	uv -= kChurnLatticeWrap * floor(uv / kChurnLatticeWrap);
-	return uv + ComputeStochasticOffsetsMesh(uv.xy).offset1.xyxy + 0.5 / kChurnTileTexels;
+	float2 uv = worldXY / kTrenchDetailTile;
+	uv -= kTrenchDetailLatticeWrap * floor(uv / kTrenchDetailLatticeWrap);
+	return uv + ComputeStochasticOffsetsMesh(uv).offset1;
 }
 
-// Churn and clod lump noise in [-1, 1] at a world point.
-float ChurnNoiseScaled(float2 worldXY, float churnSize)
+// ComputeTerrainStochasticLodBase's rule for world-unit pixel derivatives.
+float TrenchDetailLod(float2 a_dx, float2 a_dy)
 {
-	return ChurnNoiseUV(ChurnTileUVs(worldXY, churnSize).xy) * 2.0 - 1.0;
+	return max(0.5 * log2(max(min(dot(a_dx, a_dx), dot(a_dy, a_dy)), 1e-12)) + log2(1024.0 / kTrenchDetailTile) + SharedData::MipBias, 0.0);
 }
 
-float ClodNoise(float2 worldXY, float churnSize)
+// Where the detail lies across a trench. The measure holds 0.85 on the floor,
+// the carve's short blur across the rim and the berm field over the apron
+// (a_bermPair: x berm, y short blur), so it falls to 0 with no plateau. The
+// cut moves from the floor (a_coverage 0) to just past the rim (1) and out
+// over the berm (2); its band and the tail gate keep the fade soft wherever
+// it lands. Untouched snow is 0.
+float TrenchDetailMask(float a_carve, float2 a_bermPair, float a_coverage)
 {
-	return ChurnNoiseUV(ChurnTileUVs(worldXY, churnSize).zw) * 2.0 - 1.0;
+	const float f = max(0.85 * a_carve, max(a_bermPair.y, 0.8 * a_bermPair.x));
+	const float cut = 0.85 - 0.325 * a_coverage;
+	return smoothstep(cut - 0.4, cut, f) * smoothstep(0.0, 0.15, f);
 }
 
-// Central difference of the lump noise around a churn tile uv (ChurnTileUVs;
-// a_scale its ChurnTileScale), a_step world units either side. The taps share
-// the centre's cell offset.
-float2 ChurnNoiseGradUV(float2 uv, float a_scale, float a_step)
+float TrenchDetailHeight(float3 a_uv, float a_lod)
 {
-	const float d = a_step * a_scale;
-	return float2(ChurnNoiseUV(uv + float2(d, 0.0)) - ChurnNoiseUV(uv - float2(d, 0.0)),
-			   ChurnNoiseUV(uv + float2(0.0, d)) - ChurnNoiseUV(uv - float2(0.0, d))) /
-	       a_step;
-}
-
-// Churn plus clod heights at a_t along a ray whose churn tile uvs are
-// a_uv0 + a_duv * a_t (xy churn, zw clods).
-float ChurnHeightsAlong(float4 a_uv0, float4 a_duv, float a_t, float churnAmp, float clodAmp)
-{
-	float h = churnAmp * (ChurnNoiseUV(a_uv0.xy + a_duv.xy * a_t) * 2.0 - 1.0);
-	[branch] if (clodAmp > 0.001)
-		h += clodAmp * (ChurnNoiseUV(a_uv0.zw + a_duv.zw * a_t) * 2.0 - 1.0);
-	return h;
+#if defined(SNOW_NOISE_TABLE)
+	return (SnowTrenchDetailH.SampleLevel(SnowSampler, a_uv, a_lod).x - 0.5) * kTrenchDetailSpan;
+#else
+	return 0.0;
+#endif
 }
 
 // Distance along the unit view ray (dir) from the sheet point to where it first
-// meets the churn and clod heights laid over the pixel's tangent plane (slope
-// g), searched from +h to -h around the plane and refined by secant. uv0: the
-// churn tile uvs at the sheet point (ChurnTileUVs), a_scale their
-// ChurnTileScale (x churn, y clods).
-float ChurnParallaxT(float3 dir, float2 g, float churnAmp, float clodAmp, float4 uv0, float2 a_scale)
+// meets the detail heights laid over the pixel's tangent plane (slope g),
+// searched from +reach to -reach around the plane and refined by secant.
+// a_uv = (detail uv at the sheet point, uv per unit t); a_detail = (relief,
+// slice, mip).
+float TrenchDetailParallaxT(float3 dir, float2 g, float4 a_uv, float3 a_detail)
 {
 	float rise = dir.z - dot(dir.xy, g);
-	float hMax = churnAmp + clodAmp;
+	float hMax = a_detail.x * kTrenchDetailReach;
 	// Single exit: a return inside [branch] trips X4000.
 	float t = 0.0;
 	[branch] if (rise <= -0.02)
 	{
 		float span = -2.0 * hMax / rise;
-		float steps = clamp(ceil(span / 2.5), 4.0, 24.0);
+		float steps = clamp(ceil(span / 2.0), 4.0, 24.0);
 		float dt = span / steps;
-		const float4 duv = dir.xyxy * a_scale.xxyy;
 		float prevT = hMax / rise;
-		float prevGap = hMax - ChurnHeightsAlong(uv0, duv, prevT, churnAmp, clodAmp);
+		float prevGap = hMax - a_detail.x * TrenchDetailHeight(float3(a_uv.xy + a_uv.zw * prevT, a_detail.y), a_detail.z);
 		t = prevT;
 		[loop] for (float i = 1.0; i <= steps; i += 1.0)
 		{
 			float ti = hMax / rise + dt * i;
-			float gap = rise * ti - ChurnHeightsAlong(uv0, duv, ti, churnAmp, clodAmp);
+			float gap = rise * ti - a_detail.x * TrenchDetailHeight(float3(a_uv.xy + a_uv.zw * ti, a_detail.y), a_detail.z);
 			[branch] if (gap <= 0.0)
 			{
 				t = lerp(prevT, ti, prevGap / max(prevGap - gap, 1e-6));
@@ -454,10 +430,9 @@ float SampleCrust(float2 gridLocal)
 	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
 }
 
-// A fire or shock mark's weight (either half of .y): it churns whatever the
-// climate. Magnitudes per tap, so a melt beside a scorch cannot cancel.
-// Mirrored by DeformationUpdateCS.hlsl SPELL_MARK_CHURN_START.
-static const float kSpellMarkChurnStart = 0.02;
+// A fire or shock mark's weight (either half of .y). Magnitudes per tap, so a
+// melt beside a scorch cannot cancel.
+static const float kSpellMarkStart = 0.02;
 float SampleSpellMark(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
@@ -474,29 +449,22 @@ float SampleSpellMark(float2 gridLocal)
 	float m10 = abs(DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).y);
 	float m01 = abs(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).y);
 	float m11 = abs(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).y);
-	return smoothstep(kSpellMarkChurnStart, 0.15, lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y));
+	return smoothstep(kSpellMarkStart, 0.15, lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y));
 }
 
 // Trampled ground: snow walked deeper than one pass (TrampleStyle.z) is
-// packed, and its floor churn scales toward TrampleStyle.y (1 = off).
-// Melted depth is not packing.
-float TrampleChurnScale(float2 worldXY, float deformation)
+// packed, and the detail's relief on its floor scales toward TrampleStyle.y
+// (1 = off) by how far INTO the trench a point is; the berm outside it keeps
+// its own. Melted depth is not packing.
+float TrampleDetailScale(float2 worldXY, float deformation)
 {
 	float scale = 1.0;
 	[branch] if (TrampleStyle.y < 0.999 && deformation > TrampleStyle.z + 0.001)
 	{
 		const float packed = saturate((deformation - SampleMelted(worldXY - GridOrigin) - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3));
-		scale = lerp(1.0, saturate(TrampleStyle.y), packed);
+		scale = lerp(1.0, saturate(TrampleStyle.y), packed * smoothstep(0.05, 0.5, deformation));
 	}
 	return scale;
-}
-
-// Trampled ground flattens the churn by how far INTO the trench a point is:
-// the floor takes the full scale, the berm outside it none.
-float ChurnWeight(float deformation, float bermDeform, float2 worldXY)
-{
-	float trench = smoothstep(0.05, 0.5, deformation);
-	return max(trench, BermShape(bermDeform)) * lerp(1.0, TrampleChurnScale(worldXY, deformation), trench);
 }
 
 // ---- Snow Climate per pixel (TRACK-VARIATION-RESEARCH.md 3.3) ----
@@ -766,23 +734,20 @@ float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, flo
 	// applied to the carve value inside the rim band only.
 	// The contour breaks into teeth; floors (d high) and open snow (d = 0)
 	// sit outside the band and never move. Faded by depthT: teeth are
-	// cut-wall vocabulary, dimples stay smooth. The churn-free shading
-	// draws only when they are off.
-#ifndef SNOW_NO_CHURN
+	// cut-wall vocabulary, dimples stay smooth.
 	[branch] if (RimStyle.y > 0.001)
 	{
 		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
 		// Outside the band the notch adds a signed zero.
-#	ifndef SNOW_TEETH_UNGATED
+#ifndef SNOW_TEETH_UNGATED
 		[branch] if (rimBand > 0.0 && depthT > 0.0)
-#	endif
+#endif
 		{
 			float notch = (SnowDetailNoise(worldXY / 37.0) - 0.5) * 0.8 +
 			              (SnowDetailNoise(worldXY / 8.0) - 0.5) * 1.2;
 			d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
 		}
 	}
-#endif
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
