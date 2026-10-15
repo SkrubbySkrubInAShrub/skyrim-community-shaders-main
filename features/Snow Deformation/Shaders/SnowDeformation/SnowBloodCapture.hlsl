@@ -37,7 +37,8 @@ cbuffer BloodCB : register(b1)
 
 	// x = reveal 0..1: the mark soaks in from its dense core outward, so a
 	// texel shows once its alpha exceeds (1 - reveal). y > 0.5 (overlay):
-	// leave pixels no coat drew on to the landscape shell.
+	// leave pixels no coat drew on to the landscape shell; (mask): the decal
+	// is not blood. z > 0.5 (overlay): DecalMask.y holds the decals' cover.
 	float4 Spread;
 
 	// Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1).
@@ -96,8 +97,9 @@ Texture2D<float4> PreDecal2 : register(t11);
 Texture2D<float4> PreDecal3 : register(t12);
 Texture2D<float4> PreDecal4 : register(t13);
 Texture2D<float4> PreDecal5 : register(t14);
-// The decals that are not blood, as alpha (MASK pass); 0 where none drew.
-Texture2D<float> DecalMask : register(t15);
+// The MASK pass: x = the decals that are not blood, y = every overlay decal,
+// as alpha; 0 where none drew.
+Texture2D<float2> DecalMask : register(t15);
 // The main depth after the landscape shell, before the object-snow skins.
 Texture2D<float> PreSkinDepth : register(t16);
 #	endif
@@ -109,11 +111,12 @@ static const float kOverlayMaxLift = 24.0;
 #endif
 
 #ifdef MASK
-// MASK: a decal that is not blood, drawn again in screen space with the
-// game's camera - its texture alpha into an R8 target, MAX-blended. Blood's
-// alpha is read off its colour in the overlay; a frost mark or a rune has no
-// such tell. Kept where the fragment lies on the pre-snow surface, so a body
-// in front still hides the mark.
+// MASK: every overlay decal drawn again in screen space with the game's
+// camera - its texture alpha into an R8G8 target, stacked as the game stacks
+// decals. x: only decals that are not blood (blood's alpha is read off its
+// colour in the overlay; a frost mark or a rune has no such tell). y: all of
+// them, the overlay's cover. Kept where the fragment lies on the pre-snow
+// surface, so a body in front still hides the mark.
 #	ifdef PSHADER
 #		include "Common/SharedData.hlsli"
 Texture2D<float> SceneDepth : register(t3);
@@ -146,7 +149,14 @@ float4 MapClip(float2 worldXY, uint seam, out float2 logical)
 
 float4 PlaceVertex(float3 world, uint seam, out float2 logical)
 {
+#ifdef MASK
+	float3 rel = world - CameraAdjust.xyz;
+	logical = float2(0.0, 0.0);
+	return float4(dot(ViewProjRow0.xyz, rel) + ViewProjRow0.w, dot(ViewProjRow1.xyz, rel) + ViewProjRow1.w,
+		dot(ViewProjRow2.xyz, rel) + ViewProjRow2.w, dot(ViewProjRow3.xyz, rel) + ViewProjRow3.w);
+#else
 	return MapClip(world.xy, seam, logical);
+#endif
 }
 
 #ifdef VSHADER
@@ -229,14 +239,7 @@ VS_OUTPUT main(VS_INPUT input, uint inst : SV_InstanceID)
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS));
 	VS_OUTPUT o;
-#		ifdef MASK
-	float3 rel = world - CameraAdjust.xyz;
-	o.Position = float4(dot(ViewProjRow0.xyz, rel) + ViewProjRow0.w, dot(ViewProjRow1.xyz, rel) + ViewProjRow1.w,
-		dot(ViewProjRow2.xyz, rel) + ViewProjRow2.w, dot(ViewProjRow3.xyz, rel) + ViewProjRow3.w);
-	o.Logical = float2(0.0, 0.0);
-#		else
 	o.Position = PlaceVertex(world, inst & 3u, o.Logical);
-#		endif
 	o.UV = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 	o.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
 	o.Tint = float4(1, 1, 1, 1);
@@ -300,10 +303,14 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float3 d0 = PreDecal0.Load(pixel).rgb;
 	// What the decals took off green and blue: 0 wherever nothing drew, however dark.
 	float2 taken = (d0.gb - p0.gb) / max(d0.gb, 1e-4);
-	// The mask counts only where the game's decal drew: under snow claimed
-	// before the game's draws it failed its depth test, and both copies hold
-	// the clear colour.
-	float a = max(saturate(max(taken.x, taken.y)), any(p0 != d0) ? DecalMask.Load(pixel) : 0.0);
+	// The copies also hold every decal-mode mesh the game drew between them
+	// (a porch's dirt): the stack counts only up to the overlay decals' own
+	// cover. The mask counts only where the game's decal drew: under snow
+	// claimed before the game's draws it failed its depth test, and both
+	// copies hold the clear colour.
+	const float2 mask = DecalMask.Load(pixel);
+	const float cover = Spread.z > 0.5 ? mask.y : 1.0;
+	float a = max(min(saturate(max(taken.x, taken.y)), cover), any(p0 != d0) ? mask.x : 0.0);
 	if (a < 0.02)
 		discard;
 	[branch] if (OverlayView.x > 0.0)
@@ -321,7 +328,7 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	return o;
 }
 #elif defined(PSHADER) && defined(MASK)
-float main(VS_OUTPUT input) : SV_Target0
+float2 main(VS_OUTPUT input) : SV_Target0
 {
 	float4 c = Diffuse.Sample(LinearSampler, input.UV);
 	float a = c.a * MaterialAlpha;
@@ -334,7 +341,8 @@ float main(VS_OUTPUT input) : SV_Target0
 	float fragDist = SharedData::GetScreenDepth(input.Position.z);
 	if (fragDist > sceneDist + 2.0 + 0.004 * sceneDist)
 		discard;
-	return saturate(a);
+	a = saturate(a);
+	return float2(Spread.y > 0.5 ? a : 0.0, a);
 }
 #elif defined(PSHADER) && defined(RUNE)
 // RUNE: a rune's glyph decal into its atlas tile (Blood.cpp, RenderRuneCapture).

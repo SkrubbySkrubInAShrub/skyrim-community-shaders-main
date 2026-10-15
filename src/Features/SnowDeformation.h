@@ -1037,7 +1037,7 @@ public:
 		float AlphaThreshold;
 		float MaterialAlpha;
 		float NormalZMin;
-		/** @brief x = reveal 0..1 (how much of the mark's alpha range has spread in), yzw spare. */
+		/** @brief x = reveal 0..1 (how much of the mark's alpha range has spread in). y: overlay = leave the shell's pixels, mask = not blood. z: overlay = the mask's cover is live. w spare. */
 		float4 Spread;
 		/** @brief Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1). */
 		float4 OverlayRect;
@@ -1093,16 +1093,17 @@ public:
 	void CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned);
 	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
 	void RenderBloodCapture();
-	/** @brief One list of captures through the rigid and skinned blood shaders; a_overlay picks the overlay variants and one instance instead of the map's four seam instances. */
-	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u, bool a_ownClock = false);
+	/** @brief One list of captures through the rigid and skinned blood shaders; a_rigidVS / a_skinnedVS replace the map's vertex shaders, a_instances the map's four seam instances. */
+	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u, bool a_ownClock = false, ID3D11VertexShader* a_skinnedVS = nullptr);
 	/** @brief Joins the frame's overlay set: the decal's screen rectangle, and at the frame's first decal the pre-decal copy. Once per geometry. */
 	void RegisterDecalOverlay(const BloodCapture& a_capture);
 	/** @brief From the capture hook: one of the engine's runtime decals that is not blood. Overlay only, never the blood map. */
 	void CaptureDecalOverlay(RE::BSRenderPass* a_pass);
 	bool DecalOverlayWanted() const { return settings.BloodOnSnow || settings.DecalsOnObjectSnow; }
-	/** @brief The non-blood decals' alpha in screen space, for the overlay. */
+	/** @brief The overlay decals' alpha in screen space: x the ones that are not blood, y all of them (the overlay's cover). */
 	Texture2D* decalMaskTexture = nullptr;
 	ID3D11VertexShader* decalMaskVS = nullptr;
+	ID3D11VertexShader* decalMaskSkinVS = nullptr;
 	ID3D11PixelShader* decalMaskPS = nullptr;
 	winrt::com_ptr<ID3D11BlendState> decalMaskBlendState;
 	bool decalMaskFailed = false;
