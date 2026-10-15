@@ -27,6 +27,10 @@ namespace Util::Settings
 	/** @brief Removes the top-level metadata keys from a settings object. */
 	void EraseMetadataKeys(nlohmann::json& settings);
 
+	/** @brief Writes overlay onto target, merging objects key by key; any other value replaces, so a setting
+	 *  whose shape changed (unlike json::update) never throws. */
+	void MergeSettings(nlohmann::json& target, const nlohmann::json& overlay);
+
 	/** @brief One exportable setting: its JSON pointer path and display label. */
 	struct ExportSetting
 	{

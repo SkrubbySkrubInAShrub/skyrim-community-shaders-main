@@ -107,6 +107,20 @@ namespace Util::Settings
 			it = IsMetadataKey(it.key()) ? settings.erase(it) : std::next(it);
 	}
 
+	void MergeSettings(nlohmann::json& target, const nlohmann::json& overlay)
+	{
+		if (!target.is_object() || !overlay.is_object()) {
+			target = overlay;
+			return;
+		}
+		for (const auto& [key, value] : overlay.items()) {
+			if (const auto found = target.find(key); found != target.end())
+				MergeSettings(*found, value);
+			else
+				target[key] = value;
+		}
+	}
+
 	std::vector<ExportSetting> GetExportSettings(std::string_view featureShortName, const nlohmann::json& settings)
 	{
 		using json = nlohmann::json;

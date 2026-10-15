@@ -162,7 +162,7 @@ size_t BaselineManager::ApplyBaselines(const std::string& featureName, json& fea
 			auto& file = files[index];
 			if (!RejectsUnknownKeys(file, featureJson)) {
 				try {
-					featureJson.update(file.values, true);
+					Util::Settings::MergeSettings(featureJson, file.values);
 					appliedCount++;
 				} catch (const std::exception& e) {
 					logger::info("Failed to apply Baseline file from {} to {}: {}", file.packId, featureName, e.what());

@@ -33,6 +33,7 @@
 #include "ShaderCache.h"
 #include "TruePBR.h"
 #include "Utils/FileSystem.h"
+#include "Utils/SettingsCatalog.h"
 #include "Utils/SphericalHarmonics.h"
 
 #ifdef TRACY_ENABLE
@@ -444,7 +445,7 @@ namespace
 		json data = json::object();
 		for (const auto* info : BaselineManager::GetSingleton()->GetFeatureFiles(featureShortName))
 			if ((packId.empty() || info->packId == packId) && info->unknownKeys.empty())
-				data.update(info->values, true);
+				Util::Settings::MergeSettings(data, info->values);
 		return data;
 	}
 
@@ -524,7 +525,7 @@ void State::Load(bool a_allowReload)
 		}
 		json merged = BuildFeatureBase(feature);
 		featureBases[name] = merged;
-		merged.update(edits, true);
+		Util::Settings::MergeSettings(merged, edits);
 		userFeatureEdits[name] = std::move(edits);
 		if (merged.empty())
 			settings.erase(name);
@@ -698,7 +699,7 @@ void State::CheckFeatureSettingsChanged(Feature* feature)
 	const auto edits = userFeatureEdits.find(name);
 	json saved = base != featureBases.end() ? base->second : json::object();
 	if (edits != userFeatureEdits.end())
-		saved.update(edits->second, true);
+		Util::Settings::MergeSettings(saved, edits->second);
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 	json current;
 	feature->SaveSettings(current);
@@ -885,7 +886,7 @@ void State::ReapplySettingsLayers()
 		json current;
 		feature->SaveSettings(current);
 		json layered = newBase;
-		layered.update(DiffFromBase(current, base), true);
+		Util::Settings::MergeSettings(layered, DiffFromBase(current, base));
 		if (LoadLayeredSettings(feature, layered, current))
 			base = std::move(newBase);
 	}
@@ -917,7 +918,7 @@ void State::DropEditsUnder(Feature* feature, const json& packData)
 	auto edits = DiffFromBase(current, base);
 	RemoveSharedSettings(edits, packData);
 	json layered = base;
-	layered.update(edits, true);
+	Util::Settings::MergeSettings(layered, edits);
 	LoadLayeredSettings(feature, layered, current);
 }
 
