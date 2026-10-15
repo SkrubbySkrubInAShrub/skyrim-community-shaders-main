@@ -44,8 +44,6 @@ namespace
 
 	struct LsConfig
 	{
-		// The sun cascades' landscape draws are raised onto the snow.
-		bool raiseSun = true;
 		bool tessellate = true;
 		bool gate = true;
 		// LandscapeSnow.hlsl's content-gate checks: 1 map tiles, 2 class borders, 4 water, 8 object lift, 16 exclusions.
@@ -60,9 +58,6 @@ namespace
 		// raising VS alone, no hull (the replay, the sun cascades).
 		float tessReach = 2600.0f;
 		float shadowTessReach = 2000.0f;
-		// Shadow maps draw with their cascade's camera in the per-frame buffer: place their
-		// surface (grid, distance terms, tessellation reach) by the player's camera instead.
-		bool shadowMainCamera = true;
 		// Phase 5, land-blended edges: the resolve's depth bonus (log2 odds per
 		// unit of remaining snow) and carve penalty.
 		float blendBonus = 6.0f;
@@ -676,7 +671,9 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	cb.CameraView = fb.GetCameraView();
 	cb.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cb.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
-	if (LsShadowPass(ls.cbCategory) && ls.cfg.shadowMainCamera) {
+	// Shadow maps draw with their cascade's camera in the per-frame buffer: place their
+	// surface (grid, distance terms, tessellation reach) by the player's camera instead.
+	if (LsShadowPass(ls.cbCategory)) {
 		if (auto* camera = RE::Main::WorldRootCamera()) {
 			const auto& eye = camera->world.translate;
 			cb.CameraPosAdjust = { eye.x, eye.y, eye.z, 0.0f };
@@ -692,11 +689,11 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	cb.DeformInvWorldSize = 1.0f / deformWorldSize;
 	cb.ObjectHeightCenter = heightWindowCenter;
 	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
-	cb.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;
+	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
 	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y, 1.0f / kUndulationFieldHalfExtent,
-		(undulationFieldValid && !shellUndulationBakeDisabled) ? 1.0f : 0.0f };
+		undulationFieldValid ? 1.0f : 0.0f };
 	cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y, 1.0f / kExclusionFieldHalfExtent,
-		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
+		exclusionFieldValid ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
 	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
@@ -753,7 +750,7 @@ bool SnowDeformation::LandBlendActive() const
 
 float SnowDeformation::LandBlendDepthStart() const
 {
-	return std::clamp(landscapeBlendStart, 0.0f, 1.0f);
+	return kLandBlendDepthStart;
 }
 
 float2 SnowDeformation::LandBlendContest() const
@@ -906,7 +903,7 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		slot.tris[cat] += triShape->GetTrishapeRuntimeData().triangleCount;
 
 	LsMode want = LsMode::kNone;
-	if (snowOn && cat == kLsShadowSun && cfg.raiseSun && settings.SnowCastsShadows) {
+	if (snowOn && cat == kLsShadowSun && settings.SnowCastsShadows) {
 		want = LsMode::kRaise;
 		// The raise works in model space less a translate.
 		const auto& world = a_pass->geometry->world;
@@ -1113,7 +1110,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		if (a_args.contains(k) && a_args[k].is_number())
 			v = a_args[k].get<float>();
 	};
-	rdb("shadowSun", c.raiseSun);
 	rdb("tessellate", c.tessellate);
 	rdb("gate", c.gate);
 	rdb("cull", c.cull);
@@ -1124,12 +1120,9 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("lift", c.lift);
 	rdf("tessReach", c.tessReach);
 	rdf("shadowTessReach", c.shadowTessReach);
-	rdb("shadowMainCamera", c.shadowMainCamera);
-	rdf("blendStart", landscapeBlendStart);
 	rdf("blendBonus", c.blendBonus);
 	rdf("blendPenalty", c.blendPenalty);
 	rdb("landRecolor", landRecolor);
-	rdf("landRecolorLumLo", landRecolorLumLo);
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
@@ -1165,10 +1158,10 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		out["targets"] = targets;
 		out["totals"] = { { "frames", t.frames }, { "statFrames", t.statFrames }, { "lost", t.lost }, { "disjoint", t.disjoint }, { "overflow", t.overflow }, { "categories", cats } };
 	}
-	out["config"] = { { "shadowSun", c.raiseSun }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
-		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shadowMainCamera", c.shadowMainCamera },
-		{ "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty },
-		{ "landRecolor", landRecolor }, { "landRecolorLumLo", landRecolorLumLo }, { "landRecolorActive", LandRecolorActive() } };
+	out["config"] = { { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
+		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask },
+		{ "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty },
+		{ "landRecolor", landRecolor }, { "landRecolorActive", LandRecolorActive() } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
 		entries.push_back({ { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },

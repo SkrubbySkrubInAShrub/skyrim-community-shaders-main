@@ -261,7 +261,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { EnsureStaticsShaders(); },
 		[&] { PrimePatchDeferred(); },
 		[&] { GetPatchShadowVS(); },
-		[&] { GetPatchShadowVS(true); },
 		[&] { EnsureSmoothNormalsCS(); },
 	};
 	const std::function<void()> effectSteps[] = {

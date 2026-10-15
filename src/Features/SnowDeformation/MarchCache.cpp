@@ -172,9 +172,9 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const bool terrainMoved = shellTerrainVersion != marchCacheTerrainVersion;
 	marchCacheTerrainVersion = shellTerrainVersion;
 
-	// Near: the berm bake's tiles, unless the caches missed one or it is off.
+	// Near: the berm bake's tiles, unless the caches missed one.
 	const bool missedBake = bermBakeSeq > marchCacheBermSeq + 1;
-	const bool full = !marchCacheValid || keyChanged || missedBake || shellBermBakeDisabled;
+	const bool full = !marchCacheValid || keyChanged || missedBake;
 	const bool tiles = !full && bermBakeSeq == marchCacheBermSeq + 1;
 	marchCacheBermSeq = bermBakeSeq;
 	const bool fineMoved = shellFineOriginX != marchCacheFineOrigin[0] || shellFineOriginY != marchCacheFineOrigin[1];

@@ -924,7 +924,7 @@ ConstantBuffer* SnowDeformation::DepthSyncRectBuffer()
 D3D11_BOX SnowDeformation::ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const
 {
 	D3D11_BOX box{ 0, 0, 0, a_width, a_height, 1 };
-	if (screenRectsOff || !a_viewport || a_viewport->Width <= 0.0f || a_viewport->Height <= 0.0f)
+	if (!a_viewport || a_viewport->Width <= 0.0f || a_viewport->Height <= 0.0f)
 		return box;
 	const int64_t left = int64_t(std::floor(a_viewport->TopLeftX)) - a_guard;
 	const int64_t top = int64_t(std::floor(a_viewport->TopLeftY)) - a_guard;
@@ -1073,10 +1073,6 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
 	a_cb.SlopeDrape = { std::clamp(settings.SlopeDrape, 0.0f, 1.0f), 0.5f, 0.866f, 0.0f };
-	if (fineProbeArmed) {
-		fineProbeArmed = false;
-		ProbeFineLayer(a_cb);
-	}
 	// Snow uv offset folded to the tile period, so shader-side uv math stays
 	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
 	constexpr float kSnowUVTile = 4096.0f / 24.0f;
@@ -1137,7 +1133,7 @@ float SnowDeformation::ShellTessTargetRenderPx() const
 	// Dynamic resolution ratios: render size over display size.
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	const float scale = (dynRes.x > 0.0f && dynRes.y > 0.0f) ? std::clamp(std::sqrt(dynRes.x * dynRes.y), 0.25f, 1.0f) : 1.0f;
-	return std::max(shellTessTargetPx, 0.0f) * scale;
+	return kShellTessTargetPx * scale;
 }
 
 // S1: the ground prepass at the end of Prepass, before the game's opaque
@@ -1198,13 +1194,13 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	cb.DeformInvWorldSize = 1.0f / deformWorldSize;
 	cb.ObjectHeightCenter = heightWindowCenter;
 	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
-	cb.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;
+	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
 	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
 		1.0f / kUndulationFieldHalfExtent,
-		(undulationFieldValid && !shellUndulationBakeDisabled) ? 1.0f : 0.0f };
+		undulationFieldValid ? 1.0f : 0.0f };
 	cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
-		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
+		exclusionFieldValid ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
 	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
@@ -1626,7 +1622,7 @@ void SnowDeformation::DrawShell()
 	RefreshShellGridPlacement(cbData);
 	// Bit 0: a road can write road tops into the skin-depth raster this frame
 	// (the skin march's road taps read nothing else).
-	cbData.ShellFlags.y = (objectRoadGateOff || capturedRoads > 0) ? 1 : 0;
+	cbData.ShellFlags.y = capturedRoads > 0 ? 1 : 0;
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
 	cbData.BloodLook = { std::clamp(settings.BloodIntensity, 0.0f, 2.0f), bloodBurialClock,
@@ -1769,9 +1765,9 @@ void SnowDeformation::DrawShell()
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 
-	// Crisp shadows: full-resolution comparison PCF against the cascade-atlas
-	// copies taken at the shadow-mask pass. When the copies are missing this
-	// frame, the shader falls back to the blurred VSM path.
+	// Crisp shadows: full-resolution comparison PCF against the cascade atlas,
+	// read in place as the shadow-mask pass left it. Without it this frame,
+	// the shader falls back to the blurred VSM path.
 	cbData.CrispShadows = ShadowAtlasSRV() ? 1.0f : 0.0f;
 	// Screen-Space Shadows availability: the feature clears its texture to
 	// white every frame even when disabled, so multiplying is always safe
@@ -1784,12 +1780,12 @@ void SnowDeformation::DrawShell()
 
 	cbData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
-	// The bake is only usable once its texture exists AND Prepass has filled it
-	// this frame; the A/B toggle suppresses both together.
-	cbData.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;
+	// The bake is only usable once its texture exists; without it the shells
+	// take the berm taps per pixel.
+	cbData.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
 	cbData.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
 		1.0f / kUndulationFieldHalfExtent,
-		(undulationFieldValid && !shellUndulationBakeDisabled) ? 1.0f : 0.0f };
+		undulationFieldValid ? 1.0f : 0.0f };
 	// Wide exclusion field window: filled provisionally here and RE-UPLOADED
 	// below, after the height pass has rebaked the field and moved its centre.
 	// Sampling this frame's texture through last frame's centre offsets the
@@ -1799,7 +1795,7 @@ void SnowDeformation::DrawShell()
 	// has actually run.
 	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
-		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
+		exclusionFieldValid ? 1.0f : 0.0f };
 
 	// Point lights: LLF's clustered visible-light list. The cluster buffers
 	// are only coherent when LLF ran this frame (CORE, but boot-disableable).
@@ -1935,7 +1931,7 @@ void SnowDeformation::DrawShell()
 	// nearer than its object - a third of a unit on a rock, two thousand on
 	// a mountain at 450 m, in front of the mist meant to wrap it (RenderDoc
 	// pixel history against re-rasterised triangles, 2026-09-04).
-	const bool mainRange = prevViewportCount && mainViewportFrame == globals::state->frameCount && !shellMainViewportRangeDisabled;
+	const bool mainRange = prevViewportCount && mainViewportFrame == globals::state->frameCount;
 	if (mainRange) {
 		D3D11_VIEWPORT shellViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 		for (UINT i = 0; i < prevViewportCount; i++) {
@@ -1967,7 +1963,7 @@ void SnowDeformation::DrawShell()
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
-		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
+		exclusionFieldValid ? 1.0f : 0.0f };
 	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	if (prevViewportCount)
 		cbData.TessScreen = { ShellTessTargetRenderPx(), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
@@ -2000,7 +1996,7 @@ void SnowDeformation::DrawShell()
 	{
 		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
 		// Read by the shell PS (shellGround) and the skins (any capture) only.
-		if (masksRT.SRV && masksRT.texture && (screenRectsOff || !nothingDraws)) {
+		if (masksRT.SRV && masksRT.texture && !nothingDraws) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			globals::profiler->BeginPass("SnowDeformation::Ground - Masks Copy");
 			D3D11_TEXTURE2D_DESC masksDesc{};
@@ -2249,7 +2245,7 @@ void SnowDeformation::DrawShell()
 		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
 		context->PSSetSamplers(2, 1, &cmpSampler);
 	}
-	// Raw shadow-atlas copy (t22) for crisp cascade shadows; the statics
+	// The live shadow atlas (t22) for crisp cascade shadows; the statics
 	// skin inherits it too.
 	if (cbData.CrispShadows > 0.5f) {
 		ID3D11ShaderResourceView* shadowAtlasSRV = ShadowAtlasSRV();
@@ -2304,12 +2300,10 @@ void SnowDeformation::DrawShell()
 	if (!ground) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell");
 	} else {
-		globals::profiler->BeginPass(shellSplitTiming ? "SnowDeformation::Ground - Shell Setup" : "SnowDeformation::Ground - Shell");
+		globals::profiler->BeginPass("SnowDeformation::Ground - Shell Setup");
 		auto splitRow = [&](const char* a_name) {
-			if (shellSplitTiming) {
-				globals::profiler->EndPass();
-				globals::profiler->BeginPass(a_name);
-			}
+			globals::profiler->EndPass();
+			globals::profiler->BeginPass(a_name);
 		};
 		// The fields the captured statics' hull and domain stages inherit.
 		context->HSSetConstantBuffers(0, 1, cbs);

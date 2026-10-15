@@ -869,9 +869,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	if (landTriProbeArmed && !landTriProbe.pending)
-		CaptureLandTriProbe(a_pass);
-
 	// One verdict per geometry per frame: the same geometry arrives once per
 	// pass that draws it, and nothing below depends on the pass. A capture
 	// already returned at the set insert; this returns the rejections too.
@@ -1153,7 +1150,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// the snow (ice family, drifts) or carries projected snow, which takes
 	// the drape wherever it stands. Two cells of reach clipped to the
 	// loaded square; a still-baking cell counts as snow.
-	if (!fadeExempt && !fullCoat && !(flags.any(Flag::kProjectedUV) && !projectedGroundGate) && !GroundNearHasSnow(translate.x, translate.y)) {
+	if (!fadeExempt && !fullCoat && !flags.any(Flag::kProjectedUV) && !GroundNearHasSnow(translate.x, translate.y)) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no snow ground within two loaded cells");
 		return;
 	}
@@ -1363,8 +1360,7 @@ bool SnowDeformation::RoadMapsWanted() const
 {
 	// Every drawn non-road skin is S4, which reads neither outside a debug
 	// view; the probe readout prints the cone.
-	return capturedRoads > 0 || objectRoadGateOff || coneSkipDisabled || staticsDebugView != 0 ||
-	       globals::state->frameCount - heightProbeShownFrame < 3;
+	return capturedRoads > 0 || staticsDebugView != 0 || globals::state->frameCount - heightProbeShownFrame < 3;
 }
 
 void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
@@ -1442,28 +1438,27 @@ uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a
 	return count;
 }
 
-ID3D11VertexShader* SnowDeformation::GetPatchShadowVS(bool a_indexed)
+ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
 {
 	// Lazy: the shadow pass runs before DrawShell has
 	// had a chance to create the statics shaders on early frames.
-	auto*& slot = a_indexed ? patchShadowVSIndexed : patchShadowVS;
-	if (!slot) {
+	if (!patchShadowVS) {
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_SHADOW_CAST", a_indexed ? "SNOW_PATCH_INDEXED" : nullptr));
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_SHADOW_CAST", "SNOW_PATCH_INDEXED"));
 		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &slot)))
-				Util::SetResourceName(slot, a_indexed ? "SnowDeformation::TrenchPatchShadowVS Indexed" : "SnowDeformation::TrenchPatchShadowVS");
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchShadowVS)))
+				Util::SetResourceName(patchShadowVS, "SnowDeformation::TrenchPatchShadowVS");
 		}
 	}
-	return slot;
+	return patchShadowVS;
 }
 
 bool SnowDeformation::EnsurePatchCasterIB()
 {
 	if (patchCasterIB)
 		return true;
-	// Six indices per quad in the non-indexed VS's corner order, so the
+	// Six indices per quad in the visible patch VS's corner order, so the
 	// triangles and their order are the same. A triangle with a corner
 	// past the caster's distance kill (SnowStaticsShell.hlsl
 	// BuildPatchVertex) never rasterises, and lattice offsets from the
@@ -2065,7 +2060,7 @@ bool SnowDeformation::EnsureStaticsRecordCB()
 
 bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count, const uint8_t* a_needed)
 {
-	if (staticsRecordDisabled || a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
+	if (a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
 		return false;
 	auto* context = globals::d3d::context;
 	for (int i = 0; i < 2; i++) {
@@ -2169,10 +2164,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	// present, plus model-path matching that also covers non-Survival
 	// installs.
 	constexpr int kGatherJumpTexels = 32;
-	const bool windowScrolled = processData.ScrollDelta.x != 0 || processData.ScrollDelta.y != 0;
 	const bool windowJumped = processData.ClearAll != 0 ||
 	                          std::abs(processData.ScrollDelta.x) > kGatherJumpTexels || std::abs(processData.ScrollDelta.y) > kGatherJumpTexels;
-	if (windowJumped || (exclusionGatherEveryScroll && windowScrolled) || (doorRefreshCounter++ % 60) == 0)
+	if (windowJumped || (doorRefreshCounter++ % 60) == 0)
 		StartExclusionGather();
 	{
 		ScopedTicks _gatherTicks(cpuCensus.spanTicks[CpuCensus::kSpanExclusionGather], cpuCensus.spanCalls[CpuCensus::kSpanExclusionGather]);
@@ -2285,7 +2279,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
 	// Only road records write RT2 anything but its clear (SnowHeightCapture),
 	// so it is bound for the road draws alone (see the raster loop).
-	const bool roadRaster = capturedRoads > 0 || objectRoadGateOff;
+	const bool roadRaster = capturedRoads > 0;
 	context->OMSetRenderTargets(2, heightRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 
@@ -2729,7 +2723,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// bilinear it). Only Volume Snow reads it, and the volume below reads the
 	// last run's: a run that turns the bake back on first bakes that one from
 	// the previous top, which this run has only read.
-	const bool skyWanted = (settings.VolumeSnow || objectRoadGateOff) && objectSkyOpenCS && objectSkyOpen;
+	const bool skyWanted = settings.VolumeSnow && objectSkyOpenCS && objectSkyOpen;
 	auto bakeSkyOpen = [&](Texture2D* a_top) {
 		globals::profiler->BeginPass("SnowDeformation::Objects - Sky Openness");
 		context->CSSetShader(objectSkyOpenCS, nullptr, 0);
@@ -2807,7 +2801,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		std::vector<uint> steps;
 		const float texel = a_data.HeightHalfExtent * 2.0f / float(kHeightMapDim);
 		for (uint step : kConeSteps)
-			if (coneSkipDisabled || float(step) * texel * a_data.SlopePerUnit <= a_maxSeed * 1.001f)
+			if (float(step) * texel * a_data.SlopePerUnit <= a_maxSeed * 1.001f)
 				steps.push_back(step);
 		return steps;
 	};
@@ -3389,7 +3383,6 @@ void SnowDeformation::DrawCapturedStatics()
 {
 	if (SnowShadersPending(2))
 		return;
-	ServiceLandTriProbe();
 	if (cpuCensusArmed) {
 		// Order-free: the game hands the passes over in a different order
 		// each frame, so entries hash on their own and the sum is the list.
@@ -3445,8 +3438,7 @@ void SnowDeformation::DrawCapturedStatics()
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-	const bool prepass = !staticsDepthPrepassDisabled && staticsPSPrepassNoDepth &&
-	                     fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
+	const bool prepass = staticsPSPrepassNoDepth && fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
 	// No statics draw has written the main depth yet. The first fill writes
 	// the copy where its viewport is exactly the copy's rectangle; otherwise
 	// it is taken now.
@@ -3461,7 +3453,7 @@ void SnowDeformation::DrawCapturedStatics()
 		const D3D11_BOX fillBox = ScreenRectBox(vpOne ? &vp0 : nullptr, preDesc.Width, preDesc.Height, 0);
 		const bool wholePixels = vpOne && vp0.TopLeftX == std::floor(vp0.TopLeftX) && vp0.TopLeftY == std::floor(vp0.TopLeftY) &&
 		                         vp0.Width == std::floor(vp0.Width) && vp0.Height == std::floor(vp0.Height);
-		fillPreSnow = prepass && preSnowDepthRTV && GetShellFillPSPreSnow() && wholePixels && !screenRectsOff &&
+		fillPreSnow = prepass && preSnowDepthRTV && GetShellFillPSPreSnow() && wholePixels &&
 		              std::memcmp(&fillBox, &preSnowRect, sizeof(D3D11_BOX)) == 0;
 		if (!fillPreSnow)
 			TakePreSnowCopy(globals::d3d::context, mainDepthSRV);
@@ -3855,9 +3847,9 @@ void SnowDeformation::DrawCapturedStatics()
 		// Clusters need a contiguous slice of the scratch buffer, handed out
 		// here so the pass writes to a known place; a mesh that does not fit
 		// simply draws its own index buffer entire.
-		if (cached && cacheIt->second.clusterCount != 0 && !clusterCullDisabled)
+		if (cached && cacheIt->second.clusterCount != 0)
 			scratchWanted += cacheIt->second.indexCount;
-		if (cached && cacheIt->second.clusterCount != 0 && !clusterCullDisabled &&
+		if (cached && cacheIt->second.clusterCount != 0 &&
 			scratchNext + cacheIt->second.indexCount <= clusterScratchCapacity) {
 			cOffset = cacheIt->second.clusterOffset;
 			cCount = cacheIt->second.clusterCount;
@@ -3871,7 +3863,7 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? cacheIt->second.boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && !debugPrintRimOff && PrintsUnder(geometry->worldBound) });
+			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound) });
 		printTwinDraws += skinDraws.back().prints ? 1u : 0u;
 	}
 	printTwinDrawsLast = printTwinDraws;
@@ -3884,12 +3876,12 @@ void SnowDeformation::DrawCapturedStatics()
 	// Whole-skin occlusion cull: bounding spheres against a max-depth
 	// pyramid of the scene, on the GPU, same frame. Writes each skin's
 	// indirect draw arguments; the loops below draw through them.
-	auto* hiZBuild = skinCullDisabled ? nullptr : GetHiZBuildCS();
+	auto* hiZBuild = GetHiZBuildCS();
 	auto* skinCull = hiZBuild ? GetSkinCullCS() : nullptr;
 	// The pyramid covers the rendered rectangle (dynamic resolution draws into
 	// a corner of the display-size depth); every read is clamped to it.
-	const uint32_t hiZExtentW = (skinCullHiZFullTexture || vpCount == 0) ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftX + vps[0].Width));
-	const uint32_t hiZExtentH = (skinCullHiZFullTexture || vpCount == 0) ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
+	const uint32_t hiZExtentW = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftX + vps[0].Width));
+	const uint32_t hiZExtentH = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
 	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
 	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV, hiZExtentW, hiZExtentH);
 	if (cullActive) {
@@ -3934,7 +3926,8 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetConstantBuffers(0, 1, &cullCB);
 		ID3D11ShaderResourceView* nullCullSRVs[4] = {};
 		ID3D11UnorderedAccessView* nullCullUAVs[2] = {};
-		auto* hiZBuildUAV = hiZCopyPath ? nullptr : GetHiZBuildCS(true);
+		// The scratch-copy chain below stands in when the UAV build fails to compile.
+		auto* hiZBuildUAV = GetHiZBuildCS(true);
 		if (hiZBuildUAV && skinCullHiZUAVs.size() == skinCullLevels) {
 			// Level 0 folds the viewport-masked depth into mip 0; every later
 			// level reads the previous mip through its UAV and writes its own,
@@ -3989,7 +3982,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// Cluster pass: refines the arguments of every skin the whole-skin
 		// test kept, and compacts what survives into the scratch buffer both
 		// draw loops read.
-		auto* clusterCull = (clusterSkins > 0 && !clusterCullDisabled) ? GetClusterCullCS() : nullptr;
+		auto* clusterCull = clusterSkins > 0 ? GetClusterCullCS() : nullptr;
 		if (clusterCull && clusterScratchIB && clusterScratchIB->uav) {
 			ID3D11ShaderResourceView* clusterSRVs[2] = { clusterBounds->srv.get(), clusterIndexPool->srv.get() };
 			context->CSSetShaderResources(5, 2, clusterSRVs);
@@ -4112,11 +4105,10 @@ void SnowDeformation::DrawCapturedStatics()
 			// carveObject is LegacySkin, i.e. cap.road. Everything else writes
 			// back the rasterised depth, so dropping the export leaves the same
 			// number in the buffer and hands early-Z rejection back to the whole
-			// pass. The debug spike forces the no-depth path on every draw, roads
-			// included. The prepass twins mirror the same split so the private
+			// pass. The prepass twins mirror the same split so the private
 			// depth holds exactly what the shipping shaders would have written.
 			// Depth fight view: every skin through the prepass, roads too.
-			const bool needsDepth = !staticsEarlyZSpike && staticsDebugView != 9 && cap.road;
+			const bool needsDepth = staticsDebugView != 9 && cap.road;
 			// Skipped before any state: each drawn skin sets all it reads.
 			if (a_prepass && needsDepth)
 				continue;
@@ -4374,7 +4366,7 @@ void SnowDeformation::DrawCapturedStatics()
 			if (!patchCullCB)
 				patchCullCB = new ConstantBuffer(ConstantBufferDesc<PatchCullCB>(), "SnowDeformation::PatchCullCB");
 			PatchCullCB cullData{};
-			if (!patchFrustumCullOff && lastShellCBData)
+			if (lastShellCBData)
 				FillPatchCullLines(*lastShellCBData, cullData);
 			patchCullCB->Update(cullData);
 			ID3D11Buffer* cullCB = patchCullCB->CB();
@@ -4387,7 +4379,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// deferred targets, which are free once the ground has shaded; one
 		// full-screen pass then shades each kept pixel once. Forward under the
 		// debug views and until both deferred shaders exist.
-		bool deferredPatch = patchDeferredEnabled && staticsDebugView == 0 && PatchDeferredReady() && EnsurePatchDeferredResources();
+		bool deferredPatch = staticsDebugView == 0 && PatchDeferredReady() && EnsurePatchDeferredResources();
 		ID3D11VertexShader* patchFillVS = deferredPatch ? GetShellFillVS() : nullptr;
 		deferredPatch = deferredPatch && patchFillVS;
 		context->PSSetShader(deferredPatch ? patchDeferredPS[0] : patchPS, nullptr, 0);
@@ -4885,14 +4877,6 @@ void SnowDeformation::RenderWaterCapture()
 			logger::info("[SNOW DEFORMATION] water capture: first plane '{}' desc {:#x} vertex {} tris {} at ({:.0f} {:.0f} {:.0f}) window origin cell ({}, {})",
 				geometry->name.c_str(), descKey, desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX), triShape->GetTrishapeRuntimeData().triangleCount,
 				water.world.translate.x, water.world.translate.y, water.world.translate.z, shellWindowCellX, shellWindowCellY);
-		}
-		// Keyed on geometry + level, so a shape moved to another height logs again.
-		if (debugLogWaterPlanes && waterLoggedPlanes.insert(std::to_string(reinterpret_cast<uintptr_t>(geometry)) + ":" + std::to_string(int(water.world.translate.z))).second) {
-			const auto& wb = geometry->worldBound;
-			logger::info("[SNOW DEFORMATION] water body '{}' plane d {:.0f} tris {} at ({:.0f} {:.0f} {:.0f}) scale {:.2f} bound centre ({:.0f} {:.0f} {:.0f}) radius {:.0f}",
-				geometry->name.c_str(), water.planeConstant, triShape->GetTrishapeRuntimeData().triangleCount,
-				water.world.translate.x, water.world.translate.y, water.world.translate.z, water.world.scale,
-				wb.center.x, wb.center.y, wb.center.z, wb.radius);
 		}
 		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
 			continue;
@@ -5908,427 +5892,6 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 	return skinCullHiZ->srv && skinCullHiZScratch.size() == skinCullLevels && skinCullBounds && skinCullBounds->srv && skinCullArgs && skinCullArgs->uav;
 }
 
-void SnowDeformation::CaptureLandTriProbe(RE::BSRenderPass* a_pass)
-{
-	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-	// Both the vanilla landscape material and TruePBR's answer
-	// kMultiTexLandLODBlend from GetFeature (not kMultiTexLand); 33 is the
-	// PBR landscape's own FEATURE id, which TerrainData accepts too.
-	auto* material = a_pass->shaderProperty->material;
-	if (!material)
-		return;
-	const auto feature = material->GetFeature();
-	if (feature != RE::BSShaderMaterial::Feature::kMultiTexLand &&
-		feature != RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend &&
-		feature != static_cast<RE::BSShaderMaterial::Feature>(33))
-		return;
-	if (a_pass->shaderProperty->flags.any(Flag::kLODLandscape))
-		return;
-	auto* geometry = a_pass->geometry;
-	auto triShape = geometry->AsTriShape();
-	if (!triShape)
-		return;
-	auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-	if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-		return;
-	auto desc = rendererData->vertexDesc;
-	if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
-		return;
-	uint64_t descKey;
-	memcpy(&descKey, &desc, sizeof(descKey));
-	const uint32_t stride = uint32_t(descKey & 0xF) * 4;
-	const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
-	const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-	if (stride == 0 || vertexCount == 0 || indexCount == 0)
-		return;
-
-	// Position width: the first attribute after it starts where it ends (the
-	// same rule EnsureSmoothedNormals uses).
-	uint32_t positionBytes = stride;
-	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
-		{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
-		{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
-		{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
-		{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
-		{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
-		{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
-		{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
-		{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
-	};
-	for (auto [flag, attr] : kAttrs) {
-		if (desc.HasFlag(flag)) {
-			uint32_t attrOffset = desc.GetAttributeOffset(attr);
-			if (attrOffset > 0 && attrOffset < positionBytes)
-				positionBytes = attrOffset;
-		}
-	}
-
-	auto device = globals::d3d::device;
-	auto context = globals::d3d::context;
-	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-	auto* gameIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-	D3D11_BUFFER_DESC vbDesc{};
-	gameVB->GetDesc(&vbDesc);
-	D3D11_BUFFER_DESC ibDesc{};
-	gameIB->GetDesc(&ibDesc);
-	auto makeStaging = [&](const D3D11_BUFFER_DESC& a_src, winrt::com_ptr<ID3D11Buffer>& a_out) {
-		D3D11_BUFFER_DESC st{};
-		st.ByteWidth = a_src.ByteWidth;
-		st.Usage = D3D11_USAGE_STAGING;
-		st.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		a_out = nullptr;
-		return SUCCEEDED(device->CreateBuffer(&st, nullptr, a_out.put()));
-	};
-	if (!makeStaging(vbDesc, landTriProbe.vbStaging) || !makeStaging(ibDesc, landTriProbe.ibStaging)) {
-		landTriProbeResult = "probe: staging allocation failed";
-		landTriProbeArmed = false;
-		return;
-	}
-	context->CopyResource(landTriProbe.vbStaging.get(), gameVB);
-	context->CopyResource(landTriProbe.ibStaging.get(), gameIB);
-	landTriProbe.vertexCount = vertexCount;
-	landTriProbe.indexCount = indexCount;
-	landTriProbe.stride = stride;
-	landTriProbe.indexBytes = (ibDesc.ByteWidth >= indexCount * 4) ? 4u : 2u;
-	landTriProbe.posFloat32 = positionBytes >= 16;
-	landTriProbe.world = geometry->world;
-	landTriProbe.name = geometry->name.empty() ? "<unnamed>" : geometry->name.c_str();
-	landTriProbe.frame = globals::state->frameCount;
-	landTriProbe.pending = true;
-	landTriProbeArmed = false;
-	landTriProbeResult = "probe: captured, waiting for readback";
-}
-
-void SnowDeformation::ServiceLandTriProbe()
-{
-	if (!landTriProbe.pending || globals::state->frameCount < landTriProbe.frame + 2)
-		return;
-	auto context = globals::d3d::context;
-	D3D11_MAPPED_SUBRESOURCE vb{};
-	if (FAILED(context->Map(landTriProbe.vbStaging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &vb)))
-		return;
-	D3D11_MAPPED_SUBRESOURCE ib{};
-	if (FAILED(context->Map(landTriProbe.ibStaging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &ib))) {
-		context->Unmap(landTriProbe.vbStaging.get(), 0);
-		return;
-	}
-
-	const auto& p = landTriProbe;
-	const auto* vbytes = static_cast<const uint8_t*>(vb.pData);
-	auto localPos = [&](uint32_t v) {
-		const uint8_t* base = vbytes + size_t(v) * p.stride;
-		if (p.posFloat32) {
-			float xyz[3];
-			memcpy(xyz, base, sizeof(xyz));
-			return DirectX::XMFLOAT3(xyz[0], xyz[1], xyz[2]);
-		}
-		uint16_t h[3];
-		memcpy(h, base, sizeof(h));
-		return DirectX::XMFLOAT3(DirectX::PackedVector::XMConvertHalfToFloat(h[0]),
-			DirectX::PackedVector::XMConvertHalfToFloat(h[1]),
-			DirectX::PackedVector::XMConvertHalfToFloat(h[2]));
-	};
-	const auto& rot = p.world.rotate;
-	const float scale = p.world.scale;
-	auto worldXY = [&](const DirectX::XMFLOAT3& l) {
-		return DirectX::XMFLOAT2(
-			(rot.entry[0][0] * l.x + rot.entry[0][1] * l.y + rot.entry[0][2] * l.z) * scale + p.world.translate.x,
-			(rot.entry[1][0] * l.x + rot.entry[1][1] * l.y + rot.entry[1][2] * l.z) * scale + p.world.translate.y);
-	};
-	auto index = [&](uint32_t i) -> uint32_t {
-		if (p.indexBytes == 4)
-			return static_cast<const uint32_t*>(ib.pData)[i];
-		return static_cast<const uint16_t*>(ib.pData)[i];
-	};
-
-	// The mesh's own lattice step: the shortest non-zero axis run among the
-	// first triangles' edges (the render mesh is finer than the LAND record).
-	const uint32_t triCountAll = p.indexCount / 3;
-	float step = 128.0f;
-	for (uint32_t t = 0; t < std::min(triCountAll, 64u); t++) {
-		DirectX::XMFLOAT2 c[3];
-		bool ok = true;
-		for (uint32_t k = 0; k < 3; k++) {
-			uint32_t vi = index(t * 3 + k);
-			if (vi >= p.vertexCount) {
-				ok = false;
-				break;
-			}
-			c[k] = worldXY(localPos(vi));
-		}
-		if (!ok)
-			continue;
-		for (int e = 0; e < 3; e++) {
-			float dx = std::fabs(c[(e + 1) % 3].x - c[e].x), dy = std::fabs(c[(e + 1) % 3].y - c[e].y);
-			if (dx > 0.5f)
-				step = std::min(step, dx);
-			if (dy > 0.5f)
-				step = std::min(step, dy);
-		}
-	}
-	step = std::max(1.0f, std::round(step));
-
-	// Per triangle: the longest edge is the quad diagonal; its slope sign says
-	// which diagonal. The quad is placed on the world lattice (at the detected
-	// step) from its lowest corner, so the pattern is read in world terms.
-	const float kLand = step;
-	uint32_t slash = 0, backslash = 0, offLattice = 0, degenerate = 0, on64 = 0;
-	uint32_t slashEven = 0, slashOdd = 0, backEven = 0, backOdd = 0;
-	std::string sample = std::format("  transform: t=({:.1f},{:.1f},{:.1f}) s={:.3f} rot diag=({:.3f},{:.3f},{:.3f}) verts={} stride={}\n",
-		p.world.translate.x, p.world.translate.y, p.world.translate.z, scale,
-		rot.entry[0][0], rot.entry[1][1], rot.entry[2][2], p.vertexCount, p.stride);
-	const uint32_t triCount = triCountAll;
-	auto onGrid = [](const DirectX::XMFLOAT2& c, float step) {
-		return std::fabs(c.x / step - std::round(c.x / step)) <= 2.0f / step &&
-		       std::fabs(c.y / step - std::round(c.y / step)) <= 2.0f / step;
-	};
-	for (uint32_t t = 0; t < triCount; t++) {
-		DirectX::XMFLOAT2 w[3];
-		DirectX::XMFLOAT3 l[3];
-		bool ok = true;
-		for (uint32_t k = 0; k < 3; k++) {
-			uint32_t vi = index(t * 3 + k);
-			if (vi >= p.vertexCount) {
-				ok = false;
-				break;
-			}
-			l[k] = localPos(vi);
-			w[k] = worldXY(l[k]);
-		}
-		if (!ok) {
-			degenerate++;
-			continue;
-		}
-		// Raw dump of the first triangles, before any test can drop them.
-		if (t < 8)
-			sample += std::format("  tri {}: local ({:.1f},{:.1f},{:.1f}) ({:.1f},{:.1f},{:.1f}) ({:.1f},{:.1f},{:.1f}) world ({:.1f},{:.1f}) ({:.1f},{:.1f}) ({:.1f},{:.1f})\n",
-				t, l[0].x, l[0].y, l[0].z, l[1].x, l[1].y, l[1].z, l[2].x, l[2].y, l[2].z,
-				w[0].x, w[0].y, w[1].x, w[1].y, w[2].x, w[2].y);
-		if (onGrid(w[0], 128.0f) && onGrid(w[1], 128.0f) && onGrid(w[2], 128.0f))
-			on64++;
-		// Lattice check: every corner within 2 units of a 128 multiple.
-		bool onLattice = onGrid(w[0], kLand) && onGrid(w[1], kLand) && onGrid(w[2], kLand);
-		if (!onLattice) {
-			offLattice++;
-			continue;
-		}
-		int best = -1;
-		float bestLen = 0.0f;
-		float bestDx = 0.0f, bestDy = 0.0f;
-		for (int e = 0; e < 3; e++) {
-			const auto& a = w[e];
-			const auto& b = w[(e + 1) % 3];
-			float dx = b.x - a.x, dy = b.y - a.y;
-			float len = dx * dx + dy * dy;
-			if (len > bestLen) {
-				bestLen = len;
-				best = e;
-				bestDx = dx;
-				bestDy = dy;
-			}
-		}
-		if (best < 0 || std::fabs(bestDx) < kLand * 0.5f || std::fabs(bestDy) < kLand * 0.5f) {
-			degenerate++;
-			continue;
-		}
-		float minX = std::min({ w[0].x, w[1].x, w[2].x });
-		float minY = std::min({ w[0].y, w[1].y, w[2].y });
-		const long qx = std::lround(minX / kLand);
-		const long qy = std::lround(minY / kLand);
-		const bool even = ((qx + qy) & 1) == 0;
-		if (bestDx * bestDy > 0.0f) {
-			slash++;
-			(even ? slashEven : slashOdd)++;
-		} else {
-			backslash++;
-			(even ? backEven : backOdd)++;
-		}
-		if (t < 8)
-			sample += std::format("  tri {} -> {} quad ({},{})\n", t, bestDx * bestDy > 0.0f ? "/" : "\\", qx, qy);
-	}
-	// Mesh heights against the LAND heightmap the shell bakes from: at heightmap
-	// vertices the two must agree; between them the mesh follows whatever
-	// interpolation the engine uses, tested here against bilinear, the two
-	// triangulations and bicubic Catmull-Rom over the 128 grid.
-	std::string fit;
-	{
-		const std::shared_lock cellLock(shellCellMutex);
-		auto landHeight = [&](long gx, long gy, bool& a_ok) -> float {
-			const long cellX = static_cast<long>(std::floor(gx / 32.0));
-			const long cellY = static_cast<long>(std::floor(gy / 32.0));
-			const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
-			auto it = shellCells.find(key);
-			if (it == shellCells.end()) {
-				a_ok = false;
-				return 0.0f;
-			}
-			const long lx = gx - cellX * 32, ly = gy - cellY * 32;
-			const float h = it->second.height[size_t(ly) * 33 + size_t(lx)];
-			if (h < -50000.0f)
-				a_ok = false;
-			return h;
-		};
-		auto catmull = [](float p0, float p1, float p2, float p3, float t) {
-			return 0.5f * (2.0f * p1 + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t * t + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t * t * t);
-		};
-		double sumSq[4] = {}, maxAbs[4] = {};
-		double gridMax = 0.0;
-		uint32_t between = 0, onGridN = 0, missing = 0;
-		// Catmull-Rom residuals split by where the 4x4 neighbourhood lies: fully
-		// inside the vertex's own cell, or reaching a neighbour cell - where the
-		// engine may not have had the neighbour and used some edge rule instead.
-		// Two candidate edge rules are scored on the edge-reaching points only:
-		// clamp (missing neighbour = nearest in-cell height) and mirror (linear
-		// extrapolation, p0 = 2 p1 - p2).
-		double crInMax = 0.0, crInSq = 0.0, crEdgeMax = 0.0, crEdgeSq = 0.0, clampMax = 0.0, clampSq = 0.0, mirrorMax = 0.0, mirrorSq = 0.0;
-		uint32_t nIn = 0, nEdge = 0;
-		struct Worst { double d; float fx, fy; float wx, wy; float wz, cr; };
-		Worst worst[3] = {};
-		for (uint32_t v = 0; v < p.vertexCount; v++) {
-			const auto l = localPos(v);
-			const auto wxy = worldXY(l);
-			const float wz = (rot.entry[2][0] * l.x + rot.entry[2][1] * l.y + rot.entry[2][2] * l.z) * scale + p.world.translate.z;
-			const double gxf = wxy.x / 128.0, gyf = wxy.y / 128.0;
-			const long gx = static_cast<long>(std::floor(gxf)), gy = static_cast<long>(std::floor(gyf));
-			const float fx = float(gxf - gx), fy = float(gyf - gy);
-			bool ok = true;
-			float h[4][4];
-			for (int j = 0; j < 4; j++)
-				for (int i = 0; i < 4; i++)
-					h[j][i] = landHeight(gx - 1 + i, gy - 1 + j, ok);
-			if (!ok) {
-				missing++;
-				continue;
-			}
-			const float h00 = h[1][1], h10 = h[1][2], h01 = h[2][1], h11 = h[2][2];
-			if (fx < 0.01f && fy < 0.01f) {
-				onGridN++;
-				gridMax = std::max(gridMax, double(std::fabs(wz - h00)));
-				continue;
-			}
-			between++;
-			const float bil = h00 + (h10 - h00) * fx + (h01 - h00) * fy + (h00 - h10 - h01 + h11) * fx * fy;
-			const float triA = fy <= fx ? h00 + (h10 - h00) * fx + (h11 - h10) * fy : h00 + (h01 - h00) * fy + (h11 - h01) * fx;
-			const float triB = (fx + fy) <= 1.0f ? h00 + (h10 - h00) * fx + (h01 - h00) * fy : h11 + (h10 - h11) * (1.0f - fy) + (h01 - h11) * (1.0f - fx);
-			float rows[4];
-			for (int j = 0; j < 4; j++)
-				rows[j] = catmull(h[j][0], h[j][1], h[j][2], h[j][3], fx);
-			const float cr = catmull(rows[0], rows[1], rows[2], rows[3], fy);
-			const float pred[4] = { bil, triA, triB, cr };
-			for (int m = 0; m < 4; m++) {
-				const double d = double(wz) - pred[m];
-				sumSq[m] += d * d;
-				maxAbs[m] = std::max(maxAbs[m], std::fabs(d));
-			}
-			// Cell-edge classification of the 4x4 footprint (gx-1..gx+2).
-			const long cellX = static_cast<long>(std::floor(gx / 32.0)), cellY = static_cast<long>(std::floor(gy / 32.0));
-			const bool reaches = (gx - 1) < cellX * 32 || (gx + 2) > cellX * 32 + 32 || (gy - 1) < cellY * 32 || (gy + 2) > cellY * 32 + 32;
-			const double dcr = double(wz) - cr;
-			if (!reaches) {
-				nIn++;
-				crInSq += dcr * dcr;
-				crInMax = std::max(crInMax, std::fabs(dcr));
-			} else {
-				nEdge++;
-				crEdgeSq += dcr * dcr;
-				crEdgeMax = std::max(crEdgeMax, std::fabs(dcr));
-				// Rebuild the neighbourhood under each edge rule.
-				float hc[4][4], hm[4][4];
-				for (int j = 0; j < 4; j++)
-					for (int i = 0; i < 4; i++) {
-						long sx = gx - 1 + i, sy = gy - 1 + j;
-						const long cx = std::clamp(sx, cellX * 32, cellX * 32 + 32), cy = std::clamp(sy, cellY * 32, cellY * 32 + 32);
-						bool ok2 = true;
-						hc[j][i] = landHeight(cx, cy, ok2);
-						// Mirror: reflect the out-of-cell sample about the edge vertex.
-						const long mx = sx < cellX * 32 ? 2 * cellX * 32 - sx : (sx > cellX * 32 + 32 ? 2 * (cellX * 32 + 32) - sx : sx);
-						const long my = sy < cellY * 32 ? 2 * cellY * 32 - sy : (sy > cellY * 32 + 32 ? 2 * (cellY * 32 + 32) - sy : sy);
-						const float hEdge = landHeight(cx, cy, ok2);
-						const float hIn = landHeight(mx, my, ok2);
-						hm[j][i] = (sx != mx || sy != my) ? 2.0f * hEdge - hIn : hIn;
-					}
-				float rc[4], rm[4];
-				for (int j = 0; j < 4; j++) {
-					rc[j] = catmull(hc[j][0], hc[j][1], hc[j][2], hc[j][3], fx);
-					rm[j] = catmull(hm[j][0], hm[j][1], hm[j][2], hm[j][3], fx);
-				}
-				const double dc = double(wz) - catmull(rc[0], rc[1], rc[2], rc[3], fy);
-				const double dm = double(wz) - catmull(rm[0], rm[1], rm[2], rm[3], fy);
-				clampSq += dc * dc;
-				clampMax = std::max(clampMax, std::fabs(dc));
-				mirrorSq += dm * dm;
-				mirrorMax = std::max(mirrorMax, std::fabs(dm));
-			}
-			for (auto& wr : worst) {
-				if (std::fabs(dcr) > std::fabs(wr.d)) {
-					wr = { dcr, fx, fy, wxy.x, wxy.y, wz, cr };
-					break;
-				}
-			}
-		}
-		auto rms = [&](int m) { return between ? std::sqrt(sumSq[m] / between) : 0.0; };
-		fit = std::format(" | vs LAND: {} on-grid verts max dz {:.2f}; {} between: bilinear max {:.2f} rms {:.2f}, triA max {:.2f} rms {:.2f}, triB max {:.2f} rms {:.2f}, catmull-rom max {:.2f} rms {:.2f}; {} missing",
-			onGridN, gridMax, between, maxAbs[0], rms(0), maxAbs[1], rms(1), maxAbs[2], rms(2), maxAbs[3], rms(3), missing);
-		fit += std::format(" | CR by footprint: {} in-cell max {:.2f} rms {:.3f}; {} reaching a neighbour cell max {:.2f} rms {:.3f} -> clamp rule max {:.2f} rms {:.3f}, mirror rule max {:.2f} rms {:.3f}",
-			nIn, crInMax, nIn ? std::sqrt(crInSq / nIn) : 0.0,
-			nEdge, crEdgeMax, nEdge ? std::sqrt(crEdgeSq / nEdge) : 0.0,
-			clampMax, nEdge ? std::sqrt(clampSq / nEdge) : 0.0,
-			mirrorMax, nEdge ? std::sqrt(mirrorSq / nEdge) : 0.0);
-		for (const auto& wr : worst)
-			sample += std::format("  worst CR residual {:+.2f} at world ({:.0f},{:.0f}) f=({:.2f},{:.2f}) mesh {:.2f} cr {:.2f}\n", wr.d, wr.wx, wr.wy, wr.fx, wr.fy, wr.wz, wr.cr);
-
-		// One row for offline fitting: mesh heights along the first vertex row
-		// and the LAND heights bracketing it.
-		if (p.vertexCount >= 17) {
-			const auto l0 = localPos(0);
-			const auto w0 = worldXY(l0);
-			std::string meshRow, landRow;
-			for (uint32_t v = 0; v < p.vertexCount; v++) {
-				const auto l = localPos(v);
-				if (std::fabs(l.y - l0.y) < 0.5f && l.x >= l0.x - 0.5f && l.x < l0.x + 16.5f * step)
-					meshRow += std::format("({:.0f}:{:.2f}) ", l.x - l0.x, (rot.entry[2][0] * l.x + rot.entry[2][1] * l.y + rot.entry[2][2] * l.z) * scale + p.world.translate.z);
-			}
-			const long gx0 = static_cast<long>(std::floor(w0.x / 128.0)), gy0 = static_cast<long>(std::floor(w0.y / 128.0));
-			for (long i = -1; i <= 6; i++) {
-				bool ok = true;
-				const float lh = landHeight(gx0 + i, gy0, ok);
-				landRow += ok ? std::format("({:.0f}:{:.2f}) ", float(i) * 128.0f, lh) : std::format("({:.0f}:?) ", float(i) * 128.0f);
-			}
-			sample += "  row y=" + std::format("{:.0f}", w0.y) + " mesh (dx:z): " + meshRow + "\n  row LAND (dx:z, 128 grid): " + landRow + "\n";
-		}
-	}
-
-	context->Unmap(landTriProbe.ibStaging.get(), 0);
-	context->Unmap(landTriProbe.vbStaging.get(), 0);
-
-	const uint32_t classified = slash + backslash;
-	std::string verdict;
-	if (classified == 0)
-		verdict = "no lattice triangles found (LOD or non-land geometry?)";
-	else if (backslash == 0)
-		verdict = "UNIFORM '/': every quad splits SW-NE (h00-h11)";
-	else if (slash == 0)
-		verdict = "UNIFORM '\\': every quad splits NW-SE (h10-h01)";
-	else {
-		const uint32_t checkerA = slashEven + backOdd;   // '/' on even (qx+qy), '\' on odd
-		const uint32_t checkerB = slashOdd + backEven;
-		const float fa = float(checkerA) / classified, fb = float(checkerB) / classified;
-		if (fa > 0.98f)
-			verdict = std::format("CHECKERBOARD: '/' where (qx+qy) even, '\\' where odd ({:.1f}% consistent)", fa * 100.0f);
-		else if (fb > 0.98f)
-			verdict = std::format("CHECKERBOARD: '\\' where (qx+qy) even, '/' where odd ({:.1f}% consistent)", fb * 100.0f);
-		else
-			verdict = std::format("MIXED: neither uniform nor a 128-checkerboard (checker fits {:.0f}% / {:.0f}%)", fa * 100.0f, fb * 100.0f);
-	}
-	landTriProbeResult = std::format("lattice step {:.0f} | {} | {} tris: {} '/', {} '\\', {} off-lattice ({} whole tris on the 128 grid), {} degenerate | '{}' at ({:.0f},{:.0f}) {} pos {}-bit idx{}",
-		step, verdict, triCount, slash, backslash, offLattice, on64, degenerate, p.name,
-		p.world.translate.x, p.world.translate.y, p.posFloat32 ? "f32" : "f16", p.indexBytes * 8, fit);
-	logger::info("[SNOW DEFORMATION] landscape triangulation probe: {}\n{}", landTriProbeResult, sample);
-	landTriProbe.pending = false;
-	landTriProbe.vbStaging = nullptr;
-	landTriProbe.ibStaging = nullptr;
-}
-
 // Mirrors RE::TES::ForEachReferenceInRange: the interior cell alone, or the
 // loaded grid (x outer, y inner, attached cells whose square meets the
 // radius) and then the sky cell. Slot i is one of those cells.
@@ -6371,8 +5934,8 @@ void SnowDeformation::StepExclusionGather()
 	const float radius = kExclusionFieldHalfExtent + 512.0f;
 	const auto& origin = exclusionGatherOrigin;
 	auto visit = [this](RE::TESObjectREFR* a_ref) { return ExclusionVisit(a_ref); };
-	// Whole walk in one frame under the A/B; otherwise done within ~50 frames.
-	const uint32_t perStep = exclusionGatherEveryScroll ? exclusionGatherSlots : std::max(1u, (exclusionGatherSlots + 49) / 50);
+	// The walk spreads over ~50 frames.
+	const uint32_t perStep = std::max(1u, (exclusionGatherSlots + 49) / 50);
 	const uint32_t gridLength = tes->gridCells ? tes->gridCells->length : 0;
 	for (uint32_t n = 0; n < perStep && exclusionGatherSlot <= exclusionGatherSlots; n++, exclusionGatherSlot++) {
 		const uint32_t i = exclusionGatherSlot - 1;

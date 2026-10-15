@@ -34,19 +34,7 @@ void SnowDeformation::CaptureShadowAtlas()
 		if (settings.SnowCastsShadows)
 			InjectShellShadowCasters(liveAtlasSRV.get());
 
-		if (!shadowAtlasLiveReadOff) {
-			shadowAtlasLiveSRV = liveAtlasSRV;
-			shadowAtlasCopySRV = nullptr;
-			shadowAtlasCopyTex = nullptr;
-		} else {
-			shadowAtlasLiveSRV = nullptr;
-			if (shadowCopyWantedFrames > 0) {
-				globals::profiler->BeginPass("SnowDeformation::Shadows - Atlas Copy");
-				CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
-				globals::profiler->EndPass();
-			} else
-				globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Atlas Copy");
-		}
+		shadowAtlasLiveSRV = liveAtlasSRV;
 	}
 
 	// First frames, then every validity flip.
@@ -59,8 +47,8 @@ void SnowDeformation::CaptureShadowAtlas()
 		D3D11_SHADER_RESOURCE_VIEW_DESC liveViewDesc{};
 		if (liveAtlasSRV)
 			liveAtlasSRV->GetDesc(&liveViewDesc);
-		logger::info("[SNOW DEFORMATION] ShadowCopy: atlasLive={} inPlace={} valid={} atlas={}x{} slices={} fmt={} samples={} liveViewDim={} liveViewFmt={}",
-			liveAtlasSRV != nullptr, !shadowAtlasLiveReadOff, validState,
+		logger::info("[SNOW DEFORMATION] ShadowAtlas: atlasLive={} valid={} atlas={}x{} slices={} fmt={} samples={} liveViewDim={} liveViewFmt={}",
+			liveAtlasSRV != nullptr, validState,
 			atlasDesc.Width, atlasDesc.Height, atlasDesc.ArraySize, uint32_t(atlasDesc.Format), atlasDesc.SampleDesc.Count,
 			uint32_t(liveViewDesc.ViewDimension), uint32_t(liveViewDesc.Format));
 	}
@@ -97,47 +85,13 @@ void SnowDeformation::CapturePointShadowMask()
 	srvDesc.Texture2DArray.MipLevels = 1;
 	srvDesc.Texture2DArray.FirstArraySlice = 0;
 
-	if (!pointShadowLiveReadOff) {
-		pointShadowAtlasCopySRV = nullptr;
-		pointShadowAtlasCopyTex = nullptr;
-		if (pointShadowLiveTex != liveTex) {
-			pointShadowLiveSRV = nullptr;
-			pointShadowLiveTex = nullptr;
-			srvDesc.Texture2DArray.ArraySize = liveDesc.ArraySize;
-			if (FAILED(globals::d3d::device->CreateShaderResourceView(liveTex.get(), &srvDesc, pointShadowLiveSRV.put())))
-				return;
-			pointShadowLiveTex = liveTex;
-		}
-	} else {
+	if (pointShadowLiveTex != liveTex) {
 		pointShadowLiveSRV = nullptr;
 		pointShadowLiveTex = nullptr;
-		// One slice per mask channel, whole subresources: partial boxes are
-		// illegal on depth resources.
-		bool recreate = !pointShadowAtlasCopyTex || !pointShadowAtlasCopySRV;
-		if (pointShadowAtlasCopyTex) {
-			D3D11_TEXTURE2D_DESC haveDesc;
-			pointShadowAtlasCopyTex->GetDesc(&haveDesc);
-			recreate |= haveDesc.Width != liveDesc.Width || haveDesc.Height != liveDesc.Height || haveDesc.Format != liveDesc.Format;
-		}
-		if (recreate) {
-			pointShadowAtlasCopySRV = nullptr;
-			pointShadowAtlasCopyTex = nullptr;
-			D3D11_TEXTURE2D_DESC copyDesc = liveDesc;
-			copyDesc.ArraySize = kPointShadowMaxLights;
-			copyDesc.MipLevels = 1;
-			copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-			copyDesc.MiscFlags = 0;
-			copyDesc.Usage = D3D11_USAGE_DEFAULT;
-			copyDesc.CPUAccessFlags = 0;
-			if (FAILED(globals::d3d::device->CreateTexture2D(&copyDesc, nullptr, pointShadowAtlasCopyTex.put())))
-				return;
-			Util::SetResourceName(pointShadowAtlasCopyTex.get(), "SnowDeformation::PointShadowAtlasCopy");
-			srvDesc.Texture2DArray.ArraySize = kPointShadowMaxLights;
-			if (FAILED(globals::d3d::device->CreateShaderResourceView(pointShadowAtlasCopyTex.get(), &srvDesc, pointShadowAtlasCopySRV.put()))) {
-				pointShadowAtlasCopyTex = nullptr;
-				return;
-			}
-		}
+		srvDesc.Texture2DArray.ArraySize = liveDesc.ArraySize;
+		if (FAILED(globals::d3d::device->CreateShaderResourceView(liveTex.get(), &srvDesc, pointShadowLiveSRV.put())))
+			return;
+		pointShadowLiveTex = liveTex;
 	}
 
 	// Snapshot every local light whose descriptor is live now; entries
@@ -176,24 +130,17 @@ void SnowDeformation::CapturePointShadowMask()
 		PointShadowLightData& dd = pendingPointShadows[maskIndex];
 		auto proj = DirectX::XMLoadFloat4x4(reinterpret_cast<const DirectX::XMFLOAT4X4*>(&desc.lightTransform));
 		DirectX::XMStoreFloat4x4(&dd.LightTransform, proj);
-		dd.SliceIndex = pointShadowLiveReadOff ? maskIndex : desc.shadowmapIndex;
+		dd.SliceIndex = desc.shadowmapIndex;
 		dd.LightType = isFrustum ? 1u : (light->GetIsOmniLight() ? 3u : 2u);
 		// The radius the map's radial depth was normalised by; ISL rewrites
 		// the light's radius later in the frame.
 		dd.ShadowRadius = light->light ? light->light->GetLightRuntimeData().radius.x : 0.0f;
 
-		if (pointShadowLiveReadOff && shadowCopyWantedFrames > 0 && pointShadowSliceFrame[maskIndex] != pointShadowFrameIndex) {
-			pointShadowSliceFrame[maskIndex] = pointShadowFrameIndex;
-			globals::profiler->BeginPass("SnowDeformation::Shadows - Local Atlas Copy");
-			context->CopySubresourceRegion(pointShadowAtlasCopyTex.get(), maskIndex, 0, 0, 0, liveTex.get(), desc.shadowmapIndex, nullptr);
-			globals::profiler->EndPass();
-		}
-
 		static uint32_t layoutLogCount = 0;
 		if (layoutLogCount < 12) {
 			layoutLogCount++;
-			logger::info("[SNOW DEFORMATION] PointShadow: mask={} type={} srcSlice={} rt={} arr={} inPlace={} biasScale={:.3f}",
-				maskIndex, dd.LightType, desc.shadowmapIndex, uint32_t(desc.renderTarget), liveDesc.ArraySize, !pointShadowLiveReadOff, lightRuntime.shadowBiasScale);
+			logger::info("[SNOW DEFORMATION] PointShadow: mask={} type={} srcSlice={} rt={} arr={} biasScale={:.3f}",
+				maskIndex, dd.LightType, desc.shadowmapIndex, uint32_t(desc.renderTarget), liveDesc.ArraySize, lightRuntime.shadowBiasScale);
 		}
 	}
 }
@@ -283,11 +230,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (injectLogged.size() < 12 && injectLogged.insert(a_msg).second)
 			logger::info("[SNOW DEFORMATION] ShadowInject: {}", a_msg);
 	};
-	const bool splitRow = shellCasterSplitDebug;
 	auto skipPatch = [&](const char* a_msg) {
 		logOnce(a_msg);
-		if (!splitRow)
-			globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Trench Patch");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Trench Patch");
 	};
 
 	if (!settings.EnableSnowDeformation || !lastShellCBData)
@@ -304,10 +249,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		return skipPatch("skip: no snow in view");
 	// Indexed over the shared lattice: one VS invocation per vertex, the same
 	// triangles in the same order, minus those past the fade band.
-	const bool patchIndexed = !patchCasterNonIndexed && GetPatchShadowVS(true) && EnsurePatchCasterIB();
-	auto* patchCastVS = GetPatchShadowVS(patchIndexed);
+	auto* patchCastVS = GetPatchShadowVS();
 	if (!patchCastVS)
 		return skipPatch("skip: patch shadow VS unavailable");
+	if (!EnsurePatchCasterIB())
+		return skipPatch("skip: patch caster index buffer unavailable");
 
 	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
 	auto* sunShadowLight = shadowSceneNode ? shadowSceneNode->GetRuntimeData().sunShadowDirLight : nullptr;
@@ -528,10 +474,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	// The debug split names each cascade: the profiler cannot nest and folds
-	// repeated names into per-call samples.
-	static const char* const kCasterPatchRow[4] = { "SnowDeformation::Shadows - Trench Patch Cascade 0", "SnowDeformation::Shadows - Trench Patch Cascade 1", "SnowDeformation::Shadows - Trench Patch Cascade 2", "SnowDeformation::Shadows - Trench Patch Cascade 3" };
-
 	// Points shellCB and the depth target at one cascade.
 	auto bindCascade = [&](uint32_t a_cascade) {
 		// lightTransform maps absolute world -> per-slice [0,1] UV + depth
@@ -578,11 +520,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 	}
 	{
-		if (!splitRow)
-			globals::profiler->BeginPass("SnowDeformation::Shadows - Trench Patch");
+		globals::profiler->BeginPass("SnowDeformation::Shadows - Trench Patch");
 		context->VSSetShader(patchCastVS, nullptr, 0);
-		if (patchIndexed)
-			context->IASetIndexBuffer(patchCasterIB.get(), DXGI_FORMAT_R32_UINT, 0);
+		context->IASetIndexBuffer(patchCasterIB.get(), DXGI_FORMAT_R32_UINT, 0);
 		ID3D11Buffer* patchCB1 = staticsCB->CB();
 		context->VSSetConstantBuffers(1, 1, &patchCB1);
 		ID3D11ShaderResourceView* patchCastSRVs[3] = {
@@ -601,18 +541,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
 			if (!shadowAtlasDSV[cascade])
 				continue;
-			if (splitRow)
-				globals::profiler->BeginPass(kCasterPatchRow[cascade]);
 			bindCascade(cascade);
-			if (patchIndexed)
-				context->DrawIndexed(patchCasterIndexCount, 0, 0);
-			else
-				context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
-			if (splitRow)
-				globals::profiler->EndPass();
+			context->DrawIndexed(patchCasterIndexCount, 0, 0);
 		}
-		if (!splitRow)
-			globals::profiler->EndPass();
+		globals::profiler->EndPass();
 	}
 
 	// ---- Restore everything.

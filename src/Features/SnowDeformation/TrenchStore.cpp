@@ -227,32 +227,18 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 	};
 
 	// A settled source carves the same max again: its rows hold nothing new for
-	// the mirror. Mode 1 keys on texel-quantized position (idle animation
-	// crosses the lines and re-keys); mode 2 holds an anchor and only moves it
-	// past kTrenchMarkTolTexels. A settled source still re-marks once per
-	// refresh period, bounding creep inside the tolerance.
-	const int mode = trenchMarkSettleMode;
+	// the mirror. Each source holds an anchor and only moves it past
+	// kTrenchMarkTolTexels. A settled source still re-marks once per refresh
+	// period, bounding creep inside the tolerance.
 	auto marks = [&](uint32_t a_age) {
-		if (mode == 0 || a_age < kTrenchMarkSettleFrames || a_age % kTrenchMarkRefreshFrames == 0)
+		if (a_age < kTrenchMarkSettleFrames || a_age % kTrenchMarkRefreshFrames == 0)
 			return true;
 		cpuCensus.settledSkipsTotal++;
 		return false;
 	};
-	auto quant = [](float a_value, float a_step) { return (uint64_t)(int64_t)std::floor(a_value / a_step); };
-	auto mix = [](uint64_t a_hash, uint64_t a_value) {
-		a_hash ^= a_value + 0x9E3779B97F4A7C15ull + (a_hash << 6) + (a_hash >> 2);
-		return a_hash;
-	};
-	auto quantizedAge = [&](uint64_t a_key) {
-		const auto it = trenchMarkAge.find(a_key);
-		const uint32_t age = it == trenchMarkAge.end() ? 0 : std::min(it->second + 1, 0xFFFFFFu);
-		trenchMarkAgeNext[a_key] = age;
-		return age;
-	};
 	const float tol = texel * kTrenchMarkTolTexels;
 	auto within = [tol](float a_a, float a_b) { return std::abs(a_a - a_b) <= tol; };
-	if (mode == 2)
-		trenchStampAnchorClaimed.assign(trenchStampAnchors.size(), 0);
+	trenchStampAnchorClaimed.assign(trenchStampAnchors.size(), 0);
 
 	cpuCensus.stampsTotal += a_data.StampCount;
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
@@ -265,27 +251,19 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 
 		const auto& s = a_data.Stamps[i];
 		const auto& e = a_data.StampEnds[i];
-		uint32_t age = 0;
-		if (mode == 1) {
-			uint64_t key = mix(mix(mix(1, quant(s.x, texel)), quant(s.y, texel)), quant(s.z, 1.0f));
-			key = mix(mix(mix(key, quant(s.w, 1.0f)), quant(e.x, texel)), quant(e.y, texel));
-			age = quantizedAge(key);
-		} else if (mode == 2) {
-			TrenchStampAnchor anchor{ s, { e.x, e.y }, 0 };
-			for (size_t j = 0; j < trenchStampAnchors.size(); j++) {
-				const auto& a = trenchStampAnchors[j];
-				if (!trenchStampAnchorClaimed[j] && within(a.s.x, s.x) && within(a.s.y, s.y) && within(a.e.x, e.x) && within(a.e.y, e.y) &&
-					std::abs(a.s.z - s.z) <= 2.0f && std::abs(a.s.w - s.w) <= 1.0f) {
-					trenchStampAnchorClaimed[j] = 1;
-					anchor = a;
-					anchor.age = std::min(a.age + 1, 0xFFFFFFu);
-					break;
-				}
+		TrenchStampAnchor anchor{ s, { e.x, e.y }, 0 };
+		for (size_t j = 0; j < trenchStampAnchors.size(); j++) {
+			const auto& a = trenchStampAnchors[j];
+			if (!trenchStampAnchorClaimed[j] && within(a.s.x, s.x) && within(a.s.y, s.y) && within(a.e.x, e.x) && within(a.e.y, e.y) &&
+				std::abs(a.s.z - s.z) <= 2.0f && std::abs(a.s.w - s.w) <= 1.0f) {
+				trenchStampAnchorClaimed[j] = 1;
+				anchor = a;
+				anchor.age = std::min(a.age + 1, 0xFFFFFFu);
+				break;
 			}
-			trenchStampAnchorsNext.push_back(anchor);
-			age = anchor.age;
 		}
-		if (!marks(age))
+		trenchStampAnchorsNext.push_back(anchor);
+		if (!marks(anchor.age))
 			continue;
 
 		// The capsule spans segStart to tip, so take both ends plus the radius.
@@ -294,35 +272,23 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 
 	// Contact-window raster draws carve by mesh and never enter the stamp list;
 	// their bounds mark rows too (CODE-NOTES: trench roll blind spot).
-	if (debugContactRowMarks) {
-		for (const auto* draws : { &contactActors, &contactProps })
-			for (const auto& draw : *draws) {
-				cpuCensus.contactRectsTotal++;
-				uint32_t age = 0;
-				if (mode == 1) {
-					uint64_t key = mix(mix(2, draw.ref.native_handle()), quant(draw.minX, texel));
-					key = mix(mix(mix(key, quant(draw.minY, texel)), quant(draw.maxX, texel)), quant(draw.maxY, texel));
-					age = quantizedAge(key);
-				} else if (mode == 2) {
-					const uint32_t handle = draw.ref.native_handle();
-					TrenchRectAnchor anchor{ draw.minX, draw.minY, draw.maxX, draw.maxY, 0 };
-					if (const auto it = trenchRectAnchors.find(handle); it != trenchRectAnchors.end()) {
-						const auto& a = it->second;
-						if (within(a.minX, draw.minX) && within(a.minY, draw.minY) && within(a.maxX, draw.maxX) && within(a.maxY, draw.maxY)) {
-							anchor = a;
-							anchor.age = std::min(a.age + 1, 0xFFFFFFu);
-						}
-					}
-					trenchRectAnchorsNext[handle] = anchor;
-					age = anchor.age;
+	for (const auto* draws : { &contactActors, &contactProps })
+		for (const auto& draw : *draws) {
+			cpuCensus.contactRectsTotal++;
+			const uint32_t handle = draw.ref.native_handle();
+			TrenchRectAnchor anchor{ draw.minX, draw.minY, draw.maxX, draw.maxY, 0 };
+			if (const auto it = trenchRectAnchors.find(handle); it != trenchRectAnchors.end()) {
+				const auto& a = it->second;
+				if (within(a.minX, draw.minX) && within(a.minY, draw.minY) && within(a.maxX, draw.maxX) && within(a.maxY, draw.maxY)) {
+					anchor = a;
+					anchor.age = std::min(a.age + 1, 0xFFFFFFu);
 				}
-				if (marks(age))
-					markSpan(draw.minY, draw.maxY);
 			}
-	}
+			trenchRectAnchorsNext[handle] = anchor;
+			if (marks(anchor.age))
+				markSpan(draw.minY, draw.maxY);
+		}
 
-	std::swap(trenchMarkAge, trenchMarkAgeNext);
-	trenchMarkAgeNext.clear();
 	std::swap(trenchStampAnchors, trenchStampAnchorsNext);
 	trenchStampAnchorsNext.clear();
 	std::swap(trenchRectAnchors, trenchRectAnchorsNext);

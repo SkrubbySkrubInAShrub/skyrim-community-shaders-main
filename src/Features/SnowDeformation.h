@@ -1551,9 +1551,9 @@ public:
 	void BuildTerrainFineWindow();
 	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
 	bool shellLandHeightDisabled = false;
-	/** @brief Runtime-only: the ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many display pixels each (0 = distance factor alone). Default 16 (Josef, 2026-09-25). */
-	float shellTessTargetPx = 16.0f;
-	/** @brief shellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
+	/** @brief The ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many display pixels each. */
+	static constexpr float kShellTessTargetPx = 16.0f;
+	/** @brief kShellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
 	float ShellTessTargetRenderPx() const;
 
 	/** @brief Rows of ShellCB::SnowClimateLUT: 2 C below the player's temperature, at it, 2 C above. */
@@ -1620,7 +1620,7 @@ public:
 		float2 ObjectHeightCenter;
 
 		float ObjectHeightHalfExtent;
-		/** @brief Raw cascade-atlas copies are bound at t22/t23 this frame (else the shader falls back to the blurred VSM path). */
+		/** @brief The cascade atlas is bound at t22 this frame (else the shader falls back to the blurred VSM path). */
 		float CrispShadows;
 		/** @brief Screen-Space Shadows output bound at t45: the long-range depth-marched shadows carrying distant LOD tree shadows beyond the cascades. */
 		float ScreenSpaceShadowsActive;
@@ -1735,7 +1735,8 @@ public:
 	 * @brief Per-light shadow data for shadow-casting local lights (t38), indexed by the light's shadow-mask channel.
 	 *
 	 * Mirrors PointShadowLight in SnowShadow.hlsli. LightType 0 marks an empty slot; the table is left empty
-	 * whenever the shadow-atlas copies are unavailable, so the shader falls back to unshadowed light.
+	 * whenever the local shadow map array is unavailable, so the shader falls back to unshadowed light.
+	 * SliceIndex is the light's slice in that array.
 	 */
 	struct PointShadowLightData
 	{
@@ -1961,9 +1962,7 @@ public:
 	void TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV);
 	ID3D11PixelShader* GetShellFillPSPreSnow();
 	ID3D11PixelShader* shellFillPSPreSnow = nullptr;
-	/** @brief A/B, runtime-only: the pre-snow depth copy, Depth Sync and both Masks copies cover the whole display-size target again, and LandMasksCopy runs on frames with no reader. */
-	bool screenRectsOff = false;
-	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution, the whole target with screenRectsOff. */
+	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution. */
 	struct alignas(16) DepthSyncRectCB
 	{
 		uint32_t Origin[2];
@@ -1974,7 +1973,7 @@ public:
 	ConstantBuffer* DepthSyncRectBuffer();
 	ID3D11ComputeShader* GetPreSnowCopyCS();
 	ID3D11ComputeShader* preSnowCopyCS = nullptr;
-	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target when screenRectsOff or no viewport. */
+	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target with no viewport. */
 	D3D11_BOX ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const;
 	/** @brief EQUAL against the main depth, writes off: the statics' shading admits only their prepass's winners. */
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
@@ -2044,24 +2043,11 @@ public:
 	ID3D11ComputeShader* GetDepthSyncCS();
 	ID3D11ComputeShader* depthSyncCS = nullptr;
 
-	/** @brief A/B measurement: gates the wide exclusion field off, returning clearings to the near mask's ~57 m reach. Runtime-only. */
-	bool shellDistantExclusionsDisabled = false;
-
-	/** @brief A/B measurement: skips the berm field bake and returns the shells to recomputing the 17-tap average per pixel. Runtime-only; the shell renders the same either way. */
-	bool shellBermBakeDisabled = false;
-	/** @brief Debug A/B: zeroes UndulationFieldWindow.w so both shells fall back to the live two-octave eval; the bake keeps updating underneath. */
-	bool shellUndulationBakeDisabled = false;
 	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip. Rekeys the deferred PS. */
 	uint32_t shellPSLegacyBits = 0;
 
-	/** @brief A/B measurement: draws the shells through the viewport bound at DrawShell time (the deferred span's decal cap) instead of the main pass's depth range, so the range fix can be read against the ~3e-5 NDC bias it removed. Runtime-only. */
-	bool shellMainViewportRangeDisabled = false;
-
 	/** @brief A/B measurement: returns terrain height to plain bilinear, which averages the mesh's two triangulations and so sits below both. Turning it on should bring back the poke-through on steep ground. Runtime-only. */
 	bool shellBilinearHeight = false;
-
-	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
-	bool staticsEarlyZSpike = false;
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
@@ -2307,32 +2293,20 @@ public:
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 
-	/** @brief Per-frame copy of the sun cascade atlas, taken after the caster injection. Only allocated while shadowAtlasLiveReadOff is set. */
-	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
-	/** @brief A/B, runtime-only: copy the sun atlas every frame instead of sampling it in place. */
-	bool shadowAtlasLiveReadOff = false;
 	/** @brief The engine's sun atlas as bound at the shadow-mask pass. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasLiveSRV;
-	/** @brief Copy A/B gate, both shadow copies: frames a copy stays wanted after the last frame the shells or skins could read it. Updated in Prepass from last frame's draw verdicts. */
-	uint32_t shadowCopyWantedFrames = 0;
-	/** @brief The atlas the crisp cascade shadows sample this frame, or null (the VSM path). */
-	ID3D11ShaderResourceView* ShadowAtlasSRV() const
-	{
-		if (!shadowAtlasLiveReadOff)
-			return shadowAtlasLiveSRV.get();
-		return shadowCopyWantedFrames > 0 ? shadowAtlasCopySRV.get() : nullptr;
-	}
-	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
+	/** @brief The atlas the crisp cascade shadows sample this frame (in place), or null (the VSM path). */
+	ID3D11ShaderResourceView* ShadowAtlasSRV() const { return shadowAtlasLiveSRV.get(); }
+	/** @brief LESS_EQUAL comparison sampler for the atlas (s2). */
 	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
 	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */
 	winrt::com_ptr<ID3D11SamplerState> shellLinearSampler;
 
-	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Copies it and the ESRAM partner for crisp shell shadows, then injects the shell as a caster. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Injects the trench patch as a caster, then keeps the atlas for the crisp shell shadows to read in place. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
 	void CaptureShadowAtlas();
 
-	/** @brief Lazily compiles the trench patch's shadow-caster VS (a_indexed: the SNOW_PATCH_INDEXED twin). Implemented in SnowDeformation/Statics.cpp. */
-	ID3D11VertexShader* GetPatchShadowVS(bool a_indexed = false);
+	/** @brief Lazily compiles the trench patch's shadow-caster VS (SNOW_PATCH_INDEXED, drawn through patchCasterIB). Implemented in SnowDeformation/Statics.cpp. */
+	ID3D11VertexShader* GetPatchShadowVS();
 
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
 	std::unique_ptr<ShellCB> lastShellCBData;
@@ -2346,10 +2320,8 @@ public:
 	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
 	winrt::com_ptr<ID3D11DepthStencilState> shadowCastDSS;
 
-	/** @brief Depth-renders the road trench patch into the live cascade slices; the ground snow casts through the raised landscape (LandscapeSnow.cpp). The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Depth-renders the road trench patch into the live cascade slices; the ground snow casts through the raised landscape (LandscapeSnow.cpp). The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas before the snow reads the atlas. Implemented in SnowDeformation/Shadows.cpp. */
 	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
-	/** @brief Measurement: the Shadows - Trench Patch row becomes one row per cascade. Runtime-only. */
-	bool shellCasterSplitDebug = false;
 	/** @brief The sun cascades' real atlas slices into sunCascadeSlice every frame (the snow's shadow reads), whether or not anything casts. */
 	void RecordSunCascadeSlices(uint32_t a_atlasSlices);
 
@@ -2377,24 +2349,16 @@ public:
 	/** @brief 4-entry structured buffer of PointShadowLightData (t38), uploaded each frame from the mask-time snapshots. */
 	Buffer* pointShadowLights = nullptr;
 
-	/** @brief Copy A/B only: one slice per mask channel, copied at each light's mask pass. */
-	winrt::com_ptr<ID3D11Texture2D> pointShadowAtlasCopyTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> pointShadowAtlasCopySRV;
-	/** @brief A/B, runtime-only: copy each local light's map at its mask pass instead of sampling it in place. */
-	bool pointShadowLiveReadOff = false;
 	/** @brief Full-array view over the engine's local shadow map array (kSHADOWMAPS), cached by texture. */
 	winrt::com_ptr<ID3D11Texture2D> pointShadowLiveTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> pointShadowLiveSRV;
-	/** @brief The array the local-light shadows sample this frame (t39), or null. */
-	ID3D11ShaderResourceView* PointShadowAtlasSRV() const { return pointShadowLiveReadOff ? pointShadowAtlasCopySRV.get() : pointShadowLiveSRV.get(); }
+	/** @brief The array the local-light shadows sample this frame (t39, in place), or null. */
+	ID3D11ShaderResourceView* PointShadowAtlasSRV() const { return pointShadowLiveSRV.get(); }
 
 	/** @brief Per-channel descriptor snapshots, merged at each local mask pass; entries persist until their channel is reassigned (an extinguished light's entry is never sampled: its cluster light loses the Shadow flag). */
 	PointShadowLightData pendingPointShadows[kPointShadowMaxLights] = {};
-	/** @brief Frame index incremented in Prepass; per-slice latches so each light's slice is copied once per frame. */
-	uint64_t pointShadowFrameIndex = 0;
-	uint64_t pointShadowSliceFrame[kPointShadowMaxLights] = {};
 
-	/** @brief Called from State::Draw at a LOCAL light's shadow-mask pass (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live and PS t4 holds the local map array. Snapshots every live local descriptor; copies the slice in the copy A/B. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Called from State::Draw at a LOCAL light's shadow-mask pass (Utility RenderShadowmaskSpot/Pb/Dpb): the only moment the light's descriptor is live and PS t4 holds the local map array. Snapshots every live local descriptor. Implemented in SnowDeformation/Shadows.cpp. */
 	void CapturePointShadowMask();
 
 	/** @brief Uploads the pending point-shadow table (t38). The table stays empty until mask-time snapshots exist. Implemented in SnowDeformation/Shadows.cpp. */
@@ -2542,10 +2506,7 @@ public:
 	Buffer* clusterScratchIB = nullptr;
 	uint32_t clusterNext = 0;
 	uint32_t clusterIndexPoolNext = 0;
-	/** @brief A/B measurement: stops the per-cluster pass, so every skin the whole-skin test kept draws its mesh entire. Runtime-only. */
-	bool clusterCullDisabled = false;
 
-	/** @brief One-shot debug probe: snapshots the next full-detail landscape draw's index and vertex buffers and reports how the land mesh splits its quads - which diagonal, and whether it alternates - on the world 128-unit lattice. The shell's own triangulation has to match it or the shell sags inside a quad (DISTANT-SHELL-STABILITY-PLAN, Stage 1's live caveat). Implemented in SnowDeformation/Statics.cpp. */
 	/** @brief CPU census (PERF-RESEARCH §11.1): QPC ticks and counts accumulated across one frame, rolled into cpuShown by RollCpuCensus at the next Prepass. Static so the free helpers in Stamping.cpp can reach it. The capture hook has no profiler row of its own: it runs inside the game's lighting draws. */
 	struct CpuCensus
 	{
@@ -2704,29 +2665,6 @@ public:
 		RE::BSVisit::TraverseScenegraphCollision(a_root, std::ref(a_visitor));
 	}
 	void RollCpuCensus();
-	bool landTriProbeArmed = false;
-	struct LandTriProbe
-	{
-		winrt::com_ptr<ID3D11Buffer> vbStaging;
-		winrt::com_ptr<ID3D11Buffer> ibStaging;
-		uint32_t vertexCount = 0;
-		uint32_t indexCount = 0;
-		uint32_t stride = 0;
-		uint32_t indexBytes = 2;
-		bool posFloat32 = false;
-		RE::NiTransform world{};
-		std::string name;
-		uint32_t frame = 0;
-		bool pending = false;
-	};
-	LandTriProbe landTriProbe;
-	std::string landTriProbeResult;
-	void CaptureLandTriProbe(RE::BSRenderPass* a_pass);
-	void ServiceLandTriProbe();
-	/** @brief One-shot diagnostic for the land-exact height layer: reads the fine texture and the terrain window back and checks the window against the baked cells, the fine texture against a CPU replica of TerrainFineCS, and the shader's fine lookup along the camera's forward line against the same rule evaluated straight from the cells. Implemented in SnowDeformation/TerrainData.cpp. */
-	bool fineProbeArmed = false;
-	std::string fineProbeResult;
-	void ProbeFineLayer(const ShellCB& a_cb);
 	uint32_t clusterSkinsLast = 0;
 	uint32_t clusterScratchUsedLast = 0;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
@@ -2825,21 +2763,15 @@ public:
 	float2 farWindowCenter = { 0, 0 };
 	float farHalfExtentLive = 0.0f;
 	bool FarLevelActive() const { return settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
-	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
-	bool fineLevelDisabled = false;
-	/** @brief Measurement, runtime-only: run every cone pass, including the ones the seed bound proves are no-ops. */
-	bool coneSkipDisabled = false;
 	/** @brief Cone passes the chain ran this frame (of kConeSteps). */
 	uint32_t conePassesCoarse = 0;
-	/** @brief A/B, runtime-only: build the height chain's road-only outputs (the cone chain, the near level, sky openness) and the road heightfield channel every frame, as before the road gate. */
-	bool objectRoadGateOff = false;
 	/** @brief Only road skins, the trench patch, the march's road taps and the debug views read the cones and the near level: true when one of them can this frame. */
 	bool RoadMapsWanted() const;
 	/** @brief The sky-openness field holds the last height-map run's bake (Volume Snow reads that one), so a run that turns the bake back on need not bake it again before the volume draws. */
 	bool skyOpenCurrent = true;
 	/** @brief Frame the Debugging Options height probe readout last drew (its cone line needs the cone built). */
 	uint32_t heightProbeShownFrame = UINT32_MAX;
-	bool FineLevelOn() const { return !fineLevelDisabled && settings.ObjectSnowNearDetail; }
+	bool FineLevelOn() const { return settings.ObjectSnowNearDetail; }
 	static constexpr int kQualityPresetCount = 3;
 	/** @brief Object Snow range floor (m); below it the 2048-unit skin dissolve band starts at the camera. */
 	static constexpr float kMinRangeSkinsM = 50.0f;
@@ -2912,9 +2844,6 @@ public:
 	uint32_t statWaterCaptured = 0;
 	uint32_t statWaterDrawn = 0;
 	bool waterFirstLogged = false;
-	/** @brief Debugging Options: log every water body the raster has not logged before (name, plane, transform, bounds) while on. */
-	bool debugLogWaterPlanes = false;
-	std::unordered_set<std::string> waterLoggedPlanes;
 	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
@@ -3377,8 +3306,6 @@ public:
 	/** @brief The list as last uploaded, hashed: the volume's idle gate reads it. */
 	uint64_t exclusionListHash = 0;
 	bool doorsCBUploaded = false;
-	/** @brief A/B, runtime-only: gather exclusion sources on every window scroll again. */
-	bool exclusionGatherEveryScroll = false;
 	/** @brief Inputs of the last exclusion-field bake: terrain window cell, terrain texture version, the list as uploaded. The bake skips while all match and the snapped centre is unchanged - the texture already holds the same bits. */
 	int exclusionBakeCellX = INT_MIN;
 	int exclusionBakeCellY = INT_MIN;
@@ -3433,10 +3360,7 @@ public:
 	ID3D11PixelShader* GetStaticsPSPrepassKeepHidden();
 	/** @brief A/B, runtime-only: the skins' prepass runs the alpha cut on quads already behind the main depth. */
 	bool staticsPrepassExitOff = false;
-	/** @brief A/B measurement: returns the object skins to their single draw loop. Runtime-only. */
-	bool staticsDepthPrepassDisabled = false;
 	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */
-	bool skinCullDisabled = false;
 	struct alignas(16) SkinCullBound
 	{
 		float Center[3];
@@ -3483,15 +3407,11 @@ public:
 	std::vector<std::string> skinCullLogNames[kSkinCullRing];
 	int skinCullRing = 0;
 	Texture2D* skinCullHiZ = nullptr;
-	/** @brief One single-mip scratch per level: the build reads level k-1 of the chain and writes scratch k, then copies it into the chain. A texture cannot be an input and an output of the same dispatch, mips included. */
+	/** @brief One single-mip scratch per level, for when the UAV build fails to compile: the build reads level k-1 of the chain and writes scratch k, then copies it into the chain. A texture cannot be an input and an output of the same dispatch, mips included. */
 	std::vector<Texture2D*> skinCullHiZScratch;
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinCullHiZSRVs;
 	/** @brief One UAV per mip of the chain: each level is written in place and read by the next through it. */
 	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
-	/** @brief A/B, runtime-only: build the chain through the scratch copies again. */
-	bool hiZCopyPath = false;
-	/** @brief A/B, runtime-only: size the pyramid from the whole display-size depth again instead of the rendered rectangle. */
-	bool skinCullHiZFullTexture = false;
 	uint32_t skinCullLevels = 0;
 	uint32_t skinCullDrawnLast = 0;
 	uint32_t skinCullCulledLast = 0;
@@ -3514,15 +3434,11 @@ public:
 	ID3D11DomainShader* staticsDS = nullptr;
 	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops; real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
 	ID3D11VertexShader* patchVS = nullptr;
-	/** @brief Depth-only caster variant of the patch VS (PATCH + SNOW_SHADOW_CAST); drawn into the sun cascade slices by InjectShellShadowCasters. */
+	/** @brief Depth-only caster variant of the patch VS (PATCH + SNOW_SHADOW_CAST + SNOW_PATCH_INDEXED): the patch's quads from an index buffer over the (kPatchGridDim + 1)^2 lattice, one VS invocation per shared vertex; drawn into the sun cascade slices by InjectShellShadowCasters. */
 	ID3D11VertexShader* patchShadowVS = nullptr;
-	/** @brief SNOW_PATCH_INDEXED twin: the same quads from an index buffer over the (kPatchGridDim + 1)^2 lattice, one VS invocation per shared vertex instead of six. */
-	ID3D11VertexShader* patchShadowVSIndexed = nullptr;
 	winrt::com_ptr<ID3D11Buffer> patchCasterIB;
 	uint32_t patchCasterIndexCount = 0;
 	bool EnsurePatchCasterIB();
-	/** @brief A/B, runtime-only: the patch caster draws six vertices per quad again. */
-	bool patchCasterNonIndexed = false;
 	/** @brief The tessellated patch hull's frustum footprint lines (SnowStaticsShell.hlsl PatchCullCB, b11). */
 	struct alignas(16) PatchCullCB
 	{
@@ -3533,15 +3449,12 @@ public:
 	ConstantBuffer* patchCullCB = nullptr;
 	/** @brief The view frustum's five planes (rows of CameraViewProj, camera-relative) with z eliminated: lines in world XY, inside where dot(xy, p) + z >= 0. */
 	uint32_t FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const;
-	/** @brief A/B, runtime-only: no frustum test in the patch hull. */
-	bool patchFrustumCullOff = false;
 	/** @brief Tessellated patch stages (optional; legacy path is the fallback). */
 	ID3D11VertexShader* patchTessVS = nullptr;
 	ID3D11HullShader* patchHS = nullptr;
 	ID3D11DomainShader* patchDS = nullptr;
+	/** @brief The forward patch PS: drawn under the statics debug views and until both deferred shaders exist. Otherwise the patch draws deferred: its geometry once with the coverage cut alone (SNOW_PATCH_ATTR, into the ground's deferred targets), then one full-screen pass shades the pixels it kept (SNOW_PATCH_DEFERRED). */
 	ID3D11PixelShader* patchPS = nullptr;
-	/** @brief The trench patch draws deferred: its geometry once with the coverage cut alone (SNOW_PATCH_ATTR, into the ground's deferred targets), then one full-screen pass shades the pixels it kept (SNOW_PATCH_DEFERRED). Runtime-only measurement switch (DevBench patchDeferred); false = the forward patch (patchPS), which also draws under the statics debug views and until both deferred shaders exist. */
-	bool patchDeferredEnabled = true;
 	/** @brief [attribute pass, shading pass]: primed with the object snow group, else compiled off the render thread on first use. */
 	ID3D11PixelShader* patchDeferredPS[2] = {};
 	std::future<ID3D11PixelShader*> patchDeferredJob[2];
@@ -3574,8 +3487,6 @@ public:
 	winrt::com_ptr<ID3D11DeviceContext1> staticsContext1;
 	winrt::com_ptr<ID3D11Buffer> staticsRecordCB[2];
 	bool staticsRecordChecked = false;
-	/** @brief Disables the per-draw offset bind path (on by default since 2026-09-06, Josef's call after the fourth re-look: -0.15 ms of CPU at the anchor, pixels identical). Set, every draw takes the Update path from the same records. The capability check and the 11.1 context query still gate the path at first use. */
-	bool staticsRecordDisabled = false;
 	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
 	static constexpr uint32_t kStaticsRecordMax = 8192;
 	bool EnsureStaticsRecordCB();
@@ -3620,8 +3531,6 @@ public:
 	std::unordered_set<const void*> contactSkinLogged;
 	float2 contactCenter = { 0, 0 };
 	uint contactDrawsLast = 0;
-	/** @brief A/B, runtime-only, default ON: moving props inside the contact window carve by their render mesh. Off reverts them to collision-shape stamps. */
-	bool debugContactCapture = true;
 	/** @brief Bone palette for one skin partition, plus the capture window. Absolute world rows, so the VS needs no object transform and no pivot. */
 	struct alignas(16) ContactSkinCB
 	{
@@ -3644,7 +3553,7 @@ public:
 	uint32_t contactDynamicVBBytes = 0;
 	/** @brief Dynamic tri shapes whose measured layout has been logged once (capped). */
 	std::unordered_set<const void*> contactDynamicLogged;
-	/** @brief This frame's actors drawn by their skinned meshes; their bone stamps are skipped so the A/B compares like for like. */
+	/** @brief This frame's actors drawn by their skinned meshes; their bone stamps are skipped. */
 	std::vector<ContactProp> contactActors;
 	/** @brief This frame's living and corpse entries in contactActors, against their separate caps. */
 	uint contactLivingCount = 0;
@@ -3654,16 +3563,12 @@ public:
 	/** @brief Per-geometry scratch for the skinned contact palette: one composed transform per skin bone, built on first use and shared by every partition of the geometry. */
 	std::vector<RE::NiTransform> contactPaletteScratch;
 	std::vector<uint8_t> contactPaletteBuilt;
-	/** @brief S1 spike, runtime-only, default OFF: actors carve by their skinned render mesh instead of foot and limb capsules. */
-	bool debugActorContact = true;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
 	bool debugContactView = false;
 	/** @brief Runtime A/B (ShellCB CompactLook.x): off = the landscape shell ends at the drawn waterline. */
 	bool debugWaterCutDisabled = false;
 	/** @brief Runtime-only: half-extent of the field view's crop around the player, world units (192 = a body, 1536 = the whole field). */
 	float debugContactViewHalf = 192.0f;
-	/** @brief Runtime-only A/B: a settled corpse is latched out of the contact draw, its print already in the map. Off draws every rasterized corpse every frame. The living always draw. */
-	bool debugContactStillGate = true;
 	/** @brief Runtime-only: index of the one skinned geometry the actor contact pass draws (-1 = all), and its name. */
 	int debugContactSolo = -1;
 	std::string contactSoloName;
@@ -3785,27 +3690,20 @@ public:
 	std::string LandscapeSnowStatus() const;
 	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */
 	json LandscapeSnowTool(const json& a_args);
-	/** @brief Debug, not serialised: the land's snow-texture weight from which the snow deepens; below it the snow is a film the land's blend cuts. */
-	float landscapeBlendStart = 0.50f;
+	/** @brief The land's snow-texture weight from which the snow deepens; below it the snow is a film the land's blend cuts. */
+	static constexpr float kLandBlendDepthStart = 0.50f;
 	/** @brief Land Snow Recolor (LANDSCAPE-SNOW-PLAN 7.4): the land's snow layers wear the shell's snow set texel by texel wherever the land shows (DebugTerrainOverlay bit 256; 512 = the set's RMAOS is bound). Debug A/B, default on, not serialised. */
 	bool landRecolor = true;
-	/** @brief Land Snow Recolor: gamma luminance where a snow layer's texel starts to read as snow (full 0.18 above). Debug, not serialised. */
-	float landRecolorLumLo = 0.48f;
+	/** @brief Land Snow Recolor: gamma luminance where a snow layer's texel starts to read as snow (full 0.18 above). */
+	static constexpr float kLandRecolorLumLo = 0.48f;
 	/** @brief The recolor runs this frame: the ground snow draws here and the snow set is loaded. */
 	bool LandRecolorActive() const { return landRecolor && LandBlendActive() && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
-	/** @brief Runtime A/B, default ON: contact-capture draw bounds mark trench rows for the rolling mirror. Set via snowdeformation.cpucensus {"contactRowMarks":bool}. */
-	bool debugContactRowMarks = true;
-	/** @brief Runtime A/B for settled mark sources (an unchanged max-carve rewrites nothing): 0 = every source marks, 1 = texel-quantized keys, 2 = hysteresis against the anchor at the last change (default). Set via snowdeformation.cpucensus {"markSettleMode":0-2}. */
-	int trenchMarkSettleMode = 2;
-	/** @brief Frames a source keeps marking after its last change, and the period at which a settled source re-marks once (bounds creep inside the hysteresis tolerance). */
+	/** @brief Settled mark sources (an unchanged max-carve rewrites nothing): frames a source keeps marking after its last change against its anchor, and the period at which a settled source re-marks once (bounds creep inside the hysteresis tolerance). */
 	static constexpr uint32_t kTrenchMarkSettleFrames = 60;
 	static constexpr uint32_t kTrenchMarkRefreshFrames = 600;
 	/** @brief Hysteresis tolerance in map texels (positions) and world units (stamp z, radius). */
 	static constexpr float kTrenchMarkTolTexels = 2.0f;
-	/** @brief Mode 1: consecutive frames each quantized key has been seen; rebuilt every MarkTrenchDirtyRows. */
-	std::unordered_map<uint64_t, uint32_t> trenchMarkAge;
-	std::unordered_map<uint64_t, uint32_t> trenchMarkAgeNext;
-	/** @brief Mode 2 anchors: stamps matched to the nearest unclaimed anchor, contact draws by ref handle. */
+	/** @brief Mark anchors: stamps matched to the nearest unclaimed anchor, contact draws by ref handle. */
 	struct TrenchStampAnchor
 	{
 		float4 s;
@@ -3844,9 +3742,7 @@ public:
 	EffectCostProbe effectCost;
 	void StartEffectCostProbe();
 	void TickEffectCostProbe();
-	/** @brief Measurement, runtime-only: time the ground pass as its stage rows (Ground - Shell Setup / Depth Prepass / Shading) instead of one. */
-	bool shellSplitTiming = true;
-	/** @brief DevBench: applies ground measurement args (shellKill, shellSplitTiming, shellStats, ...) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
+	/** @brief DevBench: applies ground measurement args (shellKill, shellStats, ...) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
 	json DevBenchShellArgs(const json& a_args);
 	/** @brief DevBench: applies volume measurement args (memorySeconds, showRings) and returns the volume's live state per level. Implemented in DevBenchTools.cpp. */
 	json DevBenchVolumeArgs(const json& a_args);
@@ -3963,8 +3859,6 @@ protected:
 	bool captureViewCullOff = false;
 	/** @brief Whether ground within two cells of a world XY, clipped to the loaded square, can carry snow (snowy or still baking). An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
 	bool GroundNearHasSnow(float a_x, float a_y);
-	/** @brief A/B, runtime-only: projected-snow draws face the ground gate again (they are coated wherever they stand by default). */
-	bool projectedGroundGate = false;
 	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
 	uint32_t groundSnowCellCacheVersion = 0;
 	/** @brief Per-frame inputs of GroundNearHasSnow (interior flag, loaded square), taken once per frame. */
@@ -4064,8 +3958,6 @@ protected:
 	uint64_t evolveLastArmSeq = 0;
 	/** @brief Last frame's evolve decision, for the menu readout. */
 	bool evolveIdleLastFrame = false;
-	/** @brief Last frame's berm A/B state: re-enabling the bake must run one update even at rest, or the shells read a bake from before the toggle went off. */
-	bool prevBermBakeDisabled = false;
 	/** @brief BermReach the bake was last marked all-dirty for: a new Berm Steepness moves every texel's taps, so the whole field rebuilds. */
 	float bermReachBaked = 1.0f;
 	/** @brief Stamp set of the last EXECUTED dispatch, for the tolerance match. Planted feet stamp every frame, so a count can never reach zero while anyone stands on snow; "unchanged since the verdict" is the idle test instead. A quantized hash was tried first and flickered: a swaying foot straddling a grid-cell boundary reads as change every few frames, and each flicker buys dispatch + verdict latency - permanent 0% skip. Matching within a tolerance has no boundaries to straddle. */
@@ -4702,8 +4594,6 @@ protected:
 	size_t printStoreTilesLast = 0;
 	/** @brief Runtime-only: the field view shows the print verdicts and the print map (PrintViewCS) instead of the trench pair. */
 	bool debugObjectPrintView = false;
-	/** @brief Runtime-only A/B: drapes over prints keep the plain drape PS (no rim slope, thin print, shadows or detail); the bare floors stay. */
-	bool debugPrintRimOff = false;
 	/** @brief The readers' tile mask (PS t115): one R8 texel per print tile on the map's world-anchored grid, nonzero where the tile or the next one along x, y or both holds prints, so a reader's texel block takes one load. */
 	Texture2D* printTiles = nullptr;
 	/** @brief The mask as last built and as last uploaded; it uploads only when it changes. */
@@ -5487,8 +5377,6 @@ protected:
 
 	/** @brief Runtime-only skeleton probe: per-foot trenching status of one NPC (the nearest, latched by formID with one frame of lag), plus which gate ate the actor when nothing carved. Filled by GatherStamps only while debugSkeletonProbe is on; drawn in Debugging Options. */
 	bool debugSkeletonProbe = false;
-	/** @brief A/B, runtime-only, default ON: collision shapes stamp their ground silhouette (a capsule along the longest horizontal extent) instead of a bounding sphere. Off reproduces the sphere for comparison. */
-	bool debugShapeFootprint = true;
 	/** @brief One-shot: log the probed actor's whole node tree (names, scales, match classification) to CommunityShaders.log, for tester reports. */
 	bool skeletonProbeDumpRequested = false;
 	/** @brief FormID the probe follows: last frame's nearest non-player actor. */

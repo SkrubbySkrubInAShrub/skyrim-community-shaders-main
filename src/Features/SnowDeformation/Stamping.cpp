@@ -643,11 +643,11 @@ struct ShapeStamp
 	float halfHeight;
 };
 static ShapeStamp ShapeStampFor(RE::bhkNiCollisionObject* a_object, float2 a_current, float2 a_previous,
-	float a_boundRadius, bool a_footprints)
+	float a_boundRadius)
 {
 	ShapeStamp out{ a_current, a_previous, a_boundRadius, a_boundRadius };
 	float ax, ay, halfLen, halfWid, halfHgt;
-	if (!a_footprints || !SnowShapes::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid, halfHgt))
+	if (!SnowShapes::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid, halfHgt))
 		return out;
 	out.halfHeight = halfHgt;
 	const float seg = std::max(halfLen - halfWid, 0.0f);
@@ -709,7 +709,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// Raster slots to the player and the nearest living actors inside the
 	// contact window, not the first in the process list.
 	contactPriority.clear();
-	if (debugActorContact && !contactShadersFailed) {
+	if (!contactShadersFailed) {
 		struct Nearby
 		{
 			float d2;
@@ -807,7 +807,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!isDead)
 			if (auto it = stampBoneCache.find(formID); it != stampBoneCache.end())
 				contactStarved = it->second.contactStarved > 0;
-		const bool rasterCandidate = debugActorContact && !contactShadersFailed && !contactStarved &&
+		const bool rasterCandidate = !contactShadersFailed && !contactStarved &&
 		                             (isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID)) &&
 		                             root->worldBound.radius > 0.0f &&
 		                             std::abs(root->worldBound.center.x - contactCenter.x) + root->worldBound.radius < kContactHalfExtent &&
@@ -1131,13 +1131,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// S1: an actor inside the contact window carves by its skinned mesh
 		// instead of by bones. Placed AFTER the floating, incorporeal and
 		// settle gates, so a ghost is still refused; and it skips the bone
-		// stamps outright, so the A/B compares like for like. The living and
-		// the dead draw from separate budgets: a corpse is drawn while its
-		// body translates and for the settle window after, then latched out
-		// on the same rest state the bone corpse path uses; a latched corpse
-		// takes NO path - its print is already in the map - until the body
-		// moves off its resting place again. The living draw every frame.
-		if (debugActorContact && !contactShadersFailed && !contactStarved) {
+		// stamps outright. The living and the dead draw from separate
+		// budgets: a corpse is drawn while its body translates and for the
+		// settle window after, then latched out on the same rest state the
+		// bone corpse path uses; a latched corpse takes NO path - its print
+		// is already in the map - until the body moves off its resting place
+		// again. The living draw every frame.
+		if (!contactShadersFailed && !contactStarved) {
 			const auto& bound = root->worldBound;
 			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID);
 			if (budget && bound.radius > 0.0f &&
@@ -1167,7 +1167,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					}
 					rest->prevCenter = center;
 					rest->hasPrevCenter = true;
-					draw = !(debugContactStillGate && rest->settled);
+					draw = !rest->settled;
 					if (!draw)
 						stampStats.corpsesLatched++;
 				}
@@ -1495,7 +1495,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// the snow deforms as the body moves through it.
 					currentPositions[key] = current;
 
-					const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius, debugShapeFootprint);
+					const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius);
 					// Carve to the fraction the underside reaches into the layer,
 					// as limbs do: a shape hovering over the shell must not print
 					// to the ground. After the trail and settle bookkeeping above,
@@ -1678,7 +1678,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// Inside the contact window a moving prop carves by its own render
 		// mesh (DrawContactCapture, per texel in the stamp pass); its
 		// collision shapes stay out of the stamp list.
-		if (debugContactCapture && !contactShadersFailed) {
+		if (!contactShadersFailed) {
 			const auto& bound = root->worldBound;
 			if (bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
@@ -1735,7 +1735,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				currentPositions[key] = current;
 
-				const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius, debugShapeFootprint);
+				const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius);
 				// Depth from the underside, as limbs do - see the actor site.
 				const float carve = std::clamp(
 					1.0f - (centerPos.z - shapeStamp.halfHeight - supportZ) / nominalDepth, 0.0f, 1.0f);

@@ -724,7 +724,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.ProjAlphaDensity = settings.ProjAlphaDensity ? 1.0f : 0.0f;
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
 	data.SnowSpecularLevel = snowSpecularLevel;
-	data.LandRecolorLumLo = std::clamp(landRecolorLumLo, 0.0f, 1.0f);
+	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
 	// Snow Trenches on Objects: after the window advance above, which the print window follows.
 	data.PrintFullDepth = BodyPrintScale();
@@ -966,8 +966,6 @@ void SnowDeformation::PrepassSimulation()
 	SpanClock spanClock;
 	ApplyRangeSettings();
 
-	// Frame boundary for the once-per-frame local shadow atlas copy.
-	pointShadowFrameIndex++;
 	TickVRAMLog();
 	TickRowSpikeLog();
 
@@ -996,15 +994,6 @@ void SnowDeformation::PrepassSimulation()
 	if (auto* tes = globals::game::tes)
 		if (auto* worldSpace = tes->GetRuntimeData2().worldSpace)
 			cityWorldspace = worldSpace->parentWorld != nullptr;
-
-	// Copy A/B gate for both shadow copies. Prepass runs after the shadow
-	// mask passes, so this is read at next frame's; the hold keeps a coat
-	// popping in and out from flapping between the crisp and fallback paths.
-	const bool shellMayDraw = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
-	if (shellMayDraw || !capturedStatics.empty())
-		shadowCopyWantedFrames = kShellGateBareFrames;
-	else if (shadowCopyWantedFrames > 0)
-		shadowCopyWantedFrames--;
 
 	// New frame: publish last frame's statics-capture count and reset the
 	// list before this frame's opaque rendering fills it again.
@@ -1391,14 +1380,10 @@ void SnowDeformation::PrepassSimulation()
 		(deformFlagActive ? 32u : 0u) |
 		(deformFlagSeq <= deformLastNonIdleSeq ? 64u : 0u) |
 		(perFrameData.ContactDim > 0.5f ? 128u : 0u);
-	// The berm field is only rebuilt by an executed pass; re-enabling its A/B
-	// at rest needs one forced run or the stale bake stands until something moves.
-	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
-	prevBermBakeDisabled = shellBermBakeDisabled;
 	// A new Berm Steepness needs one executed run to mark the whole bake dirty.
 	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
 	// The field view keeps the pass awake: a frozen picture is worse than no sleep.
-	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !bermReachStale && !(debugForceDeformationUpdate || debugContactView);
+	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && !(debugForceDeformationUpdate || debugContactView);
 
 	// The skip-rate window: "idle" that is really a flicker (a stamp crossing
 	// the hash quantum every few frames) reads identically in a single-frame
@@ -1664,11 +1649,8 @@ void SnowDeformation::PrepassSimulation()
 		// halo): scan the dirty grid AFTER the stamp pass so its marks are
 		// in (the scan sizes the indirect args), rebuild the listed tiles,
 		// each consuming its own mark. The toroidal layout is what makes the
-		// unrebuilt remainder stay valid across scrolls. While the A/B toggle
-		// holds the shells on their per-pixel path, marks ACCUMULATE instead -
-		// re-enabling (which bermHeal forces to execute) rebuilds exactly what
-		// was missed.
-		if (shellBermBakeDisabled || !bermFieldTexture) {
+		// unrebuilt remainder stay valid across scrolls.
+		if (!bermFieldTexture) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Berms");
 		} else {
 			globals::profiler->BeginPass("SnowDeformation::Trails - Berms");
@@ -2307,9 +2289,6 @@ void SnowDeformation::ClearShaderCache()
 	if (patchShadowVS)
 		patchShadowVS->Release();
 	patchShadowVS = nullptr;
-	if (patchShadowVSIndexed)
-		patchShadowVSIndexed->Release();
-	patchShadowVSIndexed = nullptr;
 	delete patchCullCB;
 	patchCullCB = nullptr;
 	if (patchTessVS)
@@ -2518,8 +2497,6 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +
 	                         TextureBytes(texOf(heightTopFiltered)) + TextureBytes(texOf(heightBottomFiltered)) +
 	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
-	const uint64_t shadowCopies = TextureBytes(shadowAtlasCopyTex.get());
-	const uint64_t pointCopy = TextureBytes(pointShadowAtlasCopyTex.get());
 	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +
 	                         SRVBytes(shellSnowRmaosSRV.get()) + SRVBytes(shellSnowHeightSRV.get());
 
@@ -2536,12 +2513,11 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field) + heightMapBytes(lv.heightMap) + heightMapBytes(lv.heightMapUnder);
 	voxel += tex3Bytes(voxelSupport);
 
-	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex + voxel;
+	const uint64_t total = deform + terrain + heights + snowTex + voxel;
 
 	char line[256];
-	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, sunShadowCopies %llu, pointShadowCopy %llu, snowTex %llu, voxel %llu (MB)",
+	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, snowTex %llu, voxel %llu (MB)",
 		(unsigned long long)(deform >> 20), (unsigned long long)(terrain >> 20), (unsigned long long)(heights >> 20),
-		(unsigned long long)(shadowCopies >> 20), (unsigned long long)(pointCopy >> 20),
 		(unsigned long long)(snowTex >> 20), (unsigned long long)(voxel >> 20));
 	a_breakdown = line;
 	return total;
