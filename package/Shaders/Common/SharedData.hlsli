@@ -288,7 +288,7 @@ namespace SharedData
 
 		uint EnableVolumetricRays;
 		float VolumetricRaysIntensity;
-		float VolumetricRaysExtinction;
+		float VolumetricRaysDensity;
 		float VolumetricRaysSkyColorAmount;
 
 		float VolumetricRaysDesaturation;
@@ -368,6 +368,27 @@ namespace SharedData
 		float AuroraCurve;
 		uint FixBlackCrush;
 		float2 NightSkyPad0;
+
+		float3 VolumetricFogColorFilter;
+		float VolumetricFogIntensity;
+
+		float VolumetricFogCurve;
+		float VolumetricFogOpacity;
+		float VolumetricFogShadowAmount;
+		uint VolumetricFogEnableLighting;
+
+		float3 VolumetricRaysSkyColor;
+		uint VolumetricFogEnableShadows;
+
+		uint VolumetricRaysSampleCount;
+		uint GameVolumetricRaysDisableDithering;
+		float2 GameVolumetricRaysPad0;
+
+		float3 GameVolumetricRaysLightScale;
+		float GameVolumetricRaysCustomContribution;
+
+		float3 GameVolumetricRaysCustomColor;
+		float GameVolumetricRaysPad1;
 	};
 	struct TerrainBlendingSettings
 	{
