@@ -1268,6 +1268,7 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u settled corpses latched out, %u hidden/orphan partitions declined, %u whole-skin-indexed, %u missing-bone stand-ins",
 					stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, stampStats.corpsesLatched, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast);
 
+			CheckboxWrapped("Object print rim off (A/B: drapes over prints shade as plain drapes - no rim slope, thin print, shadows or detail; the bare floors stay)", &debugPrintRimOff);
 			CheckboxWrapped("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
 
 			if (debugContactView) {
@@ -1498,6 +1499,7 @@ void SnowDeformation::DrawSettings()
 				// Deliberate wipe, so the store goes with it: left alone, the
 				// inject would put every trench back on the very next frame.
 				ClearTrenchStore("the Clear Deformation Map button");
+				ClearPrintStore("the Clear Deformation Map button");
 			}
 
 

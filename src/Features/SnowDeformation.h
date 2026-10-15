@@ -4719,6 +4719,8 @@ protected:
 	size_t printStoreTilesLast = 0;
 	/** @brief Runtime-only: the field view shows the print verdicts and the print map (PrintViewCS) instead of the trench pair. */
 	bool debugObjectPrintView = false;
+	/** @brief Runtime-only A/B: drapes over prints keep the plain drape PS (no rim slope, thin print, shadows or detail); the bare floors stay. */
+	bool debugPrintRimOff = false;
 	/** @brief The readers' tile mask (PS t115): one R8 texel per print tile on the map's world-anchored grid, nonzero where the tile or the next one along x, y or both holds prints, so a reader's texel block takes one load. */
 	Texture2D* printTiles = nullptr;
 	/** @brief The mask as last built and as last uploaded; it uploads only when it changes. */
@@ -4760,6 +4762,8 @@ protected:
 	void RegisterPrintCoSave();
 	void SavePrintStore(const SKSE::SerializationInterface* a_intfc);
 	void LoadPrintStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
+	/** @brief Empties the store; the next update clears the map and re-injects nothing. Any thread. */
+	void ClearPrintStore(const char* a_why);
 	/** @brief Decides this frame's print window (printWindowTarget, printDimTarget) and returns the rect the readers may use: the texels both the map as it stands and the map after this frame's update hold. Called from GetCommonBufferData. */
 	DirectX::XMINT4 PrintRectForFrame();
 	/** @brief Rebuilds the tile mask and the live-tile sums from printLive; uploads the mask when it changed. */

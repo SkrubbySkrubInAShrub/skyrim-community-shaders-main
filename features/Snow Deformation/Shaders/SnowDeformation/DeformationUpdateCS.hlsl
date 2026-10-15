@@ -1352,6 +1352,16 @@ bool StampTexel(uint2 phys)
 #define PRINT_GATE_ABOVE 6.0
 // ContactAbove under this is the ground layer's print, not an object's.
 #define PRINT_FROM_ABOVE 0.5
+// A print is the sole's own footprint. The sole is the lowest body surface
+// within two contact texels, ignoring any more than SOLE_REACH under the
+// texel's own (a foot on another level). A texel prints where its body is
+// within SOLE_LO to SOLE_HI of that sole and the sole within TOUCH_LO to
+// TOUCH_HI of an object top: a boot's raised edges and a swinging foot do not.
+#define PRINT_SOLE_REACH 4.0
+#define PRINT_SOLE_LO 1.0
+#define PRINT_SOLE_HI 2.5
+#define PRINT_TOUCH_LO 2.0
+#define PRINT_TOUCH_HI 4.0
 
 // Mirrors PrintFrameCB in SnowDeformation.h.
 cbuffer PrintFrame : register(b1)
@@ -1393,19 +1403,27 @@ int2 PrintWorldTexel(uint2 a_phys, uint a_dim)
 	return PrintWindowMin + ((int2(a_phys) - PrintWindowMin) & int(a_dim - 1));
 }
 
-// The lowest body surface over a point this frame: the 2x2 contact texels
-// around it, MIN. CONTACT_NONE where no body drew.
-float PrintContact(float2 a_worldPos)
+// The body over a point this frame (x: the contact texel holding the point,
+// no dilation) and its sole (y). CONTACT_NONE where no body drew.
+float2 PrintContact(float2 a_worldPos)
 {
-	float contact = CONTACT_NONE;
+	float2 contact = CONTACT_NONE;
 	const float2 rel = (a_worldPos - ContactCenter) / ContactHalfExtent;
 	[branch] if (ContactDim > 0.5 && all(abs(rel) < 1.0))
 	{
 		const int dim = (int)ContactDim;
-		const int2 t0 = int2(floor(float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim - 0.5));
-		[unroll] for (int oy = 0; oy <= 1; oy++)
-			[unroll] for (int ox = 0; ox <= 1; ox++)
-				contact = min(contact, ContactHeight.Load(int3(clamp(t0 + int2(ox, oy), 0, dim - 1), 0)).x);
+		const int2 ct = int2(float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim);
+		contact = ContactHeight.Load(int3(clamp(ct, 0, dim - 1), 0)).xx;
+		[branch] if (contact.x < CONTACT_NONE * 0.5)
+		{
+			[unroll] for (int oy = -2; oy <= 2; oy++)
+				[unroll] for (int ox = -2; ox <= 2; ox++)
+				{
+					const float c = ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)).x;
+					[flatten] if (c >= contact.x - PRINT_SOLE_REACH)
+						contact.y = min(contact.y, c);
+				}
+		}
 	}
 	return contact;
 }
@@ -1442,21 +1460,23 @@ float PrintTopGap(float2 a_worldPos, float a_contact)
 	return gap;
 }
 
-// The print a point takes this frame. x = contact Z, y = depth 0-1, z = the
-// verdict: 0 no body, 1 the ground layer's, 2 no object top at that height,
-// 3 prints.
+// The print a point takes this frame. x = the sole's Z, y = depth 0-1, z =
+// the verdict: 0 no body, 1 the ground layer's, 2 no object top at that
+// height, 3 prints.
 float3 PrintVerdict(float2 a_worldPos)
 {
-	const float contact = PrintContact(a_worldPos);
-	float3 verdict = float3(contact, 0.0, 0.0);
-	[branch] if (contact < CONTACT_NONE * 0.5)
+	const float2 contact = PrintContact(a_worldPos);
+	float3 verdict = float3(contact.y, 0.0, 0.0);
+	[branch] if (contact.x < CONTACT_NONE * 0.5)
 	{
 		verdict.z = 1.0;
-		[branch] if (ContactAbove(a_worldPos, contact) >= PRINT_FROM_ABOVE)
+		[branch] if (ContactAbove(a_worldPos, contact.y) >= PRINT_FROM_ABOVE)
 		{
-			const float gap = PrintTopGap(a_worldPos, contact);
+			const float gap = PrintTopGap(a_worldPos, contact.y);
 			verdict.z = gap < 0.0 ? 2.0 : 3.0;
-			verdict.y = gap < 0.0 ? 0.0 : BodyPrint * saturate(1.0 - gap / PRINT_GATE_ABOVE);
+			verdict.y = gap < 0.0 ? 0.0 :
+			                        BodyPrint * (1.0 - smoothstep(PRINT_TOUCH_LO, PRINT_TOUCH_HI, gap)) *
+			                            (1.0 - smoothstep(PRINT_SOLE_LO, PRINT_SOLE_HI, contact.x - contact.y));
 		}
 	}
 	return verdict;

@@ -949,14 +949,17 @@ void SnowDeformation::RegisterPrintCoSave()
 		kPrintRecord, kPrintRecordVersion,
 		[this](const SKSE::SerializationInterface* a_intfc) { SavePrintStore(a_intfc); },
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadPrintStore(a_intfc, a_version, a_length); },
-		[this]() {
-			// Before a load and on a new game: the map must not carry one
-			// timeline's prints into the next.
-			std::scoped_lock lock(printStoreMutex);
-			if (!printStore.empty())
-				logger::info("[SNOW DEFORMATION] print store CLEARED by the co-save revert, {} tiles dropped", printStore.size());
-			printStore.clear();
-			printStoreGeneration.fetch_add(1, std::memory_order_acq_rel);
-			printReinjectRequested.store(true, std::memory_order_release);
-		});
+		// Before a load and on a new game: the map must not carry one
+		// timeline's prints into the next.
+		[this]() { ClearPrintStore("the co-save revert"); });
+}
+
+void SnowDeformation::ClearPrintStore(const char* a_why)
+{
+	std::scoped_lock lock(printStoreMutex);
+	if (!printStore.empty())
+		logger::info("[SNOW DEFORMATION] print store CLEARED by {}, {} tiles dropped", a_why, printStore.size());
+	printStore.clear();
+	printStoreGeneration.fetch_add(1, std::memory_order_acq_rel);
+	printReinjectRequested.store(true, std::memory_order_release);
 }

@@ -3872,7 +3872,7 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? cacheIt->second.boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound) });
+			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && !debugPrintRimOff && PrintsUnder(geometry->worldBound) });
 		printTwinDraws += skinDraws.back().prints ? 1u : 0u;
 	}
 	printTwinDrawsLast = printTwinDraws;
