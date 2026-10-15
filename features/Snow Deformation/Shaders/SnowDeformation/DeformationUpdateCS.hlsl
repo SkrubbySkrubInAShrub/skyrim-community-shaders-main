@@ -1129,21 +1129,36 @@ bool StampTexel(uint2 phys)
 		}
 	}
 
-	// Rasterized props: the lowest surface over this column, carved to the
-	// fraction it reaches into the layer - the limb rule, per texel. A 3x3
-	// MIN dilates by one contact texel so a blade thinner than a texel does
-	// not print dotted. Missing terrain reads far below and carves nothing.
+	// Rasterized props: the lowest surface over this texel's own area, carved
+	// to the fraction it reaches into the layer (the limb rule, per texel) and
+	// to the share of the area it covers. The trench's edge then falls on the
+	// body's own, and a blade thinner than a texel prints shallow rather than
+	// a texel wide. Missing terrain reads far below and carves nothing.
 	[branch] if (ContactDim > 0.5)
 	{
 		float2 rel = (worldPos - ContactCenter) / ContactHalfExtent;
 		[branch] if (all(abs(rel) < 1.0))
 		{
 			int dim = (int)ContactDim;
-			int2 ct = int2((rel.x * 0.5 + 0.5) * ContactDim, (0.5 - rel.y * 0.5) * ContactDim);
+			const float2 cf = float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim;
+			int2 ct = int2(cf);
+			// Half this texel's width in contact texels; the contact texels it overlaps.
+			const float span = TexelSize * ContactDim / (4.0 * ContactHalfExtent);
+			const int2 k0 = int2(floor(cf - span));
+			const int2 k1 = int2(ceil(cf + span)) - 1;
 			float2 contact = float2(CONTACT_NONE, CONTACT_NONE);
-			[unroll] for (int oy = -1; oy <= 1; oy++)
-				[unroll] for (int ox = -1; ox <= 1; ox++)
-					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
+			float2 cover = 0.0;
+			[loop] for (int ky = k0.y; ky <= k1.y; ky++)
+			{
+				const float wy = saturate(min(ky + 1.0, cf.y + span) - max((float)ky, cf.y - span));
+				[loop] for (int kx = k0.x; kx <= k1.x; kx++)
+				{
+					const float2 c = ContactHeight.Load(int3(clamp(int2(kx, ky), 0, dim - 1), 0));
+					contact = min(contact, c);
+					cover += wy * saturate(min(kx + 1.0, cf.x + span) - max((float)kx, cf.x - span)) * float2(c < CONTACT_NONE * 0.5);
+				}
+			}
+			cover = saturate(cover / (4.0 * span * span));
 			// Bodies go through the pass rule below; loose props carve all of
 			// their reach, the floor ItemSink rests them on. Crust bears both like
 			// any carve of unknown weight: no force.
@@ -1151,9 +1166,9 @@ bool StampTexel(uint2 phys)
 			float bodyContact = 0.0;
 			float propPrinted = 0.0;
 			[branch] if (contact.x < CONTACT_NONE * 0.5)
-				bodyContact = saturate(1.0 - ContactAbove(worldPos, contact.x)) * crustDepth;
+				bodyContact = saturate(1.0 - ContactAbove(worldPos, contact.x)) * crustDepth * cover.x;
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
-				propPrinted = saturate(1.0 - ContactAbove(worldPos, contact.y)) * crustDepth;
+				propPrinted = saturate(1.0 - ContactAbove(worldPos, contact.y)) * crustDepth * cover.y;
 			bodyReach = max(bodyReach, bodyContact);
 			// A repeat pass deepens by the reach a map texel either side,
 			// tent-weighted: a channel walked into a packed floor eases in over
