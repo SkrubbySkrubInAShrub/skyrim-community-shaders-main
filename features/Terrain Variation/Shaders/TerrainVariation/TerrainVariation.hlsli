@@ -10,6 +10,7 @@
 // --------------------- CONSTANTS AND STRUCTURES --------------------- //
 static const float HEIGHT_INFLUENCE = 0.3;  // How much height affects blending (0=pure stochastic, 1=pure height)
 static const float2x2 SKEW_MATRIX = float2x2(1.0, 0.0, -0.57735027, 1.15470054);
+static const float2x2 SKEW_MATRIX_INVERSE = float2x2(1.0, 0.0, 0.5, 0.8660254);
 static const float WORLD_SCALE = 332.54;
 // Mesh UVs already tile, so one lattice cell maps to one UV tile.
 static const float MESH_SCALE = 1.0;
@@ -29,6 +30,9 @@ struct StochasticOffsets
 	float2 offset2;
 	// Normalized weight of tap 1 in [0.5, 1]; tap 2 gets the remainder.
 	float tap1Weight;
+	// The taps' lattice cells, unwrapped (StochasticCellUV places them).
+	float2 cell1;
+	float2 cell2;
 };
 
 // Shared LOD base for the six-way blend (set once per pixel).
@@ -78,7 +82,9 @@ inline float TerrainStochasticMipLevel(Texture2D tex)
 // Near c1/c2 ties, fade w2 so the discarded corner cannot pop;
 // near c0/c1 ties, disable that fade so the primary swap stays symmetric.
 // Contrast exponent is 2, so weights are squared rather than pow()'d.
-inline StochasticOffsets ComputeStochasticOffsetsScaled(float2 uv, float scale)
+// period > 0 hashes the cells modulo period, for UVs too large for the hash's
+// precision: wrapping the UV instead breaks the skewed grid along the wrap.
+inline StochasticOffsets ComputeStochasticOffsetsScaledPeriodic(float2 uv, float scale, float period)
 {
 	float2 skewUV = mul(SKEW_MATRIX, uv * scale);
 	float2 vxID = floor(skewUV);
@@ -127,10 +133,23 @@ inline StochasticOffsets ComputeStochasticOffsetsScaled(float2 uv, float scale)
 	w2 *= lerp(1.0, rankFade, dominanceGuard);
 
 	StochasticOffsets o;
-	o.offset1 = hash2D2D(c0.cell);
-	o.offset2 = hash2D2D(c1.cell);
+	o.offset1 = hash2D2D(period > 0.0 ? c0.cell - period * floor(c0.cell / max(period, 1.0)) : c0.cell);
+	o.offset2 = hash2D2D(period > 0.0 ? c1.cell - period * floor(c1.cell / max(period, 1.0)) : c1.cell);
 	o.tap1Weight = w1 * rcp(max(w1 + w2, 1e-8));
+	o.cell1 = c0.cell;
+	o.cell2 = c1.cell;
 	return o;
+}
+
+inline StochasticOffsets ComputeStochasticOffsetsScaled(float2 uv, float scale)
+{
+	return ComputeStochasticOffsetsScaledPeriodic(uv, scale, 0.0);
+}
+
+// A lattice cell's corner in UV, undoing the skew.
+inline float2 StochasticCellUV(float2 cell, float scale)
+{
+	return mul(SKEW_MATRIX_INVERSE, cell) / scale;
 }
 
 inline StochasticOffsets ComputeStochasticOffsets(float2 landscapeUV)

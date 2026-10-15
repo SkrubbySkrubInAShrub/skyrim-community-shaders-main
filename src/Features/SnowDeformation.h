@@ -74,6 +74,8 @@ public:
 	static constexpr float kStampModeBowl = 20.0f;
 	/** @brief Added to a carve made by a body (feet, limbs, a body's own shapes): Snow Resistance and its trampled fade apply per texel. Decoded before BOWL and CONE; TrenchStore's carve test strips it. Mirrored by STAMP_MODE_BODY in DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeBody = 40.0f;
+	/** @brief A fraction on a spell carve's mode: a shove (Force), which StampCS records in the map's .w so the trench detail wears its powder set there. Under every decode's 0.5 threshold, so each still reads a carve. Mirrored by STAMP_MODE_SHOVE in DeformationUpdateCS.hlsl. */
+	static constexpr float kStampModeShove = 0.25f;
 	/** @brief Cap on spell emitters STAMPED per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 	/**
@@ -568,8 +570,6 @@ public:
 		float UndulationSpacing = 0.5f;
 		/** @brief Tessellate the ground snow and the trench patch near the camera. Its real job is trench smoothness: the hull shaders' factors key off the deformation map, so carves get vertex density the land's own triangles cannot express. */
 		bool Tessellation = true;
-		/** @brief A/B against tessellated trenches: the ground snow's replay draws the uncarved top and the prepass marches each pixel's view ray through the carve and the berms, storing the point it meets (and the foot's move, the parallax offset) in the prepass buffers that the deferred shading and the depth claim read. The sun cascades keep the carved geometry. */
-		bool TrenchParallax = false;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
 		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
@@ -578,15 +578,15 @@ public:
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.50f;
 		/** @brief Berm Steepness, 0-2: the berm's reach (its tap rings) is 2^(1 - s). 1 = the authored ~40-unit apron; 0 spreads the same crest height twice as wide, 2 packs it into half the width. */
-		float BermSteepness = 1.0f;
+		float BermSteepness = 0.75f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
 		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
-		float RimTeeth = 0.33f;
+		float RimTeeth = 0.50f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
 		float SnowResistance = 33.0f;
 		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth and wall softness follow the snow, each with its slider as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
-		float SnowClimateStrength = 1.0f;
+		float SnowClimateStrength = 0.75f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
@@ -598,7 +598,7 @@ public:
 		/** @brief Trench detail: snow roughness multiplier over the detail mask (lower = glossier). 1 = the snow set's own. */
 		float TrenchDetailRoughness = 1.0f;
 		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
-		float TrenchDetailCoverage = 2.0f;
+		float TrenchDetailCoverage = 1.75f;
 		/** @brief Trench detail set: 0 by the snow condition, 1 powder, 2 firm, 3 wet. */
 		int TrenchDetailSet = 0;
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades and the SSS mask shade the snow. A/B for dark blotches on open snow at a low sun. */
@@ -625,8 +625,8 @@ public:
 		float BloodSheen = 0.5f;
 		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
 		float BloodSpreadSeconds = 1.5f;
-		/** @brief Deformation map resolution (1024 or 2048, snapped to pow2 - the toroidal mask requires it; 4096 was offered until 2026-09-21 and retired: trenches looked worse at it and it cost 4.71 ms). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
-		uint32_t DeformMapResolution = 2048;
+		/** @brief Deformation map resolution (1024, 2048 or 4096, snapped to pow2 - the toroidal mask requires it). 4096 was retired 2026-09-21 (trenches looked worse at it, 4.71 ms) and is back since 2026-10-15 at Josef's call: the default and the High preset. The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
+		uint32_t DeformMapResolution = 4096;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 200.0f;
 		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
@@ -1349,8 +1349,8 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailHeightSRV;
 	bool trenchDetailAttempted = false;
 	void EnsureTrenchDetailTextures();
-	/** @brief This frame's detail slice: Settings::TrenchDetailSet, or by the snow condition (wet, else powder while fresher than firm, else firm). */
-	uint32_t TrenchDetailSlice() const;
+	/** @brief This frame's detail sets: x the dominant slice, y the second, z the second's weight (0 = one set). Settings::TrenchDetailSet forces one; by the snow condition the weights cross over in bands, wet around wetness 0.5 and powder against firm around freshness = firmness. */
+	float3 TrenchDetailBlend() const;
 	/** @brief Runtime-only: the trench detail coverage view (ShellCB::TrenchDetailView). */
 	bool debugTrenchDetailView = false;
 	struct alignas(16) UndulationFieldCB
@@ -1652,24 +1652,25 @@ public:
 		/** @brief Edge berm crest height as a fraction of local snow depth. */
 		float BermHeightAmp;
 
-		/** @brief Layout keepers (the retired churn's amplitude and size), uploaded as 0. */
-		float LayoutKeeper0;
-		float LayoutKeeper1;
-		/** @brief DebugNoFarPad: layout keeper, uploaded as 0. DebugParallaxView: the trench parallax offset view (trenchParallaxView); 0 = off. */
+		/** @brief Trench detail: the second set's slice and its weight against TrenchDetailSlice's (TrenchDetailBlend()). Claim the retired churn's keepers. */
+		float TrenchDetailSecond;
+		float TrenchDetailMix;
+		/** @brief Layout keepers, uploaded as 0 (LayoutKeeper4 was the retired parallax trench view). */
 		float DebugNoFarPad;
-		float DebugParallaxView;
+		float LayoutKeeper4;
 
 		/** @brief The object snow's berm height (the landscape's). */
 		float ObjBermHeightAmp;
-		/** @brief Layout keepers (the retired object churn's amplitude and size), uploaded as 0. */
-		float LayoutKeeper2;
+		/** @brief Trench detail: sun self-shadow fade, Settings::ParallaxDepth up to 1 (the presets set it), 0 = off; its occlusion scales by SnowParallax.y (Parallax Shadow) as the snow texture's does. Claims a retired churn keeper. */
+		float TrenchDetailShadow;
+		/** @brief Layout keeper, uploaded as 0. */
 		float LayoutKeeper3;
 		/** @brief settings.ObjectMeetBand, read by the landscape shell and the drape. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float ObjectMeetBand;
 
 		/** @brief BermReachScale() (Berm Steepness), for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float BermReach;
-		/** @brief Trench detail slice: 0 powder, 1 firm, 2 wet (TrenchDetailSlice()). Claims the retired distant-snow debug keeper. */
+		/** @brief Trench detail: the dominant set's slice, 0 powder, 1 firm, 2 wet (TrenchDetailBlend()). Claims the retired distant-snow debug keeper. */
 		uint TrenchDetailSlice;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
 		float SeamRampInv;
@@ -1682,7 +1683,7 @@ public:
 		/** @brief Wide exclusion field window: xy = world centre, z = 1/half extent, w > 0.5 when the field was baked this frame. */
 		float4 ExclusionFieldWindow;
 
-		/** @brief Parallax on the shells: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = self-shadow strength (0 disables the taps), z = occlusion depth multiplier (0 disables the march, landscape shell only), w = Screen-Space Parallax Trenches' reach in view depth (0 = off). */
+		/** @brief Parallax on the shells: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = self-shadow strength (0 disables the taps), z = occlusion depth multiplier (0 disables the march, landscape shell only), w spare (the retired Screen-Space Parallax Trenches' reach). */
 		float4 SnowParallax;
 
 		/** @brief x = how dark a shock discharge burns the snow it struck, y = crust shading strength, z = crust roughness, w = how far crust flattens the snow normal map. Mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
@@ -1805,10 +1806,10 @@ public:
 	Texture2D* shellDeferredAttr[3] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
 	bool EnsureDeferredResources();
-	/** @brief The deferred PS [tessellated trenches, Screen-Space Parallax Trenches]. */
-	ID3D11PixelShader* shellPSDeferred[2] = {};
-	uint32_t shellPSDeferredLegacyBits[2] = {};
-	ID3D11PixelShader* GetShellPSDeferred(bool a_parallax = false);
+	/** @brief The deferred PS, and the legacy bits it was compiled with. */
+	ID3D11PixelShader* shellPSDeferred = nullptr;
+	uint32_t shellPSDeferredLegacyBits = 0;
+	ID3D11PixelShader* GetShellPSDeferred();
 	/** @brief The deferred PS with SNOW_CONDITION_VIEW (tessellated trenches only), compiled off the render thread the first time the view is switched on. */
 	ID3D11PixelShader* shellPSDeferredConditionView = nullptr;
 	std::atomic<int> conditionViewShaderState = 0;
@@ -1860,9 +1861,9 @@ public:
 	/** @brief Brings the caches up to date and binds them at PS t106-t108 (DrawShell, after the shell CB upload). False = no caches this frame: the marches must be switched off, as they read nothing else. */
 	bool UpdateMarchCaches(const ShellCB& a_cb);
 	void UnbindMarchCaches();
-	void ReleaseMarchCache();	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept][tessellated, parallax]. */
-	ID3D11PixelShader* shellPSPrepassAttr[2][2] = {};
-	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden, bool a_parallax = false);
+	void ReleaseMarchCache();	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept]. */
+	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
+	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
 
 	/** @brief S1: DrawShellEarlyPrepass runs the ground prepass (the landscape replay) at the end of Prepass, before the game's opaque draws, against the blended scene depth seeded into shellTestDepth, and writes its settled pixels into the main depth, so the terrain replay and buried objects fail the depth test under the snow. Pixels whose cut needs this frame's land masks (the land's verdict) or a static's mask (the export clamp) stay pending (negative raster depth, inputs in shellEarlyPending); DrawShell's resolve finishes them and re-tests every winner against the main depth. Needs Terrain Blending and this frame's landscape capture. */
 	enum class EarlyPrepass : uint8_t
@@ -1894,27 +1895,10 @@ public:
 	Texture2D* shellEarlyMarks = nullptr;
 	bool EnsureEarlyPrepassResources();
 	void DrawShellEarlyPrepass();
-	/** @brief SNOW_PREPASS_EARLY prepass PS [plain, hidden kept][tessellated, parallax]. */
-	ID3D11PixelShader* shellPSPrepassEarly[2][2] = {};
-	ID3D11PixelShader* GetShellPSPrepassEarly(bool a_keepHidden, bool a_parallax = false);
+	/** @brief SNOW_PREPASS_EARLY prepass PS [plain, hidden kept]. */
+	ID3D11PixelShader* shellPSPrepassEarly[2] = {};
+	ID3D11PixelShader* GetShellPSPrepassEarly(bool a_keepHidden);
 
-	/** @brief Screen-Space Parallax Trenches (Settings::TrenchParallax): its pixel shader variants compile off the render thread on first use; 0 not started, 1 compiling, 2 ready, 3 failed. */
-	std::atomic<int> trenchParallaxShaderState = 0;
-	std::future<bool> trenchParallaxCompile;
-	/** @brief The frame TrenchParallaxActive last latched, and its answer: the early prepass, DrawShell and the replay agree within a frame. */
-	uint32_t trenchParallaxFrame = UINT32_MAX;
-	bool trenchParallaxLatched = false;
-	/** @brief The setting is on and its shaders (prepass, deferred, replay) are ready; latched per frame. Starts their compile when they are missing. */
-	bool TrenchParallaxActive();
-	/** @brief The prepass's parallax offset (RG16F, display-size like shellRasterDepth): the foot's world-XY move from the drawn top to the point the view ray met. */
-	Texture2D* shellParallaxOffset = nullptr;
-	bool EnsureParallaxOffset();
-	/** @brief Screen-Space Parallax Trenches' reach in view depth (units), DevBench parallaxReach; the relief fades over its last fifth. */
-	float trenchParallaxReach = 2600.0f;
-	/** @brief Debug view (DevBench trenchParallaxView): the parallax offset's length on the snow, red / yellow / white at 4 / 16 / 64 units. */
-	bool trenchParallaxView = false;
-	/** @brief The replay's SNOW_TRENCH_PARALLAX shader set is ready; starts its compile on first call (LandscapeSnow.cpp). */
-	bool LandscapeShadeParallaxReady();
 	ID3D11PixelShader* shellPSEarlyResolve = nullptr;
 	ID3D11PixelShader* GetShellPSEarlyResolve();
 
@@ -3805,7 +3789,7 @@ public:
 	/** @brief The resolve's depth bonus (log2 odds per unit of remaining snow) and carve penalty (log2 odds at a full carve). */
 	float2 LandBlendContest() const;
 	/** @brief The ground snow's prepass geometry: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
-	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB, bool a_parallax);
+	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB);
 	/** @brief One-line status for the Debugging menu. */
 	std::string LandscapeSnowStatus() const;
 	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */

@@ -119,7 +119,6 @@
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
 	X(Tessellation) \
-	X(TrenchParallax) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(BermHeight) \
@@ -763,10 +762,9 @@ void SnowDeformation::ApplyRangeSettings()
 	// companions) and clears, and the store re-injects what it holds.
 	if (deformMapDimDirty || !rangeInitApplied) {
 		// Snapped to a power of two - the toroidal mask requires it. The
-		// combo only offers these two; this guards a hand-edited JSON and a
-		// file saved while 4096 was still offered, and writes the value back
-		// so the next save holds what is running.
-		const uint desired = settings.DeformMapResolution >= 2048u ? 2048u : 1024u;
+		// combo offers these three; this guards a hand-edited JSON and writes
+		// the value back so the next save holds what is running.
+		const uint desired = settings.DeformMapResolution >= 4096u ? 4096u : (settings.DeformMapResolution >= 2048u ? 2048u : 1024u);
 		settings.DeformMapResolution = desired;
 		if (desired != deformMapDim) {
 			deformMapDim = desired;
@@ -2117,10 +2115,9 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 
 void SnowDeformation::ClearShaderCache()
 {
-	// The prime worker owns these members while it runs, and the trench
-	// parallax worker its variants; a debug toggle in that window no-ops
-	// rather than racing them.
-	if (snowPrimeState.load(std::memory_order_acquire) == 1 || trenchParallaxShaderState.load(std::memory_order_acquire) == 1)
+	// The prime worker owns these members while it runs; a debug toggle in
+	// that window no-ops rather than racing it.
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 	// Rehash the sources on the next compile, so a recompile after a live
 	// shader edit cannot serve stale cached bytecode.
@@ -2169,11 +2166,9 @@ void SnowDeformation::ClearShaderCache()
 	if (exclusionFieldCS)
 		exclusionFieldCS->Release();
 	exclusionFieldCS = nullptr;
-	for (auto& deferredPS : shellPSDeferred) {
-		if (deferredPS)
-			deferredPS->Release();
-		deferredPS = nullptr;
-	}
+	if (shellPSDeferred)
+		shellPSDeferred->Release();
+	shellPSDeferred = nullptr;
 	if (conditionViewCompile.valid())
 		conditionViewCompile.wait();
 	if (shellPSDeferredConditionView)
@@ -2181,21 +2176,16 @@ void SnowDeformation::ClearShaderCache()
 	shellPSDeferredConditionView = nullptr;
 	conditionViewShaderState.store(0, std::memory_order_release);
 	ReleaseMarchCache();
-	for (auto& attrPair : shellPSPrepassAttr) {
-		for (auto& attrPS : attrPair) {
-			if (attrPS)
-				attrPS->Release();
-			attrPS = nullptr;
-		}
+	for (auto& attrPS : shellPSPrepassAttr) {
+		if (attrPS)
+			attrPS->Release();
+		attrPS = nullptr;
 	}
-	for (auto& earlyPair : shellPSPrepassEarly) {
-		for (auto& earlyPS : earlyPair) {
-			if (earlyPS)
-				earlyPS->Release();
-			earlyPS = nullptr;
-		}
+	for (auto& earlyPS : shellPSPrepassEarly) {
+		if (earlyPS)
+			earlyPS->Release();
+		earlyPS = nullptr;
 	}
-	trenchParallaxShaderState.store(0, std::memory_order_release);
 	if (shellPSEarlyResolve)
 		shellPSEarlyResolve->Release();
 	shellPSEarlyResolve = nullptr;
@@ -2398,11 +2388,11 @@ void SnowDeformation::SaveSettings(json& o_json)
 
 void SnowDeformation::RestoreDefaultSettings()
 {
+	// Trenches stay: a range or resolution change clears the map as any change
+	// does, and the store re-injects what it holds.
 	settings = {};
 	trenchRangeDirty = true;
 	deformMapDimDirty = true;
-	clearRequested = true;
-	ClearTrenchStore("restore defaults");
 	RefreshLandTextureDepths();
 	shellDataDirty.store(true, std::memory_order_release);
 }

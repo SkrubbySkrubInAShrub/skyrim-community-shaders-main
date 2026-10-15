@@ -48,10 +48,10 @@ float SnowDetailNoise(float2 p)
 }
 #endif
 
-// Tiles the lattice input wraps after: the stochastic hash multiplies the
-// cell index by ~3300 and needs it small to keep a fraction (the frost
-// lattice below, same reason).
-static const float kTrenchDetailLatticeWrap = 32.0;
+// Lattice cells the stochastic hash repeats after: it multiplies the cell
+// index by ~3300 and needs it small to keep a fraction. CS's sampler wraps
+// the hash alone, so the grid itself has no seam.
+static const float kTrenchDetailLatticePeriod = 64.0;
 
 // Field map sizes. The landscape shell (SNOW_FIELD_DIMS) takes them from
 // ShellCB.FieldDims, GetDimensions of what DrawShell binds (0 where unbound);
@@ -254,17 +254,53 @@ bool ShellUntouched(float2 gridLocal)
 }
 
 // Trench detail tile: 64 units on 1024 texels, its height stored as 0.5 + h / 6
-// about the tile mean (reach +2.44 / -1.06 at most), one stochastic offset per
-// tile cell (CS's sampler, one lattice cell per tile).
+// about the tile mean (the firm set reaches +-2.51), one stochastic offset per
+// tile cell (CS's sampler, one lattice cell per tile). Slice 0 is the powder
+// set, 2 the wet.
 static const float kTrenchDetailTile = 64.0;
 static const float kTrenchDetailSpan = 6.0;
-static const float kTrenchDetailReach = 2.5;
+static const float kTrenchDetailReach = 2.75;
+static const float kTrenchDetailPowder = 0.0;
+static const float kTrenchDetailWet = 2.0;
 
-float2 TrenchDetailUV(float2 worldXY)
+// The detail's two stochastic taps at a point: CS's sampler picks the two
+// lattice cells and the dominant one's weight, and each cell turns its tile by
+// an angle of its own, read from the offset CS hashed for it, about the cell's
+// own corner. Normals turn back with the tile.
+struct TrenchDetailTaps
 {
-	float2 uv = worldXY / kTrenchDetailTile;
-	uv -= kTrenchDetailLatticeWrap * floor(uv / kTrenchDetailLatticeWrap);
-	return uv + ComputeStochasticOffsetsMesh(uv).offset1;
+	float4 uv;    // xy the dominant cell's tile uv, zw the second's
+	float4 turn;  // (cos, sin) of each cell's turn
+	float w;      // the dominant tap's weight (CS's tap1Weight)
+};
+
+float2 TrenchDetailTurn(float2 a_offset)
+{
+	const float a = 6.2831853 * frac(dot(a_offset, float2(17.13, 31.71)));
+	return float2(cos(a), sin(a));
+}
+
+float2 TrenchDetailRotate(float2 v, float2 cs)
+{
+	return float2(cs.x * v.x - cs.y * v.y, cs.y * v.x + cs.x * v.y);
+}
+
+TrenchDetailTaps TrenchDetailTapsAt(float2 worldXY)
+{
+	const float2 uv = worldXY / kTrenchDetailTile;
+	const StochasticOffsets o = ComputeStochasticOffsetsScaledPeriodic(uv, MESH_SCALE, kTrenchDetailLatticePeriod);
+	TrenchDetailTaps t;
+	t.turn = float4(TrenchDetailTurn(o.offset1), TrenchDetailTurn(o.offset2));
+	t.uv = float4(TrenchDetailRotate(uv - StochasticCellUV(o.cell1, MESH_SCALE), t.turn.xy) + o.offset1,
+		TrenchDetailRotate(uv - StochasticCellUV(o.cell2, MESH_SCALE), t.turn.zw) + o.offset2);
+	t.w = o.tap1Weight;
+	return t;
+}
+
+// Both taps' uv change for a world step a_d.
+float4 TrenchDetailStep(TrenchDetailTaps a_t, float2 a_d)
+{
+	return float4(TrenchDetailRotate(a_d, a_t.turn.xy), TrenchDetailRotate(a_d, a_t.turn.zw)) / kTrenchDetailTile;
 }
 
 // ComputeTerrainStochasticLodBase's rule for world-unit pixel derivatives.
@@ -286,38 +322,99 @@ float TrenchDetailMask(float a_carve, float2 a_bermPair, float a_coverage)
 	return smoothstep(cut - 0.4, cut, f) * smoothstep(0.0, 0.15, f);
 }
 
-float TrenchDetailHeight(float3 a_uv, float a_lod)
+// One tap's stored height (0.5 = the tile mean). The sets blend by weather,
+// TrenchDetailSlice's tile mixed toward TrenchDetailSecond's by TrenchDetailMix,
+// then toward the powder set by a_marks.y (a shock's scorch, a Force shove)
+// and last toward the wet set by a_marks.x (snow fire has melted).
+float TrenchDetailHeight01(float2 a_uv, float a_lod, float2 a_marks)
 {
 #if defined(SNOW_NOISE_TABLE)
-	return (SnowTrenchDetailH.SampleLevel(SnowSampler, a_uv, a_lod).x - 0.5) * kTrenchDetailSpan;
+	float h = SnowTrenchDetailH.SampleLevel(SnowSampler, float3(a_uv, (float)TrenchDetailSlice), a_lod).x;
+	[branch] if (TrenchDetailMix > 0.001)
+		h = lerp(h, SnowTrenchDetailH.SampleLevel(SnowSampler, float3(a_uv, TrenchDetailSecond), a_lod).x, TrenchDetailMix);
+	[branch] if (a_marks.y > 0.001 && (TrenchDetailSlice != 0 || TrenchDetailMix > 0.001))
+		h = lerp(h, SnowTrenchDetailH.SampleLevel(SnowSampler, float3(a_uv, kTrenchDetailPowder), a_lod).x, a_marks.y);
+	[branch] if (a_marks.x > 0.001)
+		h = lerp(h, SnowTrenchDetailH.SampleLevel(SnowSampler, float3(a_uv, kTrenchDetailWet), a_lod).x, a_marks.x);
+	return h;
+#else
+	return 0.5;
+#endif
+}
+
+// The detail's height in units at both taps' uvs, the taps blended as CS
+// blends its stochastic taps (height-biased).
+float TrenchDetailHeight(float4 a_uv, float a_w, float a_lod, float2 a_marks)
+{
+	const float h1 = TrenchDetailHeight01(a_uv.xy, a_lod, a_marks);
+	const float h2 = TrenchDetailHeight01(a_uv.zw, a_lod, a_marks);
+	return (StochasticBlendTwoSamples(h1.xxxx, h2.xxxx, a_w, h1, h2).x - 0.5) * kTrenchDetailSpan;
+}
+
+// One tap's height gradient in its tile's frame, from its normals, the sets
+// mixed as TrenchDetailHeight01 mixes them.
+float2 TrenchDetailGrad01(float2 a_uv, float a_lod, float2 a_marks)
+{
+#if defined(SNOW_NOISE_TABLE)
+	float2 n = SnowTrenchDetailN.SampleLevel(SnowSampler, float3(a_uv, (float)TrenchDetailSlice), a_lod) * 2.0 - 1.0;
+	float2 g = -n / max(sqrt(saturate(1.0 - dot(n, n))), 0.25);
+	[branch] if (TrenchDetailMix > 0.001)
+	{
+		n = SnowTrenchDetailN.SampleLevel(SnowSampler, float3(a_uv, TrenchDetailSecond), a_lod) * 2.0 - 1.0;
+		g = lerp(g, -n / max(sqrt(saturate(1.0 - dot(n, n))), 0.25), TrenchDetailMix);
+	}
+	[branch] if (a_marks.y > 0.001 && (TrenchDetailSlice != 0 || TrenchDetailMix > 0.001))
+	{
+		n = SnowTrenchDetailN.SampleLevel(SnowSampler, float3(a_uv, kTrenchDetailPowder), a_lod) * 2.0 - 1.0;
+		g = lerp(g, -n / max(sqrt(saturate(1.0 - dot(n, n))), 0.25), a_marks.y);
+	}
+	[branch] if (a_marks.x > 0.001)
+	{
+		n = SnowTrenchDetailN.SampleLevel(SnowSampler, float3(a_uv, kTrenchDetailWet), a_lod) * 2.0 - 1.0;
+		g = lerp(g, -n / max(sqrt(saturate(1.0 - dot(n, n))), 0.25), a_marks.x);
+	}
+	return g;
 #else
 	return 0.0;
 #endif
 }
 
-// Distance along the unit view ray (dir) from the sheet point to where it first
-// meets the detail heights laid over the pixel's tangent plane (slope g),
-// searched from +reach to -reach around the plane and refined by secant.
-// a_uv = (detail uv at the sheet point, uv per unit t); a_detail = (relief,
-// slice, mip).
-float TrenchDetailParallaxT(float3 dir, float2 g, float4 a_uv, float3 a_detail)
+// The detail's height gradient in world space: each tap's turned back out of
+// its tile's frame, the two blended with their heights' weight.
+float2 TrenchDetailGrad(TrenchDetailTaps a_t, float a_lod, float2 a_marks)
 {
-	float rise = dir.z - dot(dir.xy, g);
-	float hMax = a_detail.x * kTrenchDetailReach;
+	const float h1 = TrenchDetailHeight01(a_t.uv.xy, a_lod, a_marks);
+	const float h2 = TrenchDetailHeight01(a_t.uv.zw, a_lod, a_marks);
+	const float2 g1 = TrenchDetailRotate(TrenchDetailGrad01(a_t.uv.xy, a_lod, a_marks), a_t.turn.xy * float2(1.0, -1.0));
+	const float2 g2 = TrenchDetailRotate(TrenchDetailGrad01(a_t.uv.zw, a_lod, a_marks), a_t.turn.zw * float2(1.0, -1.0));
+	return StochasticBlendTwoSamples(float4(g1, 0.0, 0.0), float4(g2, 0.0, 0.0), a_t.w, h1, h2).xy;
+}
+
+// Distance along the unit view ray (dir) from the sheet point to where it first
+// meets the detail heights laid over the pixel's tangent plane (slope g): a
+// linear search from +reach to -reach around the plane, its start dithered by
+// a_noise, refined by secant. a_t = the taps at the sheet point, a_duv their
+// uvs per unit t; a_detail = (relief, mip, horizontal step in units); a_marks
+// as TrenchDetailHeight01's.
+float TrenchDetailParallaxT(float3 dir, float2 g, TrenchDetailTaps a_t, float4 a_duv, float3 a_detail, float2 a_marks, float a_noise)
+{
+	const float rise = dir.z - dot(dir.xy, g);
+	const float hMax = a_detail.x * kTrenchDetailReach;
 	// Single exit: a return inside [branch] trips X4000.
 	float t = 0.0;
 	[branch] if (rise <= -0.02)
 	{
-		float span = -2.0 * hMax / rise;
-		float steps = clamp(ceil(span / 2.0), 4.0, 24.0);
-		float dt = span / steps;
-		float prevT = hMax / rise;
-		float prevGap = hMax - a_detail.x * TrenchDetailHeight(float3(a_uv.xy + a_uv.zw * prevT, a_detail.y), a_detail.z);
-		t = prevT;
-		[loop] for (float i = 1.0; i <= steps; i += 1.0)
+		const float t0 = hMax / rise;
+		const float span = -2.0 * hMax / rise;
+		const float steps = clamp(ceil(span * length(dir.xy) / a_detail.z), 6.0, 40.0);
+		const float dt = span / steps;
+		float prevT = t0;
+		float prevGap = hMax - a_detail.x * TrenchDetailHeight(a_t.uv + a_duv * t0, a_t.w, a_detail.y, a_marks);
+		t = t0 + span;
+		[loop] for (float i = 0.0; i < steps; i += 1.0)
 		{
-			float ti = hMax / rise + dt * i;
-			float gap = rise * ti - a_detail.x * TrenchDetailHeight(float3(a_uv.xy + a_uv.zw * ti, a_detail.y), a_detail.z);
+			const float ti = t0 + dt * (i + a_noise);
+			const float gap = rise * ti - a_detail.x * TrenchDetailHeight(a_t.uv + a_duv * ti, a_t.w, a_detail.y, a_marks);
 			[branch] if (gap <= 0.0)
 			{
 				t = lerp(prevT, ti, prevGap / max(prevGap - gap, 1e-6));
@@ -325,10 +422,36 @@ float TrenchDetailParallaxT(float3 dir, float2 g, float4 a_uv, float3 a_detail)
 			}
 			prevT = ti;
 			prevGap = gap;
-			t = ti;
 		}
 	}
 	return t;
+}
+
+// Sun visibility through the detail heights from a point on them (taps a_t),
+// a_h over the tangent plane of slope g; a_detail = (relief, mip, strength),
+// a_marks as TrenchDetailHeight01's. Ten taps along the ray toward the sun
+// until it clears the tallest detail (32 units at most), each tap's overshoot
+// weighed against its distance for a soft edge, the worst scaled by strength
+// as the snow texture's parallax shadow is (Parallax Shadow). 1 = lit.
+float TrenchDetailSunShadow(TrenchDetailTaps a_t, float a_h, float3 L, float2 g, float3 a_detail, float2 a_marks, float a_noise)
+{
+	const float hMax = a_detail.x * kTrenchDetailReach;
+	const float climb = L.z - dot(L.xy, g);
+	float lit = 1.0;
+	[branch] if (climb > 0.01 && a_h < hMax)
+	{
+		const float reach = min((hMax - a_h) / climb, 32.0);
+		const float4 duv = TrenchDetailStep(a_t, L.xy);
+		float occlusion = 0.0;
+		[loop] for (float i = 0.0; i < 10.0; i += 1.0)
+		{
+			const float d = reach * (i + 0.1 + 0.9 * a_noise) / 10.0;
+			const float over = a_detail.x * TrenchDetailHeight(a_t.uv + duv * d, a_t.w, a_detail.y, a_marks) - (a_h + climb * d);
+			occlusion = max(occlusion, over / (0.2 * d + 0.05));
+		}
+		lit = 1.0 - saturate(occlusion * a_detail.z);
+	}
+	return lit;
 }
 
 // ---- Deformation surface-state readers (spell marks). One bilinear tap;
@@ -354,6 +477,29 @@ float SampleMelted(float2 gridLocal)
 	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	return saturate(v.y);
+}
+
+// The trench detail's set marks at a point, one bilinear tap: x = melted
+// (the wet set), y = the larger of scorch and a Force shove (.w), the powder
+// set's.
+float2 SampleDetailMarks(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	SNOW_DEFORM_DIMS(dims);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return float2(saturate(v.y), max(saturate(-v.y), saturate(v.w)));
 }
 
 // Scorch at a point: burnt snow left by a shock discharge, the negative half

@@ -1804,8 +1804,8 @@ void SnowDeformation::ProbeFineLayer(const ShellCB& a_cb)
 	const int fineCellY0 = int(std::lround(shellFineOriginY / cellSize));
 	const float windowOriginX = shellWindowCellX * cellSize;
 	const float windowOriginY = shellWindowCellY * cellSize;
-	std::string out = std::format("fine probe: ShellFlags {} parallaxView {:.0f} GridOrigin ({:.0f},{:.0f}) FineWindow ({:.0f},{:.0f},{:.0f},{:.0f}) fineOrigin ({:.0f},{:.0f}) windowOrigin ({:.0f},{:.0f}) GridToTerrainOffset ({:.0f},{:.0f})\n",
-		a_cb.ShellFlags.x, a_cb.DebugParallaxView, a_cb.GridOrigin.x, a_cb.GridOrigin.y, a_cb.FineWindow.x, a_cb.FineWindow.y, a_cb.FineWindow.z, a_cb.FineWindow.w,
+	std::string out = std::format("fine probe: ShellFlags {} GridOrigin ({:.0f},{:.0f}) FineWindow ({:.0f},{:.0f},{:.0f},{:.0f}) fineOrigin ({:.0f},{:.0f}) windowOrigin ({:.0f},{:.0f}) GridToTerrainOffset ({:.0f},{:.0f})\n",
+		a_cb.ShellFlags.x, a_cb.GridOrigin.x, a_cb.GridOrigin.y, a_cb.FineWindow.x, a_cb.FineWindow.y, a_cb.FineWindow.z, a_cb.FineWindow.w,
 		shellFineOriginX, shellFineOriginY, windowOriginX, windowOriginY, a_cb.GridToTerrainOffset.x, a_cb.GridToTerrainOffset.y);
 
 	// A: window texels against the baked cells, over the fine window's cells.

@@ -225,13 +225,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetShellPSEarlyResolve(); },
 		[&] { GetShellPSDeferred(); },
 		[&] { GetNoiseHashCS(); },
-		[&] {
-			if (settings.TrenchParallax) {
-				GetShellPSPrepassEarly(false, true);
-				GetShellPSPrepassAttr(false, true);
-				GetShellPSDeferred(true);
-			}
-		},
 		[&] { GetShellFillVS(); },
 		[&] { GetShellFillPS(); },
 		[&] { GetShellFillPSClaim(); },

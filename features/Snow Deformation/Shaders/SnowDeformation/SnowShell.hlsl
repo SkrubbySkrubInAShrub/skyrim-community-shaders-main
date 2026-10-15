@@ -171,25 +171,22 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float StaticsDebugView;
 	float BermHeightAmp;
 
-	// Layout keepers (the retired churn), 0.
-	float LayoutKeeper0;
-	float LayoutKeeper1;
-	// DebugNoFarPad: layout keeper, 0. DebugParallaxView: the trench parallax
-	// offset view.
+	float TrenchDetailSecond;  // the second detail set's slice
+	float TrenchDetailMix;     // its weight against TrenchDetailSlice's (0 = one set)
+	// Layout keepers, 0.
 	float DebugNoFarPad;
-	float DebugParallaxView;
+	float LayoutKeeper4;
 
 	float ObjBermHeightAmp;
-	// Layout keepers (the retired object churn), 0.
-	float LayoutKeeper2;
-	float LayoutKeeper3;
+	float TrenchDetailShadow;  // the detail's sun self-shadow, 0 = off
+	float LayoutKeeper3;       // layout keeper, 0
 	// Units across which the sheet and an object's coat meet, half on each
 	// side of the junction; 0 = off.
 	float ObjectMeetBand;
 
 	// 1 / Berm Steepness: the berm tap reach (BermFieldTapped, BermGradStep).
 	float BermReach;
-	uint TrenchDetailSlice;  // detail tile slice: 0 powder, 1 firm, 2 wet
+	uint TrenchDetailSlice;  // the dominant detail set's slice: 0 powder, 1 firm, 2 wet
 	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
 	// data (fall back to the warped-span fade alone).
 	float SeamRampInv;
@@ -208,7 +205,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	// Parallax: x = HeightScale (PBR JSON displacementScale), y = self-shadow
 	// strength (0 disables), z = occlusion depth multiplier (0 disables the
-	// march), w = Screen-Space Parallax Trenches' reach in view depth.
+	// march), w spare (the retired Screen-Space Parallax Trenches' reach).
 	float4 SnowParallax;
 
 	// x = scorch darkening strength, y = crust shading strength,
@@ -885,6 +882,34 @@ float2 RoadRasterAt(float2 worldXY)
 	return s;
 }
 
+// RoadRasterAt's footprint bilinear over its road texels alone: x = how much
+// of it is road (0-1), y = the road's top, z = its layer depth (y and z where
+// x > 0). Continuous where the max-of-4 steps at every texel boundary.
+float3 RoadRasterBilinear(float2 worldXY)
+{
+	float3 r = float3(0.0, 0.0, 0.0);
+	float2 dims;
+	bool valid;
+	const float2 t = ObjectMapTexel(worldXY, dims, valid);
+	[branch] if (valid)
+	{
+		const int2 t0 = (int2)t;
+		const int2 t1 = min(t0 + 1, int2(dims) - 1);
+		const float2 f = t - t0;
+		const float2 s00 = ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0));
+		const float2 s10 = ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0));
+		const float2 s01 = ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0));
+		const float2 s11 = ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0));
+		const float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y) *
+		                 float4((s00.y > kNoRoadTop * 0.5 && s00.x >= 1.0) ? 1.0 : 0.0, (s10.y > kNoRoadTop * 0.5 && s10.x >= 1.0) ? 1.0 : 0.0,
+							 (s01.y > kNoRoadTop * 0.5 && s01.x >= 1.0) ? 1.0 : 0.0, (s11.y > kNoRoadTop * 0.5 && s11.x >= 1.0) ? 1.0 : 0.0);
+		r.x = dot(w, 1.0);
+		r.y = dot(w, float4(s00.y, s10.y, s01.y, s11.y)) / max(r.x, 1e-6);
+		r.z = dot(w, float4(s00.x, s10.x, s01.x, s11.x)) / max(r.x, 1e-6);
+	}
+	return r;
+}
+
 // The road trench patch's drawn surface over a road column (RoadRasterAt), as
 // BuildPatchVertex lays it: the road's top, the carve through the road layer,
 // the dunes.
@@ -895,18 +920,14 @@ float RoadPatchZ(float2 road, float deform, float blur, float und, float2 worldX
 }
 
 // The patch's macro slope (its normal's top term, BuildPatchVertex): 16-unit
-// differences of the road's top (tops = +x, -x, +y, -y), one-sided at the
-// road's edge, clamped to 45 degrees.
-float RoadTopSlope1(float p, float n, float c, float step)
+// differences of the road's top, each side weighed by how much road its tap
+// holds (RoadRasterBilinear .x), so it turns one-sided at the road's edge
+// smoothly; clamped to 45 degrees.
+float2 RoadTopSlope(float3 a_c, float3 a_px, float3 a_nx, float3 a_py, float3 a_ny, float step)
 {
-	const bool vp = p > kNoRoadTop * 0.5;
-	const bool vn = n > kNoRoadTop * 0.5;
-	return vp && vn ? (p - n) / (2.0 * step) : (vp ? (p - c) / step : (vn ? (c - n) / step : 0.0));
-}
-
-float2 RoadTopSlope(float4 tops, float centreTop, float step)
-{
-	const float2 g = float2(RoadTopSlope1(tops.x, tops.y, centreTop, step), RoadTopSlope1(tops.z, tops.w, centreTop, step));
+	const float2 g = float2((a_px.x * (a_px.y - a_c.y) + a_nx.x * (a_c.y - a_nx.y)) / max(a_px.x + a_nx.x, 1e-3),
+						 (a_py.x * (a_py.y - a_c.y) + a_ny.x * (a_c.y - a_ny.y)) / max(a_py.x + a_ny.x, 1e-3)) /
+	                 step;
 	return g / max(1.0, length(g));
 }
 
@@ -1206,13 +1227,6 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 // so boundaries between differently-deep snows are geometric depth ramps;
 // negative depths (roads) submerge the shell below the surface.
 // Shared by the geometry and the prepass so both agree.
-// SNOW_TRENCH_PARALLAX: the uncarved top only (no carve or berm); the
-// prepass marches the rest. gShellUncarvedDepth is the layer
-// depth the carve would have started from (0 where none).
-
-#ifdef SNOW_TRENCH_PARALLAX
-static float gShellUncarvedDepth;
-#endif
 
 float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
@@ -1221,9 +1235,6 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	// return keeps fxc's X4000 quiet (early return + out params misfires).
 	float edgeFade = ShellEdgeFade(gridLocal);
 	float surfaceZ;
-#ifdef SNOW_TRENCH_PARALLAX
-	gShellUncarvedDepth = 0.0;
-#endif
 	[branch] if (edgeFade <= 0.0)
 	{
 		terrainHeight = SampleTerrain(gridLocal).x;
@@ -1313,13 +1324,6 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// Carves only where the layer is raised; the negative-depth submerge at
 		// class edges is untouched. Undulation rides on top, scaled by
 		// remaining depth.
-#ifdef SNOW_TRENCH_PARALLAX
-		[flatten] if (depth > 0.0)
-		{
-			gShellUncarvedDepth = depth;
-			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
-		}
-#else
 		[flatten] if (depth > 0.0)
 		{
 			float deformation = saturate(SampleDeformation(gridLocal));
@@ -1334,7 +1338,6 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 		}
-#endif
 
 		surfaceZ = terrainHeight + depth;
 	}
@@ -1562,22 +1565,9 @@ struct PS_PREPASS_OUTPUT
 	// contest; w = 2 if the export clamped + 8 if the land contest runs + 32
 	// if a static under the snow draws its own pixel.
 	float4 Pending : SV_Target4;
-#			ifdef SNOW_TRENCH_PARALLAX
-	// The parallax offset: the foot's world-XY move from the drawn top to the
-	// point the view ray meets.
-	float2 ParallaxOffset : SV_Target5;
-#			endif
-#		elif defined(SNOW_TRENCH_PARALLAX)
-	float2 ParallaxOffset : SV_Target4;
 #		endif
 #	endif
-#	ifdef SNOW_TRENCH_PARALLAX
-	// The point the march meets lies behind the drawn top, or in front of it
-	// under a berm.
-	float DepthLE : SV_Depth;
-#	else
 	float DepthLE : SV_DepthLessEqual;
-#	endif
 };
 
 // The depth the shell writes: the raster depth, pulled to just in front of
@@ -1695,250 +1685,6 @@ bool ShellMasksNotLand(float3 worldPosRel, float2 pixel, float shellZ, float sce
 }
 #endif
 
-#if defined(SNOW_TRENCH_PARALLAX) && defined(SNOW_SHELL_DEPTH_PREPASS)
-// Trenches by parallax occlusion: the replay draws the uncarved top, and each
-// prepass pixel marches the trench relief the way Extended Materials marches a
-// height map (Davo's formula, CS PR #2618): a softened view slope, steps from
-// texel travel with a grazing floor, a one-step start dither, then a binary
-// search and secant steps. SnowParallax.w is the reach in view depth.
-static const float kTrenchParallaxMinSteps = 4.0;
-static const float kTrenchParallaxMaxSteps = 32.0;
-
-// Height of the carved surface over the uncarved top at a foot, for a layer u
-// deep: ShellSurfaceZ's carve, berm and undulation terms. fine takes the
-// bicubic map tap ShellSurfaceZ uses, else the march's bilinear one. The berm
-// reads the bake or nothing, as the horizon march does.
-float TrenchRelief(float2 foot, float u, float bermScale, float und, bool fine)
-{
-	const float d = saturate(fine ? SampleDeformation(foot) : SampleDeformationMarch(foot));
-	const float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(foot) : float2(0.0, d);
-	const float carved = CarveProfile(d, berm.y, u, GridOrigin + foot) + BermShape(berm.x) * saturate(1.0 - d) * bermScale;
-	return carved - u + und * (saturate(carved / 8.0) - saturate(u / 8.0));
-}
-
-// Every point of the foot's path from a to b lies within half a tile of a
-// sample whose tile is untouched (dilated by a tile), so the relief is zero
-// along it.
-bool TrenchPathUntouched(float2 a, float2 b, float tile)
-{
-	const float len = length(b - a);
-	const float n = ceil(len / tile);
-	bool untouched = len <= 8.0 * tile && ShellUntouched(a) && ShellUntouched(b);
-	[loop] for (float i = 1.0; i < n && untouched; i += 1.0)
-		untouched = ShellUntouched(lerp(a, b, i / n));
-	return untouched;
-}
-
-// The class ramp's positive depth alone: SampleTerrain's .y without its height.
-float TerrainRampDepth(float2 gridLocal)
-{
-	float2 t = clamp((GridToTerrainOffset + gridLocal) / TerrainTexelSize, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-	float r = lerp(lerp(TerrainWindowWet.Load(int3(t0.x, t0.y, 0)).y, TerrainWindowWet.Load(int3(t1.x, t0.y, 0)).y, f.x),
-		lerp(TerrainWindowWet.Load(int3(t0.x, t1.y, 0)).y, TerrainWindowWet.Load(int3(t1.x, t1.y, 0)).y, f.x), f.y);
-	return max(r, 0.0) * RimStyle.w;
-}
-
-// The ground as SampleTerrain's .x places it: the land-exact mesh in the fine
-// window, the window's bilinear outside it; the missing sentinel over gaps.
-float MarchGroundZ(float2 gridLocal)
-{
-	float h = -100000.0;
-	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0)
-		h = LandHeightFine(gridLocal);
-	[branch] if (h < -50000.0)
-		h = TerrainHeightAt(gridLocal);
-	return h;
-}
-
-// The foot's move per unit of relief along the view ray's (foot, layer
-// height) rates (v, k): Extended Materials' softened slope, |z| * 0.7 + 0.3 of
-// the unit view vector, floored at 1/16.
-float2 TrenchSoftShift(float2 v, float k)
-{
-	const float len = sqrt(dot(v, v) + k * k);
-	return v / max(0.7 * abs(k) + 0.3 * len, 0.0625 * len);
-}
-
-// The relief between rMin and rMin + rRange over the top at foot0, marched as
-// a normalized height t: 1 at the highest berm, 0 on the ground. At relief 0
-// the foot is foot0. groundScale turns the ground's departure from its plane
-// through groundZ0 into layer height; 0 = the plane alone.
-struct TrenchRay
-{
-	float2 foot0;
-	float2 shift;
-	float rMin;
-	float rRange;
-	float2 groundGrad;
-	float groundZ0;
-	float groundScale;
-	float u;
-	float bermScale;
-	float und;
-	float fade;
-};
-
-float2 TrenchFootAt(TrenchRay r, float t)
-{
-	return r.foot0 - r.shift * (r.rMin + t * r.rRange);
-}
-
-// The surface's normalized height under the ray's foot at t, less t: >= 0
-// where the ray has met the surface.
-float TrenchGapAt(TrenchRay r, float t, bool fine)
-{
-	const float2 foot = TrenchFootAt(r, t);
-	float bend = 0.0;
-	[branch] if (r.groundScale > 0.0)
-	{
-		const float ground = MarchGroundZ(foot);
-		bend = ground > -50000.0 ? (ground - r.groundZ0 - dot(r.groundGrad, foot - r.foot0)) * r.groundScale : 0.0;
-	}
-	return (bend + r.fade * TrenchRelief(foot, r.u, r.bermScale, r.und, fine) - r.rMin) / r.rRange - t;
-}
-
-// The normalized height where the ray meets the relief; 0 if it reaches the
-// ground first. Search on the bilinear map, refinement on the bicubic one.
-float TrenchParallaxT(TrenchRay r, float ndotv, float texel, float noise)
-{
-	// Squared grazing factor; near head-on stays cheap.
-	float grazing = 1.0 - ndotv;
-	grazing *= grazing;
-	// Steps from the foot's travel in map texels, with a grazing floor; past
-	// one step per texel the taps land in texels already read.
-	const float marchTexels = (abs(r.shift.x) + abs(r.shift.y)) * r.rRange / texel;
-	const float travelSteps = floor(marchTexels / lerp(3.5, 1.75, grazing) + 0.5);
-	const float angleSteps = floor(lerp(kTrenchParallaxMinSteps, kTrenchParallaxMaxSteps, grazing) + 0.5);
-	const float steps = clamp(min(max(travelSteps, angleSteps), floor(marchTexels + 0.5)), kTrenchParallaxMinSteps, kTrenchParallaxMaxSteps);
-	const float stepSize = 1.0 / steps;
-	// A one-step start dither breaks residual step bands; the start counts as clear.
-	float tFar = 1.0 - saturate(noise) * stepSize;
-	float fFar = -1e-3;
-	float tNear = 0.0;
-	float fNear = 0.0;
-	bool found = false;
-	[loop] for (float i = 0.0; i < steps; i += 1.0)
-	{
-		const float t = tFar - stepSize;
-		const float f = TrenchGapAt(r, t, false);
-		[branch] if (f >= 0.0)
-		{
-			tNear = t;
-			fNear = f;
-			found = true;
-			break;
-		}
-		tFar = t;
-		fFar = f;
-	}
-	float t = 0.0;
-	[branch] if (found)
-	{
-		const uint binaryIters = grazing > 0.2 ? 4u : 2u;
-		const uint iters = binaryIters + (grazing > 0.25 ? 2u : 1u);
-		[loop] for (uint c = 0; c < iters; c++)
-		{
-			const float d = fNear - fFar;
-			const float tMid = c < binaryIters ? 0.5 * (tNear + tFar) : lerp(tNear, tFar, abs(d) > 1e-6 ? saturate(fNear / d) : 0.5);
-			const float fMid = TrenchGapAt(r, tMid, true);
-			[flatten] if (fMid >= 0.0)
-			{
-				tNear = tMid;
-				fNear = fMid;
-			}
-			else
-			{
-				tFar = tMid;
-				fFar = fMid;
-			}
-		}
-		const float d = fNear - fFar;
-		t = lerp(tNear, tFar, abs(d) > 1e-6 ? saturate(fNear / d) : 0.5);
-	}
-	return t;
-}
-
-// Moves the prepass fragment from the drawn top to where its softened ray
-// meets the relief: the foot moves by the parallax, and position, raster depth
-// (by the viewport's depth range, TessScreen.w) and view depth follow the view
-// ray to the point above that foot. Returns the foot's world-XY move.
-float2 TrenchParallaxMove(inout VS_OUTPUT input)
-{
-	float2 move = 0.0;
-	const float viewZ = input.CurrentClip.w;
-	const float3 dir = normalize(input.WorldPos);
-	// The layer stands off the ground along the slope drape (SHELL_DRAPE).
-	const float3 n = normalize(input.TerrainNormalAlpha.xyz);
-	const float2 groundGrad = -n.xy / max(n.z, 0.05);
-	const float tilt = SlopeDrape.x * (1.0 - smoothstep(SlopeDrape.y, SlopeDrape.z, n.z));
-	const float3 drape = normalize(lerp(float3(0.0, 0.0, 1.0), n, tilt));
-	const float layerScale = 1.0 / max(drape.z - dot(groundGrad, drape.xy), 0.05);
-	const float kLayer = (dir.z - dot(groundGrad, dir.xy)) * layerScale;
-	[branch] if (viewZ < SnowParallax.w && kLayer < -1e-3)
-	{
-		// Per unit of ray: the foot moves v, the height over the top changes k.
-		const float2 v = dir.xy - drape.xy * kLayer;
-		const float2 worldXY = GridOrigin + input.GridLocal;
-		float3 undHG = float3(Undulation(worldXY), UndulationGradSampled(worldXY));
-		[flatten] if (UndulationBakedCovers(worldXY))
-			undHG = UndulationBakedHG(worldXY) * UndulationAmp;
-		SNOW_DEFORM_DIMS(dims);
-		const float texel = 1.0 / (DeformInvWorldSize * dims.x);
-		// Untouched along every path a layer as deep as the ramp (or the
-		// object lift's 6) could take: the relief is zero, so is the move.
-		const float uBound = max(TerrainRampDepth(input.GridLocal), 6.0);
-		// The shallowest rise over any layer depth: the longest shift.
-		const float2 shiftBound = TrenchSoftShift(v, max(kLayer, kLayer - dot(undHG.yz, v)));
-		const float riseBound = uBound * (BermHeightAmp + RimStyle.x) + abs(undHG.x) + 4.0;
-		const float sinkBound = uBound + abs(undHG.x);
-		[branch] if (!TrenchPathUntouched(input.GridLocal - shiftBound * riseBound, input.GridLocal + shiftBound * sinkBound, 8.0 * texel))
-		{
-			float coverage0, terrain0;
-			ShellSurfaceZ(input.GridLocal, coverage0, terrain0);
-			TrenchRay r;
-			r.u = gShellUncarvedDepth;
-			const float k = kLayer - dot(undHG.yz * saturate(r.u / 8.0), v);
-			[branch] if (r.u > 0.5 && k < -1e-3)
-			{
-				r.foot0 = input.GridLocal;
-				r.shift = TrenchSoftShift(v, k);
-				r.groundGrad = groundGrad;
-				r.groundZ0 = MarchGroundZ(input.GridLocal);
-				r.groundScale = r.groundZ0 > -50000.0 ? layerScale : 0.0;
-				r.fade = 1.0 - smoothstep(0.8 * SnowParallax.w, SnowParallax.w, viewZ);
-				r.und = undHG.x;
-				r.bermScale = r.u * BermHeightAmp * BermDepthGate(r.u);
-				// The ground bends off its plane under a long shift: a few units
-				// of slack above the highest berm.
-				const float rMax = r.fade * (r.bermScale + RimStyle.x * r.u * smoothstep(6.0, 18.0, r.u) + max(r.und, 0.0) * (1.0 - saturate(r.u / 8.0))) + 4.0;
-				r.rMin = -r.fade * (r.u + r.und * saturate(r.u / 8.0));
-				r.rRange = rMax - r.rMin;
-				const float ndotv = -k / sqrt(dot(v, v) + k * k);
-				const float t = TrenchParallaxT(r, ndotv, texel, Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount));
-				// The ray's distance to the point above the parallax foot.
-				const float along = -(r.rMin + t * r.rRange) / max(0.7 * abs(k) + 0.3 * sqrt(dot(v, v) + k * k), 0.0625 * sqrt(dot(v, v) + k * k));
-				[branch] if (abs(along) > 1e-4)
-				{
-					const float3 hit = input.WorldPos + dir * along;
-					const float4 clipTop = mul(CameraViewProj, float4(input.WorldPos, 1.0));
-					const float4 clipHit = mul(CameraViewProj, float4(hit, 1.0));
-					input.Position.z += (clipHit.z / clipHit.w - clipTop.z / clipTop.w) * TessScreen.w;
-					input.WorldPos = hit;
-					move = v * along;
-					input.GridLocal += move;
-					input.CurrentClip.w = mul(CameraViewProjUnjittered, float4(hit, 1.0)).w;
-				}
-			}
-		}
-	}
-	return move;
-}
-#endif
-
-
 #if defined(SNOW_SHELL_DEFERRED)
 // LLF cluster lookup coordinates for a camera-relative position.
 void ShellClusterCoords(float3 relPos, out float viewZ, out float2 clusterUV)
@@ -2010,11 +1756,6 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	return o;
 }
 #else
-#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_TRENCH_PARALLAX)
-// Debug view only: the prepass's parallax offset.
-Texture2D<float2> DebugParallaxOffset : register(t99);
-#endif
-
 
 #if defined(SNOW_SHELL_DEFERRED)
 PS_OUTPUT ShellShade(VS_OUTPUT input)
@@ -2043,13 +1784,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		discard;
 		return (PS_PREPASS_OUTPUT)0;
 	}
-#endif
-#if defined(SNOW_TRENCH_PARALLAX) && defined(SNOW_SHELL_DEPTH_PREPASS)
-	// Everything below sees the point the ray meets; the derivatives above
-	// stay the drawn top's.
-	const float2 parallaxMove = TrenchParallaxMove(input);
-	gridLocal = input.GridLocal;
-	shellZ = input.CurrentClip.w;
 #endif
 
 	// The terrain field per PIXEL: the ramp the deferred attributes carry and
@@ -2250,9 +1984,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	prepassOut.AttrGrid = float4(input.GridLocal, normalize(input.TerrainNormalAlpha.xyz).xy);
 	prepassOut.AttrGridDeriv = attrGridDeriv;
 	prepassOut.AttrDepth = float4(input.CurrentClip.w, attrZDeriv, pixelRampDepth);
-#		ifdef SNOW_TRENCH_PARALLAX
-	prepassOut.ParallaxOffset = parallaxMove;
-#		endif
 #	endif
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 #	ifdef SNOW_PREPASS_EARLY
@@ -2292,7 +2023,9 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// macro slope goes the whole way to the road's here, the patch keeping its
 	// own. Weighed by the height gap, not the road's edge: the sheet runs on
 	// over the road and meets the patch wherever the two pass through one
-	// height. Shading only.
+	// height. The road is read bilinear over its texels, as the dense patch
+	// lays it, and the meet fades out across the raster's last texel: the
+	// max-of-4 steps at texel boundaries and drew straight seams. Shading only.
 	float roadMeet = 0.0;
 	float roadMeetDepth = 0.0;
 	float2 roadMeetSlope = 0.0;
@@ -2302,17 +2035,18 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		const float2 road = RoadRasterAt(roadXY);
 		[branch] if (road.y > kNoRoadTop * 0.5 && road.x >= 1.0)
 		{
+			const float3 roadB = RoadRasterBilinear(roadXY);
+			const float2 roadDT = roadB.x > 0.0 ? roadB.zy : road;
 			const float centreBlur = (CompactLook.w > 0.0 && !pixelUntouched) ? BermFieldPair(gridLocal).y : pixelCarve;
-			const float roadZ = RoadPatchZ(road, pixelCarve, centreBlur, UndulationSampled(roadXY), roadXY);
+			const float roadZ = RoadPatchZ(roadDT, pixelCarve, centreBlur, UndulationSampled(roadXY), roadXY);
 			roadMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, abs(input.WorldPos.z + ShellCameraPosAdjust.z - roadZ))) *
-			           (1.0 - smoothstep(1024.0, 2048.0, shellZ));
-			roadMeetDepth = road.x;
+			           (1.0 - smoothstep(1024.0, 2048.0, shellZ)) * smoothstep(0.0, 1.0, roadB.x);
+			roadMeetDepth = roadDT.x;
 			[branch] if (roadMeet > 0.001)
 			{
 				const float tStep = 16.0;
-				roadMeetSlope = RoadTopSlope(float4(RoadRasterAt(roadXY + float2(tStep, 0.0)).y, RoadRasterAt(roadXY - float2(tStep, 0.0)).y,
-												 RoadRasterAt(roadXY + float2(0.0, tStep)).y, RoadRasterAt(roadXY - float2(0.0, tStep)).y),
-					road.y, tStep);
+				roadMeetSlope = RoadTopSlope(roadB, RoadRasterBilinear(roadXY + float2(tStep, 0.0)), RoadRasterBilinear(roadXY - float2(tStep, 0.0)),
+					RoadRasterBilinear(roadXY + float2(0.0, tStep)), RoadRasterBilinear(roadXY - float2(0.0, tStep)), tStep);
 			}
 		}
 	}
@@ -2383,73 +2117,54 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		gradZ += UndulationGradSampled(worldXYPS) * undScale;
 	}
-#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_TRENCH_PARALLAX)
-	// Steep hits take their footprint from the next pixels' view rays met by
-	// the tangent plane (detail left out); the drawn top's is far off on a wall.
-	{
-		const float3 tangentN = normalize(float3(-gradZ, 1.0));
-		const float steep = smoothstep(0.1, 0.3, 1.0 - tangentN.z);
-		[branch] if (steep > 0.0)
-		{
-			float3 rayX, rayY;
-			SHELL_DEFERRED_REL(rayX, input.Position.xy + float2(1.0, 0.0), input.CurrentClip.w)
-			SHELL_DEFERRED_REL(rayY, input.Position.xy + float2(0.0, 1.0), input.CurrentClip.w)
-			const float np = dot(tangentN, input.WorldPos);
-			const float sx = np / dot(tangentN, rayX);
-			const float sy = np / dot(tangentN, rayY);
-			[branch] if (sx > 0.0 && sy > 0.0)
-			{
-				float3 fx = rayX * sx - input.WorldPos;
-				float3 fy = rayY * sy - input.WorldPos;
-				fx *= min(1.0, 1024.0 / max(length(fx), 1e-6));
-				fy *= min(1.0, 1024.0 / max(length(fy), 1e-6));
-				gDeferredGridDx = lerp(gDeferredGridDx, fx.xy, steep);
-				gDeferredGridDy = lerp(gDeferredGridDy, fy.xy, steep);
-				gDeferredZDx = lerp(gDeferredZDx, fx.z, steep);
-				gDeferredZDy = lerp(gDeferredZDy, fy.z, steep);
-			}
-		}
-	}
-#endif
 
-	// Trench detail tiles: the mask across the trench profile at the sheet
-	// point, carried with their uv through the march to the shaded point. It
-	// fades out with the march and into an object's coat where the two meet;
-	// its relief also with thin cover and on trampled floors.
+	// Trench detail tiles, by parallax occlusion: the mask across the trench
+	// profile at the sheet point; the view ray marched through the detail
+	// heights over the tangent plane, and the point it meets shaded with the
+	// snow set's own maps, glints and lights. Fades out with the march and
+	// into an object's coat where the two meet; its relief also with thin
+	// cover and on trampled floors. Snow fire has melted (its marks, the heat
+	// round fires) wears the wet set at full relief; a shock's scorch and a
+	// Force shove wear the powder set.
 	const float detailFade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
 	float detailMask = 0.0;
 	float detailRelief = 0.0;
-	float3 detailUV = 0.0;
+	TrenchDetailTaps detailTaps = (TrenchDetailTaps)0;
 	float detailLod = 0.0;
+	float detailHitH = 0.0;
+	float2 detailMarks = 0.0;
+	const float2 detailPlane = gradZ;
 	float3 shadePos = input.WorldPos;
 #if defined(SNOW_NOISE_TABLE)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		detailMask = TrenchDetailMask(pixelCarve, BermFieldPair(gridLocal), TrenchDetailCoverage) * detailFade * (1.0 - objectMeet.x);
-		detailRelief = TrenchDetailRelief * detailMask * saturate(pixelDepth / 10.0) * TrampleDetailScale(worldXYPS, pixelCarve);
-		detailUV = float3(TrenchDetailUV(worldXYPS), (float)TrenchDetailSlice);
+		detailMarks = smoothstep(kSpellMarkStart, 0.15, SampleDetailMarks(gridLocal));
+		detailMarks.x = max(detailMarks.x, smoothstep(0.1, 0.4, pixelMelt));
+		detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), detailMarks.x) * TrampleDetailScale(worldXYPS, pixelCarve);
+		detailTaps = TrenchDetailTapsAt(worldXYPS);
 		detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 	}
-	// The ray is marched through the detail heights and the point it meets
-	// is shaded; depth-buffer work stays on the sheet.
 	[branch] if (detailRelief > 0.05)
 	{
 		float3 dir = normalize(input.WorldPos);
-		float t = TrenchDetailParallaxT(dir, gradZ, float4(detailUV.xy, dir.xy / kTrenchDetailTile), float3(detailRelief, detailUV.z, detailLod));
+		const float4 duv = TrenchDetailStep(detailTaps, dir.xy);
+		float t = TrenchDetailParallaxT(dir, detailPlane, detailTaps, duv,
+			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(shellZ / 1500.0))), detailMarks, screenNoise);
+		detailHitH = (dir.z - dot(dir.xy, detailPlane)) * t;
 		shadePos = input.WorldPos + dir * t;
 		worldXYPS += dir.xy * t;
 		gridLocal += dir.xy * t;
-		detailUV.xy += dir.xy * (t / kTrenchDetailTile);
+		detailTaps.uv += duv * t;
 	}
-	// The detail tile's slopes at the shaded point, scaled with its height.
 	[branch] if (detailRelief > 0.001)
-	{
-		const float2 dn = SnowTrenchDetailN.SampleLevel(SnowSampler, detailUV, detailLod) * 2.0 - 1.0;
-		gradZ -= dn / max(sqrt(saturate(1.0 - dot(dn, dn))), 0.25) * detailRelief;
-	}
+		gradZ += TrenchDetailGrad(detailTaps, detailLod, detailMarks) * detailRelief;
 #endif
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
+	// The surface without the trench detail: the snow maps' projection, frame
+	// and march key on it, as on the geometric normal under a normal map.
+	const float3 frameNormalWS = normalize(float3(-detailPlane, 1.0));
 
 	// Snow texture taps, shared by albedo, normal and RMAOS so every map
 	// agrees on the same anti-tiling offsets. Micro-relief fades with
@@ -2488,9 +2203,9 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Earlier and narrower than the statics ramp: landscape walls live at 40-65
 	// degrees, where any top-projection share boils as the camera moves. Side
 	// takes over fully by ~57 degrees.
-	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
+	float snowSteepness = smoothstep(0.75, 0.55, abs(frameNormalWS.z));
 	float snowWorldZAbs = shadePos.z + ShellCameraPosAdjust.z;
-	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
+	bool snowSideDropsX = abs(frameNormalWS.x) > abs(frameNormalWS.y);
 	float2 snowSidePlane = snowSideDropsX ? float2(worldXYPS.y, snowWorldZAbs) : float2(worldXYPS.x, snowWorldZAbs);
 	// NO SnowUVOffset on the side plane, and a STATIC 4096-unit fold (exactly
 	// 24 tiles). SnowUVOffset compensates gridLocal's rebase, but the side
@@ -2507,8 +2222,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
 	// BEFORE the normal map perturbs it, matching Lighting.hlsl's use of the
 	// interpolated TBN. Shared with the parallax shadow below.
-	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-	float3 bumpB = cross(normalWS, bumpT);
+	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), frameNormalWS) + float3(1e-5, 0.0, 0.0));
+	float3 bumpB = cross(frameNormalWS, bumpT);
 
 	float3 V = -normalize(input.WorldPos);
 
@@ -2531,7 +2246,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		// bumpT/bumpB ARE the uv axes (world-XY planar projection); EM's
 		// marcher builds tangent-space view from this frame itself.
-		float3x3 snowTbn = float3x3(bumpT, bumpB, normalWS);
+		float3x3 snowTbn = float3x3(bumpT, bumpB, frameNormalWS);
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
@@ -2541,7 +2256,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		// still leaves most of the top march live there. Hard tilt cut instead,
 		// dead by ~40 degrees, side plane sampled unmarched - at a 21-unit wall
 		// stability beats parallax.
-		pomOffset *= 1.0 - smoothstep(0.15, 0.35, 1.0 - abs(normalWS.z));
+		pomOffset *= 1.0 - smoothstep(0.15, 0.35, 1.0 - abs(frameNormalWS.z));
 		snowUV += pomOffset;
 		snowTaps = OffsetSnowTaps(snowTaps, pomOffset);
 	}
@@ -2863,6 +2578,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		// Walls take the trench self-shadow march and the cascades instead.
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
 	}
+#if defined(SNOW_NOISE_TABLE)
+	// The trench detail shadows itself: the sun's ray from the point the march
+	// met, through the detail heights, as strong as Parallax Shadow makes the
+	// snow texture's.
+	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise), TrenchDetailShadow);
+#endif
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
@@ -2987,17 +2709,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		// Orange where the trench detail tiles apply, over grey shading.
 		const float shade = dot(psout.Diffuse.rgb, float3(0.2126, 0.7152, 0.0722));
 		psout.Diffuse.rgb = lerp(shade.xxx, float3(1.0, 0.35, 0.08) * (shade * 1.6 + 0.08), detailMask);
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
-#endif
-#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_TRENCH_PARALLAX)
-	[branch] if (DebugParallaxView > 0.5)
-	{
-		// Red, yellow, white as the foot moved 4, 16 and 64 units.
-		const float shift = length(DebugParallaxOffset.Load(int3(input.Position.xy, 0)));
-		psout.Diffuse.rgb = float3(saturate(shift / 4.0), saturate(shift / 16.0), saturate(shift / 64.0)) * 4.0;
 		psout.Albedo.rgb = 0.0;
 		psout.Specular.rgb = 0.0;
 		psout.Reflectance.rgb = 0.0;

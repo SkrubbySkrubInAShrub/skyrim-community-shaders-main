@@ -305,10 +305,6 @@ namespace
 		int shadeState = 0;  // 1 compiling, 2 ready, 3 failed
 		std::future<LssShaders> shadePending;
 		LssShaders shade;
-		// Screen-Space Parallax Trenches' replay set, compiled on first use.
-		int shadeParallaxState = 0;
-		std::future<LssShaders> shadeParallaxPending;
-		LssShaders shadeParallax;
 		LsShadeCounts shadeFrame;
 		LsShadeCounts shadeLast;
 		uint64_t shadeFallbacks = 0;
@@ -344,16 +340,13 @@ namespace
 		return out;
 	}
 
-	// a_parallax: Screen-Space Parallax Trenches' set, which draws the uncarved top.
-	LssShaders LssCompile(bool a_parallax)
+	LssShaders LssCompile()
 	{
 		LssShaders out;
 		const auto t0 = std::chrono::steady_clock::now();
 		auto& snow = globals::features::snowDeformation;
 		const wchar_t* path = L"Data\\Shaders\\SnowDeformation\\LandscapeSnowShell.hlsl";
 		std::vector<std::pair<const char*, const char*>> defs;
-		if (a_parallax)
-			defs.emplace_back("SNOW_TRENCH_PARALLAX", "");
 		out.vs.attach(static_cast<ID3D11VertexShader*>(snow.CompileSnowShader(path, defs, "vs_5_0")));
 		out.hs.attach(static_cast<ID3D11HullShader*>(snow.CompileSnowShader(path, defs, "hs_5_0")));
 		out.ds.attach(static_cast<ID3D11DomainShader*>(snow.CompileSnowShader(path, defs, "ds_5_0")));
@@ -365,7 +358,7 @@ namespace
 	bool LssPoll()
 	{
 		if (ls.shadeState == 0) {
-			ls.shadePending = std::async(std::launch::async, LssCompile, false);
+			ls.shadePending = std::async(std::launch::async, LssCompile);
 			ls.shadeState = 1;
 		}
 		if (ls.shadeState == 1 && ls.shadePending.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -753,23 +746,6 @@ bool SnowDeformation::LandscapeShadeReady()
 	return ready;
 }
 
-bool SnowDeformation::LandscapeShadeParallaxReady()
-{
-	if (ls.shadeParallaxState == 0) {
-		ls.shadeParallaxPending = std::async(std::launch::async, LssCompile, true);
-		ls.shadeParallaxState = 1;
-	}
-	if (ls.shadeParallaxState == 1 && ls.shadeParallaxPending.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-		ls.shadeParallax = ls.shadeParallaxPending.get();
-		ls.shadeParallaxState = (ls.shadeParallax.vs && ls.shadeParallax.hs && ls.shadeParallax.ds) ? 2 : 3;
-		if (ls.shadeParallaxState == 2)
-			logger::info("[SNOW DEFORMATION] Screen-Space Parallax Trenches: replay shaders ready in {:.0f} ms", ls.shadeParallax.compileMs);
-		else
-			logger::warn("[SNOW DEFORMATION] Screen-Space Parallax Trenches: LandscapeSnowShell.hlsl failed to compile, the trenches stay tessellated");
-	}
-	return ls.shadeParallaxState == 2;
-}
-
 bool SnowDeformation::LandBlendActive() const
 {
 	return settings.EnableSnowDeformation;
@@ -785,7 +761,7 @@ float2 SnowDeformation::LandBlendContest() const
 	return { std::max(ls.cfg.blendBonus, 0.0f), std::max(ls.cfg.blendPenalty, 0.0f) };
 }
 
-uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB, bool a_parallax)
+uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB)
 {
 	auto& counts = ls.shadeFrame;
 	counts.replayCalls++;
@@ -813,7 +789,7 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 	ID3D11SamplerState* sampler = shellSnowSampler.get();
 	auto* state = globals::state;
 	ID3D11Buffer* shared[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
-	const auto& shaders = a_parallax ? ls.shadeParallax : ls.shade;
+	const auto& shaders = ls.shade;
 	a_context->VSSetShader(shaders.vs.get(), nullptr, 0);
 	a_context->HSSetShader(shaders.hs.get(), nullptr, 0);
 	a_context->DSSetShader(shaders.ds.get(), nullptr, 0);
@@ -832,9 +808,7 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 
 	const float4 live = LsLiveRect(a_cb);
 	const auto& cam = a_cb.CameraPosAdjust;
-	// The parallax replay draws no carve: the map tiles call no edge detailed.
-	const int gateMask = (cfg.gate ? std::clamp(cfg.gateMask, 0, 31) : 0) & (a_parallax ? ~1 : ~0);
-	const bool gateLeftNothing = a_parallax && cfg.gate && gateMask == 0;
+	const int gateMask = cfg.gate ? std::clamp(cfg.gateMask, 0, 31) : 0;
 	ID3D11InputLayout* boundLayout = nullptr;
 	uint32_t issued = 0;
 	for (const auto& cap : ls.captures) {
@@ -844,7 +818,7 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 			continue;
 		const float dx = c.x - cam.x;
 		const float dy = c.y - cam.y;
-		const bool tessNear = cfg.tessellate && settings.Tessellation && !gateLeftNothing && std::sqrt(dx * dx + dy * dy) - r < cfg.tessReach;
+		const bool tessNear = cfg.tessellate && settings.Tessellation && std::sqrt(dx * dx + dy * dy) - r < cfg.tessReach;
 		LsCBData data{
 			{ float(cap.translate[0] - double(a_cb.GridOrigin.x)), float(cap.translate[1] - double(a_cb.GridOrigin.y)), float(cap.translate[2]), std::max(cfg.lift, 0.0f) },
 			{ 1.0f, tessNear ? std::clamp(cfg.maxFactor, 1.0f, 64.0f) : 1.0f, float(gateMask), cfg.cull ? 1.0f : 0.0f },
@@ -1156,9 +1130,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("blendPenalty", c.blendPenalty);
 	rdb("landRecolor", landRecolor);
 	rdf("landRecolorLumLo", landRecolorLumLo);
-	rdb("trenchParallax", settings.TrenchParallax);
-	rdf("parallaxReach", trenchParallaxReach);
-	rdb("trenchParallaxView", trenchParallaxView);
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
 	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
@@ -1168,10 +1139,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		if (ls.shadeState != 1) {
 			ls.shade = {};
 			ls.shadeState = 0;
-		}
-		if (ls.shadeParallaxState != 1) {
-			ls.shadeParallax = {};
-			ls.shadeParallaxState = 0;
 		}
 		Util::ClearShaderCompileFailures();
 	}
@@ -1201,8 +1168,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	out["config"] = { { "shadowSun", c.raiseSun }, { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
 		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask }, { "shadowMainCamera", c.shadowMainCamera },
 		{ "blendStart", landscapeBlendStart }, { "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty },
-		{ "landRecolor", landRecolor }, { "landRecolorLumLo", landRecolorLumLo }, { "landRecolorActive", LandRecolorActive() },
-		{ "trenchParallax", settings.TrenchParallax }, { "parallaxReach", trenchParallaxReach }, { "trenchParallaxView", trenchParallaxView } };
+		{ "landRecolor", landRecolor }, { "landRecolorLumLo", landRecolorLumLo }, { "landRecolorActive", LandRecolorActive() } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
 		entries.push_back({ { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
@@ -1212,8 +1178,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		{ "liveRect", { ls.liveRect.x, ls.liveRect.y, ls.liveRect.z, ls.liveRect.w } }, { "camera", { lsCB.CameraPosAdjust.x, lsCB.CameraPosAdjust.y, lsCB.CameraPosAdjust.z } } };
 	const auto& sc = ls.shadeLast;
 	const auto excl = [](const LsExclCounts& a_c) { return json{ { "draws", a_c.draws }, { "rects", a_c.rects }, { "overflow", a_c.overflow } }; };
-	out["trenchParallax"] = { { "drawing", trenchParallaxLatched }, { "latchFrame", trenchParallaxFrame }, { "frame", globals::state->frameCount },
-		{ "pixelShaders", trenchParallaxShaderState.load(std::memory_order_acquire) }, { "replayState", ls.shadeParallaxState }, { "replayCompileMs", ls.shadeParallax.compileMs } };
 	out["shade"] = { { "replayState", ls.shadeState }, { "compileMs", ls.shade.compileMs }, { "fallbackFrames", ls.shadeFallbacks },
 		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess },
 						   { "replaySmallExclusions", excl(sc.replayExcl) }, { "raiseSmallExclusions", excl(sc.raiseExcl) } } } };

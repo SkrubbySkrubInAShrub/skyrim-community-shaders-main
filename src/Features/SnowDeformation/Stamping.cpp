@@ -1929,7 +1929,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// instantaneous mark has no rate to give, and a cloak needs to say it
 		// pocks a ring at its reach rather than a bowl at its feet.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
-			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve : kStampModeMelt))) +
+			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve + kStampModeShove : kStampModeMelt))) +
 				(emitter.cone ? kStampModeCone : 0.0f) + (emitter.bowl ? kStampModeBowl : 0.0f),
 			// A carve reads this as the weight it puts through a crust. A
 			// shout goes through: nothing survives being shoved that hard.

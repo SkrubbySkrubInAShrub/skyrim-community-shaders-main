@@ -212,24 +212,42 @@ float LsDetailFactor(float3 a, float3 b)
 	{
 		float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
 		float reach = kTessNear * reliefBase;
-		// The parallax replay draws no carve: nothing for the trench boost to resolve.
-#ifndef SNOW_TRENCH_PARALLAX
 		[branch] if (dist < kTessCutoff)
 		{
 			float deform = max(max(SampleDeformationFast(a.xy), SampleDeformationFast(b.xy)), SampleDeformationFast(mid));
 			reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
 		}
-#endif
 		spacing /= clamp(reach / max(dist, 32.0), 1.0, kTessMax);
 	}
 	float factor = clamp(distance(a.xy, b.xy) / spacing, 1.0, LsTess.y);
+	// Camera passes: an edge crossing a trench wall (five carve taps along it
+	// disagree) splits to ~1.5 map texels under a quarter of the pixel cap.
+	// Coarser, a vertex inside the trench drags the rim into a notch.
+	bool wall = false;
+	[branch] if (LsTess.x > 0.5)
+	{
+		float lo = 1.0;
+		float hi = 0.0;
+		[unroll] for (uint i = 0; i < 5; i++)
+		{
+			const float d = saturate(SampleDeformationFast(lerp(a.xy, b.xy, i * 0.25)));
+			lo = min(lo, d);
+			hi = max(hi, d);
+		}
+		wall = hi - lo > 0.15;
+		[branch] if (wall)
+		{
+			SNOW_DEFORM_DIMS(dims);
+			factor = max(factor, min(distance(a.xy, b.xy) * DeformInvWorldSize * dims.x / 1.5, 64.0));
+		}
+	}
 	[branch] if (LsTess.x > 0.5 && TessScreen.x > 0.0 && factor > 1.0)
 	{
 		float3 camLocal = float3(GridOrigin, 0.0) - ShellCameraPosAdjust.xyz;
 		float4 clipA = mul(CameraViewProj, float4(a + camLocal, 1.0));
 		float4 clipB = mul(CameraViewProj, float4(b + camLocal, 1.0));
 		[flatten] if (min(clipA.w, clipB.w) > 16.0)
-			factor = min(factor, max(length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz) / TessScreen.x, 1.0));
+			factor = min(factor, max(length((clipA.xy / clipA.w - clipB.xy / clipB.w) * TessScreen.yz) / ((wall ? 0.25 : 1.0) * TessScreen.x), 1.0));
 	}
 	return factor;
 }

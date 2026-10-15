@@ -138,16 +138,16 @@ cbuffer ShellCB : register(b0)
 	float StaticsDebugView;
 	float BermHeightAmp;
 
-	// Layout keepers (the retired churn), 0.
-	float LayoutKeeper0;
-	float LayoutKeeper1;
-	// Landscape-shell C3 A/B flags; declared so ShellCB's layout matches.
+	// The second detail set's slice and its weight (see SnowShell.hlsl).
+	float TrenchDetailSecond;
+	float TrenchDetailMix;
+	// Layout keepers, 0.
 	float DebugNoFarPad;
-	float DebugParallaxView;
+	float LayoutKeeper4;
 
 	float ObjBermHeightAmp;
-	// Layout keepers (the retired object churn), 0.
-	float LayoutKeeper2;
+	// The detail's sun self-shadow, 0 = off.
+	float TrenchDetailShadow;
 	float LayoutKeeper3;
 	// The meeting with the landscape sheet (SnowShell.hlsl): band in units,
 	// half on each side of the junction.
@@ -155,7 +155,7 @@ cbuffer ShellCB : register(b0)
 
 	// 1 / Berm Steepness (see SnowShell.hlsl).
 	float BermReach;
-	// Trench detail tile slice: 0 powder, 1 firm, 2 wet.
+	// The dominant detail set's slice: 0 powder, 1 firm, 2 wet.
 	uint TrenchDetailSlice;
 	float SeamRampInv;
 	// >0.5: read the berm field from the bake at t14 instead of recomputing
@@ -2869,37 +2869,44 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
 	float3 shadePos = input.WorldPos;
 #ifdef PATCH
-	// Trench detail tiles, the ground's own: the mask across the trench profile
-	// at the sheet point, the ray marched through the detail heights and the
-	// point it meets shaded.
+	// Trench detail tiles by parallax occlusion, the ground's own: the mask
+	// across the trench profile at the sheet point, the view ray marched
+	// through the detail heights and the point it meets shaded. Fire marks wear
+	// the wet set, shock and Force marks the powder set, as on the ground.
 #	ifdef SNOW_PATCH_DEFERRED
-	const float detailLodHere = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
+	const float detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 #	else
-	const float detailLodHere = TrenchDetailLod(ddx(input.worldXY), ddy(input.worldXY));
+	const float detailLod = TrenchDetailLod(ddx(input.worldXY), ddy(input.worldXY));
 #	endif
 	const float detailFade = 1.0 - smoothstep(1200.0, 2000.0, input.CurrentClip.w);
 	float detailMask = 0.0;
 	float detailRelief = 0.0;
-	float3 detailUV = 0.0;
+	TrenchDetailTaps trenchTaps = (TrenchDetailTaps)0;
+	float detailHitH = 0.0;
+	float2 detailMarks = 0.0;
+	const float2 detailPlane = -normalWS.xy / max(normalWS.z, 0.1);
 	[branch] if (detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		detailMask = TrenchDetailMask(input.pixelDeform, BermFieldPair(input.trenchGridLocal), TrenchDetailCoverage) * detailFade;
 		[branch] if (detailMask > 0.001)
 		{
-			detailRelief = TrenchDetailRelief * detailMask * saturate(PatchSkinDepth(input.worldXY).x / 10.0) * TrampleDetailScale(input.worldXY, input.pixelDeform);
-			detailUV = float3(TrenchDetailUV(input.worldXY), (float)TrenchDetailSlice);
+			detailMarks = smoothstep(kSpellMarkStart, 0.15, SampleDetailMarks(input.trenchGridLocal));
+			detailRelief = TrenchDetailRelief * detailMask * max(saturate(PatchSkinDepth(input.worldXY).x / 10.0), detailMarks.x) * TrampleDetailScale(input.worldXY, input.pixelDeform);
+			trenchTaps = TrenchDetailTapsAt(input.worldXY);
 		}
 	}
 	[branch] if (detailRelief > 0.05)
 	{
 		float3 dir = normalize(input.WorldPos);
-		float2 slope = -normalWS.xy / max(normalWS.z, 0.1);
-		float t = TrenchDetailParallaxT(dir, slope, float4(detailUV.xy, dir.xy / kTrenchDetailTile), float3(detailRelief, detailUV.z, detailLodHere));
+		const float4 duv = TrenchDetailStep(trenchTaps, dir.xy);
+		float t = TrenchDetailParallaxT(dir, detailPlane, trenchTaps, duv,
+			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(input.CurrentClip.w / 1500.0))), detailMarks, input.screenNoise);
+		detailHitH = (dir.z - dot(dir.xy, detailPlane)) * t;
 		shadePos = input.WorldPos + dir * t;
 		input.worldXY += dir.xy * t;
 		input.trenchGridLocal += dir.xy * t;
 		input.GridLocal += dir.xy * t;
-		detailUV.xy += dir.xy * (t / kTrenchDetailTile);
+		trenchTaps.uv += duv * t;
 	}
 #endif
 	const float2 trenchGridLocal = input.trenchGridLocal;
@@ -3009,14 +3016,15 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
 	}
 
+	// The surface without the trench detail: the snow maps' frame and march
+	// key on it, as on the geometric normal under a normal map.
+	const float3 frameNormalWS = normalWS;
 #ifdef PATCH
-	// The detail tile's slopes at the shaded point, scaled with its height:
-	// the ground's gradient, so the two agree where they meet.
+	// The detail's slopes at the shaded point, scaled with its height: the
+	// ground's gradient, so the two agree where they meet.
 	[branch] if (detailRelief > 0.001)
 	{
-		const float2 dn = SnowTrenchDetailN.SampleLevel(SnowSampler, detailUV, detailLodHere) * 2.0 - 1.0;
-		float2 g = -normalWS.xy / max(normalWS.z, 0.1);
-		g -= dn / max(sqrt(saturate(1.0 - dot(dn, dn))), 0.25) * detailRelief;
+		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) + TrenchDetailGrad(trenchTaps, detailLod, detailMarks) * detailRelief;
 		normalWS = normalize(float3(-g, 1.0));
 	}
 #endif
@@ -3024,8 +3032,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
 	// Built from the geometric normal before the normal map perturbs it, and
 	// shared with the parallax shadow below.
-	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-	float3 bumpB = cross(normalWS, bumpT);
+	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), frameNormalWS) + float3(1e-5, 0.0, 0.0));
+	float3 bumpB = cross(frameNormalWS, bumpT);
 
 	float3 V = -normalize(input.WorldPos);
 
@@ -3052,7 +3060,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		pomParams.HeightScale *= SnowParallax.z;
 
 		// Top plane: bumpT/bumpB ARE its uv axes.
-		float3x3 tbnTop = float3x3(bumpT, bumpB, normalWS);
+		float3x3 tbnTop = float3x3(bumpT, bumpB, frameNormalWS);
 		float2 offsetTop = SnowParallaxOffset(snowTaps, snowUV, V, tbnTop, pixelDist, snowHeightMip, screenNoise, pomParams);
 		// Faded with steepness, in step with the landscape shell: on a steep
 		// side the top TBN follows the surface normal while snowUV stays a
@@ -3070,7 +3078,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		{
 			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
 			float3 sideB = float3(0.0, 0.0, 1.0);
-			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
+			float3 sideN = normalize(snowSideDropsX ? float3(frameNormalWS.x, 0.0, 0.0) : float3(0.0, frameNormalWS.y, 0.0));
 			sideN = dot(V, sideN) < 0.0 ? -sideN : sideN;
 			float3x3 tbnSide = float3x3(sideT, sideB, sideN);
 			float2 offsetSide = SnowParallaxOffset(snowTapsSide, snowUVSide, V, tbnSide, pixelDist, snowHeightMipSide, screenNoise, pomParams);
@@ -3403,6 +3411,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
 	}
+#ifdef PATCH
+	// The trench detail shadows itself, as on the ground.
+	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise), TrenchDetailShadow);
+#endif
 
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
 	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and

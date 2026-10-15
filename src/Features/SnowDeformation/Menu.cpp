@@ -166,7 +166,7 @@ namespace
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
 		{ 1024u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
 		{ 2048u, 115.0f, 105.0f, 150.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
-		{ 2048u, 200.0f, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
+		{ 4096u, 200.0f, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
 	};
 }
 
@@ -223,7 +223,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on and every reach at its maximum. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m and a 24 px Object Snow Tessellation Cap. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m and a 32 px cap. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m and a 24 px Object Snow Tessellation Cap. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m and a 32 px cap. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[kQualityPresetCount] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < kQualityPresetCount; i++) {
@@ -667,11 +667,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttPd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));
+			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march. It also sets how strongly the trench detail shades itself from the sun: 0 turns that off, 1 or more gives it in full."));
 
 		ImGui::SliderFloat(T(TKEY("parallax_shadow_strength"), "Parallax Shadow"), &settings.ParallaxShadowStrength, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttPss = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
+			ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost). It scales the trench detail's own sun shadow the same way: 0 turns that off too."));
 
 		ImGui::TreePop();
 	}
@@ -773,23 +773,19 @@ void SnowDeformation::DrawSettings()
 		// change: the map clears and the trench store re-injects what it
 		// remembers.
 		{
-			static const uint kMapDims[] = { 1024u, 2048u };
-			int dimIndex = settings.DeformMapResolution <= 1024u ? 0 : 1;
-			if (ImGui::Combo(T(TKEY("map_resolution"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0")) {
+			static const uint kMapDims[] = { 1024u, 2048u, 4096u };
+			int dimIndex = settings.DeformMapResolution <= 1024u ? 0 : (settings.DeformMapResolution >= 4096u ? 2 : 1);
+			if (ImGui::Combo(T(TKEY("map_resolution"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0" "4096\0")) {
 				settings.DeformMapResolution = kMapDims[dimIndex];
 				deformMapDimDirty = true;
 			}
 			if (auto _ttRes = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("map_resolution_tooltip"), "Resolution of the map every trench, melt mark and berm lives in. The main performance dial for this section: cost scales with the square of it, so each step down roughly quarters the trench passes' GPU time. Detail follows the Trenches range too - at the default range, 2048 gives roughly 12 cm per texel, 1024 roughly 24 cm (footprints soften but trails stay). Changing it clears the map; remembered trenches are re-injected from the store."));
+				ImGui::Text("%s", T(TKEY("map_resolution_tooltip"), "Resolution of the map every trench, melt mark and berm lives in. The main performance dial for this section: cost scales with the square of it, so each step down roughly quarters the trench passes' GPU time. Detail follows the Trenches range too - at the default range, 2048 gives roughly 12 cm per texel, 1024 roughly 24 cm (footprints soften but trails stay). 4096 halves the texel again and costs roughly four times 2048's trench-pass time and video memory; the High preset uses it. Changing it clears the map; remembered trenches are re-injected from the store."));
 		}
 
 		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 		if (auto _ttTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow and the road trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
-
-		ImGui::Checkbox(T(TKEY("trench_parallax"), "Screen-Space Parallax Trenches"), &settings.TrenchParallax);
-		if (auto _ttTrenchParallax = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_parallax_tooltip"), "An A/B against tessellated trenches on the ground snow. The snow is drawn as its untouched top, and in the snow's depth prepass each pixel follows its view ray down into the trenches and over the berms to the snow surface it meets. That point is what the snow's shading, the depth buffer and the blood and rune marks use, so feet and items still stand in the trench. Trench shadows still come from the carved shadow geometry, and road snow keeps its own trench patch. The first time it is turned on its shaders take a few seconds to compile, and the trenches stay tessellated until then."));
 
 		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
 			ClearTrenchStore("the Remember Trenches toggle");
@@ -820,7 +816,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_relief"), "Detail Relief"), &settings.TrenchDetailRelief, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttTdRelief = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height and slopes of the broken snow in and around trenches, on the ground and on roads: the clods, crumbs and slabs the light picks out. It eases off on thin snow and on trampled floors (Flattening). 1 = as authored, 0 = off."));
+			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches, on the ground and on roads. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening). 1 = as authored, 0 = off."));
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_roughness"), "Detail Roughness"), &settings.TrenchDetailRoughness, 0.3f, 1.5f, "%.2fx");
 		if (auto _ttTdRough = Util::HoverTooltipWrapper())
@@ -834,9 +830,14 @@ void SnowDeformation::DrawSettings()
 			const char* sets[] = { "By Snow Condition", "Powder", "Firm", "Wet" };
 			ImGui::Combo(T(TKEY("trench_detail_set"), "Detail Set"), &settings.TrenchDetailSet, sets, 4);
 			if (auto _ttTdSet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition picks wet in wet snow, powder in fresh snow and firm otherwise; the others force one set for comparison."));
-			if (settings.TrenchDetailSet == 0)
-				ImGui::TextDisabled("%s %s", T(TKEY("trench_detail_set_now"), "Now:"), sets[1 + TrenchDetailSlice()]);
+				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition blends them with the weather: wet as the snow turns wet, powder while it is fresh, firm once it has settled, each fading into the next. The others force one set for comparison."));
+			if (settings.TrenchDetailSet == 0) {
+				const float3 blend = TrenchDetailBlend();
+				if (blend.z > 0.005f)
+					ImGui::TextDisabled("%s %s %.0f%%, %s %.0f%%", T(TKEY("trench_detail_set_now"), "Now:"), sets[1 + int(blend.x)], 100.0f * (1.0f - blend.z), sets[1 + int(blend.y)], 100.0f * blend.z);
+				else
+					ImGui::TextDisabled("%s %s", T(TKEY("trench_detail_set_now"), "Now:"), sets[1 + int(blend.x)]);
+			}
 		}
 #if !SNOW_ALPHA_BUILD
 		ImGui::Checkbox(T(TKEY("trench_detail_view"), "Detail View"), &debugTrenchDetailView);
@@ -1672,17 +1673,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("land_recolor_lum_lo"), "Land Snow Brightness Cut"), &landRecolorLumLo, 0.2f, 0.8f, "%.2f");
 			if (auto _ttLandRecolorLum = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("land_recolor_lum_lo_tooltip"), "How bright a land snow texel must be before it takes this mod's snow. Lower recolors more of a snowy-rocks or grass-snow texture; higher keeps more of it."));
-			ImGui::SliderFloat(T(TKEY("trench_parallax_reach"), "Parallax Trench Reach"), &trenchParallaxReach, 500.0f, 8000.0f, "%.0f");
-			if (auto _ttTrenchParallaxReach = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_parallax_reach_tooltip"), "How far from the camera Screen-Space Parallax Trenches runs, in units of view depth. The trenches flatten over the last fifth. 2600 is where tessellated trenches stop getting extra vertices."));
-			ImGui::Checkbox(T(TKEY("trench_parallax_view"), "Show Parallax Offset"), &trenchParallaxView);
-			if (auto _ttTrenchParallaxView = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_parallax_view_tooltip"), "Screen-Space Parallax Trenches only: paints the ground snow by how far the parallax moved each pixel's point across the ground, red at 4 units, yellow at 16, white at 64. Black is not moved."));
-			{
-				static constexpr const char* kStates[] = { "not compiled", "compiling", "ready", "failed" };
-				WrapTextF("  Screen-Space Parallax Trenches: %s, shaders %s", TrenchParallaxActive() ? "drawing" : (settings.TrenchParallax ? "waiting" : "off"),
-					kStates[std::clamp(trenchParallaxShaderState.load(std::memory_order_acquire), 0, 3)]);
-			}
 			WrapTextF("  %s", LandscapeSnowStatus().c_str());
 			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
 			if (auto _ttGroundLift = Util::HoverTooltipWrapper())
@@ -2115,7 +2105,9 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, wall slough %.2f", look.strength,
 					look.berm, look.lip, look.teeth, look.slough);
 				static const char* kDetailSets[] = { "powder", "firm", "wet" };
-				WrapTextF("Trench detail: %s set%s", kDetailSets[TrenchDetailSlice()], settings.TrenchDetailSet == 0 ? " (by the snow condition)" : " (forced)");
+				const float3 blend = TrenchDetailBlend();
+				WrapTextF("Trench detail%s: %s %.0f%%, %s %.0f%%", settings.TrenchDetailSet == 0 ? "" : " (forced)", kDetailSets[int(blend.x)], 100.0f * (1.0f - blend.z),
+					kDetailSets[int(blend.y)], 100.0f * blend.z);
 			}
 
 			ImGui::Checkbox(T(TKEY("climate_temperature_override_on"), "Override Temperature"), &debugClimateTemperatureOn);
@@ -2139,7 +2131,7 @@ void SnowDeformation::DrawSettings()
 				const char* views[] = { "Off", "Temperature", "Wetness", "Stickiness", "Firmness", "All (wet R, sticky G, firm B)" };
 				ImGui::Combo(T(TKEY("condition_view"), "Snow Condition View"), &debugConditionView, views, IM_ARRAYSIZE(views));
 				if (auto _ttView = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Roads and objects keep their look. Off while Screen-Space Parallax Trenches is on."));
+					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Roads and objects keep their look."));
 				if (debugConditionView > 0) {
 					static const char* kViewStates[] = { "starting", "compiling", "ready", "failed to compile" };
 					WrapTextF("View shader: %s", kViewStates[std::clamp(conditionViewShaderState.load(std::memory_order_acquire), 0, 3)]);
