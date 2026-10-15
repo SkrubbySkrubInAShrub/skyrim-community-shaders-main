@@ -454,9 +454,9 @@ SamplerState SnowSampler : register(s0);
 #ifdef PATCH
 #	define SNOW_RUNE_GLYPHS
 #endif
-#if defined(PSHADER) && defined(PATCH)
+#if defined(PSHADER) && (defined(PATCH) || defined(SNOW_OBJECT_PRINTS))
 // The patch's shading reads the noise hash table and the trench detail tiles,
-// as the ground's does.
+// as the ground's does; so does the drapes' print twin around a print.
 #	define SNOW_NOISE_TABLE
 #endif
 #if defined(PSHADER) && defined(SNOW_PATCH_DEFERRED)
@@ -2876,11 +2876,21 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 {
 	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
 	float3 shadePos = input.WorldPos;
-#ifdef PATCH
+#ifdef SNOW_OBJECT_PRINTS
+	// The print under this coat pixel, depth and slope, at the coat's own point.
+	// The coat has already stepped off the print's bare core (Masks.y), so what
+	// shades here is the rim. Its slope, shadows and detail are a
+	// heightfield's: tops only.
+	const float3 printAt = float3(input.worldXY, input.WorldPos.z + ShellCameraPosAdjust.z);
+	const float3 print = SnowPrints::DepthSlope(printAt);
+	const float printTop = smoothstep(0.5, 0.75, input.geoNz);
+#endif
+#if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
 	// Trench detail tiles by parallax occlusion, the ground's own: the mask
 	// across the trench profile at the sheet point, the view ray marched
 	// through the detail heights and the point it meets shaded. Fire marks wear
-	// the wet set, shock and Force marks the powder set, as on the ground.
+	// the wet set, shock and Force marks the powder set, as on the ground. The
+	// print twin runs it across a print's rim.
 #	ifdef SNOW_PATCH_DEFERRED
 	const float detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 #	else
@@ -2895,11 +2905,23 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	const float2 detailPlane = -normalWS.xy / max(normalWS.z, 0.1);
 	[branch] if (detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
+#	ifdef PATCH
 		detailMask = TrenchDetailMask(input.pixelDeform, BermFieldPair(input.trenchGridLocal), TrenchDetailCoverage) * detailFade;
+#	else
+		// No berm on an object: the depth as a share of a full print stands in
+		// for both the carve and its short blur.
+		const float printRel = print.x / max(SharedData::snowDeformationSettings.PrintFullDepth, 0.001);
+		detailMask = TrenchDetailMask(printRel, float2(0.0, printRel), TrenchDetailCoverage) * detailFade * printTop;
+#	endif
 		[branch] if (detailMask > 0.001)
 		{
+#	ifdef PATCH
 			detailMarks = smoothstep(kSpellMarkStart, 0.15, SampleDetailMarks(input.trenchGridLocal));
 			detailRelief = TrenchDetailRelief * detailMask * max(saturate(PatchSkinDepth(input.worldXY).x / 10.0), detailMarks.x) * TrampleDetailScale(input.worldXY, input.pixelDeform);
+#	else
+			// A dusting: the patch's thin-cover rule at the dent's depth.
+			detailRelief = TrenchDetailRelief * detailMask * saturate(kPrintDentDepth / 10.0);
+#	endif
 			trenchTaps = TrenchDetailTapsAt(input.worldXY);
 		}
 	}
@@ -3027,7 +3049,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// The surface without the trench detail: the snow maps' frame and march
 	// key on it, as on the geometric normal under a normal map.
 	const float3 frameNormalWS = normalWS;
-#ifdef PATCH
+#if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
 	// The detail's slopes at the shaded point, scaled with its height: the
 	// ground's gradient, so the two agree where they meet.
 	[branch] if (detailRelief > 0.001)
@@ -3037,24 +3059,23 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	}
 #endif
 #ifdef SNOW_OBJECT_PRINTS
-	// The print under this coat pixel: depth and slope. The coat has already
-	// stepped off the print's bare core (Masks.y), so what shades here is the
-	// rim. It slopes into the print, the dent (-kPrintDentDepth x depth) added
-	// to the surface's slope as the patch adds its detail; a slope is a
-	// heightfield's, so tops only.
-	const float3 print = SnowPrints::DepthSlope(float3(worldXY, snowWorldZAbs));
-	[branch] if (input.geoNz > 0.5 && any(abs(print.yz) > 1e-4))
+	// The rim slopes into the print: the dent (-kPrintDentDepth x depth) added
+	// to the surface's slope as the patch adds its detail.
+	[branch] if (printTop > 0.0 && any(abs(print.yz) > 1e-4))
 	{
-		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) - kPrintDentDepth * smoothstep(0.5, 0.75, input.geoNz) * print.yz;
+		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) - kPrintDentDepth * printTop * print.yz;
 		normalWS = normalize(float3(-g, 1.0));
 	}
-	// The dent shadows its own rim at a low sun, as strong as the snow's
-	// parallax shadow (Parallax Shadow). Taken before the lighting's state is
-	// live, which saves four registers.
+	// The dent and the detail shadow the rim at a low sun, as strong as the
+	// snow's parallax shadow (Parallax Shadow). Taken before the lighting's
+	// state is live, which saves registers.
 	float printLit = 1.0;
-	[branch] if (input.geoNz > 0.5 && print.x > 0.005 && SnowParallax.y > 0.001)
-		printLit = SnowPrints::DentSunShadow(float3(worldXY, snowWorldZAbs), SharedData::DirLightDirection.xyz, -frameNormalWS.xy / max(frameNormalWS.z, 0.1),
-			kPrintDentDepth, SnowParallax.y * smoothstep(0.5, 0.75, input.geoNz), screenNoise);
+	[branch] if (printTop > 0.0 && print.x > 0.005 && SnowParallax.y > 0.001)
+		printLit = SnowPrints::DentSunShadow(printAt, SharedData::DirLightDirection.xyz, -frameNormalWS.xy / max(frameNormalWS.z, 0.1), kPrintDentDepth,
+			SnowParallax.y * printTop, screenNoise);
+	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001)
+		printLit *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, SharedData::DirLightDirection.xyz, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise),
+			TrenchDetailShadow);
 #endif
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
@@ -3225,7 +3246,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
-#ifdef PATCH
+#if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
 	// Trench detail: its roughness crank over the mask.
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 #endif
@@ -3541,7 +3562,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	r.dbgMarchRan = dbgMarchRan;
 	r.landVertexAO = landVertexAO;
 	r.snowRoughness = snowRoughness;
-#ifdef PATCH
+#if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
 	r.detailMask = detailMask;
 #else
 	r.detailMask = 0.0;
