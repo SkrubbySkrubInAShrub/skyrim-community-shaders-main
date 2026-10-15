@@ -239,9 +239,6 @@ void MarchCachedHeights(float2 a_gridLocal, float2 a_stepDir, bool a_near, out f
 // outside the window a tap can still reach in, so only far outside skips.
 bool ShellUntouched(float2 gridLocal)
 {
-#ifdef SNOW_UNTOUCHED_SKIP_OFF
-	return false;
-#else
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
 	float2 pad = 8.0 * DeformInvWorldSize;
 	bool farOutside = any(uv < -pad) || any(uv > 1.0 + pad);
@@ -250,7 +247,6 @@ bool ShellUntouched(float2 gridLocal)
 	bool zeroTile = UntouchedTiles.Load(int3(((logical + DeformMapOrigin) & (int2(dims) - 1)) >> 3, 0)) != 0;
 	bool inside = all(uv >= 0.0) && all(uv <= 1.0);
 	return BermBakeActive > 0.5 && (farOutside || (inside && zeroTile));
-#endif
 }
 
 // Trench detail tile: 64 units on 1024 texels, its height stored as 0.5 + h / 6
@@ -885,9 +881,7 @@ float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, flo
 	{
 		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
 		// Outside the band the notch adds a signed zero.
-#ifndef SNOW_TEETH_UNGATED
 		[branch] if (rimBand > 0.0 && depthT > 0.0)
-#endif
 		{
 			float notch = (SnowDetailNoise(worldXY / 37.0) - 0.5) * 0.8 +
 			              (SnowDetailNoise(worldXY / 8.0) - 0.5) * 1.2;

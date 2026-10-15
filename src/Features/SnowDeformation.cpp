@@ -694,7 +694,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
-	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
+	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
 	                           (LandBlendActive() ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (LandRecolorActive() && shellSnowRmaosSRV ? 512u : 0u);
 	// Water raster frame (t104): the window's min corner, texel size, dim.
 	data.WaterWindowDim = 0.0f;
@@ -2167,11 +2167,9 @@ void SnowDeformation::ClearShaderCache()
 			attrPS->Release();
 		attrPS = nullptr;
 	}
-	for (auto& earlyPS : shellPSPrepassEarly) {
-		if (earlyPS)
-			earlyPS->Release();
-		earlyPS = nullptr;
-	}
+	if (shellPSPrepassEarly)
+		shellPSPrepassEarly->Release();
+	shellPSPrepassEarly = nullptr;
 	if (shellPSEarlyResolve)
 		shellPSEarlyResolve->Release();
 	shellPSEarlyResolve = nullptr;
@@ -2271,9 +2269,6 @@ void SnowDeformation::ClearShaderCache()
 	if (staticsPSPrepassNoDepth)
 		staticsPSPrepassNoDepth->Release();
 	staticsPSPrepassNoDepth = nullptr;
-	if (staticsPSPrepassKeepHidden)
-		staticsPSPrepassKeepHidden->Release();
-	staticsPSPrepassKeepHidden = nullptr;
 	if (staticsPSDrapeNoDepth)
 		staticsPSDrapeNoDepth->Release();
 	staticsPSDrapeNoDepth = nullptr;

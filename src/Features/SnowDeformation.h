@@ -1503,8 +1503,8 @@ public:
 	ID3D11ComputeShader* GetShellTerrainCutCS();
 	/** @brief Rebuilds shellTerrainWet when its inputs changed. Call after the water cover pass, before any landscape-shell pass. */
 	void UpdateTerrainWet();
-	/** @brief SampleTerrain's t21: the cut window while a_cut and it is current, else the raw window. */
-	ID3D11ShaderResourceView* TerrainWetSRV(bool a_cut) const;
+	/** @brief SampleTerrain's t21: the cut window while it is current, else the raw window. */
+	ID3D11ShaderResourceView* TerrainWetSRV() const;
 	/** @brief The inputs shellTerrainWet was cut from: terrain version, water window version, water SRV. */
 	uint64_t shellTerrainWetKey[3] = {};
 	bool shellTerrainWetValid = false;
@@ -1549,8 +1549,6 @@ public:
 	ID3D11ComputeShader* terrainFineCS = nullptr;
 	ID3D11ComputeShader* GetTerrainFineCS();
 	void BuildTerrainFineWindow();
-	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
-	bool shellLandHeightDisabled = false;
 	/** @brief The ground snow's and the patch's deformation tessellation keep no more segments than an edge's projected length holds at this many display pixels each. */
 	static constexpr float kShellTessTargetPx = 16.0f;
 	/** @brief kShellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
@@ -1605,8 +1603,8 @@ public:
 		float TrenchDetailRelief;
 		float TrenchDetailRoughness;
 
-		/** @brief Terrain height follows the landscape mesh's triangulation instead of bilinear, which averages the two and sits below both. Claims the retired BorderTrampledFade slot, so the buffer layout is untouched. */
-		float ShellTriHeight;
+		/** @brief Layout keeper, uploaded as 0. */
+		float LayoutKeeper5;
 		/** @brief Trench detail: the coverage cut across the trench profile (Settings::TrenchDetailCoverage). Claims the retired Border Fade keeper. */
 		float TrenchDetailCoverage;
 		/** @brief Cull replayed landscape triangles whose depth has reached the -8 bare floor everywhere. Claims the retired SeamFadeUnused slot, so the buffer layout is untouched. */
@@ -1615,7 +1613,7 @@ public:
 		float SkinFadeStart;
 
 		float SkinFadeEnd;
-		/** @brief The object height field's mode: 0 = unbound, 0.5 = bound with the ground lift off (shelter and shadow reads only), kObjectLiftCap = bound and lifting. Never read as a magnitude. */
+		/** @brief The object field maps: 0 = unbound, 0.5 = bound (shelter and shadow reads). Never read as a magnitude. */
 		float ObjectLiftCap;
 		float2 ObjectHeightCenter;
 
@@ -1687,7 +1685,7 @@ public:
 		float4 CrustLook2;
 		/** @brief xy layout keepers (the retired dust switch and trench floor), uploaded as 0; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); yz = the land-blend contest's depth bonus and carve penalty; w = trench wall slough, 0-1: how far CarveProfile takes the berm field's short blur over the carve (Snow Climate). Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x spare, uploaded as 0; yz = the land-blend contest's depth bonus and carve penalty; w = trench wall slough, 0-1: how far CarveProfile takes the berm field's short blur over the carve (Snow Climate). Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z spare (the retired berm clods), uploaded as 0, w = GetAccumulationDepthScale(). xy consumed inside CarveProfile. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -1697,7 +1695,7 @@ public:
 
 		/** @brief Toroidal deformation-map addressing: physical position of logical texel (0,0). Every DeformationMap Load adds this and masks by dim-1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 DeformMapOrigin;
-		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch), bit 2 = land-exact height off; y: bit 0 = road tops in the skin-depth raster this frame. Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch); y: bit 0 = road tops in the skin-depth raster this frame. Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 ShellFlags;
 		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
 		float4 FineWindow;
@@ -1800,9 +1798,8 @@ public:
 	Texture2D* shellDeferredAttr[3] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
 	bool EnsureDeferredResources();
-	/** @brief The deferred PS, and the legacy bits it was compiled with. */
+	/** @brief The deferred PS. */
 	ID3D11PixelShader* shellPSDeferred = nullptr;
-	uint32_t shellPSDeferredLegacyBits = 0;
 	ID3D11PixelShader* GetShellPSDeferred();
 	/** @brief The deferred PS with SNOW_CONDITION_VIEW (tessellated trenches only), compiled off the render thread the first time the view is switched on. */
 	ID3D11PixelShader* shellPSDeferredConditionView = nullptr;
@@ -1889,9 +1886,9 @@ public:
 	Texture2D* shellEarlyMarks = nullptr;
 	bool EnsureEarlyPrepassResources();
 	void DrawShellEarlyPrepass();
-	/** @brief SNOW_PREPASS_EARLY prepass PS [plain, hidden kept]. */
-	ID3D11PixelShader* shellPSPrepassEarly[2] = {};
-	ID3D11PixelShader* GetShellPSPrepassEarly(bool a_keepHidden);
+	/** @brief SNOW_PREPASS_EARLY prepass PS. */
+	ID3D11PixelShader* shellPSPrepassEarly = nullptr;
+	ID3D11PixelShader* GetShellPSPrepassEarly();
 
 	ID3D11PixelShader* shellPSEarlyResolve = nullptr;
 	ID3D11PixelShader* GetShellPSEarlyResolve();
@@ -1933,8 +1930,6 @@ public:
 	ID3D11PixelShader* GetShellFillPSClaim();
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);
 
-	/** @brief A/B, runtime-only: the prepass runs the alpha cut on fragments already behind the scene (SNOW_PREPASS_KEEP_HIDDEN). */
-	bool shellPrepassExitOff = false;
 	ID3D11VertexShader* GetShellFillVS();
 	ID3D11PixelShader* GetShellFillPS();
 	ID3D11VertexShader* shellFillVS = nullptr;
@@ -2042,12 +2037,6 @@ public:
 	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11ComputeShader* GetDepthSyncCS();
 	ID3D11ComputeShader* depthSyncCS = nullptr;
-
-	/** @brief A/Bs restoring pre-change shading-PS code (DevBench psLegacy): 1 rim teeth ungated, 4 no untouched-tile skip. Rekeys the deferred PS. */
-	uint32_t shellPSLegacyBits = 0;
-
-	/** @brief A/B measurement: returns terrain height to plain bilinear, which averages the mesh's two triangulations and so sits below both. Turning it on should bring back the poke-through on steep ground. Runtime-only. */
-	bool shellBilinearHeight = false;
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
@@ -2728,8 +2717,6 @@ public:
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
 
-	/** @brief Raised snow more than this far above the terrain does not lift the height field (buildings must not become snow tents). Also doubles as the shader-side field-enable gate. */
-	static constexpr float kObjectLiftCap = 150.0f;
 	/** @brief Peel tolerance: surfaces within this many units below a peeled layer's top belong to that layer's plane. Was the "Plane Merge Height" slider, retired 2026-09-06 at its default. */
 	static constexpr float kPeelTol = 8.0f;
 	/** @brief Cone seed rim threshold (world units). Was "Plane Split Step", retired 2026-09-10 at its default. */
@@ -2744,7 +2731,7 @@ public:
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
-	/** @brief Processed maps the shell samples (t4/t5): the base snow-height field (the terrain window's bilinear height) and the smooth shelter/suppression mask, plus the object cone chains' ping-pong scratch. */
+	/** @brief Processed maps: CombineCS's OutA, never written (its size sets the dispatch and FieldDims.z), and the smooth shelter/suppression mask the shell samples (t5), plus the object cone chains' ping-pong scratch. */
 	Texture2D* heightTopFiltered = nullptr;
 	Texture2D* heightBottomFiltered = nullptr;
 	Texture2D* heightScratch = nullptr;
@@ -2779,8 +2766,6 @@ public:
 	void ApplyQualityPreset(int a_preset);
 	/** @brief The preset every lever currently matches, or -1 (custom). */
 	int MatchingQualityPreset() const;
-	/** @brief Debugging Options A/B: the landscape shell rises onto captured object tops again (the lift that met the retired object shell). Off, it keeps its own height through objects; the shelter mask and the buried-shadow discriminator still read the field. */
-	bool groundLiftDebug = false;
 	// ---- Height-field probe (Debugging Options): the six object maps read
 	// back at the player's texel every frame, so a report carries numbers
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.
@@ -2900,8 +2885,8 @@ public:
 		/** @brief tan(ShelterDriftAngle), always > 0: sizes the enclosure disc. */
 		float ShelterConeTan;
 
-		/** @brief CombineCS writes the base field (ObjectHeights, t4) only for the ground-lift debug view, its sole reader. */
-		uint WriteBaseField;
+		/** @brief Layout keeper, uploaded as 0. */
+		uint keeper;
 		uint pad0;
 		uint pad1;
 		uint pad2;
@@ -3350,16 +3335,11 @@ public:
 	ID3D11PixelShader* staticsPSNoDepth = nullptr;
 	/** @brief Depth-prepass twin of the no-export shader (SNOW_STATICS_DEPTH_PREPASS): the alpha cut with no colour and no export. Non-carving skins draw once with it into a private copy of the scene depth, then once with the shipping shader under EQUAL against it, so hardware early-Z admits exactly the pixels the prepass wrote; carving draws keep their own export and LESS_EQUAL in the shading loop, since a shader-computed depth cannot be matched against a second compile of itself; the private depth is then written back. Bit-identical by construction: both passes run the same raster path. */
 	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
-	/** @brief SNOW_STATICS_KEEP_HIDDEN twin of the prepass shader, without the hidden-quad exit (A/B, compiled on first use). */
-	ID3D11PixelShader* staticsPSPrepassKeepHidden = nullptr;
 	/** @brief SNOW_STATICS_DRAPE twins of the no-export shading and prepass shaders: the values FillSkinDrawCB gives every drape (S4) draw, and the debug views off, folded in. Chosen per draw for drapes; a compile failure keeps the general pair. */
 	ID3D11PixelShader* staticsPSDrapeNoDepth = nullptr;
 	ID3D11PixelShader* staticsPSDrapePrepass = nullptr;
 	/** @brief The drapes' print twin (SNOW_OBJECT_PRINTS): the no-export drape PS plus the rim around a bare print. Chosen per draw where the print map holds prints under it; a compile failure keeps those drapes on staticsPSDrapeNoDepth. */
 	ID3D11PixelShader* staticsPSDrapePrintsNoDepth = nullptr;
-	ID3D11PixelShader* GetStaticsPSPrepassKeepHidden();
-	/** @brief A/B, runtime-only: the skins' prepass runs the alpha cut on quads already behind the main depth. */
-	bool staticsPrepassExitOff = false;
 	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */
 	struct alignas(16) SkinCullBound
 	{
@@ -3565,8 +3545,6 @@ public:
 	std::vector<uint8_t> contactPaletteBuilt;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
 	bool debugContactView = false;
-	/** @brief Runtime A/B (ShellCB CompactLook.x): off = the landscape shell ends at the drawn waterline. */
-	bool debugWaterCutDisabled = false;
 	/** @brief Runtime-only: half-extent of the field view's crop around the player, world units (192 = a body, 1536 = the whole field). */
 	float debugContactViewHalf = 192.0f;
 	/** @brief Runtime-only: index of the one skinned geometry the actor contact pass draws (-1 = all), and its name. */
@@ -3672,8 +3650,8 @@ public:
 	void LandscapeSnowRestore();
 	/** @brief Rebuilds the landscape's ShellCB copy and SRV set from the live fields; false while one is missing or the footprint holds no snow. */
 	bool LandscapeSnowRefresh();
-	/** @brief The surface's SRV set t0-t58 (the slots ShellVertexZ and the landscape hull read) for a_cb, from the fields as they stand now. */
-	void LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderResourceView** a_srvs);
+	/** @brief The surface's SRV set t0-t58 (the slots ShellVertexZ and the landscape hull read), from the fields as they stand now. */
+	void LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs);
 	/** @brief The ground snow can draw this frame: the replay's shaders are ready and this frame's depth prepass has been captured. Counts the frames that wanted it and drew no ground. */
 	bool LandscapeShadeReady();
 	/** @brief The land-blended edges (LANDSCAPE-SNOW-PLAN Phase 5), on whenever the feature is: wherever the land is mixed, its own height blend decides snow or ground (Lighting writes its snow odds into Masks.y); trenches reach the ground; the window bake keeps snow depth only where the land is nearly all snow. */
@@ -3786,8 +3764,6 @@ public:
 	float debugMeltEmitterRadius = 100.0f;
 	/** @brief Emitter accumulation rate in depth units per second at the core. */
 	float debugMeltEmitterRate = 0.50f;
-	/** @brief Runtime-only: land-UV / 256-unit / cell gridlines on terrain, for measuring the landscape texture's world-space repeat against kSnowUVTile. */
-	bool debugTilingRuler = false;
 	/** @brief Tints classified projected-snow pixels magenta (DebugTerrainOverlay bit 4) so the SnowProjectedIsSnow bit is verifiable in-game without a capture. */
 	bool debugProjSnowView = false;
 	/** @brief DebugTerrainOverlay bit 32: the Lighting recolor paints its real blend weight as a grey ramp and projected draws it does not classify in red. Hold against the object snow debug view's Projected mask mode (R = the skin's reconstruction). */

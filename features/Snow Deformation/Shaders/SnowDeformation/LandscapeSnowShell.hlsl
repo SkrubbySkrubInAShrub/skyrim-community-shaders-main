@@ -50,13 +50,10 @@ bool LssBeyondSeam(float2 lo, float2 hi)
 
 // Fully bare: the -8 floor over every texel the triangle reaches and no land
 // snow there (the land's snow keeps its film wherever it is painted, under
-// water too); corners and centroid for the object lift.
-bool LssFullyBare(float2 a, float2 b, float2 c, float2 lo, float2 hi)
+// water too).
+bool LssFullyBare(float2 lo, float2 hi)
 {
-	bool bare = ShellTerrainAllBare(lo, hi) && LandRectNoSnow(lo, hi);
-	[branch] if (bare && ObjectLiftCap > 1.0)
-		bare = !(ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) || ShellObjectLiftsAt((a + b + c) / 3.0));
-	return bare;
+	return ShellTerrainAllBare(lo, hi) && LandRectNoSnow(lo, hi);
 }
 
 // Outside one camera clip plane from the land's 32-unit submerge floor up to
@@ -98,7 +95,7 @@ LSS_Const LSS_PatchConst(InputPatch<LSS_CP, 3> p)
 		culled = LssOffView(g0, g1, g2);
 	// ShellTerrainAllBare reads at most 4x4 texels.
 	[branch] if (!culled && ShellCullBare > 0.5 && all(hi - lo <= 2.0 * TerrainTexelSize))
-		culled = LssFullyBare(g0.xy, g1.xy, g2.xy, lo, hi);
+		culled = LssFullyBare(lo, hi);
 	[branch] if (!culled)
 	{
 		o.Edges[0] = 1.0;

@@ -1461,7 +1461,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 #		if defined(SNOW_DEFORMATION)
-	SnowLighting::DebugLandOverlay(baseColor.xyz, input.WorldPosition.xy, snowState.landSnowness, uvOriginal);
+	SnowLighting::DebugLandOverlay(baseColor.xyz, input.WorldPosition.xy, snowState.landSnowness);
 #		endif
 #	else  // Non-landscape code
 	float4 rawBaseColor;

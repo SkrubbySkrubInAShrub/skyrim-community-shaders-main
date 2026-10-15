@@ -159,13 +159,11 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		}
 	};
 	const float keyFloats[] = { a_cb.DeformInvWorldSize, a_cb.UndulationAmp, a_cb.UndulationScale, settings.BermHeight, settings.RimLip,
-		a_cb.ShellTriHeight, a_cb.BermBakeActive, a_cb.ObjectLiftCap > 0.0f ? 1.0f : 0.0f, a_cb.ExclusionFieldWindow.w, a_cb.CompactLook.x, a_cb.FineWindow.z,
+		a_cb.BermBakeActive, a_cb.ObjectLiftCap > 0.0f ? 1.0f : 0.0f, a_cb.ExclusionFieldWindow.w, a_cb.FineWindow.z,
 		a_cb.ObjectHeightHalfExtent, a_cb.FieldDims.x, a_cb.FieldDims.y, a_cb.FieldDims.z, a_cb.FieldDims.w,
 		settings.FreshSnowSoftness, debugFreshnessOverride, settings.SnowClimateStrength, debugClimateTemperatureOn ? debugClimateTemperature : -1000.0f,
 		debugClimateShareOverride, debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride };
 	mix(keyFloats, sizeof(keyFloats));
-	const int landExactOff = a_cb.ShellFlags.x & 4;
-	mix(&landExactOff, sizeof(landExactOff));
 	mix(&dim, sizeof(dim));
 	const bool keyChanged = key != marchCacheKey;
 	marchCacheKey = key;
@@ -220,7 +218,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 
 	// Ground, near and far: SnowShell.hlsl's own bindings for what its taps read.
 	context->CSSetConstantBuffers(0, 3, cbs);
-	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV(a_cb.CompactLook.x > 0.5f);
+	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	ID3D11ShaderResourceView* bottomsSRV = heightBottomFiltered->srv.get();
 	ID3D11ShaderResourceView* exclusionSRV = exclusionFieldTexture ? exclusionFieldTexture->srv.get() : nullptr;

@@ -1643,20 +1643,6 @@ void SnowDeformation::ReleasePatchDeferred()
 	patchConditionViewTried = false;
 }
 
-ID3D11PixelShader* SnowDeformation::GetStaticsPSPrepassKeepHidden()
-{
-	if (!staticsPSPrepassKeepHidden) {
-		const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
-		const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", ehfDefine, iblDefine,
-			"SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_KEEP_HIDDEN"));
-		if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSPrepassKeepHidden)))
-			Util::SetResourceName(staticsPSPrepassKeepHidden, "SnowDeformation::StaticsShellPS Prepass KeepHidden");
-	}
-	return staticsPSPrepassKeepHidden;
-}
-
 bool SnowDeformation::EnsureStaticsShaders()
 {
 	if (staticsVS && staticsPS)
@@ -2150,7 +2136,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ShelterMaxHeight = std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
 	processData.ShelterBandHeight = std::max(kShelterBandHeight, processData.ShelterMaxHeight);
 	processData.ShelterConeTan = std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f));
-	processData.WriteBaseField = groundLiftDebug ? 1u : 0u;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -4089,10 +4074,6 @@ void SnowDeformation::DrawCapturedStatics()
 	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
 	uint32_t skinParity = 0;
 
-	ID3D11PixelShader* prepassPS = staticsPrepassExitOff ? GetStaticsPSPrepassKeepHidden() : nullptr;
-	if (!prepassPS)
-		prepassPS = staticsPSPrepassNoDepth;
-
 	auto drawSkins = [&](bool a_prepass) {
 		boundStaticsPS = nullptr;
 		uint32_t drawIndex = 0;
@@ -4149,7 +4130,7 @@ void SnowDeformation::DrawCapturedStatics()
 			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth : staticsPSDrapeNoDepth;
 			ID3D11PixelShader* wantPS = nullptr;
 			if (a_prepass)
-				wantPS = (drapePS && !staticsPrepassExitOff && staticsPSDrapePrepass) ? staticsPSDrapePrepass : prepassPS;
+				wantPS = (drapePS && staticsPSDrapePrepass) ? staticsPSDrapePrepass : staticsPSPrepassNoDepth;
 			else if (!needsDepth && staticsPSNoDepth)
 				wantPS = (drapePS && drapeShadePS) ? drapeShadePS : staticsPSNoDepth;
 			else

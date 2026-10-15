@@ -133,14 +133,13 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float TrenchDetailRelief;     // detail tile height and slopes x this; 0 = off
 	float TrenchDetailRoughness;  // roughness x this over the detail mask
 
-	float ShellTriHeight;        // was BorderTrampledFade: mesh-matched terrain height
+	float LayoutKeeper5;         // layout keeper, 0
 	float TrenchDetailCoverage;  // TrenchDetailMask cut: 0 floor .. 1 past the rim .. 2 berm
 	float ShellCullBare;         // was SeamFadeUnused: cull fully-bare triangles
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
-	// Object height field mode: 0 = unbound, 0.5 = bound with the ground
-	// lift off, >1 = lifting. A gate, never a magnitude.
+	// Object field maps: 0 = unbound, 0.5 = bound. A gate, never a magnitude.
 	float ObjectLiftCap;
 	float2 ObjectHeightCenter;
 
@@ -225,9 +224,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// xy layout keepers; zw = sun cascades' REAL atlas slices (the shared
 	// atlas moves them with the active-light set).
 	float4 BorderStyle;
-	// x = water cut (1 = the sheet ends at the drawn waterline); yz = the land
-	// contest's depth bonus and carve penalty; w = trench wall slough (Snow
-	// Climate, CarveProfile).
+	// x spare; yz = the land contest's depth bonus and carve penalty; w =
+	// trench wall slough (Snow Climate, CarveProfile).
 	float4 CompactLook;
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
@@ -240,8 +238,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// Toroidal deformation-map addressing: physical position of logical
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
-	// x bit 0 horizon march, bit 2 land-exact height OFF; y bit 0 road tops
-	// in the skin-depth raster. Mirror in SnowDeformation.h.
+	// x bit 0 horizon march; y bit 0 road tops in the skin-depth raster.
+	// Mirror in SnowDeformation.h.
 	int2 ShellFlags;
 
 	// Land-exact height layer: xy = GridOrigin - fine window origin (world),
@@ -299,15 +297,15 @@ static const float kWaterTexelDepth = 8.0;
 
 // A texel whose ground lies under drawn water reads as a non-snow class
 // (-8), so the shoreline is a class border: same noise, smoothing, dither
-// and rim as any texture seam. Callers gate on CompactLook.x.
+// and rim as any texture seam.
 float3 WaterBareTexel(float3 texel, int2 t)
 {
 	float water = WaterWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0));
 	texel.y = texel.x < water - kWaterTexelDepth ? min(texel.y, -8.0) : texel.y;
 	return texel;
 }
-// TerrainWindow with WaterBareTexel already applied (TerrainCutCS), or the
-// raw window while the cut is off (CompactLook.x): SampleTerrain's taps.
+// TerrainWindow with WaterBareTexel already applied (TerrainCutCS; the raw
+// window until the cut has run): SampleTerrain's taps.
 Texture2D<float4> TerrainWindowWet : register(t58);
 // Land-blended edges: 1 - the land's snow-texture weight per window texel;
 // unbound reads 0, all snow.
@@ -334,15 +332,11 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
-// Processed top-down object maps: the slope-limited snow-height FIELD (world
-// Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
-// no snow beneath walkways, roofs and bridges).
-Texture2D<float> ObjectHeights : register(t4);
+// Processed top-down object map: the SUPPRESSION mask (1 under floating
+// structures; no snow beneath walkways, roofs and bridges).
 Texture2D<float2> ObjectBottoms : register(t5);
 // Raw object tops (persistence-scrolled) and this frame's skin-depth raster,
-// shared with the trench patch: where the shell rides a captured object, its
-// layer wears the object's own skin depth instead of the landscape class
-// depth.
+// shared with the trench patch: the road reads and the buried-caster test.
 Texture2D<float> ObjectTopsRaw : register(t11);
 // x = layer depth (all this shell reads), y = the patch's road-heightfield bit.
 Texture2D<float2> ObjectSkinDepthMap : register(t12);
@@ -541,7 +535,7 @@ float3 SampleTerrain(float2 gridLocal)
 	// Outside the fine window, or over missing data, the 128-texel height
 	// below stands, so nothing changes at the seam.
 	float fine = -100000.0;
-	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0)
+	[branch] if (FineWindow.z > 0.5)
 		fine = LandHeightFine(gridLocal);
 	// Height follows the mesh's triangulation; depth and coverage stay bilinear,
 	// being material blends rather than geometry. Skipped where any corner is the
@@ -550,7 +544,7 @@ float3 SampleTerrain(float2 gridLocal)
 	// gap instead.
 	[branch] if (fine > -50000.0)
 		result.x = fine;
-	else if (ShellTriHeight > 0.5 && min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
+	else if (min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
 		result.x = TriangulatedHeight(s00.x, s10.x, s01.x, s11.x, f);
 	// the accumulated layer scales depth HERE, at the one point
 	// every reader funnels through, so geometry, shading, the berm gate and the
@@ -559,23 +553,6 @@ float3 SampleTerrain(float2 gridLocal)
 	// border, not snow, and scaling it would move class edges as it snowed.
 	result.y = max(result.y, 0.0) * RimStyle.w + min(result.y, 0.0);
 	return result;
-}
-
-// Height as the terrain window's plain bilinear reads it: the object field's
-// own base (HeightMapProcessCS SampleTerrainHeight), so a lift measured
-// against it is the field's excess and nothing else.
-float SampleTerrainBilinearHeight(float2 gridLocal)
-{
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-	float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 // Bilinear helper at fractional texel coordinates (Load-based).
@@ -701,25 +678,6 @@ float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
 	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 }
 
-float SampleObjectHeight(float2 worldXY)
-{
-	float2 dims;
-	bool valid;
-	float2 t = ObjectMapTexel(worldXY, dims, valid);
-	if (!valid)
-		return -100000.0;
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float s00 = ObjectHeights.Load(int3(t0.x, t0.y, 0));
-	float s10 = ObjectHeights.Load(int3(t1.x, t0.y, 0));
-	float s01 = ObjectHeights.Load(int3(t0.x, t1.y, 0));
-	float s11 = ObjectHeights.Load(int3(t1.x, t1.y, 0));
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
 // Fully-bare test. ShellSurfaceZ's depth is rampDepth + (-8) * bare, so -8 is
 // the floor: it is what ground reaches when EVERY layer under it is a non-snow
 // class, and no blend can go below it. Anything above -8 is still on the ramp
@@ -727,17 +685,6 @@ float SampleObjectHeight(float2 worldXY)
 // transition and leave a gap where the layer rises out of the ground - so the
 // test is against the floor and not a threshold part-way up.
 static const float kBareDepthFloor = -7.9;
-
-// The one thing in ShellSurfaceZ that can raise depth back off the floor:
-//   float liftForce = smoothstep(6.0, 20.0, field - terrainHeight);
-//   rampDepth = max(rampDepth, liftForce * 6.0);
-// so a patch is only safe to cull while the object field stands less than 6
-// units proud. Tested with margin.
-//
-// NOT a test for "the field has data": t4 is terrain run through the cone
-// transform, so it holds a real height across the whole object window and a
-// data test vetoes every near patch - which is where the pixels are.
-static const float kBareLiftMargin = 2.0;
 
 // Conservative over the whole patch, which point sampling is NOT: the shell's
 // surface is the BILINEAR blend of the terrain texels, so a patch whose corners
@@ -774,16 +721,6 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 	}
 	return maxDepth <= kBareDepthFloor;
 }
-
-// Object-lift veto, sampled at corners and centre. The cone field is slope
-// limited and changes slowly, and the margin sits well under the 6 units where
-// the lift actually starts, so a few taps carry it.
-bool ShellObjectLiftsAt(float2 gridLocal)
-{
-	float field = SampleObjectHeight(GridOrigin + gridLocal);
-	return field > -50000.0 && field - SampleTerrainBilinearHeight(gridLocal) > kBareLiftMargin;
-}
-
 
 // SampleExclusionField lives in SnowFields.hlsli.
 
@@ -822,46 +759,8 @@ float2 SampleExclusionMask(float2 worldXY)
 	return max(nearMask, SampleExclusionField(worldXY));
 }
 
-// Mirrors of SnowDeformation.h kNoRoadTop / SnowStaticsShell.hlsl kRoadOwnsTop.
+// Mirror of SnowDeformation.h kNoRoadTop.
 static const float kNoRoadTop = -1000000.0;
-static const float kRoadOwnsTop = 8.0;
-
-// The object-layer depth cap: the skin depth (max of 4 texels; the raster is
-// sentinel-free, 0 where nothing wrote) where a captured object covers the
-// texel, or a huge no-cap value where none does or the window does not reach.
-//
-// Road-owned columns cap to ZERO: the trench patch owns road snow outright
-// (ROAD-HEIGHTFIELD-PLAN), and a shell layer drawn there at its own class
-// depth is a second surface through one snow layer - Josef's depth sweep
-// caught it slicing across the patch's trench walls as a bright ledge
-// wherever the two depths disagree. Cap 0 takes the shell's existing
-// step-aside path (coverage dies with the depth), which the patch then fills
-// by construction. ALL FOUR texels must be road-owned - one-texel erosion, so
-// the verge keeps today's overlap and a jitter-shaped gap cannot open at the
-// road edge. Only road captures write the G channel.
-float SampleObjectDepthCap(float2 worldXY)
-{
-	float2 dims;
-	bool valid;
-	float2 t = ObjectMapTexel(worldXY, dims, valid);
-	if (!valid)
-		return 1e6;
-	int2 t0 = (int2)t;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float4 tops = float4(
-		ObjectTopsRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t0.y, 0)),
-		ObjectTopsRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t1.y, 0)));
-	[flatten] if (all(tops < -50000.0))
-		return 1e6;
-	float2 sd00 = ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0));
-	float2 sd10 = ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0));
-	float2 sd01 = ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0));
-	float2 sd11 = ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0));
-	float4 roadTops = float4(sd00.y, sd10.y, sd01.y, sd11.y);
-	[branch] if (all(roadTops > kNoRoadTop * 0.5) && all(tops - roadTops < kRoadOwnsTop))
-		return 0.0;
-	return max(max(sd00.x, sd10.x), max(sd01.x, sd11.x));
-}
 
 // The road raster at a point, max of four texels like the patch: x = road
 // layer depth, y = road top (kNoRoadTop where no road drew).
@@ -1191,13 +1090,10 @@ static const float kShoreRise = 10.0;
 // the line is free however little it stands above the level (a cave floor
 // 5 units over a lake plane was thinned everywhere, in heightmap-quantised
 // rectangles), and both terms only grow away from the water. Rounded knee
-// where the cap meets the class ramp. Once per consumer. waterCap is the
-// height the sheet may stand above the ground here (1e9 = no water), so
-// the object lift can be held to it as well.
-float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
+// where the cap meets the class ramp. Once per consumer.
+float3 EndSnowAtWater(float3 terrain, float2 gridLocal)
 {
-	waterCap = 1e9;
-	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0 && terrain.y > -7.9)
+	[branch] if (terrain.x > -50000.0 && terrain.y > -7.9)
 	{
 		float2 waterAt = SampleWaterHeight(gridLocal);
 		float water = waterAt.x;
@@ -1212,7 +1108,6 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 				float capNear = (SampleWaterNear(gridLocal) - 1.0) * 38.0;
 				// Past the raster's last texel the cap lifts clear of the ramp.
 				float cap = max(capRise, capNear) + (1.0 - waterWeight) * 60.0;
-				waterCap = cap;
 				terrain.y = max(KneeMin(terrain.y, cap, 4.0), -8.0);
 			}
 		}
@@ -1243,9 +1138,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 	else
 	{
 		float3 terrain = SampleTerrain(gridLocal);
-
-		float waterCap;
-		terrain = EndSnowAtWater(terrain, gridLocal, waterCap);
+		terrain = EndSnowAtWater(terrain, gridLocal);
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
@@ -1255,53 +1148,8 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// smooth 0-1, so doorstep clearings fade at their edges instead of
 		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
 		// (coverage untouched), so melted ground keeps a thin snow floor
-		// instead of fading to bare ground. Sampled BEFORE the object lift:
-		// the wall-drift banks must respect clearings too (see below).
+		// instead of fading to bare ground.
 		float2 shelterMask = SampleExclusionMask(GridOrigin + gridLocal);
-
-		// Object height field: t4 holds the SLOPE-LIMITED snow-height field
-		// (terrain run through the angle-of-repose cone transform), t5 the
-		// shelter mask; 1 under floating structures, so walkways, roofs and
-		// bridges keep the ground beneath them bare.
-		[branch] if (ObjectLiftCap > 1.0)
-		{
-			float2 worldXY = GridOrigin + gridLocal;
-			float field = SampleObjectHeight(worldXY);
-			[flatten] if (field > -50000.0)
-			{
-				// The lift never crosses the shell's own boundary: banks and
-				// cones rise only from ground showing shell snow (class
-				// coverage minus clearings). Gating on the exclusion mask alone
-				// misses bare landscape classes and raises a rim where the
-				// shell meets dirt.
-				float groundSnow = smoothstep(0.1, 0.45, coverage) * (1.0 - saturate(shelterMask.x));
-				// The lift is the field's excess over its OWN base, the window's
-				// bilinear height - not over the height the shell stands on.
-				// With the land-exact layer those differ by the whole chord
-				// error, and max(exact, bilinear) is an envelope creased along
-				// the 128-unit lattice (stripes, lifted hollows, forced snow).
-				float lift = max(field - SampleTerrainBilinearHeight(gridLocal), 0.0) * groundSnow;
-				// A drift bank ends at the water like the sheet does: lift plus
-				// depth stays under the shore cap.
-				lift = max(KneeMin(lift, max(waterCap - max(rampDepth, 0.0), 0.0), 4.0), 0.0);
-				// Where a captured object defines the surface, the layer wears
-				// the object's own skin depth instead of the landscape class
-				// depth (a thin-skinned rock must not carry a deep landscape
-				// layer). Blend by how far the object stands proud of the
-				// un-lifted base, so buried objects and the aprons around them
-				// keep landscape depth.
-				float capT = smoothstep(0.25, 1.0, lift / max(rampDepth, 1.0));
-				rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
-				terrainHeight += lift;
-				// Drift failsafe: a field standing well proud IS snow. Force
-				// coverage and a minimum depth so banks raised over bare or
-				// low-coverage ground (dirt patches at walls) never dither into
-				// holes or submerge out of the surface.
-				float liftForce = smoothstep(6.0, 20.0, lift);
-				coverage = max(coverage, liftForce);
-				rampDepth = max(rampDepth, liftForce * 6.0);
-			}
-		}
 
 		coverage *= saturate(1.0 - shelterMask.x);
 
@@ -1791,41 +1639,17 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// The prepass computed the ramp from the same GridLocal bits; with the
 	// cut trusted, nothing else of this block reaches the outputs.
 	float pixelRampDepth = gDeferredRampDepth;
-	float pixelWaterCap = 0.0;
 	float3 pixelTerrain = 0.0;
 	float pixelCoverage = 1.0;
 	float psEdgeFade = 1.0;
 	float pixelClassDepth = 0.0;
 #else
-	float pixelWaterCap;
-	float3 pixelTerrain = EndSnowAtWater(SampleTerrain(gridLocal), gridLocal, pixelWaterCap);
+	float3 pixelTerrain = EndSnowAtWater(SampleTerrain(gridLocal), gridLocal);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float psEdgeFade = ShellEdgeFade(gridLocal);
 
 	// Un-carved class depth ramp; negative means the snow is submerged.
-	// Mirrors ShellSurfaceZ's object-depth cap so the cut agrees with the
-	// capped geometry.
 	float pixelClassDepth = pixelTerrain.y;
-	[branch] if (ObjectLiftCap > 1.0)
-	{
-		float2 capWorldXY = GridOrigin + gridLocal;
-		float capField = SampleObjectHeight(capWorldXY);
-		[flatten] if (capField > -50000.0)
-		{
-			// Boundary gate mirroring ShellSurfaceZ: no lift from bare ground.
-			float capGround = smoothstep(0.1, 0.45, pixelCoverage) * (1.0 - saturate(SampleExclusionMask(capWorldXY).x));
-			capField = lerp(min(capField, pixelTerrain.x), capField, capGround);
-			float capLift = capField - pixelTerrain.x;
-			capLift = max(KneeMin(capLift, max(pixelWaterCap - max(pixelClassDepth, 0.0), 0.0), 4.0), 0.0);
-			float capT = smoothstep(0.25, 1.0, capLift / max(pixelClassDepth, 1.0));
-			pixelClassDepth = lerp(pixelClassDepth, min(pixelClassDepth, SampleObjectDepthCap(capWorldXY)), capT);
-			// Drift failsafe, mirroring ShellSurfaceZ: raised banks are snow
-			// regardless of the ground class beneath.
-			float liftForce = smoothstep(6.0, 20.0, capLift);
-			pixelCoverage = max(pixelCoverage, liftForce);
-			pixelClassDepth = max(pixelClassDepth, liftForce * 6.0);
-		}
-	}
 	float pixelBare = saturate(1.0 - pixelCoverage);
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
 	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
@@ -1874,27 +1698,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float objectness = smoothstep(-1.0, 2.0, sceneSurfaceZ - shellSurfaceZ);
 		proximityFade = max(proximityFade, 1.0 - objectness);
 	}
-	// Two cases hug the geometry behind them and must override the fade, or
-	// they dither away view-dependently: carved trench floors, and the shell
-	// riding a raised height field.
+	// Carved trench floors hug the geometry behind them and must override the
+	// fade, or they dither away view-dependently.
 	const bool pixelUntouched = ShellUntouched(gridLocal);
 	float pixelCarve = 0.0;
 	[branch] if (!pixelUntouched)
 		pixelCarve = saturate(SampleDeformation(gridLocal));
-	float pixelLift = 0.0;
 	float2 pixelShelter = SampleExclusionMask(GridOrigin + gridLocal);
-	[branch] if (ObjectLiftCap > 1.0)
-	{
-		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
-		[flatten] if (fieldHeight > -50000.0)
-		{
-			// Boundary gate mirroring ShellSurfaceZ: a lift the geometry no
-			// longer takes must not hold the alpha override either.
-			float liftGround = smoothstep(0.1, 0.45, saturate(pixelTerrain.z)) * (1.0 - saturate(pixelShelter.x));
-			fieldHeight = lerp(min(fieldHeight, pixelTerrain.x), fieldHeight, liftGround);
-			pixelLift = max(KneeMin(fieldHeight - pixelTerrain.x, max(pixelWaterCap - max(pixelTerrain.y, 0.0), 0.0), 4.0), 0.0);
-		}
-	}
 	// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above it);
 	// without an override the proximity fade dithers them into translucency
 	// like any other near-coincident surface.
@@ -1919,7 +1729,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		landBurial = landMelt > 0.0 ? CarveProfile(landMelt, landMelt, max(pixelEffDepth, 0.0), GridOrigin + gridLocal) : max(pixelEffDepth, 0.0);
 	}
 #endif
-	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
+	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(0.1, 0.4, pixelMelt)));
 
 #ifndef SNOW_SHELL_DEFERRED
 #	ifdef SNOW_SHELL_DEPTH_PREPASS

@@ -1664,24 +1664,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttLandRecolor = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("land_recolor_tooltip"), "Where the land itself shows (prints down to the ground, thin snow, the bases of blended objects), its snow textures wear this mod's snow, texel by texel. Rocks, grass and dirt inside those textures keep their own look."));
 			WrapTextF("  %s", LandscapeSnowStatus().c_str());
-			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
-			if (auto _ttGroundLift = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("ground_lift_debug_tooltip"), "Measurement aid: the ground snow rises onto the tops of nearby objects again, the way it did to meet the retired raised object shell - the sheets across doorways and along wall tops. Off, the ground snow keeps its own height and objects stand in it; roofs and walkways still keep the ground beneath them bare."));
-
-
-			ImGui::Checkbox(T(TKEY("debug_water_cut_disabled"), "Disable Water Cut"), &debugWaterCutDisabled);
-			if (auto _ttWater = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_water_cut_disabled_tooltip"), "A/B: lets the ground snow run on under the water again. Off, ground under a body of water counts as a non-snow texture class, so the shore gets the same border as any texture seam."));
-
-			ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Bilinear Terrain Height"), &shellBilinearHeight);
-			if (auto _ttBilin = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
-
-
-			ImGui::Checkbox(T(TKEY("shell_land_height_disabled"), "Disable Land-Exact Height"), &shellLandHeightDisabled);
-			if (auto _ttLand = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_land_height_disabled_tooltip"), "A/B: returns the snow shell to standing on a straight line between the terrain's 128-unit height samples. The game itself renders the ground as a smooth curve through those samples at four times the detail, and on steep ground the curve rises above the line by more than the snow is deep - the holes where rock shows through. With this off, the shell stands on the ground exactly as the game draws it."));
-
 
 			ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Pipeline Statistics"), &shellPipelineStatsEnabled);
 			if (auto _ttStats = Util::HoverTooltipWrapper())
@@ -1709,12 +1691,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("debug_overlay"), "Terrain Overlay"), &debugTerrainOverlay);
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
-
-
-			ImGui::Checkbox(T(TKEY("debug_tiling_ruler"), "Tiling Ruler"), &debugTilingRuler);
-			if (auto _ttRuler = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
-
 
 			WrapTextF("Exclusion zones: %u, workspace clearings: %u, sealed containers: %u (Survival heat list %s)",
 				statExclusionCount, statTrampleCount, statSealedCount, survivalHeatSources ? "found" : "absent");
@@ -1803,10 +1779,18 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
 			{
-				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient", "Skin identity", "Depth fight", "Volume seed" };
-				ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
+				// The shaders' StaticsDebugView values; 6 and 7 are unassigned.
+				static constexpr int kStaticsDebugModeValues[] = { 0, 1, 2, 3, 4, 5, 8, 9, 10 };
+				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Skin identity", "Depth fight", "Volume seed" };
+				static_assert(IM_ARRAYSIZE(kStaticsDebugModeValues) == IM_ARRAYSIZE(staticsDebugModes));
+				int staticsDebugIndex = 0;
+				for (int i = 0; i < IM_ARRAYSIZE(kStaticsDebugModeValues); i++)
+					if (kStaticsDebugModeValues[i] == staticsDebugView)
+						staticsDebugIndex = i;
+				if (ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugIndex, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes)))
+					staticsDebugView = kStaticsDebugModeValues[staticsDebugIndex];
 				if (auto _ttDbgView = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means they agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences, the rifts under cover, the lifted edges. Brightness says whether the snow is actually drawn there: bright red is a tear you can see in-game, dark red is one in geometry that is currently hidden. The flat road/trench surface is dim gray because it cannot tear at all. Nothing consumes this view; it only reports.\n\nSkin identity: every snow skin in its own colour, striped where the skin is drawn in the game's decal depth mode (the overlay meshes on rocks and trims). The object's own material showing through where snow should be means NO skin won that pixel's depth test - the skin is either drawn and losing, or not drawn at all (see the culling census).\n\nDepth fight: the same test, scored. Green = a skin won the pixel, red = this skin lost it; brightness = by how many depth ULPs (dim = a hair, bright = a lot), striped as above. Needs the depth prepass on. Green here must coincide with colour in Skin identity; a pixel coloured there but bare here means the view's bias formula is off - report it.\n\nVolume seed (needs Volume Snow on): why the volume does or does not grow on this surface, judged the way the seed pass judges it at the nearest level. GREEN = the volume holds snow here. RED = something captured sits within the headroom above it (a beam, an eave, the member's own inside). BLUE = the surface faces too steeply for Volume Max Slope. YELLOW = seeded but weak - a door, a sheltering roof, or a closed sky; brightness is the weight. MAGENTA = seeded fine, yet no field here - the sweep, rounding or coverage threshold removed it, or a coarser ring owns this spot. Light GREY = this surface is not in the volume's occupancy at all (never captured, or thinner than a voxel). Dark grey = outside the volume's window."));
+					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nSkin identity: every snow skin in its own colour, striped where the skin is drawn in the game's decal depth mode (the overlay meshes on rocks and trims). The object's own material showing through where snow should be means NO skin won that pixel's depth test - the skin is either drawn and losing, or not drawn at all (see the culling census).\n\nDepth fight: the same test, scored. Green = a skin won the pixel, red = this skin lost it; brightness = by how many depth ULPs (dim = a hair, bright = a lot), striped as above. Needs the depth prepass on. Green here must coincide with colour in Skin identity; a pixel coloured there but bare here means the view's bias formula is off - report it.\n\nVolume seed (needs Volume Snow on): why the volume does or does not grow on this surface, judged the way the seed pass judges it at the nearest level. GREEN = the volume holds snow here. RED = something captured sits within the headroom above it (a beam, an eave, the member's own inside). BLUE = the surface faces too steeply for Volume Max Slope. YELLOW = seeded but weak - a door, a sheltering roof, or a closed sky; brightness is the weight. MAGENTA = seeded fine, yet no field here - the sweep, rounding or coverage threshold removed it, or a coarser ring owns this spot. Light GREY = this surface is not in the volume's occupancy at all (never captured, or thinner than a voxel). Dark grey = outside the volume's window."));
 #if !SNOW_ALPHA_BUILD
 				ImGui::Checkbox(T(TKEY("debug_proj_albedo"), "Recolor Sampled Albedo"), &debugProjAlbedoView);
 				if (auto _ttProjAlbedo = Util::HoverTooltipWrapper())
@@ -1853,7 +1837,7 @@ void SnowDeformation::DrawSettings()
 					WrapText(probeLine4);
 				}
 				if (auto _ttSdv = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("statics_debug_modes_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires. Shell layers (skins only): which peeled snow plane owns each pixel - green = layer 1, yellow = layer 2, red = layer 3, magenta = below all three; brightness = the depth it was granted, so a dim pure color is a plane that got no height."));
+					ImGui::Text("%s", T(TKEY("statics_debug_modes_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires."));
 			}
 
 

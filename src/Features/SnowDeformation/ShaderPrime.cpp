@@ -220,7 +220,7 @@ void SnowDeformation::RunShaderPrime()
 	// compile.
 	const std::function<void()> groundSteps[] = {
 		[&] { ShaderSourcesFingerprint(); },
-		[&] { GetShellPSPrepassEarly(false); },
+		[&] { GetShellPSPrepassEarly(); },
 		[&] { GetShellPSPrepassAttr(false); },
 		[&] { GetShellPSEarlyResolve(); },
 		[&] { GetShellPSDeferred(); },

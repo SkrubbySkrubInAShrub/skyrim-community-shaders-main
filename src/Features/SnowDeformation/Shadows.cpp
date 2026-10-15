@@ -450,7 +450,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		heightBottomFiltered ? heightBottomFiltered->srv.get() : nullptr };
 	context->VSSetShaderResources(0, 6, vsSRVs);
 	// SampleTerrain's taps, cut as DrawShell cut them for this CB.
-	ID3D11ShaderResourceView* casterWetSRV = TerrainWetSRV(lastShellCBData->CompactLook.x > 0.5f);
+	ID3D11ShaderResourceView* casterWetSRV = TerrainWetSRV();
 	context->VSSetShaderResources(kTerrainWetSlot, 1, &casterWetSRV);
 	// The land-exact height layer (t13).
 	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;

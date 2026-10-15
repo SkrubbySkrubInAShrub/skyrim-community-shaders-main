@@ -46,8 +46,8 @@ namespace
 	{
 		bool tessellate = true;
 		bool gate = true;
-		// LandscapeSnow.hlsl's content-gate checks: 1 map tiles, 2 class borders, 4 water, 8 object lift, 16 exclusions.
-		int gateMask = 31;
+		// LandscapeSnow.hlsl's content-gate checks: 1 map tiles, 2 class borders, 4 water, 16 exclusions.
+		int gateMask = 23;
 		bool cull = true;
 		bool measure = false;
 		bool stats = false;
@@ -703,14 +703,14 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	ls.shellCB->Update(cb);
 	lsCB = cb;
 
-	LandscapeSurfaceSRVs(cb, ls.srvs);
+	LandscapeSurfaceSRVs(ls.srvs);
 	ls.sampler = shellSnowSampler.get();
 	ls.liveRect = LsLiveRect(cb);
 	ls.cbValid = true;
 	return true;
 }
 
-void SnowDeformation::LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderResourceView** a_srvs)
+void SnowDeformation::LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs)
 {
 	auto* s = a_srvs;
 	std::fill(s, s + kLsSRVCount, nullptr);
@@ -729,7 +729,7 @@ void SnowDeformation::LandscapeSurfaceSRVs(const ShellCB& a_cb, ID3D11ShaderReso
 	s[28] = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
 	s[29] = GetUndulationFieldSRV();
 	s[kUntouchedTilesSlot] = untouchedTilesSRV.get();
-	s[kTerrainWetSlot] = TerrainWetSRV(a_cb.CompactLook.x > 0.5f);
+	s[kTerrainWetSlot] = TerrainWetSRV();
 	s[kTerrainBareSlot] = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
 }
 
@@ -782,7 +782,7 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 	a_context->DSGetConstantBuffers(11, 1, &prevCB11[2]);
 
 	ID3D11ShaderResourceView* srvs[kLsSRVCount];
-	LandscapeSurfaceSRVs(a_cb, srvs);
+	LandscapeSurfaceSRVs(srvs);
 	ID3D11SamplerState* sampler = shellSnowSampler.get();
 	auto* state = globals::state;
 	ID3D11Buffer* shared[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };

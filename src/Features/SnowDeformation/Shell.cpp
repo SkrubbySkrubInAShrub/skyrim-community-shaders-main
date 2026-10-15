@@ -535,9 +535,9 @@ ID3D11ShaderResourceView* SnowDeformation::ShellWaterSRV() const
 	return waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
 }
 
-ID3D11ShaderResourceView* SnowDeformation::TerrainWetSRV(bool a_cut) const
+ID3D11ShaderResourceView* SnowDeformation::TerrainWetSRV() const
 {
-	if (a_cut && shellTerrainWetValid)
+	if (shellTerrainWetValid)
 		return shellTerrainWet->srv.get();
 	return shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr;
 }
@@ -757,19 +757,10 @@ bool SnowDeformation::EnsureDeferredResources()
 
 ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 {
-	if (shellPSDeferred && shellPSDeferredLegacyBits != shellPSLegacyBits) {
-		shellPSDeferred->Release();
-		shellPSDeferred = nullptr;
-	}
 	if (!shellPSDeferred) {
 		logger::debug("Compiling SnowShell PS (deferred)");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
-		if (shellPSLegacyBits & 1)
-			defines.emplace_back("SNOW_TEETH_UNGATED", "");
-		if (shellPSLegacyBits & 4)
-			defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
-		shellPSDeferredLegacyBits = shellPSLegacyBits;
 		shellPSDeferred = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPSDeferred;
@@ -781,15 +772,10 @@ ID3D11PixelShader* SnowDeformation::ConditionViewPS()
 		return nullptr;
 	int state = conditionViewShaderState.load(std::memory_order_acquire);
 	if (state == 0) {
-		const uint32_t legacy = shellPSLegacyBits;
 		conditionViewShaderState.store(1, std::memory_order_release);
-		conditionViewCompile = std::async(std::launch::async, [this, legacy] {
+		conditionViewCompile = std::async(std::launch::async, [this] {
 			auto defines = ShellPSDefines();
 			defines.emplace_back("SNOW_SHELL_DEFERRED", "");
-			if (legacy & 1)
-				defines.emplace_back("SNOW_TEETH_UNGATED", "");
-			if (legacy & 4)
-				defines.emplace_back("SNOW_UNTOUCHED_SKIP_OFF", "");
 			defines.emplace_back("SNOW_CONDITION_VIEW", "");
 			shellPSDeferredConditionView = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 			return shellPSDeferredConditionView != nullptr;
@@ -822,20 +808,17 @@ ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
 	return slot;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSPrepassEarly(bool a_keepHidden)
+ID3D11PixelShader* SnowDeformation::GetShellPSPrepassEarly()
 {
-	auto*& slot = shellPSPrepassEarly[a_keepHidden ? 1 : 0];
-	if (!slot) {
-		logger::debug("Compiling SnowShell PS (early depth prepass{})", a_keepHidden ? ", hidden kept" : "");
+	if (!shellPSPrepassEarly) {
+		logger::debug("Compiling SnowShell PS (early depth prepass)");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
 		defines.emplace_back("SNOW_PREPASS_ATTR", "");
 		defines.emplace_back("SNOW_PREPASS_EARLY", "");
-		if (a_keepHidden)
-			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
-		slot = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		shellPSPrepassEarly = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
-	return slot;
+	return shellPSPrepassEarly;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSEarlyResolve()
@@ -1066,9 +1049,8 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 	// scrolled after it was taken. One b0 serves both shells and the
 	// shadow/probe passes.
 	a_cb.DeformMapOrigin = mapOrigin;
-	// Bit 0 horizon march, bit 2 land-exact height off. .y is DrawShell's
-	// (road tops this frame).
-	a_cb.ShellFlags.x = (settings.ShellHorizonMarch ? 1 : 0) | (shellLandHeightDisabled ? 4 : 0);
+	// Bit 0 horizon march. .y is DrawShell's (road tops this frame).
+	a_cb.ShellFlags.x = settings.ShellHorizonMarch ? 1 : 0;
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
@@ -1160,7 +1142,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	shellEarlyState = EarlyPrepass::Unavailable;
 	auto renderer = globals::game::renderer;
 	const auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	auto* psEarly = GetShellPSPrepassEarly(shellPrepassExitOff);
+	auto* psEarly = GetShellPSPrepassEarly();
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto* fillClaim = fillVS ? GetShellFillPSClaim() : nullptr;
@@ -1300,14 +1282,13 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		release(prevCSUAV0);
 	}
 
-	if (cb.CompactLook.x > 0.5f)
-		UpdateTerrainWet();
+	UpdateTerrainWet();
 
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
-	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV(cb.CompactLook.x > 0.5f);
+	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	ID3D11ShaderResourceView* waterSRVs[2] = { ShellWaterSRV(), waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
 	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
@@ -1730,10 +1711,10 @@ void SnowDeformation::DrawShell()
 	// xy are layout keepers: the retired dust switch and trench floor.
 	cbData.BorderStyle = { 0.0f, 0.0f, (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	// x = the water cut (runtime A/B in Debugging Options); y, z = the land-blend
-	// contest's depth bonus and carve penalty (log2 odds); w = the wall slough.
+	// x spare; y, z = the land-blend contest's depth bonus and carve penalty
+	// (log2 odds); w = the wall slough.
 	const float2 landContest = LandBlendContest();
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, landContest.x, landContest.y, look.strength * look.slough };
+	cbData.CompactLook = { 0.0f, landContest.x, landContest.y, look.strength * look.slough };
 	{
 		const SnowCondition condition = GetSnowCondition();
 		auto* player = RE::PlayerCharacter::GetSingleton();
@@ -1743,7 +1724,6 @@ void SnowDeformation::DrawShell()
 		std::copy(look.lut.begin(), look.lut.end(), cbData.SnowClimateLUT);
 	}
 	cbData.DebugNoFarPad = 0.0f;
-	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
 	// reads zeros, which look like fully bare ground everywhere.
 	cbData.ShellCullBare = shellTerrainTexture ? 1.0f : 0.0f;
@@ -1759,9 +1739,9 @@ void SnowDeformation::DrawShell()
 	// lowering Object Snow keeps a soft edge without a second slider.
 	cbData.SkinFadeEnd = settings.RangeSkinsM * kUnitsPerMeter;
 	cbData.SkinFadeStart = std::max(cbData.SkinFadeEnd - 2048.0f, 0.0f);
-	// Field enable gate + window addressing for the t4/t5 samplers; the
+	// Field enable gate + window addressing for the object map samplers; the
 	// center is re-uploaded below once the height pass has recentered.
-	cbData.ObjectLiftCap = groundLiftDebug ? kObjectLiftCap : 0.5f;
+	cbData.ObjectLiftCap = 0.5f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 
@@ -1917,8 +1897,7 @@ void SnowDeformation::DrawShell()
 	spanClock.Lap(CpuCensus::kSpanWaterCapture);
 	CoverWaterWindow();
 	spanClock.Lap(CpuCensus::kSpanWaterCover);
-	if (cbData.CompactLook.x > 0.5f)
-		UpdateTerrainWet();
+	UpdateTerrainWet();
 	shellDrawTerrainVersion = shellTerrainVersion;
 	RenderBloodCapture();
 	spanClock.Lap(CpuCensus::kSpanBloodCapture);
@@ -2035,7 +2014,7 @@ void SnowDeformation::DrawShell()
 	// draws, or here when S1 did not run), the resolve and the deferred pass.
 	const auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	// The hidden-fragment exit reads Terrain Blending's blended depth as the main depth.
-	const bool keepHidden = shellPrepassExitOff || !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
+	const bool keepHidden = !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
 	auto* fillVS = shellGround ? GetShellFillVS() : nullptr;
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto* psPrepass = (fillPS && !early) ? GetShellPSPrepassAttr(keepHidden) : nullptr;
@@ -2109,7 +2088,7 @@ void SnowDeformation::DrawShell()
 	// roads, rocks).
 	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	context->VSSetShaderResources(0, 6, shellSRVs);
-	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV(cbData.CompactLook.x > 0.5f);
+	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
 	context->VSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &fineSRV);

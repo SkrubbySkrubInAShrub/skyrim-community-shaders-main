@@ -12,13 +12,12 @@
 //            capture rasterizes into the cleared maps, and fills only what
 //            nothing drew into - see the ghost-merge note on the entry
 //            point.
-// CombineCS  builds the base snow-height field (the terrain window's
-//            bilinear height) and the shelter mask: a structure floating well
-//            above the ground shelters what is under it, as a soft melt to a
-//            dusting rather than a coverage kill. Doors clear the field and
-//            add to the mask; fires write NEGATIVE mask values, a melt
-//            fraction that thins depth toward a floor, so fire pits keep a
-//            thin floor instead of sinking below terrain.
+// CombineCS  builds the shelter mask: a structure floating well above the
+//            ground shelters what is under it, as a soft melt to a dusting
+//            rather than a coverage kill. Doors add to the mask; fires write
+//            NEGATIVE mask values, a melt fraction that thins depth toward a
+//            floor, so fire pits keep a thin floor instead of sinking below
+//            terrain.
 // ObjectConeSeedCS / ObjectConeCS  angle of repose over the object top
 //            raster: an iterative min-plus cone transform, so no point of the
 //            depth field rises steeper than SlopePerUnit from its rims.
@@ -57,7 +56,7 @@ cbuffer HeightProcessCB : register(b0)
 	float ShelterMaxHeight;  // underside height above ground past which a structure stops sheltering
 	float ShelterConeTan;  // tan(drift angle from vertical), > 0: sizes the enclosure disc
 
-	uint WriteBaseField;  // CombineCS: write OutA (the shell reads it only in the ground-lift debug view)
+	uint HeightProcessKeeper;  // layout keeper, 0
 	uint3 HeightProcessPad;
 }
 
@@ -288,7 +287,7 @@ groupshared uint combineTileCount;
 groupshared uint combineTileList[MAX_EXCLUSIONS];
 groupshared uint combineElevated;
 
-// InA = raw tops, InB = raw bottoms. OutA = base field, OutB = shelter mask.
+// InA = raw tops, InB = raw bottoms. OutA sizes the window, OutMask = shelter mask.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
 									 : SV_DispatchThreadID, uint3 gid
 									 : SV_GroupID, uint gi
@@ -335,7 +334,7 @@ groupshared uint combineElevated;
 		return;
 	// Nothing floats within the ring's reach and no exclusion reaches the tile:
 	// every ShelterTap is +0, the enclosure cannot run, melt and suppress are +0.
-	[branch] if (combineElevated == 0 && combineTileCount == 0 && WriteBaseField == 0)
+	[branch] if (combineElevated == 0 && combineTileCount == 0)
 	{
 		OutMask[dtid.xy] = float2(0.0, 0.0);
 		return;
@@ -343,17 +342,13 @@ groupshared uint combineElevated;
 
 	float2 worldXY = TexelWorldXY(dtid.xy, dims);
 	float terrain = SampleTerrainHeight(worldXY);
-	float field = terrain;
 	float suppress = 0.0;
 	float melt = 0.0;
 
-	// Shelter only: grounded object tops deliberately do NOT raise the field
-	// (an object-top "blanket" lift was tried and removed; it produced seams
-	// against the landscape shell and 45-degree spike cones at range). The
-	// raster feeds just the floating-structure test: a bottom well clear of
-	// the ground with a top high above it is a walkway/roof/bridge, and the
-	// ground beneath it is sheltered from snowfall. Consumed as MELT (thin
-	// shell floor, snow texture kept - a coverage kill exposed the
+	// Shelter: the raster feeds the floating-structure test. A bottom well
+	// clear of the ground with a top high above it is a walkway/roof/bridge,
+	// and the ground beneath it is sheltered from snowfall. Consumed as MELT
+	// (thin shell floor, snow texture kept - a coverage kill exposed the
 	// mismatched projected snow beneath and cut a cliff at the roofline);
 	// the per-texel test is binary, so a center + 8-tap ring fraction turns
 	// the cut into a smooth sink under the eaves. Taps reuse the center
@@ -385,24 +380,19 @@ groupshared uint combineElevated;
 		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));
 	}
 
-	// Exclusion zones: pull the field back to terrain, then either suppress
-	// snow (doors: coverage fades to bare ground) or melt it (fires: depth
-	// thins toward a floor). Shared with the wide field bake so the near and
-	// far answers are the same function of the same constant buffer.
+	// Exclusion zones: either suppress snow (doors: coverage fades to bare
+	// ground) or melt it (fires: depth thins toward a floor). Shared with the
+	// wide field bake so the near and far answers are the same function of the
+	// same constant buffer.
 	{
 		uint tileCount = min(combineTileCount, MAX_EXCLUSIONS);
-		float flatten = 0.0;
 		for (uint listI = 0; listI < tileCount; listI++) {
 			ExclusionResult one = EvaluateExclusionAt(combineTileList[listI], worldXY, terrain);
 			suppress = max(suppress, one.Suppress);
 			melt = max(melt, one.Melt);
-			flatten += one.Flatten * (1.0 - flatten);
 		}
-		field = lerp(field, terrain, flatten);
 	}
 
-	[branch] if (WriteBaseField != 0)
-		OutA[dtid.xy] = field;
 	OutMask[dtid.xy] = float2(suppress, melt);
 }
 

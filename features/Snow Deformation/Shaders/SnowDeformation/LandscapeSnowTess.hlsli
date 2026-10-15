@@ -15,7 +15,7 @@ cbuffer LandscapeSnowCB : register(b11)
 	// x: camera-pass factors (trench reach boost, screen cap) rather than the
 	// distance band alone, y: max factor, z: content gate, the checks that can
 	// call an edge detailed (0 = every edge is; 1 map tiles, 2 class borders,
-	// 4 water, 8 object lift, 16 exclusions), w: drop patches outside the view.
+	// 4 water, 16 exclusions), w: drop patches outside the view.
 	float4 LsTess;
 	// x: view cull guard band, a fraction of clip w, z: how many LsExcl
 	// entries are live, yw spare.
@@ -90,38 +90,27 @@ bool LsBoxPlain(float2 lo, float2 hi)
 // No drawn water over the box's texels: the shore cap shapes the edge there.
 bool LsBoxDry(float2 lo, float2 hi)
 {
-	bool dry = true;
-	[branch] if (CompactLook.x > 0.5)
+	float maxT = (float)(TerrainDim - 1) - 0.001;
+	int2 t0 = (int2)clamp((GridToTerrainOffset + lo) / TerrainTexelSize, 0.0, maxT);
+	int2 t1 = min((int2)clamp((GridToTerrainOffset + hi) / TerrainTexelSize, 0.0, maxT) + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	bool dry = all(t1 - t0 <= 3);
+	[unroll] for (int y = 0; y < 4; y++)
 	{
-		float maxT = (float)(TerrainDim - 1) - 0.001;
-		int2 t0 = (int2)clamp((GridToTerrainOffset + lo) / TerrainTexelSize, 0.0, maxT);
-		int2 t1 = min((int2)clamp((GridToTerrainOffset + hi) / TerrainTexelSize, 0.0, maxT) + 1, int2(TerrainDim - 1, TerrainDim - 1));
-		dry = all(t1 - t0 <= 3);
-		[unroll] for (int y = 0; y < 4; y++)
+		[unroll] for (int x = 0; x < 4; x++)
 		{
-			[unroll] for (int x = 0; x < 4; x++)
-			{
-				int2 t = min(t0 + int2(x, y), t1);
-				dry = dry && WaterRawWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) < -50000.0;
-			}
+			int2 t = min(t0 + int2(x, y), t1);
+			dry = dry && WaterRawWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) < -50000.0;
 		}
 	}
 	return dry;
 }
 
-// Object lift (gate bit 8), and the clearings, shelter and melt basins of
-// the exclusion mask (bit 16), at one point.
-bool LsPointPlain(float2 gridLocal, uint gate)
+// The clearings, shelter and melt basins of the exclusion mask (gate bit 16)
+// at one point.
+bool LsPointPlain(float2 gridLocal)
 {
-	bool plain = true;
-	[branch] if ((gate & 8) != 0 && ObjectLiftCap > 1.0)
-		plain = !ShellObjectLiftsAt(gridLocal);
-	[branch] if (plain && (gate & 16) != 0)
-	{
-		float2 mask = SampleExclusionMask(GridOrigin + gridLocal);
-		plain = max(mask.x, mask.y) < 0.001;
-	}
-	return plain;
+	float2 mask = SampleExclusionMask(GridOrigin + gridLocal);
+	return max(mask.x, mask.y) < 0.001;
 }
 
 bool LsEdgeDetail(float2 a, float2 b, uint gate)
@@ -135,8 +124,8 @@ bool LsEdgeDetail(float2 a, float2 b, uint gate)
 		detail = !LsBoxPlain(lo, hi);
 	[branch] if (!detail && (gate & 4) != 0)
 		detail = !LsBoxDry(lo, hi);
-	[branch] if (!detail && (gate & 24) != 0)
-		detail = !(LsPointPlain(a, gate) && LsPointPlain(b, gate) && LsPointPlain(0.5 * (a + b), gate));
+	[branch] if (!detail && (gate & 16) != 0)
+		detail = !(LsPointPlain(a) && LsPointPlain(b) && LsPointPlain(0.5 * (a + b)));
 	return detail;
 }
 

@@ -100,14 +100,13 @@ cbuffer ShellCB : register(b0)
 	float TrenchDetailRelief;
 	float TrenchDetailRoughness;
 
-	float ShellTriHeight;  // was BorderTrampledFade; landscape shell only, unread here
+	float LayoutKeeper5;  // layout keeper, 0
 	float TrenchDetailCoverage;
 	float ShellCullBare;   // was SeamFadeUnused; landscape shell only, unread here
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
 	float SkinFadeEnd;
-	// Object height field mode: 0 = unbound, 0.5 = bound with the ground
-	// lift off, >1 = lifting. A gate, never a magnitude.
+	// Object field maps: 0 = unbound, 0.5 = bound. A gate, never a magnitude.
 	float ObjectLiftCap;
 	float2 ObjectHeightCenter;
 
@@ -180,8 +179,7 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
-	// x = the landscape shell's water cut (unread here); w = trench wall
-	// slough (Snow Climate, CarveProfile).
+	// x spare; w = trench wall slough (Snow Climate, CarveProfile).
 	float4 CompactLook;
 	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
 	float4 RimStyle;
@@ -668,13 +666,7 @@ float SkinMasksY(int2 a_px)
 	}
 	return live;
 }
-// Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
-// the shell is designed to have. That reference is the cornice roll, which
-// descends the whole class depth across kCorniceRoll world units - a slope of
-// depth/kCorniceRoll, i.e. 6.25:1 at depth 25. A flat threshold cannot work:
-// set below the roll it lights every legitimate silhouette, and the roll's
-// slope legitimately scales with the depth slider while a tear does not.
-static const float kPleatOverRoll = 3.0;
+
 static const float kShelterNear = 8.0;
 static const float kShelterFar = 32.0;
 // Depth a fully sheltered surface keeps. The landscape shell thins under
@@ -1254,7 +1246,7 @@ float SheetLandFine(float2 gridLocal)
 {
 	float land = -100000.0;
 	float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
-	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0 && all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
+	[branch] if (FineWindow.z > 0.5 && all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
 	{
 		int2 f0 = (int2)tf;
 		float2 ff = tf - f0;
@@ -1625,9 +1617,8 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.Flat = StaticsDebugView != 0.0 ?
 	                 saturate(v.SkinDepth / 8.0) * 0.49 + (v.RoadBit > 0.5 ? 0.5 : 0.0) :
 	                 0.0;
-	// Mode 6 covers the PATCH too: layer 1 in the skin's green/yellow/red
-	// convention, so one screenshot compares the two paths.
-	[flatten] if (StaticsDebugView > 5.5)
+	// Modes 8-10: layer 1, full depth.
+	[flatten] if (StaticsDebugView > 7.5)
 	{
 		vsout.Coverage = 0.5 / 8.0;
 		vsout.Flat = 1.0;
@@ -1902,8 +1893,7 @@ struct SkinLift
 	// Authored-relief mode: the raw authored vertex alpha, exported so the
 	// PS can rebuild vanilla's weight per pixel from the G-buffer normal.
 	float ProjLinear;
-	// Debug (Shell Layers view): which peeled plane owned this vertex.
-	// 0 = not an S4 draw, 1/2/3 = the layer, 4 = below all three.
+	// Debug views 8-10: 1 on an S4 draw, else 0.
 	float DebugLayer;
 	// Post-shelter depth target: the class depth with only the two shelter
 	// clamps applied. What this column would carry if it were interior and
@@ -1959,7 +1949,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// and the factor is exported for the PS's density-mode coverage gate.
 	float projFactor = 1.0;
 	float projLinear = 1.0;
-	// Shell Layers debug view: which peeled plane owned this vertex.
+	// Debug views 8-10: the draw's layer.
 	float debugLayer = 0.0;
 	// S4 dome shading normal; non-S4 paths keep the raw normal.
 	float3 shadeNormal = nrmWS;
@@ -2327,9 +2317,8 @@ VS_OUTPUT main(VS_INPUT input)
 	// Mode 5 pairs the current up-facing mask with vanilla's reconstructed
 	// projection mask so one screenshot says whether the authored vertex
 	// alpha carries information the normal test lacks (SKIN-PLACEMENT-PLAN).
-	// Mode 6 (Shell Layers): which peeled plane owned the vertex + the depth
-	// it was granted, the two questions every S4 report reduces to.
-	[flatten] if (StaticsDebugView > 5.5)
+	// Modes 8-10: the draw's layer and the depth it was granted.
+	[flatten] if (StaticsDebugView > 7.5)
 	{
 		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
 		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, v.Flat), kMinSkinLift));
@@ -2531,9 +2520,9 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	// zero the lift; a surface that looks up-facing but reads UpFacing 0 is
 	// then traceable to whichever of the two is lying.
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
-	[flatten] if (StaticsDebugView > 5.5)
+	[flatten] if (StaticsDebugView > 7.5)
 	{
-		// Mode 6: identical encoding to the untessellated VS.
+		// Modes 8-10: identical encoding to the untessellated VS.
 		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
 		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift));
 	}
@@ -3764,7 +3753,7 @@ float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixel
 #endif
 
 #if !defined(VOXEL) && !defined(SNOW_PATCH_DEFERRED)
-#if defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_STATICS_KEEP_HIDDEN)
+#ifdef SNOW_STATICS_DEPTH_PREPASS
 // Every lane of the quad lies behind the depth the private buffer started
 // from, even pulled by the most the skin raster state's bias can (r at its
 // largest for z <= 1; the non-decal state clamps at 1e-5), so each fails
@@ -3794,7 +3783,7 @@ PATCH_ATTR_OUTPUT main(VS_OUTPUT input)
 PS_OUTPUT main(VS_OUTPUT input)
 #endif
 {
-#if defined(SNOW_STATICS_DEPTH_PREPASS) && !defined(SNOW_STATICS_KEEP_HIDDEN)
+#ifdef SNOW_STATICS_DEPTH_PREPASS
 	// No early-Z under the alpha cut's discard; a hidden quad skips the cut.
 	[branch] if (SkinQuadHidden(input.Position.z, input.Position.xy))
 	{
@@ -4692,24 +4681,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// Skin identity / depth fight: skins only. Dim gray.
 			preLit = float3(0.1, 0.1, 0.1);
 		}
-		else [branch] if (StaticsDebugView > 6.5)
-		{
-			// Lift Gradient mode. The patch is a lattice whose Lift is a
-			// constant, so its gradient is zero BY CONSTRUCTION - it cannot
-			// pleat and there is nothing here to measure. Dim gray, so a
-			// screenshot cannot be misread as "the patch is clean too".
-			preLit = float3(0.1, 0.1, 0.1);
-		}
-		else [branch] if (StaticsDebugView > 5.5)
-		{
-			// Shell Layers: which DRAW LAYER drew this patch pixel. Green =
-			// layer 1 (the surface the patch has always drawn), yellow =
-			// layer 2, red = layer 3 - the same colors the skin uses for its
-			// peeled planes, so the two paths read as one picture.
-			float drawLayer = floor(saturate(input.Coverage) * 8.0);
-			preLit = drawLayer < 0.5 ? float3(0.1, 1.0, 0.1) :
-			                           (drawLayer < 1.5 ? float3(1.0, 0.9, 0.1) : float3(1.0, 0.15, 0.1));
-		}
 		else [branch] if (StaticsDebugView > 4.5)
 		{
 			// Projected-mask mode compares skin data; the patch is outside
@@ -4921,89 +4892,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = saturate(abs(frac(h + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
 			if (DebugSkinId < 0.0)
 				preLit *= frac((input.Position.x + input.Position.y) / 12.0) < 0.5 ? 1.0 : 0.35;
-		}
-		else [branch] if (StaticsDebugView > 6.5)
-		{
-			// Lift Gradient mode (S-A Tier 0): how far this pixel's LIFT
-			// disagrees with its neighbours, as a fraction of the class depth.
-			// A coherent dome wall spends the class depth over many pixels; a
-			// sliver triangle spans it in one or two, so the screen-space lift
-			// gradient IS the tell - the same quantity round 30's shred rule
-			// thresholded before it was removed. Green = agreeing, amber = a
-			// real slope, red = a tear. MEASUREMENT ONLY: nothing consumes it,
-			// and it does not change what the shell draws.
-			// Normalised by the surface's OWN screen-space extent, not by the
-			// class depth. Dividing by liftBase made the same geometry read
-			// red at depth 0 and green at depth 25, because the divisor grows
-			// with the slider while a tear does not - Josef's 0-vs-25 pair,
-			// where the red vanished and every artifact it had been marking
-			// stayed. World units of lift change per world unit of surface
-			// change is dimensionless, so it reads the same at any depth AND
-			// at any distance. StaticsDebugView is a constant, so these
-			// derivatives sit in uniform control flow.
-			// pleat = world units of LIFT change per world unit of BASE
-			// SURFACE travel. The base is WorldPos with the lift subtracted
-			// back out of z - and that subtraction is the whole instrument.
-			// Lift is baked into the drawn WorldPos, so dividing by the raw
-			// position travel divides the lift change by a quantity that
-			// CONTAINS the lift change: on a vertical wall the two move in
-			// lockstep and the ratio is bounded at ~1 however violent the
-			// tear. That bound is why iteration 2 (threshold 1.5) painted
-			// every wall red and iteration 3 (threshold ~19) painted the same
-			// walls green - the measure could never leave [0,1]. Against the
-			// base, a tear is two vertices at nearly the SAME base position
-			// with lifts a class depth apart: base travel ~0, ratio explodes.
-			// A real mesh wall or the roll moves its base too, and stays low.
-			float3 baseDX = ddx(input.WorldPos);
-			float3 baseDY = ddy(input.WorldPos);
-			baseDX.z -= ddx(input.Lift);
-			baseDY.z -= ddy(input.Lift);
-			float pleat = max(abs(ddx(input.Lift)) / max(length(baseDX), 1e-3),
-			                  abs(ddy(input.Lift)) / max(length(baseDY), 1e-3));
-			// Scored against the steepest slope the shell is SUPPOSED to have:
-			// the cornice roll drops the whole class depth over kCorniceRoll
-			// units, so depth/kCorniceRoll is a legitimate silhouette and must
-			// not saturate. A flat threshold lit every plank end and rock rim,
-			// which is why the un-scored view could not be read as a work
-			// queue. NOT rim-gated on purpose: round 30 established the fences
-			// ARE at the object's edges, so excluding rims would delete exactly
-			// the thing this view exists to find. Magnitude separates them -
-			// the roll spends the depth over 4 units, a sliver spends it over
-			// one triangle.
-			float rollSlope = max(liftBase, kMinSkinLift) / kCorniceRoll;
-			float hot = saturate(pleat / max(rollSlope * kPleatOverRoll, 1e-3));
-			// BRIGHTNESS = whether the shell actually DRAWS here. Every debug
-			// mode forces coverageAlpha and fadeAlpha to 1 ("full visibility;
-			// the dither must not hide geometry the diagnosis needs to see"),
-			// so all of them paint the whole shell mesh, discards included -
-			// which is why an object reads as solid colour in every mode and
-			// why that is NOT a finding. dbgAlpha is that pass's real coverage,
-			// captured before the override. Bright red is a tear in snow you
-			// can see; dark red is a tear in geometry currently discarded -
-			// still worth knowing, not currently visible.
-			preLit = float3(hot, 1.0 - hot, 0.15 * (1.0 - hot)) * (0.2 + 0.8 * saturate(dbgAlpha));
-		}
-		else [branch] if (StaticsDebugView > 5.5)
-		{
-			// Shell Layers mode: WHICH peeled plane owns each pixel and
-			// what depth it was granted. Green = layer 1, yellow = layer 2,
-			// red = layer 3, magenta = below all three (no plane owns it),
-			// dim blue-gray = a non-S4 draw (roads/classic). Brightness =
-			// granted depth as a fraction of the slider; a dim pure color
-			// is a plane that got NO height - the exact signature of every
-			// starved-floor and cut-surface report.
-			float layer = floor(saturate(input.Coverage) * 8.0);
-			float bright = 0.25 + 0.75 * saturate(input.Flat);
-			float3 layerColor = float3(0.1, 0.15, 0.25);
-			[flatten] if (layer > 3.5)
-				layerColor = float3(1.0, 0.0, 1.0);
-			else [flatten] if (layer > 2.5)
-				layerColor = float3(1.0, 0.1, 0.1);
-			else [flatten] if (layer > 1.5)
-				layerColor = float3(1.0, 1.0, 0.1);
-			else [flatten] if (layer > 0.5)
-				layerColor = float3(0.1, 1.0, 0.1);
-			preLit = layerColor * bright;
 		}
 		else [branch] if (StaticsDebugView > 4.5)
 		{
