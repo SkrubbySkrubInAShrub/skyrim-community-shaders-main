@@ -204,11 +204,6 @@ public:
 	std::unique_ptr<Texture2D> sunRaysTexB;
 	std::unique_ptr<ConstantBuffer> sunRaysCB;
 
-	winrt::com_ptr<ID3D11Texture2D> raindropTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> raindropSRV;
-	std::string raindropStatus;
-	void LoadRaindropTexture();
-
 	/** @brief Sun color after the preset's sun desaturation and filter, normalized to a peak of 1; tints the sky scattering. */
 	float3 scatteringSunColor = { 1.0f, 1.0f, 1.0f };
 	/** @brief Sun direction used for sky scattering; mirrored below the horizon while the sun disc is hidden. */
