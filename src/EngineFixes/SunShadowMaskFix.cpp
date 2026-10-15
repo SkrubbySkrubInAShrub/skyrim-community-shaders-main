@@ -58,6 +58,7 @@ bool SunShadowMaskFix::ShouldSetSunBits(const RE::BSLightingShaderProperty* prop
 RE::BSShaderProperty::RenderPassArray* SunShadowMaskFix::BSLightingShaderProperty_GetRenderPasses::thunk(RE::BSLightingShaderProperty* property, RE::BSGeometry* geometry, uint32_t renderMode, RE::BSShaderAccumulator* accumulator)
 {
 	if (ShouldSetSunBits(property, geometry, renderMode, accumulator))
-		property->lightData->activeLightMask |= sunLightMask;
+		// Atomic so this worker write cannot drop bits the render thread's cascade cull sets concurrently.
+		std::atomic_ref(property->lightData->activeLightMask).fetch_or(sunLightMask);
 	return func(property, geometry, renderMode, accumulator);
 }
