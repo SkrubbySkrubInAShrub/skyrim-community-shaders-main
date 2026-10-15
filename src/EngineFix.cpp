@@ -6,6 +6,7 @@
 #include "EngineFixes/ShadowmapCascadeCullingFix.h"
 #include "EngineFixes/ShadowmapCascadeRasterizerFix.h"
 #include "EngineFixes/SunShadowMaskFix.h"
+#include "EngineFixes/SunOcclusionPollFix.h"
 #include "EngineFixes/WaterReflectionCubemapFix.h"
 
 const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
@@ -14,6 +15,7 @@ const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 	static ShadowmapCascadeCullingFix shadowmapCascadeCullingFix;
 	static ShadowmapRasterizerFix shadowmapRasterizerFix;
 	static SunShadowMaskFix sunShadowMaskFix;
+	static SunOcclusionPollFix sunOcclusionPollFix;
 	static WaterReflectionCubemapFix waterReflectionCubemapFix;
 
 	static std::vector<EngineFix*> fixes = {
@@ -23,6 +25,7 @@ const std::vector<EngineFix*>& EngineFix::GetOnPostPostLoadFixesList()
 		&shadowmapCascadeCullingFix,
 		&shadowmapRasterizerFix,
 		&sunShadowMaskFix,
+		&sunOcclusionPollFix,
 		&waterReflectionCubemapFix
 	};
 
