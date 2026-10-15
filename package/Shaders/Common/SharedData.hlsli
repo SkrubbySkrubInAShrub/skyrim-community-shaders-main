@@ -414,7 +414,10 @@ namespace SharedData
 		// recoloured snow darkens like the shell's. Was a pad. Mirror in
 		// SnowDeformation.h.
 		float LandWetPrint;
-		float LandWetPad;
+		// Snow Trenches on Objects: the stored depth of a full print (Snow
+		// Resistance's share); 0 = no print goes bare. Was a pad. Mirror in
+		// SnowDeformation.h.
+		float PrintFullDepth;
 
 		// Water raster (t104) frame: world xy of texel (0,0), texel size;
 		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.
@@ -433,6 +436,11 @@ namespace SharedData
 		// Land Snow Recolor: luminance where a snow layer's texel starts to
 		// read as snow. Mirror in SnowDeformation.h.
 		float LandRecolorLumLo;
+
+		// Snow Trenches on Objects: the world print texels [xy, zw) the print
+		// map (t114) holds for this frame; empty = nothing to read. Mirror in
+		// SnowDeformation.h.
+		int4 PrintRect;
 	};
 
 	cbuffer FeatureData : register(b6)

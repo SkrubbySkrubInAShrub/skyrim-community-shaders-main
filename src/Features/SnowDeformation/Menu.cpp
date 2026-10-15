@@ -1279,11 +1279,11 @@ void SnowDeformation::DrawSettings()
 				if (debugObjectPrintView) {
 					WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: each print texel's verdict this frame (black = no body over it, BLUE = the body is in the ground's snow layer, so the trench map takes it, MAGENTA = no captured object's top at the contact's height, green to yellow = a print, brighter = deeper). RIGHT: the print map over the SAME ground (red = slot A depth, green = slot B, the second surface level; faint blue = print texel edges when zoomed in; grey = outside the window). Yellow box = the player's world bound on both.",
 						2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);
-					WrapTextF("  print map: %u texels a side (%.0f m reach), window corner (%.0f, %.0f) | %zu live tiles, %zu stored | last frame: %u stamp blocks, %u refill blocks, %u tiles mirrored, %u injected%s",
+					WrapTextF("  print map: %u texels a side (%.0f m reach), window corner (%.0f, %.0f) | %zu live tiles, %zu stored | last frame: %u stamp blocks, %u refill blocks, %u tiles mirrored, %u injected, %u drapes on the print twin%s%s",
 						printMapDim, 0.5f * (float)printMapDim * kPrintTexel / kUnitsPerMeter,
 						(float)printWindowMin.x * kPrintTexel, (float)printWindowMin.y * kPrintTexel,
 						printLive.size(), printStoreTilesLast, printStampBlocksLast, printRefillBlocksLast, printMirrorsLast, printInjectsLast,
-						printCSFailed ? " | KERNELS FAILED TO COMPILE" : "");
+						printTwinDrawsLast, staticsPSDrapePrintsNoDepth ? "" : " (TWIN NOT COMPILED)", printCSFailed ? " | KERNELS FAILED TO COMPILE" : "");
 				} else {
 					WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: the contact field as the carve pass samples it (red = carve fraction, green = hovering, MAGENTA = the surface reads below that column's ground, which carves full depth without touching anything, black = nothing drawn). RIGHT: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
 						2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);

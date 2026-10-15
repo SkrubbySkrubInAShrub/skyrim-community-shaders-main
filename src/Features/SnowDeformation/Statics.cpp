@@ -696,6 +696,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	bool bindSnowSet = false;
+	bool projectedSnow = false;
 	if (settings.ProjSnowMatch) {
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
 		const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
@@ -743,6 +744,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			statProjMatched++;
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 			bindSnowSet = true;
+			projectedSnow = true;
 		}
 	}
 	// Plain object LOD: DynDOLOD's unflagged batches (drifts, roads, piles
@@ -777,6 +779,9 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		ID3D11ShaderResourceView* horizonSnowSRVs[3] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get(),
 			waterFineTexture ? waterFineTexture->srv.get() : nullptr };
 		globals::d3d::context->PSSetShaderResources(102, 3, horizonSnowSRVs);
+		// The print readers (t114-t115), same fate; only projected snow reads them.
+		if (projectedSnow && printRectPublished.z > printRectPublished.x)
+			BindPrintReaders(globals::d3d::context);
 	}
 }
 
@@ -1762,6 +1767,16 @@ bool SnowDeformation::EnsureStaticsShaders()
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrepass)))
 				Util::SetResourceName(staticsPSDrapePrepass, "SnowDeformation::StaticsShellPS Drape Prepass");
+		}
+	}
+	// The drapes' print twin (SNOW_OBJECT_PRINTS), for draws over prints. A
+	// failure keeps them on the drape twin.
+	if (!staticsPSDrapePrintsNoDepth) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrintsNoDepth)))
+				Util::SetResourceName(staticsPSDrapePrintsNoDepth, "SnowDeformation::StaticsShellPS Drape Prints NoDepth");
 		}
 	}
 
@@ -3673,6 +3688,8 @@ void SnowDeformation::DrawCapturedStatics()
 	// index), as Lighting does at t14.
 	ID3D11ShaderResourceView* gameShadowMaskSRV = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
 	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
+	// The print map and its tiles (t114-t115), for the drapes' print twin.
+	BindPrintReaders(context);
 
 	// Depth prepass for the skins. Unlike the shell's, the private test
 	// depth is written BY the prepass draws themselves rather than through a
@@ -3741,6 +3758,8 @@ void SnowDeformation::DrawCapturedStatics()
 		uint32_t scratchBase;
 		bool decalDepth;
 		winrt::com_ptr<ID3D11ShaderResourceView> smoothSRV;
+		// A drape over prints: shaded by the print twin.
+		bool prints;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
@@ -3749,6 +3768,7 @@ void SnowDeformation::DrawCapturedStatics()
 	EnsureClusterResources(clusterScratchNeeded);
 	uint32_t scratchNext = 0;
 	uint32_t scratchWanted = 0;
+	uint32_t printTwinDraws = 0;
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
@@ -3852,8 +3872,10 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? cacheIt->second.boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV });
+			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound) });
+		printTwinDraws += skinDraws.back().prints ? 1u : 0u;
 	}
+	printTwinDrawsLast = printTwinDraws;
 
 	auto statsRow = [](const char* a_name) {
 		globals::profiler->EndPass();
@@ -4130,13 +4152,15 @@ void SnowDeformation::DrawCapturedStatics()
 			}
 
 			// Drapes take the SNOW_STATICS_DRAPE twins, which fold exactly
-			// what FillSkinDrawCB gives every S4 draw, with no debug view.
+			// what FillSkinDrawCB gives every S4 draw, with no debug view;
+			// drapes over prints shade through the print twin.
 			const bool drapePS = d.s4Shell && staticsDebugView == 0;
+			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth : staticsPSDrapeNoDepth;
 			ID3D11PixelShader* wantPS = nullptr;
 			if (a_prepass)
 				wantPS = (drapePS && !staticsPrepassExitOff && staticsPSDrapePrepass) ? staticsPSDrapePrepass : prepassPS;
 			else if (!needsDepth && staticsPSNoDepth)
-				wantPS = (drapePS && staticsPSDrapeNoDepth) ? staticsPSDrapeNoDepth : staticsPSNoDepth;
+				wantPS = (drapePS && drapeShadePS) ? drapeShadePS : staticsPSNoDepth;
 			else
 				wantPS = staticsPS;
 			if (wantPS != boundStaticsPS) {

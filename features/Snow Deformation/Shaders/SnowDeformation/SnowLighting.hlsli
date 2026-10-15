@@ -30,6 +30,8 @@ namespace SnowLighting
 		float3 projAlbedo;
 		// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
 		bool underWater;
+		// Snow Trenches on Objects: how much of the projection a print takes off.
+		float printBare;
 		float lodReplaceW;
 		float3 lodAlbedo;
 		float texWeight;
@@ -373,6 +375,13 @@ namespace SnowLighting
 	{
 		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 || SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5)
 			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
+#	if defined(PROJECTED_UV)
+		// The facet normal, written as Lighting's triFaceNormal so the compiler
+		// folds the two. Prints lie on tops: the flank under one keeps its snow.
+		const float3 faceNormal = normalize(-cross(ddx(worldRel), ddy(worldRel)));
+		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+			s.printBare = SnowPrints::Bare(worldRel + FrameBuffer::CameraPosAdjust.xyz) * smoothstep(0.5, 0.75, faceNormal.z);
+#	endif
 	}
 #endif
 
@@ -397,6 +406,11 @@ namespace SnowLighting
 		// on snow-classified draws only (the sparkle pass then discards).
 		[flatten] if (s.underWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 			vertexAlpha = 0.0;
+		// In a print the object goes bare (Snow Trenches on Objects): -1 puts a
+		// top's projWeight under every reader's threshold, where 0 would leave
+		// it barely under the projection's own threshold.
+		[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+			vertexAlpha = lerp(vertexAlpha, -1.0, s.printBare);
 		return vertexAlpha;
 	}
 

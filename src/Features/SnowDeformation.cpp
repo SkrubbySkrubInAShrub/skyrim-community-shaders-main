@@ -733,6 +733,9 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = std::clamp(landRecolorLumLo, 0.0f, 1.0f);
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
+	// Snow Trenches on Objects: after the window advance above, which the print window follows.
+	data.PrintFullDepth = BodyPrintScale();
+	data.PrintRect = PrintRectForFrame();
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// skins are gated the same way in DrawCapturedStatics.
@@ -985,6 +988,7 @@ void SnowDeformation::PrepassSimulation()
 	// Water raster (t104) for Lighting's underwater veto; null until captured.
 	ID3D11ShaderResourceView* waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(104, 1, &waterSRV);
+	BindPrintReaders(context);
 	// Horizon snow albedo (t102) + normals (t103) for the LOD terrain
 	// recolor; the shader gates on LODReplaceEnable/SnowHasNormal, which
 	// require these SRVs to exist.
@@ -1805,6 +1809,7 @@ void SnowDeformation::PrepassSimulation()
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(104, 1, &waterSRV);
+	BindPrintReaders(context);
 	spanClock.Lap(CpuCensus::kSpanPrepassTail);
 }
 
@@ -2300,6 +2305,9 @@ void SnowDeformation::ClearShaderCache()
 	if (staticsPSDrapePrepass)
 		staticsPSDrapePrepass->Release();
 	staticsPSDrapePrepass = nullptr;
+	if (staticsPSDrapePrintsNoDepth)
+		staticsPSDrapePrintsNoDepth->Release();
+	staticsPSDrapePrintsNoDepth = nullptr;
 	if (patchVS)
 		patchVS->Release();
 	patchVS = nullptr;

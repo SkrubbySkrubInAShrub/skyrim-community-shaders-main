@@ -8,6 +8,9 @@
 // the camera, produced each frame by DeformationUpdateCS. Texel value is
 // normalized depression depth: 0 = untouched snow, 1 = compressed to ground.
 
+// Snow Trenches on Objects: the print map (t114) and its tiles (t115).
+#include "SnowDeformation/SnowPrints.hlsli"
+
 namespace SnowDeformation
 {
 	Texture2D<float4> DeformationMap : register(t101);

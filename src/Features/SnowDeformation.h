@@ -750,7 +750,8 @@ public:
 		DirectX::XMINT2 DeformMapOrigin;
 		/** @brief Snow Climate x wetness at the player, for the wet print on the land's recoloured snow (SnowLighting.hlsli LandRecolorBegin). Took the torus pad. Mirror in SharedData.hlsli. */
 		float LandWetPrint;
-		float LandWetPad;
+		/** @brief Snow Trenches on Objects: the stored depth of a full print, BodyPrintScale(); 0 = no print goes bare. Was a pad. Mirror in SharedData.hlsli. */
+		float PrintFullDepth;
 
 		/** @brief Water raster (t104) frame for Lighting's underwater veto: world xy of texel (0,0) and the texel size; Dim 0 = no raster this frame. Mirror in SharedData.hlsli. */
 		float2 WaterWindowOrigin;
@@ -765,6 +766,9 @@ public:
 		float SnowSpecularLevel;
 		/** @brief Land Snow Recolor: luminance where a snow layer's texel starts to read as snow. Mirror in SharedData.hlsli. */
 		float LandRecolorLumLo;
+
+		/** @brief Snow Trenches on Objects: the world print texels [xy, zw) the print map (t114) holds this frame; empty = nothing to read. Mirror in SharedData.hlsli. */
+		DirectX::XMINT4 PrintRect;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -3441,6 +3445,8 @@ public:
 	/** @brief SNOW_STATICS_DRAPE twins of the no-export shading and prepass shaders: the values FillSkinDrawCB gives every drape (S4) draw, and the debug views off, folded in. Chosen per draw for drapes; a compile failure keeps the general pair. */
 	ID3D11PixelShader* staticsPSDrapeNoDepth = nullptr;
 	ID3D11PixelShader* staticsPSDrapePrepass = nullptr;
+	/** @brief The drapes' print twin (SNOW_OBJECT_PRINTS): the no-export drape PS plus the rim around a bare print. Chosen per draw where the print map holds prints under it; a compile failure keeps those drapes on staticsPSDrapeNoDepth. */
+	ID3D11PixelShader* staticsPSDrapePrintsNoDepth = nullptr;
 	ID3D11PixelShader* GetStaticsPSPrepassKeepHidden();
 	/** @brief A/B, runtime-only: the skins' prepass runs the alpha cut on quads already behind the main depth. */
 	bool staticsPrepassExitOff = false;
@@ -4610,6 +4616,8 @@ protected:
 	static constexpr uint32_t kPrintMirrorPerFrame = 4;
 	static constexpr uint32_t kPrintRecord = 'SNOP';
 	static constexpr uint32_t kPrintRecordVersion = 1;
+	/** @brief PS slots of the print readers (SnowPrints.hlsli): t114 the print map, t115 its tile mask. */
+	static constexpr UINT kPrintReaderSlot = 114;
 
 	/** @brief Per-frame constants of the print passes (b1). Layout must match PrintFrame in DeformationUpdateCS.hlsl. */
 	struct alignas(16) PrintFrameCB
@@ -4711,6 +4719,22 @@ protected:
 	size_t printStoreTilesLast = 0;
 	/** @brief Runtime-only: the field view shows the print verdicts and the print map (PrintViewCS) instead of the trench pair. */
 	bool debugObjectPrintView = false;
+	/** @brief The readers' tile mask (PS t115): one R8 texel per print tile on the map's world-anchored grid, nonzero where the tile or the next one along x, y or both holds prints, so a reader's texel block takes one load. */
+	Texture2D* printTiles = nullptr;
+	/** @brief The mask as last built and as last uploaded; it uploads only when it changes. */
+	std::vector<uint8_t> printTilesScratch;
+	std::vector<uint8_t> printTilesUploaded;
+	/** @brief Summed-area table of the live tiles over the window's tile grid, for the drapes' twin choice: printTileSumDim tiles a side from printTileSumOrigin. */
+	std::vector<uint32_t> printTileSum;
+	DirectX::XMINT2 printTileSumOrigin = { 0, 0 };
+	int32_t printTileSumDim = 0;
+	/** @brief The window and dim this frame's update moves the map to, decided with the trench window in GetCommonBufferData so the readers' rect agrees with the map. */
+	DirectX::XMINT2 printWindowTarget = { 0, 0 };
+	uint32_t printDimTarget = 0;
+	/** @brief This frame's SettingsGPU::PrintRect. */
+	DirectX::XMINT4 printRectPublished = { 0, 0, 0, 0 };
+	/** @brief Debug readout: drape draws on the print twin last frame. */
+	uint32_t printTwinDrawsLast = 0;
 
 	/** @brief The print map's frame: window, mirror, ring, inject, refill, stamp, view. Runs after the trench dispatch; a_trenchPassRan says whether PerFrame (b0) holds this frame's values. */
 	void UpdateObjectPrints(ID3D11DeviceContext* a_context, const PerFrame& a_frame, bool a_trenchPassRan);
@@ -4736,6 +4760,14 @@ protected:
 	void RegisterPrintCoSave();
 	void SavePrintStore(const SKSE::SerializationInterface* a_intfc);
 	void LoadPrintStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
+	/** @brief Decides this frame's print window (printWindowTarget, printDimTarget) and returns the rect the readers may use: the texels both the map as it stands and the map after this frame's update hold. Called from GetCommonBufferData. */
+	DirectX::XMINT4 PrintRectForFrame();
+	/** @brief Rebuilds the tile mask and the live-tile sums from printLive; uploads the mask when it changed. */
+	void PublishPrintTiles(ID3D11DeviceContext* a_context);
+	/** @brief Whether a world bound reaches a tile holding prints: the drapes' twin choice. */
+	bool PrintsUnder(const RE::NiBound& a_bound) const;
+	/** @brief Binds the print map and its tile mask for the readers (PS t114-t115) while the published rect is live, else nulls them. */
+	void BindPrintReaders(ID3D11DeviceContext* a_context) const;
 
 public:
 	/** @brief Applies pending range-setting changes (trench window resize + map clear). Called at Prepass start; the first call applies loaded settings. */

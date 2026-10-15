@@ -63,6 +63,12 @@ namespace
 	{
 		return std::any_of(a_texels.begin(), a_texels.end(), [](uint32_t v) { return (v & 1023u) != 0u; });
 	}
+
+	// The three map sizes the reach setting offers.
+	uint32_t SnapPrintDim(uint32_t a_dim)
+	{
+		return a_dim >= 2048u ? 2048u : (a_dim >= 1024u ? 1024u : 512u);
+	}
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintStampCS()
@@ -142,6 +148,26 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 	uavDesc.Texture2DArray = { 0, 0, 2 };
 	printMap->CreateUAV(uavDesc);
 	printMapDim = a_dim;
+
+	delete printTiles;
+	printTiles = nullptr;
+	D3D11_TEXTURE2D_DESC tilesDesc{};
+	tilesDesc.Width = a_dim / kPrintTileDim;
+	tilesDesc.Height = a_dim / kPrintTileDim;
+	tilesDesc.MipLevels = 1;
+	tilesDesc.ArraySize = 1;
+	tilesDesc.Format = DXGI_FORMAT_R8_UINT;
+	tilesDesc.SampleDesc.Count = 1;
+	tilesDesc.Usage = D3D11_USAGE_DEFAULT;
+	tilesDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	printTiles = new Texture2D(tilesDesc, "SnowDeformation::PrintTiles");
+	D3D11_SHADER_RESOURCE_VIEW_DESC tilesSrvDesc{};
+	tilesSrvDesc.Format = tilesDesc.Format;
+	tilesSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	tilesSrvDesc.Texture2D.MipLevels = 1;
+	printTiles->CreateSRV(tilesSrvDesc);
+	// Uploaded whole by the next publish.
+	printTilesUploaded.clear();
 
 	if (!printFrameCB)
 		printFrameCB = new ConstantBuffer(ConstantBufferDesc<PrintFrameCB>(), "SnowDeformation::PrintFrameCB");
@@ -424,12 +450,18 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 {
 	if (!EnsurePrintShaders())
 		return;
-	const uint32_t wantDim = settings.ObjectTrenchResolution >= 2048u ? 2048u : (settings.ObjectTrenchResolution >= 1024u ? 1024u : 512u);
+	// Window and dim as GetCommonBufferData decided them for this frame.
+	if (!printDimTarget)
+		PrintRectForFrame();
+	const uint32_t wantDim = printDimTarget;
 	settings.ObjectTrenchResolution = wantDim;
 	if (wantDim != printMapDim)
 		CreatePrintResources(wantDim);
 	if (!printMap)
 		return;
+	// The readers let go before the map is a UAV target; PrepassSimulation binds them again.
+	ID3D11ShaderResourceView* nullReaders[2] = {};
+	a_context->PSSetShaderResources(kPrintReaderSlot, 2, nullReaders);
 	printFrame++;
 	printStampBlocksLast = printRefillBlocksLast = printMirrorsLast = printInjectsLast = 0;
 
@@ -466,8 +498,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	PollPrintMirrors(a_context);
 
 	const int32_t dim = (int32_t)printMapDim;
-	const DirectX::XMINT2 newMin = { (int32_t)std::floor(contactCenter.x / kPrintTexel) - dim / 2,
-		(int32_t)std::floor(contactCenter.y / kPrintTexel) - dim / 2 };
+	const DirectX::XMINT2 newMin = printWindowTarget;
 	const DirectX::XMINT4 newWindow = { newMin.x, newMin.y, dim, dim };
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	const int32_t dx = newMin.x - printWindowMin.x;
@@ -701,6 +732,8 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		}
 	}
 
+	PublishPrintTiles(a_context);
+
 	{
 		std::scoped_lock lock(printStoreMutex);
 		printStoreTilesLast = printStore.size();
@@ -712,6 +745,87 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	a_context->CSSetUnorderedAccessViews(0, 3, nullUAV, nullptr);
 	ID3D11Buffer* nullCBs[2] = {};
 	a_context->CSSetConstantBuffers(0, 2, nullCBs);
+}
+
+DirectX::XMINT4 SnowDeformation::PrintRectForFrame()
+{
+	// The window follows the trench window's centre, as the contact field does
+	// (contactCenter), and is decided here, with it, so the rect and the map agree.
+	printDimTarget = SnapPrintDim(settings.ObjectTrenchResolution);
+	const int32_t dim = (int32_t)printDimTarget;
+	printWindowTarget = { (int32_t)std::floor((windowOrigin.x + deformWorldSize * 0.5f) / kPrintTexel) - dim / 2,
+		(int32_t)std::floor((windowOrigin.y + deformWorldSize * 0.5f) / kPrintTexel) - dim / 2 };
+	// Only texels both the map as it stands and the map after this frame's
+	// update hold: the update may not run (suspended passes, a pause), and when
+	// it runs it may move, clear or remake the map.
+	printRectPublished = { 0, 0, 0, 0 };
+	DirectX::XMINT4 both{};
+	if (settings.EnableSnowDeformation && printMap && printWindowValid && !printLive.empty() &&
+		!printReinjectRequested.load(std::memory_order_acquire) && printWorldspace == activeWorldspace.load(std::memory_order_acquire) &&
+		Overlap({ printWindowMin.x, printWindowMin.y, (int32_t)printMapDim, (int32_t)printMapDim }, { printWindowTarget.x, printWindowTarget.y, dim, dim }, both))
+		printRectPublished = { both.x, both.y, both.x + both.z, both.y + both.w };
+	return printRectPublished;
+}
+
+void SnowDeformation::PublishPrintTiles(ID3D11DeviceContext* a_context)
+{
+	if (!printTiles)
+		return;
+	const int32_t n = (int32_t)printMapDim / kPrintTileDim;
+	const int32_t mask = n - 1;
+	printTilesScratch.assign((size_t)n * n, 0);
+	// The window's corner sits off the tile grid, so it touches one tile more a side than the map holds.
+	const int32_t w = n + 1;
+	printTileSumOrigin = { FloorDiv(printWindowMin.x, kPrintTileDim), FloorDiv(printWindowMin.y, kPrintTileDim) };
+	printTileSumDim = w;
+	printTileSum.assign((size_t)(w + 1) * (w + 1), 0u);
+	for (const auto& [id, live] : printLive) {
+		const int32_t tx = PrintTileX(id);
+		const int32_t ty = PrintTileY(id);
+		// A reader's block starts in one tile and may run into the next along
+		// x, y or both: the tile and the three before it are marked.
+		for (int32_t dy = 0; dy <= 1; dy++)
+			for (int32_t dx = 0; dx <= 1; dx++)
+				printTilesScratch[(size_t)((ty - dy) & mask) * n + ((tx - dx) & mask)] = 1;
+		const int32_t lx = tx - printTileSumOrigin.x;
+		const int32_t ly = ty - printTileSumOrigin.y;
+		if (lx >= 0 && ly >= 0 && lx < w && ly < w)
+			printTileSum[(size_t)(ly + 1) * (w + 1) + lx + 1] = 1u;
+	}
+	for (int32_t y = 1; y <= w; y++)
+		for (int32_t x = 1; x <= w; x++)
+			printTileSum[(size_t)y * (w + 1) + x] += printTileSum[(size_t)(y - 1) * (w + 1) + x] + printTileSum[(size_t)y * (w + 1) + x - 1] -
+			                                         printTileSum[(size_t)(y - 1) * (w + 1) + x - 1];
+	if (printTilesScratch != printTilesUploaded) {
+		a_context->UpdateSubresource(printTiles->resource.get(), 0, nullptr, printTilesScratch.data(), (UINT)n, 0);
+		printTilesUploaded = printTilesScratch;
+	}
+}
+
+bool SnowDeformation::PrintsUnder(const RE::NiBound& a_bound) const
+{
+	if (printTileSumDim <= 0 || printRectPublished.z <= printRectPublished.x || printRectPublished.w <= printRectPublished.y ||
+		!std::isfinite(a_bound.center.x) || !std::isfinite(a_bound.center.y) || !(a_bound.radius >= 0.0f && a_bound.radius < 1e6f))
+		return false;
+	// The twin reads up to a texel and a half past its pixel.
+	const float reach = a_bound.radius + 2.0f * kPrintTexel;
+	const float tileSize = kPrintTexel * (float)kPrintTileDim;
+	const int32_t w = printTileSumDim;
+	const int32_t x0 = std::max((int32_t)std::floor((a_bound.center.x - reach) / tileSize) - printTileSumOrigin.x, 0);
+	const int32_t y0 = std::max((int32_t)std::floor((a_bound.center.y - reach) / tileSize) - printTileSumOrigin.y, 0);
+	const int32_t x1 = std::min((int32_t)std::floor((a_bound.center.x + reach) / tileSize) - printTileSumOrigin.x, w - 1);
+	const int32_t y1 = std::min((int32_t)std::floor((a_bound.center.y + reach) / tileSize) - printTileSumOrigin.y, w - 1);
+	if (x0 > x1 || y0 > y1)
+		return false;
+	const auto sum = [&](int32_t a_x, int32_t a_y) { return printTileSum[(size_t)a_y * (w + 1) + a_x]; };
+	return sum(x1 + 1, y1 + 1) - sum(x0, y1 + 1) - sum(x1 + 1, y0) + sum(x0, y0) > 0u;
+}
+
+void SnowDeformation::BindPrintReaders(ID3D11DeviceContext* a_context) const
+{
+	const bool live = printMap && printTiles && printRectPublished.z > printRectPublished.x && printRectPublished.w > printRectPublished.y;
+	ID3D11ShaderResourceView* srvs[2] = { live ? printMap->srv.get() : nullptr, live ? printTiles->srv.get() : nullptr };
+	a_context->PSSetShaderResources(kPrintReaderSlot, 2, srvs);
 }
 
 void SnowDeformation::SavePrintStore(const SKSE::SerializationInterface* a_intfc)
