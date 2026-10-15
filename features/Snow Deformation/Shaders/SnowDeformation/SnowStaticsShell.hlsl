@@ -155,7 +155,7 @@ cbuffer ShellCB : register(b0)
 
 	// 1 / Berm Steepness (see SnowShell.hlsl).
 	float BermReach;
-	// The dominant detail set's slice: 0 powder, 1 firm, 2 wet.
+	// The dominant detail set's slice: 0 powder, 1 wet.
 	uint TrenchDetailSlice;
 	float SeamRampInv;
 	// >0.5: read the berm field from the bake at t14 instead of recomputing

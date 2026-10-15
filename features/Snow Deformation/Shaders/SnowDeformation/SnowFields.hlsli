@@ -254,14 +254,14 @@ bool ShellUntouched(float2 gridLocal)
 }
 
 // Trench detail tile: 64 units on 1024 texels, its height stored as 0.5 + h / 6
-// about the tile mean (the firm set reaches +-2.51), one stochastic offset per
-// tile cell (CS's sampler, one lattice cell per tile). Slice 0 is the powder
-// set, 2 the wet.
+// about the tile mean (the powder set reaches furthest, +2.38), one stochastic
+// offset per tile cell (CS's sampler, one lattice cell per tile). Slice 0 is
+// the powder set, 1 the wet.
 static const float kTrenchDetailTile = 64.0;
 static const float kTrenchDetailSpan = 6.0;
 static const float kTrenchDetailReach = 2.75;
 static const float kTrenchDetailPowder = 0.0;
-static const float kTrenchDetailWet = 2.0;
+static const float kTrenchDetailWet = 1.0;
 
 // The detail's two stochastic taps at a point: CS's sampler picks the two
 // lattice cells and the dominant one's weight, and each cell turns its tile by

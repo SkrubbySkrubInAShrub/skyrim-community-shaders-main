@@ -838,10 +838,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("trench_detail_coverage_tooltip"), "How far across a trench the detail reaches. 0 = the trench floor only, 1 = the floor and walls to just past the rim, 2 = out over the berm, 2.5 = the berm's whole apron. The edge fades softly at every setting and every snow depth, and the detail fades out where a trench meets an object."));
 
 		{
-			const char* sets[] = { "By Snow Condition", "Powder", "Firm", "Wet" };
-			ImGui::Combo(T(TKEY("trench_detail_set"), "Detail Set"), &settings.TrenchDetailSet, sets, 4);
+			const char* sets[] = { "By Snow Condition", "Powder", "Wet" };
+			int set = settings.TrenchDetailSet == 3 ? 2 : settings.TrenchDetailSet == 1 ? 1 : 0;
+			if (ImGui::Combo(T(TKEY("trench_detail_set"), "Detail Set"), &set, sets, 3))
+				settings.TrenchDetailSet = set == 2 ? 3 : set;
 			if (auto _ttTdSet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition blends them with the weather: wet as the snow turns wet, powder while it is fresh, firm once it has settled, each fading into the next. The others force one set for comparison."));
+				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition follows the weather: powder on dry snow, fresh or settled, and wet as the snow turns wet, the one fading into the other. The others force one set for comparison."));
 			if (settings.TrenchDetailSet == 0) {
 				const float3 blend = TrenchDetailBlend();
 				if (blend.z > 0.005f)
@@ -2126,7 +2128,7 @@ void SnowDeformation::DrawSettings()
 				const SnowClimateLook look = ComputeSnowClimateLook();
 				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, wall slough %.2f", look.strength,
 					look.berm, look.lip, look.teeth, look.slough);
-				static const char* kDetailSets[] = { "powder", "firm", "wet" };
+				static const char* kDetailSets[] = { "powder", "wet" };
 				const float3 blend = TrenchDetailBlend();
 				WrapTextF("Trench detail%s: %s %.0f%%, %s %.0f%%", settings.TrenchDetailSet == 0 ? "" : " (forced)", kDetailSets[int(blend.x)], 100.0f * (1.0f - blend.z),
 					kDetailSets[int(blend.y)], 100.0f * blend.z);

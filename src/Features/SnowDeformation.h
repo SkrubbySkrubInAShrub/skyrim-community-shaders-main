@@ -599,7 +599,7 @@ public:
 		float TrenchDetailRoughness = 1.0f;
 		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
 		float TrenchDetailCoverage = 1.75f;
-		/** @brief Trench detail set: 0 by the snow condition, 1 powder, 2 firm, 3 wet. */
+		/** @brief Trench detail set: 0 by the snow condition, 1 powder, 3 wet. 2 was the retired firm set; LoadSettings reads it as 0. */
 		int TrenchDetailSet = 0;
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades and the SSS mask shade the snow. A/B for dark blotches on open snow at a low sun. */
 		bool ShellHorizonMarch = true;
@@ -1349,13 +1349,13 @@ public:
 	ID3D11ComputeShader* GetNoiseHashCS();
 	/** @brief Bakes the hash table on the first call after it was created; the bound SRV, or null until baked. */
 	ID3D11ShaderResourceView* NoiseHashSRV();
-	/** @brief Trench detail tiles (tools/churn-tiles/pack_game.py): BC5 arrays, slices powder / firm / wet; normal at PS t112, (height, cavity) at t113, read by the ground's and the road patch's shading. Absent files leave the detail off. */
+	/** @brief Trench detail tiles (tools/churn-tiles/pack_game.py): BC5 arrays, slices powder / wet; normal at PS t112, (height, cavity) at t113, read by the ground's and the road patch's shading. Absent files leave the detail off. */
 	static constexpr uint32_t kTrenchDetailSlot = 112;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailNormalSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailHeightSRV;
 	bool trenchDetailAttempted = false;
 	void EnsureTrenchDetailTextures();
-	/** @brief This frame's detail sets: x the dominant slice, y the second, z the second's weight (0 = one set). Settings::TrenchDetailSet forces one; by the snow condition the weights cross over in bands, wet around wetness 0.5 and powder against firm around freshness = firmness. */
+	/** @brief This frame's detail sets: x the dominant slice, y the second, z the second's weight (0 = one set). Settings::TrenchDetailSet forces one; by the snow condition wet takes over from powder in a band around wetness 0.5. */
 	float3 TrenchDetailBlend() const;
 	/** @brief Runtime-only: the trench detail coverage view (ShellCB::TrenchDetailView). */
 	bool debugTrenchDetailView = false;
@@ -1676,7 +1676,7 @@ public:
 
 		/** @brief BermReachScale() (Berm Steepness), for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float BermReach;
-		/** @brief Trench detail: the dominant set's slice, 0 powder, 1 firm, 2 wet (TrenchDetailBlend()). Claims the retired distant-snow debug keeper. */
+		/** @brief Trench detail: the dominant set's slice, 0 powder, 1 wet (TrenchDetailBlend()). Claims the retired distant-snow debug keeper. */
 		uint TrenchDetailSlice;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
 		float SeamRampInv;

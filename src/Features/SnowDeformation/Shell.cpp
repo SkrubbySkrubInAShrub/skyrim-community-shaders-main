@@ -191,27 +191,14 @@ void SnowDeformation::EnsureTrenchDetailTextures()
 
 float3 SnowDeformation::TrenchDetailBlend() const
 {
-	if (settings.TrenchDetailSet >= 1 && settings.TrenchDetailSet <= 3)
-		return { float(settings.TrenchDetailSet - 1), 0.0f, 0.0f };
-	const auto smooth = [](float a_e0, float a_e1, float a_x) {
-		const float t = std::clamp((a_x - a_e0) / (a_e1 - a_e0), 0.0f, 1.0f);
-		return t * t * (3.0f - 2.0f * t);
-	};
-	const SnowCondition c = GetSnowCondition();
-	const float wet = smooth(0.35f, 0.65f, c.wetness);
-	const float powder = smooth(-0.15f, 0.15f, c.freshness - c.firmness);
-	const float w[3] = { (1.0f - wet) * powder, (1.0f - wet) * (1.0f - powder), wet };
-	// The two heaviest mix; the third drops out (it weighs most where both
-	// crossovers meet, a rare corner).
-	int a = 0;
-	for (int i = 1; i < 3; i++)
-		if (w[i] > w[a])
-			a = i;
-	int b = a == 0 ? 1 : 0;
-	for (int i = 0; i < 3; i++)
-		if (i != a && w[i] > w[b])
-			b = i;
-	return { float(a), float(b), w[b] / std::max(w[a] + w[b], 1e-4f) };
+	// Slices: 0 powder, 1 wet. Settings 1 and 3 force one (2 was firm, retired).
+	if (settings.TrenchDetailSet == 1)
+		return { 0.0f, 0.0f, 0.0f };
+	if (settings.TrenchDetailSet == 3)
+		return { 1.0f, 0.0f, 0.0f };
+	const float t = std::clamp((GetSnowCondition().wetness - 0.35f) / 0.3f, 0.0f, 1.0f);
+	const float wet = t * t * (3.0f - 2.0f * t);
+	return wet > 0.5f ? float3{ 1.0f, 0.0f, 1.0f - wet } : float3{ 0.0f, 1.0f, wet };
 }
 
 void SnowDeformation::EnsureShellSnowTextures()

@@ -186,7 +186,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	// 1 / Berm Steepness: the berm tap reach (BermFieldTapped, BermGradStep).
 	float BermReach;
-	uint TrenchDetailSlice;  // the dominant detail set's slice: 0 powder, 1 firm, 2 wet
+	uint TrenchDetailSlice;  // the dominant detail set's slice: 0 powder, 1 wet
 	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
 	// data (fall back to the warped-span fade alone).
 	float SeamRampInv;

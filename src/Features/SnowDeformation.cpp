@@ -2388,6 +2388,9 @@ void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.RangeSkinsM = std::clamp(settings.RangeSkinsM, kMinRangeSkinsM, 750.0f);
+	// 2 was the retired firm detail set.
+	if (settings.TrenchDetailSet != 1 && settings.TrenchDetailSet != 3)
+		settings.TrenchDetailSet = 0;
 	// Loaded values may change the window size or map resolution; the apply
 	// path is a no-op when they match the current state.
 	trenchRangeDirty = true;
