@@ -48,6 +48,7 @@
 #define ICON_FA_SYNC_ALT "\xef\x8b\xb1"	// U+f2f1
 #define ICON_FA_PEN "\xef\x8c\x84"	// U+f304
 #define ICON_FA_EXTERNAL_LINK_ALT "\xef\x8d\x9d"	// U+f35d
+#define ICON_FA_EXCHANGE_ALT "\xef\x8d\xa2"	// U+f362
 #define ICON_FA_MAP_MARKER_ALT "\xef\x8f\x85"	// U+f3c5
 #define ICON_FA_SHIELD_ALT "\xef\x8f\xad"	// U+f3ed
 #define ICON_FA_CHESS_ROOK "\xef\x91\x87"	// U+f447
@@ -115,6 +116,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf2f1, 0xf2f1,
 	0xf304, 0xf304,
 	0xf35d, 0xf35d,
+	0xf362, 0xf362,
 	0xf3c5, 0xf3c5,
 	0xf3ed, 0xf3ed,
 	0xf447, 0xf447,
