@@ -10,6 +10,7 @@
 #include <winrt/base.h>
 
 #include "Features/Effects11/SceneHandoff.h"
+#include "PackManifest.h"
 #include "PostProcessingMode.h"
 #include "PresetCompatibility.h"
 #include "Utils/UI.h"
@@ -50,21 +51,9 @@ public:
 	static const char* GetPresetTypeName(PresetType type);
 
 	/** @brief A discovered pack's manifest data, backend payloads and lazily loaded artwork. */
-	struct PackInfo
+	struct PackInfo : PackManifest
 	{
 		std::string id;
-		std::string name;
-		std::string author;
-		std::string version;
-		std::string description;
-		std::string nexusUrl;  ///< Optional "nexusUrl" manifest field; shown as a link when non-empty.
-		std::vector<std::string> tags;
-		/// Community Shaders version the pack was made for (MAJOR.MINOR.PATCH); empty = unspecified.
-		std::string csVersion;
-		/// Feature short names the pack expects loaded; missing ones surface as warnings in the browser.
-		std::vector<std::string> requiredFeatures;
-		/// Plugin file names the pack was made with; missing ones surface as soft warnings in the browser.
-		std::vector<std::string> requiredPlugins;
 		/// csVersion, requiredFeatures and requiredPlugins checked against this session, refreshed by each Discover.
 		PresetCompatibility::Warning compat;
 
@@ -208,11 +197,6 @@ public:
 	/** @brief Opens a pack's folder in Explorer, preferring its physical copy over the MO2 VFS path. */
 	bool OpenPackFolder(const std::string& id) const;
 
-	/** @brief In-game / VFS path to the unified presets root. */
-	std::filesystem::path GetPresetsRoot() const;
-	/** @brief On-disk presets root under the CS mod root, else GetPresetsRoot. */
-	std::filesystem::path GetPresetsRealPath() const;
-
 	/** @brief A pack's manifest file: `<PackId>.json`, else the legacy `preset.json` when only that exists. */
 	static std::filesystem::path GetPackManifestPath(const std::filesystem::path& packRoot);
 
@@ -240,10 +224,9 @@ private:
 
 	/** @brief Adds each folder under Presets as a pack, read from its manifest. */
 	void DiscoverUnifiedPacks();
-	/** @brief Adds Effects 11 library presets that no unified pack of the same name already covers. */
-	void DiscoverEffects11Orphans();
-	/** @brief Adds the Effects 11 install at the game root or Data folder, when present. */
-	void DiscoverEffects11Legacy();
+	/** @brief Adds the Effects 11 install at the game root or Data folder, when present, and the library presets
+	 *  no unified pack of the same name already covers. */
+	void DiscoverEffects11Presets();
 	/** @brief Switches to the pipeline a pack chose, recording it as the pack layer's choice; the caller persists. */
 	void UsePackPipeline(PostProcessingMode::Mode mode);
 

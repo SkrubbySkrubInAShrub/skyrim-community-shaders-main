@@ -93,18 +93,6 @@ namespace Util
 		std::filesystem::path GetThemesPath();
 
 		/**
-		 * Gets the Effects11 presets library path (VFS / in-game Data path).
-		 * @return CommunityShaderPath / "Effects11" / "Presets"
-		 */
-		std::filesystem::path GetEffects11PresetsPath();
-
-		/**
-		 * Gets the unified shader presets library path (VFS).
-		 * @return CommunityShaderPath / "Presets"
-		 */
-		std::filesystem::path GetUnifiedPresetsPath();
-
-		/**
 		 * Gets the Translations directory path for i18n locale files
 		 * @return CommunityShaderPath / "Translations"
 		 */
@@ -180,13 +168,15 @@ namespace Util
 
 		/**
 		 * Returns the real path to the Effects11 presets library (for Explorer / create_directories).
-		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Effects11" / "Presets"
+		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Effects11" / "Presets", or the in-game
+		 *          path when the mod root is unknown
 		 */
 		std::filesystem::path GetEffects11PresetsRealPath();
 
 		/**
 		 * Returns the real path to the unified presets library.
-		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Presets"
+		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Presets", or the in-game path when
+		 *          the mod root is unknown
 		 */
 		std::filesystem::path GetUnifiedPresetsRealPath();
 
@@ -268,6 +258,9 @@ namespace Util
 		 * @param path The directory path to ensure exists
 		 */
 		void EnsureDirectoryExists(const std::filesystem::path& path);
+
+		/** @brief Opens a file or folder with its default handler, Explorer for folders. @return Whether the shell accepted it. */
+		bool OpenWithShell(const std::filesystem::path& path);
 
 		/**
 		 * Replaces Windows-invalid filename characters with underscore.

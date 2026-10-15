@@ -182,13 +182,6 @@ private:
 	json SanitizeJsonData(const json& jsonData);
 
 	/**
-	 * @brief Recursively merges a Baseline file's JSON into target JSON
-	 * @param target The target JSON to modify
-	 * @param overlay The JSON to apply
-	 */
-	void MergeJson(json& target, const json& overlay);
-
-	/**
 	 * @brief Reports whether a file names keys the feature does not serialize.
 	 * @param file The file to check; its unknownKeys verdict is refreshed when featureJson has a shape
 	 * @param featureJson Canonical settings blob, or an empty object to reuse the last verdict

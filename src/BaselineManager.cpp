@@ -8,12 +8,8 @@
 #include "Utils/SettingsCatalog.h"
 
 #include <algorithm>
-#include <ctime>
 #include <format>
-#include <fstream>
-#include <iomanip>
 #include <ranges>
-#include <sstream>
 
 using namespace SKSE;
 
@@ -23,13 +19,9 @@ namespace
 	constexpr int kBaselineJsonIndent = 2;
 
 	/** @brief Parses a Baseline file without the discovery-time filename and sanitization passes. */
-	bool ReadBaselineDocument(const std::filesystem::path& path, json& document)
+	std::optional<json> ReadBaselineDocument(const std::filesystem::path& path)
 	{
-		auto parsed = Util::FileHelpers::ReadJsonObject(path, "Baseline file", MAX_BASELINE_FILE_SIZE);
-		if (!parsed)
-			return false;
-		document = std::move(*parsed);
-		return true;
+		return Util::FileHelpers::ReadJsonObject(path, "Baseline file", MAX_BASELINE_FILE_SIZE);
 	}
 
 	/** @brief Erases one setting leaf, then any groups it leaves empty. */
@@ -116,24 +108,6 @@ size_t BaselineManager::DiscoverDirectory(const std::filesystem::path& directory
 				continue;
 			}
 
-			std::error_code ec;
-			auto fileSize = std::filesystem::file_size(entry.path(), ec);
-			if (ec) {
-				logger::info("Could not get size of Baseline file, skipping: {}", entry.path().string());
-				continue;
-			}
-
-			// Skip empty files or overly large files
-			if (fileSize == 0) {
-				logger::info("Skipping empty Baseline file: {}", entry.path().string());
-				continue;
-			}
-
-			if (fileSize > MAX_BASELINE_FILE_SIZE) {
-				logger::info("Skipping overly large Baseline file ({}KB): {}", fileSize / 1024, entry.path().string());
-				continue;
-			}
-
 			// Pack files are per-feature only; this is what keeps Advanced/General/Menu keys (e.g. compiler threads) unshippable.
 			// Checked against the build rather than load state: discovery runs before features load at boot.
 			const auto featureName = ParseBaselineFeatureName(entry.path());
@@ -188,7 +162,7 @@ size_t BaselineManager::ApplyBaselines(const std::string& featureName, json& fea
 			auto& file = files[index];
 			if (!RejectsUnknownKeys(file, featureJson)) {
 				try {
-					MergeJson(featureJson, file.values);
+					featureJson.update(file.values, true);
 					appliedCount++;
 				} catch (const std::exception& e) {
 					logger::info("Failed to apply Baseline file from {} to {}: {}", file.packId, featureName, e.what());
@@ -233,116 +207,27 @@ void BaselineManager::Refresh()
 
 std::unique_ptr<BaselineManager::BaselineFile> BaselineManager::LoadFile(const std::filesystem::path& filePath, const std::string& packId)
 {
-	try {
-		// Check file size to prevent loading extremely large files
-		std::error_code ec;
-		auto fileSize = std::filesystem::file_size(filePath, ec);
-		if (ec) {
-			logger::info("Could not get file size for Baseline file: {}", filePath.string());
-			return nullptr;
-		}
-
-		// Limit file size to 1MB to prevent abuse
-		if (fileSize > MAX_BASELINE_FILE_SIZE) {
-			logger::info("Baseline file too large ({}KB, max 1MB): {}", fileSize / 1024, filePath.string());
-			return nullptr;
-		}
-
-		std::ifstream file(filePath);
-		if (!file.is_open()) {
-			logger::info("Could not open Baseline file: {}", filePath.string());
-			return nullptr;
-		}
-
-		// Read entire file content for hash computation
-		std::string fileContent;
-		fileContent.reserve(static_cast<size_t>(fileSize));
-		fileContent.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-		file.close();
-
-		// Validate file content is not empty
-		if (fileContent.empty()) {
-			logger::info("Baseline file is empty: {}", filePath.string());
-			return nullptr;
-		}
-
-		// Parse JSON from content with error handling
-		json fileJson;
-		try {
-			fileJson = json::parse(fileContent);
-		} catch (const json::parse_error& e) {
-			logger::info("JSON parse error in Baseline file {}: {} at byte {}",
-				filePath.string(), e.what(), e.byte);
-			return nullptr;
-		} catch (const json::exception& e) {
-			logger::info("JSON error in Baseline file {}: {}", filePath.string(), e.what());
-			return nullptr;
-		}
-
-		// Validate the file's format and data types
-		if (!ValidateFormat(fileJson, filePath.string())) {
-			logger::info("Invalid Baseline file format: {}", filePath.string());
-			return nullptr;
-		}
-
-		if (!ValidateJsonDataTypes(fileJson, "", filePath.string())) {
-			logger::info("Invalid data types in Baseline file: {}", filePath.string());
-			return nullptr;
-		}
-
-		auto baselineFile = std::make_unique<BaselineFile>();
-
-		const auto featureName = ParseBaselineFeatureName(filePath);
-		assert(Feature::IsFeatureKnown(featureName));
-
-		baselineFile->packId = packId;
-		baselineFile->featureName = featureName;
-		baselineFile->filePath = filePath.string();
-
-		// Extract and validate metadata if present
-		if (fileJson.contains("_metadata") && fileJson["_metadata"].is_object()) {
-			const auto& metadata = fileJson["_metadata"];
-
-			try {
-				if (metadata.contains("version") && metadata["version"].is_string()) {
-					std::string version = metadata["version"];
-					if (version.length() <= MAX_STRING_LENGTH) {
-						baselineFile->version = version;
-					} else {
-						logger::info("Version string too long in Baseline file: {}", filePath.string());
-					}
-				}
-
-				if (metadata.contains("description") && metadata["description"].is_string()) {
-					std::string description = metadata["description"];
-					if (description.length() <= MAX_STRING_LENGTH) {
-						baselineFile->description = description;
-					} else {
-						logger::info("Description string too long in Baseline file: {}", filePath.string());
-					}
-				}
-
-			} catch (const json::exception& e) {
-				logger::info("Error parsing metadata in Baseline file {}: {}", filePath.string(), e.what());
-				// Continue without metadata if it's malformed
-			}
-		}
-
-		// Store the settings (excluding metadata) and sanitize it
-		baselineFile->values = SanitizeJsonData(fileJson);
-		if (baselineFile->values.contains("_metadata")) {
-			baselineFile->values.erase("_metadata");
-		}
-
-		return baselineFile;
-
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::info("Filesystem error loading Baseline file {}: {}", filePath.string(), e.what());
+	const auto fileJson = ReadBaselineDocument(filePath);
+	if (!fileJson || !IsValidDocument(*fileJson, filePath))
 		return nullptr;
-	} catch (const std::exception& e) {
-		logger::info("Unexpected error loading Baseline file {}: {}", filePath.string(), e.what());
-		return nullptr;
+
+	auto baselineFile = std::make_unique<BaselineFile>();
+	baselineFile->packId = packId;
+	baselineFile->featureName = ParseBaselineFeatureName(filePath);
+	assert(Feature::IsFeatureKnown(baselineFile->featureName));
+	baselineFile->filePath = filePath.string();
+
+	// ValidateFormat has checked the metadata fields' types and lengths.
+	if (const auto metadata = fileJson->find("_metadata"); metadata != fileJson->end()) {
+		baselineFile->version = metadata->value("version", "");
+		baselineFile->description = metadata->value("description", "");
 	}
+
+	// Underscore keys are file metadata, never settings.
+	auto& values = baselineFile->values = SanitizeJsonData(*fileJson);
+	for (auto it = values.begin(); it != values.end();)
+		it = it.key().starts_with('_') ? values.erase(it) : std::next(it);
+	return baselineFile;
 }
 
 bool BaselineManager::ValidateFormat(const json& fileJson, const std::string& filePath)
@@ -571,35 +456,9 @@ json BaselineManager::SanitizeJsonData(const json& jsonData)
 					sanitizeRecursive(element);
 				}
 			} else if (data.is_string()) {
-				std::string str = data.get<std::string>();
-
-				// Remove any null characters or control characters except common ones
-				str.erase(std::remove_if(str.begin(), str.end(), [](char c) {
-					return (c >= 0 && c < 32 && c != '\t' && c != '\n' && c != '\r');
-				}),
-					str.end());
-
-				// Truncate if too long
-				if (str.length() > MAX_STRING_LENGTH) {
-					str = str.substr(0, MAX_STRING_LENGTH);
-					logger::info("Truncated overly long string in file data");
-				}
-
-				data = str;
-			} else if (data.is_number()) {
-				double value = data.get<double>();
-
-				// Clamp to safe ranges
-				if (value > MAX_NUMERIC_VALUE) {
-					data = MAX_NUMERIC_VALUE;
-					logger::info("Clamped numeric value to maximum allowed value");
-				} else if (value < MIN_NUMERIC_VALUE) {
-					data = MIN_NUMERIC_VALUE;
-					logger::info("Clamped numeric value to minimum allowed value");
-				} else if (std::isnan(value) || std::isinf(value)) {
-					data = 0.0;
-					logger::info("Replaced NaN/infinity numeric value with 0");
-				}
+				// Lengths and numeric ranges were checked by ValidateJsonDataTypes; only control characters remain to strip.
+				auto& str = data.get_ref<std::string&>();
+				std::erase_if(str, [](char c) { return c >= 0 && c < 32 && c != '\t' && c != '\n' && c != '\r'; });
 			}
 		};
 
@@ -612,92 +471,9 @@ json BaselineManager::SanitizeJsonData(const json& jsonData)
 	}
 }
 
-void BaselineManager::MergeJson(json& target, const json& overlay)
-{
-	try {
-		if (!overlay.is_object()) {
-			logger::info("Attempting to merge non-object JSON data, skipping");
-			return;
-		}
-
-		for (const auto& [key, value] : overlay.items()) {
-			// Skip metadata fields during merge
-			if (key.length() > 0 && key[0] == '_') {
-				continue;
-			}
-
-			// Validate key length
-			if (key.length() > MAX_STRING_LENGTH) {
-				logger::info("Skipping merge of key '{}' - too long", key.substr(0, 50) + "...");
-				continue;
-			}
-
-			try {
-				if (target.contains(key) && target[key].is_object() && value.is_object()) {
-					// Recursively merge objects
-					MergeJson(target[key], value);
-				} else {
-					// Validate the value before assignment
-					if (value.is_string()) {
-						std::string strValue = value.get<std::string>();
-						if (strValue.length() > MAX_STRING_LENGTH) {
-							logger::info("Truncating string value for key '{}' - too long", key);
-							target[key] = strValue.substr(0, MAX_STRING_LENGTH);
-						} else {
-							target[key] = value;
-						}
-					} else if (value.is_number()) {
-						double numValue = value.get<double>();
-						if (std::isnan(numValue) || std::isinf(numValue)) {
-							logger::info("Skipping merge of key '{}' - invalid numeric value", key);
-							continue;
-						}
-						if (numValue > MAX_NUMERIC_VALUE || numValue < MIN_NUMERIC_VALUE) {
-							logger::info("Clamping numeric value for key '{}'", key);
-							target[key] = std::clamp(numValue, MIN_NUMERIC_VALUE, MAX_NUMERIC_VALUE);
-						} else {
-							target[key] = value;
-						}
-					} else if (value.is_array()) {
-						if (value.size() > MAX_ARRAY_SIZE) {
-							logger::info("Truncating array for key '{}' - too large", key);
-							json truncatedArray = json::array();
-							for (size_t i = 0; i < std::min(value.size(), MAX_ARRAY_SIZE); ++i) {
-								truncatedArray.push_back(value[i]);
-							}
-							target[key] = truncatedArray;
-						} else {
-							target[key] = value;
-						}
-					} else if (value.is_object()) {
-						if (value.size() > MAX_OBJECT_SIZE) {
-							logger::info("Skipping merge of key '{}' - object too large", key);
-							continue;
-						}
-						target[key] = value;
-					} else {
-						// Boolean, null, or other safe types
-						target[key] = value;
-					}
-				}
-			} catch (const json::exception& e) {
-				logger::info("JSON error merging key '{}': {}", key, e.what());
-				continue;
-			} catch (const std::exception& e) {
-				logger::info("Error merging key '{}': {}", key, e.what());
-				continue;
-			}
-		}
-	} catch (const json::exception& e) {
-		logger::info("JSON error during merge operation: {}", e.what());
-	} catch (const std::exception& e) {
-		logger::info("Error during merge operation: {}", e.what());
-	}
-}
-
 bool BaselineManager::RejectsUnknownKeys(BaselineFile& file, const json& featureJson)
 {
-	// MergeJson would drop unknown keys without error; an empty target has no shape, so keep the last verdict.
+	// The merge would carry unknown keys through silently; an empty target has no shape, so keep the last verdict.
 	if (featureJson.is_object() && !featureJson.empty()) {
 		const bool alreadyReported = !file.unknownKeys.empty();
 		file.unknownKeys.clear();
@@ -724,21 +500,9 @@ void BaselineManager::ReportFailure(const std::string& packId, const std::string
 		fileInfo.hasINI = true;  // Using hasINI to indicate file exists (even though it's JSON)
 		fileInfo.iniPath = filePath.string();
 
-		try {
-			auto timestamp = std::filesystem::last_write_time(filePath);
-			fileInfo.latestTimestamp = timestamp;
-			fileInfo.latestTimestampFile = filePath.string();
-
-			// Format timestamp for display
-			auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-				timestamp - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
-			auto time_t = std::chrono::system_clock::to_time_t(sctp);
-			std::stringstream ss;
-			ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
-			fileInfo.timestampDisplay = ss.str();
-		} catch (const std::exception&) {
-			fileInfo.timestampDisplay = "Unknown";
-		}
+		fileInfo.latestTimestamp = std::filesystem::last_write_time(filePath, ec);
+		fileInfo.latestTimestampFile = filePath.string();
+		fileInfo.timestampDisplay = ec ? "Unknown" : FeatureIssues::FormatFileTimestamp(fileInfo.latestTimestamp);
 	}
 
 	const auto fullErrorMessage = "Baseline file for feature '" + featureName + "' from preset pack '" + packId + "' failed to load: " + errorMessage;
@@ -779,11 +543,7 @@ std::optional<json> BaselineManager::ReadExportTarget(const std::filesystem::pat
 	if (!std::filesystem::exists(destination, ec)) {
 		return json::object();
 	}
-	json document;
-	if (!ReadBaselineDocument(destination, document)) {
-		return std::nullopt;
-	}
-	return document;
+	return ReadBaselineDocument(destination);
 }
 
 bool BaselineManager::ExportSettings(const std::string& packName, const std::string& featureName,

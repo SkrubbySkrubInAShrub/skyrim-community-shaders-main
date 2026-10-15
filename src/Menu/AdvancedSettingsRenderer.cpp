@@ -604,7 +604,7 @@ void AdvancedSettingsRenderer::RenderDeveloperSection()
 
 	if (ImGui::Button(T("menu.advanced.dump_feature_defaults", "Dump All Feature Defaults to JSON"), { -1, 0 })) {
 		if (const auto path = state->DumpFeatureDefaults(); !path.empty())
-			ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			Util::FileHelpers::OpenWithShell(path);
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("menu.advanced.dump_feature_defaults_tooltip",

@@ -1594,19 +1594,12 @@ void WeatherWidget::ApplyChanges()
 	PropagateToChildren();
 }
 
-void WeatherWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	pendingReinit = true;
-	ApplyChanges();
-}
-
 void WeatherWidget::Delete()
 {
 	Widget::Delete();
 }
 
-bool WeatherWidget::Settings::operator==(const Settings& o) const
+bool WeatherSettings::operator==(const WeatherSettings& o) const
 {
 	return parent == o.parent &&
 	       inheritFlags == o.inheritFlags &&
@@ -1620,11 +1613,6 @@ bool WeatherWidget::Settings::operator==(const Settings& o) const
 	       std::equal(std::begin(volumetricLightingRefs), std::end(volumetricLightingRefs), std::begin(o.volumetricLightingRefs)) &&
 	       precipitationData == o.precipitationData &&
 	       referenceEffect == o.referenceEffect;
-}
-
-bool WeatherWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
 }
 
 std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() const

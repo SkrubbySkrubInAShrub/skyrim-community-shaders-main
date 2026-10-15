@@ -203,17 +203,6 @@ void VolumetricLightingWidget::ApplyChanges()
 	volumetricLighting->samplingRepartition.rangeFactor = settings.samplingRangeFactor;
 }
 
-void VolumetricLightingWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	ApplyChanges();
-}
-
-bool VolumetricLightingWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
-}
-
 std::vector<Widget::SearchResult> VolumetricLightingWidget::CollectSearchableSettings() const
 {
 	// Many tabs share the same inner label ("Contribution"); display names are

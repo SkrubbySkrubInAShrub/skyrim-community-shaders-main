@@ -208,12 +208,6 @@ void LightingTemplateWidget::ApplyChanges()
 	SetLightingTemplateValues();
 }
 
-void LightingTemplateWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	ApplyChanges();
-}
-
 void LightingTemplateWidget::SetLightingTemplateValues()
 {
 	auto& data = lightingTemplate->data;
@@ -305,11 +299,6 @@ void LightingTemplateWidget::SaveSettings()
 {
 	js = settings;
 	originalSettings = settings;
-}
-
-bool LightingTemplateWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
 }
 
 std::vector<Widget::SearchResult> LightingTemplateWidget::CollectSearchableSettings() const

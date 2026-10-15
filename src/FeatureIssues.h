@@ -117,6 +117,9 @@ namespace FeatureIssues
 	 */
 	FeatureFileInfo GetFeatureFileInfo(const std::string& featureName);
 
+	/** @brief Local "YYYY-MM-DD HH:MM:SS" form of a file time, or "Unknown" when it cannot be converted. */
+	std::string FormatFileTimestamp(std::filesystem::file_time_type timestamp);
+
 	/**
 	 * Add a feature issue to the tracking system
 	 *

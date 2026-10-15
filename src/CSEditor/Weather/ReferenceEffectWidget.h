@@ -2,6 +2,17 @@
 
 #include "../Widget.h"
 
+/** @brief The BGSReferenceEffect fields a ReferenceEffectWidget edits. */
+struct ReferenceEffectSettings
+{
+	RE::BGSArtObject* artObject = nullptr;
+	RE::TESEffectShader* effectShader = nullptr;
+	bool faceTarget = false;
+	bool attachToCamera = false;
+	bool inheritRotation = false;
+	bool operator==(const ReferenceEffectSettings&) const = default;
+};
+
 /**
  * @brief Widget for editing visual effect (BGSReferenceEffect) form data.
  *
@@ -9,7 +20,7 @@
  * flags such as face-target and attach-to-camera. Requires manual apply
  * because changes trigger a weather reinit.
  */
-class ReferenceEffectWidget : public Widget
+class ReferenceEffectWidget : public SettingsWidget<ReferenceEffectSettings>
 {
 public:
 	/**
@@ -22,8 +33,7 @@ public:
 		form = a_referenceEffect;
 		if (referenceEffect) {
 			LoadFromGameSettings();
-			vanillaSettings = settings;
-			originalSettings = settings;
+			CaptureVanillaSettings();
 		}
 	}
 
@@ -47,18 +57,6 @@ public:
 	/** @brief Writes the current settings into the game's BGSReferenceEffect and triggers a weather reinit. */
 	void ApplyChanges() override;
 
-	/** @brief Reverts settings to vanilla values and re-applies them to the game data. */
-	void RevertChanges() override;
-
-	/** @brief Returns true if the current settings differ from the last saved state. */
-	bool HasUnsavedChanges() const override;
-	UndoHistory::SnapshotPtr CaptureEdits() const override { return UndoHistory::Capture(settings); }
-	void RestoreEdits(const UndoHistory::Snapshot& snapshot) override
-	{
-		settings = UndoHistory::Get<Settings>(snapshot);
-		ApplyChanges();
-	}
-
 	/** @brief Collects all searchable reference effect settings for the search dropdown. */
 	std::vector<SearchResult> CollectSearchableSettings() const override;
 
@@ -66,20 +64,6 @@ public:
 
 private:
 	void LoadFromGameSettings();
-
-	struct Settings
-	{
-		RE::BGSArtObject* artObject = nullptr;
-		RE::TESEffectShader* effectShader = nullptr;
-		bool faceTarget = false;
-		bool attachToCamera = false;
-		bool inheritRotation = false;
-		bool operator==(const Settings&) const = default;
-	};
-
-	Settings settings;
-	Settings vanillaSettings;
-	Settings originalSettings;
 
 	std::vector<RE::BGSArtObject*> artObjectArray;
 	std::vector<RE::TESEffectShader*> effectShaderArray;

@@ -354,11 +354,6 @@ void PrecipitationWidget::RevertChanges()
 	ApplyChanges();
 }
 
-bool PrecipitationWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
-}
-
 std::vector<Widget::SearchResult> PrecipitationWidget::CollectSearchableSettings() const
 {
 	const std::vector<std::pair<std::string, std::vector<std::string>>> entries = {

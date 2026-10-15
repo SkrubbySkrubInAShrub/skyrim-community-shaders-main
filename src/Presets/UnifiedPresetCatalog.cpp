@@ -21,7 +21,6 @@
 #include "Utils/Format.h"
 #include "Utils/UI.h"
 
-#include <Windows.h>
 #include <algorithm>
 #include <array>
 #include <format>
@@ -36,7 +35,6 @@ using json = nlohmann::json;
 
 namespace
 {
-	constexpr intptr_t kShellExecuteSuccessThreshold = 32;
 	constexpr const char* kActiveStateFileName = "_active.json";
 	constexpr const char* kBaselinePackIdsKey = "baselinePackIds";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
@@ -242,18 +240,6 @@ UnifiedPresetCatalog& UnifiedPresetCatalog::GetSingleton()
 	return instance;
 }
 
-std::filesystem::path UnifiedPresetCatalog::GetPresetsRoot() const
-{
-	return Util::PathHelpers::GetUnifiedPresetsPath();
-}
-
-std::filesystem::path UnifiedPresetCatalog::GetPresetsRealPath() const
-{
-	if (!Util::PathHelpers::GetRootRealPath().empty())
-		return Util::PathHelpers::GetUnifiedPresetsRealPath();
-	return GetPresetsRoot();
-}
-
 std::filesystem::path UnifiedPresetCatalog::GetPackManifestPath(const std::filesystem::path& packRoot)
 {
 	auto manifestPath = packRoot / packRoot.filename();
@@ -340,7 +326,7 @@ void UnifiedPresetCatalog::LoadActiveState()
 	baselinePackIds.clear();
 	activePipeline.reset();
 	pipelineRevision = 0;
-	const auto state = Util::FileHelpers::ReadJsonObject(GetPresetsRealPath() / kActiveStateFileName, "active pack state");
+	const auto state = Util::FileHelpers::ReadJsonObject(Util::PathHelpers::GetUnifiedPresetsRealPath() / kActiveStateFileName, "active pack state");
 	if (!state)
 		return;
 	try {
@@ -367,7 +353,7 @@ void UnifiedPresetCatalog::LoadActiveState()
 
 void UnifiedPresetCatalog::SaveActiveState() const
 {
-	const auto path = GetPresetsRealPath() / kActiveStateFileName;
+	const auto path = Util::PathHelpers::GetUnifiedPresetsRealPath() / kActiveStateFileName;
 	try {
 		json j;
 		j["activePackId"] = activePackId;
@@ -420,57 +406,27 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 	for (const auto& packRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kUnifiedPresetsSubdir, true)) {
 		const auto packId = packRoot.filename().string();
 
-		PackInfo pack;
+		std::string manifestError;
+		const auto meta = ReadPackManifest(packRoot, &manifestError);
+		PackInfo pack{ PackManifest::Read(meta, packId) };
 		pack.id = packId;
-		pack.name = packId;
 		pack.source = SourceKind::UnifiedPack;
 		pack.rootPath = packRoot;
-
-		const auto meta = ReadPackManifest(packRoot, &pack.invalidReason);
-		pack.valid = pack.invalidReason.empty();
-		try {
-			pack.name = meta.value("name", packId);
-			pack.author = meta.value("author", "");
-			pack.version = meta.value("version", "");
-			pack.description = meta.value("description", "");
-			pack.nexusUrl = meta.value("nexusUrl", "");
-			pack.csVersion = meta.value("csVersion", "");
-			pack.type = ReadPresetType(meta, packId);
-			const auto readStrings = [&](const char* key, std::vector<std::string>& out) {
-				if (const auto it = meta.find(key); it != meta.end() && it->is_array()) {
-					for (const auto& value : *it) {
-						if (value.is_string())
-							out.push_back(value.get<std::string>());
-					}
-				}
-			};
-			readStrings("tags", pack.tags);
-			readStrings("requiredFeatures", pack.requiredFeatures);
-			readStrings("requiredPlugins", pack.requiredPlugins);
-			if (const auto disableAtBoot = meta.find(kDisableAtBootKey); disableAtBoot != meta.end() && disableAtBoot->is_object()) {
-				for (auto it = disableAtBoot->begin(); it != disableAtBoot->end(); ++it) {
-					if (it.value().is_boolean())
-						pack.disableAtBoot[it.key()] = it.value().get<bool>();
-				}
+		pack.valid = manifestError.empty();
+		pack.invalidReason = std::move(manifestError);
+		pack.type = ReadPresetType(meta, packId);
+		if (const auto disableAtBoot = meta.find(kDisableAtBootKey); disableAtBoot != meta.end() && disableAtBoot->is_object()) {
+			for (auto it = disableAtBoot->begin(); it != disableAtBoot->end(); ++it) {
+				if (it.value().is_boolean())
+					pack.disableAtBoot[it.key()] = it.value().get<bool>();
 			}
+		}
 
-			if (meta.contains("logo") && meta["logo"].is_string())
-				pack.logoPath = ResolveRelative(packRoot, meta["logo"].get<std::string>());
-			if (meta.contains("cover") && meta["cover"].is_string())
-				pack.coverPath = ResolveRelative(packRoot, meta["cover"].get<std::string>());
-			if (meta.contains("screenshots") && meta["screenshots"].is_array()) {
-				for (const auto& shot : meta["screenshots"]) {
-					if (!shot.is_string())
-						continue;
-					auto path = ResolveRelative(packRoot, shot.get<std::string>());
-					if (!path.empty())
-						pack.screenshotPaths.push_back(std::move(path));
-				}
-			}
-		} catch (const std::exception& e) {
-			pack.valid = false;
-			pack.invalidReason = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
-				{ { "file", GetPackManifestPath(packRoot).filename().string() }, { "error", e.what() } }, "Invalid {file}: {error}");
+		pack.logoPath = ResolveRelative(packRoot, pack.logo);
+		pack.coverPath = ResolveRelative(packRoot, pack.cover);
+		for (const auto& shot : pack.screenshots) {
+			if (auto path = ResolveRelative(packRoot, shot); !path.empty())
+				pack.screenshotPaths.push_back(std::move(path));
 		}
 		pack.compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures, pack.requiredPlugins);
 
@@ -496,61 +452,45 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 	}
 }
 
-void UnifiedPresetCatalog::DiscoverEffects11Orphans()
+void UnifiedPresetCatalog::DiscoverEffects11Presets()
 {
-	for (const auto& presetRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kEffects11PresetsSubdir, true)) {
-		const auto name = presetRoot.filename().string();
-
-		// Skip if already covered by a unified pack with the same folder name
-		if (FindPack(name))
+	// Unified packs list their own effects11 folder, so only Legacy and the library are scanned here.
+	for (const auto& preset : PresetManager::GetSingleton().ScanPresets(false)) {
+		if (preset.isLegacy ? !preset.valid : FindPack(preset.id) != nullptr)
 			continue;
 
 		PackInfo pack;
-		pack.id = std::string(kEffects11OrphanPrefix) + name;
-		pack.name = name;
-		pack.source = SourceKind::Effects11Orphan;
-		pack.rootPath = presetRoot;
-		pack.effects11Root = presetRoot;
-		pack.hasEffects11 = std::filesystem::exists(presetRoot / PresetManager::kEnbSeriesIniName) &&
-		                    std::filesystem::is_directory(presetRoot / PresetManager::kEnbSeriesDirName);
-		if (!pack.hasEffects11) {
-			pack.valid = false;
-			pack.invalidReason = T("menu.presets.missing_effects11_files", "Missing enbseries.ini / enbseries");
+		pack.rootPath = preset.rootPath;
+		pack.effects11Root = preset.rootPath;
+		pack.hasEffects11 = pack.valid = preset.valid;
+		if (preset.isLegacy) {
+			pack.id = kEffects11LegacyPackId;
+			pack.name = T("menu.presets.legacy_name", "Effects 11 Preset (Legacy)");
+			pack.source = SourceKind::Effects11Legacy;
+			pack.description = T("menu.presets.legacy_description", "Effects 11 preset installed in the game root or Data folder.");
+		} else {
+			pack.id = std::string(kEffects11OrphanPrefix) + preset.id;
+			pack.name = preset.id;
+			pack.source = SourceKind::Effects11Orphan;
+			pack.description = T("menu.presets.effects11_library_description", "Effects11 library preset");
+			if (!preset.valid)
+				pack.invalidReason = T("menu.presets.missing_effects11_files", "Missing enbseries.ini, enbseries or enbseries/enbeffect.fx");
 		}
-		pack.description = T("menu.presets.effects11_library_description", "Effects11 library preset");
 		packs.push_back(std::move(pack));
 	}
-}
-
-void UnifiedPresetCatalog::DiscoverEffects11Legacy()
-{
-	const auto& presetManager = PresetManager::GetSingleton();
-	if (!presetManager.HasLegacyInstall())
-		return;
-
-	PackInfo pack;
-	pack.id = kEffects11LegacyPackId;
-	pack.name = T("menu.presets.legacy_name", "Effects 11 Preset (Legacy)");
-	pack.source = SourceKind::Effects11Legacy;
-	pack.rootPath = presetManager.GetLegacyENBSeriesIniPath().parent_path();
-	pack.effects11Root = pack.rootPath;
-	pack.hasEffects11 = true;
-	pack.description = T("menu.presets.legacy_description", "Effects 11 preset installed in the game root or Data folder.");
-	packs.push_back(std::move(pack));
 }
 
 void UnifiedPresetCatalog::Discover()
 {
 	ReleaseAllArtwork();
 	packs.clear();
-	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
+	Util::FileHelpers::EnsureDirectoryExists(Util::PathHelpers::GetUnifiedPresetsRealPath());
 	LoadActiveState();
 
 	// Before the scan, so the packs it creates are listed by it.
 	PostProcessingPresets::MigrateLegacyPresets();
 	DiscoverUnifiedPacks();
-	DiscoverEffects11Orphans();
-	DiscoverEffects11Legacy();
+	DiscoverEffects11Presets();
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -912,21 +852,16 @@ bool UnifiedPresetCatalog::EnsureBaselineManifest(const std::filesystem::path& p
 	if (std::filesystem::exists(manifestPath, ec))
 		return true;
 
-	json manifest;
-	manifest["name"] = displayName;
-	manifest["author"] = "";
-	manifest["version"] = "1.0.0";
-	manifest["description"] = "";
-	manifest[kPresetTypeKey] = GetPresetTypeName(PresetType::Baseline);
-	manifest["csVersion"] = PresetCompatibility::CurrentCsVersionString();
+	json manifest{ { PackManifest::kNameKey, displayName }, { kPresetTypeKey, GetPresetTypeName(PresetType::Baseline) } };
+	PackManifest{ .version = PackManifest::kDefaultVersion, .csVersion = PresetCompatibility::CurrentCsVersionString() }.WriteDetails(manifest);
 	return Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest");
 }
 
 bool UnifiedPresetCatalog::OpenPresetsFolder() const
 {
-	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
-	const auto result = ShellExecuteW(nullptr, L"open", GetPresetsRealPath().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
+	const auto path = Util::PathHelpers::GetUnifiedPresetsRealPath();
+	Util::FileHelpers::EnsureDirectoryExists(path);
+	return Util::FileHelpers::OpenWithShell(path);
 }
 
 bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
@@ -945,6 +880,5 @@ bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
 			path = std::move(realPath);
 	}
 
-	const auto result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
+	return Util::FileHelpers::OpenWithShell(path);
 }

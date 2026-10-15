@@ -87,17 +87,6 @@ void LensFlareWidget::ApplyChanges()
 	lensFlare->colorInfluence = settings.colorInfluence;
 }
 
-void LensFlareWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	ApplyChanges();
-}
-
-bool LensFlareWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
-}
-
 std::vector<Widget::SearchResult> LensFlareWidget::CollectSearchableSettings() const
 {
 	return {

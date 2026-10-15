@@ -559,6 +559,8 @@ private:
 
 	/** @brief Defaults with the enabled Baseline packs applied, for one feature. */
 	nlohmann::json BuildFeatureBase(Feature* feature);
+	/** @brief The part of a feature's settings that differs from its base: the user's edits. */
+	nlohmann::json DiffFromFeatureBase(const std::string& featureName, const nlohmann::json& current) const;
 	/** @brief Replaces each feature's full settings in a config with only the user's edits to it. */
 	void KeepOnlyUserEdits(nlohmann::json& settings);
 

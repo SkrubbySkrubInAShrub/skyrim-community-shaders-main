@@ -32,21 +32,6 @@ namespace SceneSettingsInternal
 	/// Earlier open-shaders name for the locationTypes section and its "Category" type; read and migrated.
 	constexpr const char* kLegacyLocationTypeSectionName = "categories";
 	constexpr const char* kLegacyLocationTypeName = "Category";
-	/// Unified pack manifest keys the Scene Manager reads and writes; artwork paths are relative to the pack folder.
-	constexpr const char* kPresetMetadataNameKey = "name";
-	constexpr const char* kPresetMetadataVersionKey = "version";
-	constexpr const char* kPresetMetadataAuthorKey = "author";
-	constexpr const char* kPresetMetadataDescriptionKey = "description";
-	constexpr const char* kPresetMetadataTagsKey = "tags";
-	constexpr const char* kPresetMetadataLogoKey = "logo";
-	constexpr const char* kPresetMetadataCoverKey = "cover";
-	constexpr const char* kPresetMetadataScreenshotsKey = "screenshots";
-	/// Community Shaders MAJOR.MINOR.PATCH the preset was authored against.
-	constexpr const char* kPresetMetadataCsVersionKey = "csVersion";
-	/// Feature short names the preset expects to be loaded.
-	constexpr const char* kPresetMetadataRequiredFeaturesKey = "requiredFeatures";
-	/// Plugin file names the preset was made with; missing ones only warn.
-	constexpr const char* kPresetMetadataRequiredPluginsKey = "requiredPlugins";
 	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;

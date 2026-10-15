@@ -410,28 +410,20 @@ try {
 		}
 	}
 
-	if (!manifest.contains(kPresetMetadataNameKey))
-		manifest[kPresetMetadataNameKey] = safeModName;
-	manifest[kPresetMetadataVersionKey] = info.version;
+	if (!manifest.contains(PackManifest::kNameKey))
+		manifest[PackManifest::kNameKey] = safeModName;
+	info.WriteDetails(manifest);
 	// Base settings added to a CS or E11 pack do not turn it into a Baseline pack.
 	if (info.type != PresetType::Baseline || !manifest.contains(UnifiedPresetCatalog::kPresetTypeKey))
 		manifest[UnifiedPresetCatalog::kPresetTypeKey] = UnifiedPresetCatalog::GetPresetTypeName(info.type);
 	if (info.type != PresetType::Baseline)
 		manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
-	const auto setOrErase = [&](const char* key, const auto& value) {
-		if (value.empty())
-			manifest.erase(key);
+	if (exportEffects11) {
+		if (auto sceneControl = E11Handoff::ToManifest(); sceneControl.empty())
+			manifest.erase(UnifiedPresetCatalog::kSceneControlKey);
 		else
-			manifest[key] = value;
-	};
-	setOrErase(kPresetMetadataAuthorKey, info.author);
-	setOrErase(kPresetMetadataDescriptionKey, info.description);
-	setOrErase(kPresetMetadataTagsKey, info.tags);
-	setOrErase(kPresetMetadataCsVersionKey, info.csVersion);
-	setOrErase(kPresetMetadataRequiredFeaturesKey, info.requiredFeatures);
-	setOrErase(kPresetMetadataRequiredPluginsKey, info.requiredPlugins);
-	if (exportEffects11)
-		setOrErase(UnifiedPresetCatalog::kSceneControlKey, E11Handoff::ToManifest());
+			manifest[UnifiedPresetCatalog::kSceneControlKey] = std::move(sceneControl);
+	}
 
 	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
 	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
@@ -444,8 +436,8 @@ try {
 			manifest.erase(key);
 		}
 	};
-	exportArtwork(kPresetMetadataLogoKey, info.logoSource, info.clearLogo, "logo");
-	exportArtwork(kPresetMetadataCoverKey, info.coverSource, info.clearCover, "cover");
+	exportArtwork(PackManifest::kLogoKey, info.logoSource, info.clearLogo, "logo");
+	exportArtwork(PackManifest::kCoverKey, info.coverSource, info.clearCover, "cover");
 
 	if (!info.screenshotSources.empty() || info.clearScreenshots) {
 		const std::filesystem::path galleryDir = "gallery";
@@ -453,7 +445,7 @@ try {
 		std::filesystem::remove_all(packRoot / galleryDir, galleryEc);
 		if (galleryEc)
 			return false;
-		manifest.erase(kPresetMetadataScreenshotsKey);
+		manifest.erase(PackManifest::kScreenshotsKey);
 		json shots = json::array();
 		for (size_t i = 0; i < info.screenshotSources.size(); ++i) {
 			const auto& source = info.screenshotSources[i];
@@ -463,7 +455,7 @@ try {
 				wroteAll = false;
 		}
 		if (!shots.empty())
-			manifest[kPresetMetadataScreenshotsKey] = std::move(shots);
+			manifest[PackManifest::kScreenshotsKey] = std::move(shots);
 	}
 
 	for (const auto& [featureName, settings] : info.baselines) {
@@ -523,37 +515,8 @@ std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPr
 		return std::nullopt;
 
 	const auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot);
-	const auto readString = [&](const char* key) {
-		const auto it = manifest.find(key);
-		return it != manifest.end() && it->is_string() ? it->get<std::string>() : std::string{};
-	};
-	const auto readStrings = [&](const char* key) {
-		std::vector<std::string> values;
-		if (const auto it = manifest.find(key); it != manifest.end() && it->is_array()) {
-			for (const auto& value : *it) {
-				if (value.is_string())
-					values.push_back(value.get<std::string>());
-			}
-		}
-		return values;
-	};
-
-	PresetMetadata metadata{ .name = readString(kPresetMetadataNameKey),
-		.version = readString(kPresetMetadataVersionKey),
-		.author = readString(kPresetMetadataAuthorKey),
-		.description = readString(kPresetMetadataDescriptionKey),
-		.tags = readStrings(kPresetMetadataTagsKey),
-		.csVersion = readString(kPresetMetadataCsVersionKey),
-		.requiredFeatures = readStrings(kPresetMetadataRequiredFeaturesKey),
-		.requiredPlugins = readStrings(kPresetMetadataRequiredPluginsKey),
-		.logo = readString(kPresetMetadataLogoKey),
-		.cover = readString(kPresetMetadataCoverKey),
-		.screenshots = readStrings(kPresetMetadataScreenshotsKey),
-		.path = manifestPath,
-		.transitionHours = ReadTimeOfDayTransitionHours(manifest, manifestPath.string()) };
-	if (metadata.name.empty())
-		metadata.name = packRoot.filename().string();
-	return metadata;
+	return PresetMetadata{ PackManifest::Read(manifest, packRoot.filename().string()), manifestPath,
+		ReadTimeOfDayTransitionHours(manifest, manifestPath.string()) };
 }
 
 void SceneSettingsManager::DiscoverPresetMetadata()

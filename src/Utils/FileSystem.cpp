@@ -77,16 +77,6 @@ namespace Util
 			return GetCommunityShaderPath() / "Themes";
 		}
 
-		std::filesystem::path GetEffects11PresetsPath()
-		{
-			return GetCommunityShaderPath() / kEffects11PresetsSubdir;
-		}
-
-		std::filesystem::path GetUnifiedPresetsPath()
-		{
-			return GetCommunityShaderPath() / kUnifiedPresetsSubdir;
-		}
-
 		std::filesystem::path GetTranslationsPath()
 		{
 			return GetCommunityShaderPath() / "Translations";
@@ -155,14 +145,25 @@ namespace Util
 			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / "Themes";
 		}
 
+		namespace
+		{
+			/** @brief A CommunityShaders subfolder under the real mod root, or its in-game path when the root is unknown. */
+			std::filesystem::path GetCommunityShaderRealPath(const std::filesystem::path& relativePath)
+			{
+				const auto realRoot = GetRootRealPath();
+				return realRoot.empty() ? GetCommunityShaderPath() / relativePath :
+				                          realRoot / "SKSE" / "Plugins" / "CommunityShaders" / relativePath;
+			}
+		}
+
 		std::filesystem::path GetEffects11PresetsRealPath()
 		{
-			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kEffects11PresetsSubdir;
+			return GetCommunityShaderRealPath(kEffects11PresetsSubdir);
 		}
 
 		std::filesystem::path GetUnifiedPresetsRealPath()
 		{
-			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kUnifiedPresetsSubdir;
+			return GetCommunityShaderRealPath(kUnifiedPresetsSubdir);
 		}
 
 		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath)
@@ -311,6 +312,14 @@ namespace Util
 			if (ec) {
 				logger::warn("Failed to create directory '{}': {}", path.string(), ec.message());
 			}
+		}
+
+		bool OpenWithShell(const std::filesystem::path& path)
+		{
+			// ShellExecute returns a value above 32 on success.
+			constexpr intptr_t kShellExecuteSuccessThreshold = 32;
+			const auto result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
 		}
 
 		std::string SanitizeFileName(std::string name)

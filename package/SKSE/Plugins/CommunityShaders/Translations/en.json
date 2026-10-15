@@ -3345,7 +3345,7 @@
     "menu.presets.legacy_description": "Effects 11 preset installed in the game root or Data folder.",
     "menu.presets.legacy_name": "Effects 11 Preset (Legacy)",
     "menu.presets.manifest_not_object": "not a JSON object",
-    "menu.presets.missing_effects11_files": "Missing enbseries.ini / enbseries",
+    "menu.presets.missing_effects11_files": "Missing enbseries.ini, enbseries or enbseries/enbeffect.fx",
     "menu.presets.missing_payload": "No Effects11, CS Presets, Forms or Baseline payload found",
     "menu.presets.nexus_link_tooltip": "Open this preset's Nexus Mods page.",
     "menu.presets.no_description": "No description provided.",

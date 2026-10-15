@@ -495,6 +495,43 @@ protected:
 	virtual void NavigateToSearchResult(const SearchResult& result);
 };
 
+/**
+ * @brief A widget that edits a copy of its form's fields: compared against the last saved copy for unsaved
+ *        changes, handed to the undo history, and reverted to the form's vanilla values.
+ * @tparam TSettings The edited fields; needs operator==.
+ */
+template <class TSettings>
+class SettingsWidget : public Widget
+{
+public:
+	using Settings = TSettings;
+
+	/** @brief Puts the vanilla values back and applies them to the form. */
+	void RevertChanges() override
+	{
+		settings = vanillaSettings;
+		ApplyChanges();
+	}
+	bool HasUnsavedChanges() const override { return !(settings == originalSettings); }
+	UndoHistory::SnapshotPtr CaptureEdits() const override { return UndoHistory::Capture(settings); }
+	void RestoreEdits(const UndoHistory::Snapshot& snapshot) override
+	{
+		settings = UndoHistory::Get<Settings>(snapshot);
+		ApplyChanges();
+	}
+
+protected:
+	/** @brief Records the form's current settings as both its vanilla and its saved state. Call once the
+	 *  constructor has read them from the game. */
+	void CaptureVanillaSettings() { vanillaSettings = originalSettings = settings; }
+
+	Settings settings;
+	/// The last loaded or saved state.
+	Settings originalSettings;
+	/// The form's values before any edit was applied.
+	Settings vanillaSettings;
+};
+
 /** @brief Lightweight widget for caching form data without full editing functionality. */
 class SimpleFormWidget : public Widget
 {

@@ -69,14 +69,11 @@ namespace
 			[manager] { return manager->GetOverwriteModNames(); });
 	}
 
-	/// The name is kept as typed; tags and plugins stay unparsed until export.
+	/// The name is kept as typed; tags and plugins stay unparsed until export. Its artwork paths are the ones
+	/// a prior export of this name wrote, shown when nothing new is picked.
 	PresetExportInfo form;
 	std::string presetTags;
 	std::string requiredPlugins;
-	/// Existing relative paths from a prior export of this name (shown when no new pick).
-	std::string existingLogo;
-	std::string existingCover;
-	std::vector<std::string> existingScreenshots;
 	std::vector<std::filesystem::path> collidingFiles;
 	/// Form edits a CS or E11 export carries, read once when the dialog opens.
 	FormEditSources::FormKeySet formEditKeys;
@@ -303,9 +300,6 @@ namespace
 		baselineFeatures.clear();
 		presetTags.clear();
 		requiredPlugins.clear();
-		existingLogo.clear();
-		existingCover.clear();
-		existingScreenshots.clear();
 		collidingFiles.clear();
 	}
 
@@ -335,9 +329,9 @@ namespace
 			if (!shortName.empty() && !Feature::FindFeatureByShortName(shortName) && !IsFeatureRequired(shortName))
 				form.requiredFeatures.push_back(shortName);
 		}
-		existingLogo = meta.logo;
-		existingCover = meta.cover;
-		existingScreenshots = meta.screenshots;
+		form.logo = meta.logo;
+		form.cover = meta.cover;
+		form.screenshots = meta.screenshots;
 		form.clearLogo = false;
 		form.clearCover = false;
 		form.clearScreenshots = false;
@@ -587,9 +581,9 @@ namespace
 			if (!form.screenshotSources.empty())
 				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_selected",
 					{ { "count", std::to_string(form.screenshotSources.size()) } }, "{count} file(s) selected");
-			else if (!cleared && !existingScreenshots.empty())
+			else if (!cleared && !form.screenshots.empty())
 				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_existing",
-					{ { "count", std::to_string(existingScreenshots.size()) } }, "{count} existing");
+					{ { "count", std::to_string(form.screenshots.size()) } }, "{count} existing");
 			else
 				status = T(TKEY("scene_export_artwork_none"), "None");
 		} else if (singleSource && !singleSource->empty()) {
@@ -838,9 +832,9 @@ namespace
 			return;
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
-		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
+		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, form.logo);
 		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
-			existingCover);
+			form.cover);
 		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
 
 		ImGui::TableNextColumn();

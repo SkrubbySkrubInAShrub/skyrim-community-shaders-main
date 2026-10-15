@@ -365,18 +365,20 @@ void State::Setup()
 
 namespace
 {
-	/** @brief Writes overlay onto target, merging objects key by key; any other value replaces. */
-	void MergeInto(json& target, const json& overlay)
+	/** @brief Loads layered settings into a feature, putting current back when a malformed layer throws partway.
+	 *  @return Whether the layered settings were applied. */
+	bool LoadLayeredSettings(Feature* feature, json& layered, json& current)
 	{
-		if (!target.is_object() || !overlay.is_object()) {
-			target = overlay;
-			return;
-		}
-		for (const auto& [key, value] : overlay.items()) {
-			if (const auto found = target.find(key); found != target.end() && found->is_object() && value.is_object())
-				MergeInto(*found, value);
-			else
-				target[key] = value;
+		try {
+			feature->LoadSettings(layered);
+			return true;
+		} catch (const std::exception& e) {
+			logger::warn("Could not apply Baseline settings to {}, keeping its settings: {}", feature->GetName(), e.what());
+			try {
+				feature->LoadSettings(current);
+			} catch (...) {
+			}
+			return false;
 		}
 	}
 
@@ -442,7 +444,7 @@ namespace
 		json data = json::object();
 		for (const auto* info : BaselineManager::GetSingleton()->GetFeatureFiles(featureShortName))
 			if ((packId.empty() || info->packId == packId) && info->unknownKeys.empty())
-				MergeInto(data, info->values);
+				data.update(info->values, true);
 		return data;
 	}
 
@@ -522,7 +524,7 @@ void State::Load(bool a_allowReload)
 		}
 		json merged = BuildFeatureBase(feature);
 		featureBases[name] = merged;
-		MergeInto(merged, edits);
+		merged.update(edits, true);
 		userFeatureEdits[name] = std::move(edits);
 		if (merged.empty())
 			settings.erase(name);
@@ -696,7 +698,7 @@ void State::CheckFeatureSettingsChanged(Feature* feature)
 	const auto edits = userFeatureEdits.find(name);
 	json saved = base != featureBases.end() ? base->second : json::object();
 	if (edits != userFeatureEdits.end())
-		MergeInto(saved, edits->second);
+		saved.update(edits->second, true);
 	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 	json current;
 	feature->SaveSettings(current);
@@ -841,6 +843,13 @@ json State::BuildFeatureBase(Feature* feature)
 	return base;
 }
 
+json State::DiffFromFeatureBase(const std::string& featureName, const json& current) const
+{
+	static const json empty = json::object();
+	const auto* base = GetFeatureBase(featureName);
+	return DiffFromBase(current, base ? *base : empty);
+}
+
 void State::KeepOnlyUserEdits(json& settings)
 {
 	for (auto* feature : Feature::GetFeatureList()) {
@@ -850,9 +859,7 @@ void State::KeepOnlyUserEdits(json& settings)
 		// A feature that never loaded holds defaults, not the user's values, so its stored edits carry over.
 		if (feature->loaded) {
 			const auto current = settings.find(name);
-			const auto base = featureBases.find(name);
-			userFeatureEdits[name] = current == settings.end() ? json::object() :
-			                                                     DiffFromBase(*current, base != featureBases.end() ? base->second : json::object());
+			userFeatureEdits[name] = current == settings.end() ? json::object() : DiffFromFeatureBase(name, *current);
 		}
 		const auto edits = userFeatureEdits.find(name);
 		if (edits == userFeatureEdits.end() || edits->second.empty())
@@ -878,19 +885,9 @@ void State::ReapplySettingsLayers()
 		json current;
 		feature->SaveSettings(current);
 		json layered = newBase;
-		MergeInto(layered, DiffFromBase(current, base));
-		try {
-			feature->LoadSettings(layered);
-		} catch (const std::exception& e) {
-			// A malformed Baseline file can throw after some fields applied, so put the previous values back.
-			logger::warn("Could not apply Baseline changes to {}, keeping its settings: {}", feature->GetName(), e.what());
-			try {
-				feature->LoadSettings(current);
-			} catch (...) {
-			}
-			continue;
-		}
-		base = std::move(newBase);
+		layered.update(DiffFromBase(current, base), true);
+		if (LoadLayeredSettings(feature, layered, current))
+			base = std::move(newBase);
 	}
 }
 
@@ -906,7 +903,7 @@ std::vector<Feature*> State::FindEditsUnderPack(const std::string& packId)
 			continue;
 		json current;
 		feature->SaveSettings(current);
-		if (SharesSettings(DiffFromBase(current, featureBases[feature->GetName()]), packData))
+		if (SharesSettings(DiffFromFeatureBase(feature->GetName(), current), packData))
 			features.push_back(feature);
 	}
 	return features;
@@ -920,16 +917,8 @@ void State::DropEditsUnder(Feature* feature, const json& packData)
 	auto edits = DiffFromBase(current, base);
 	RemoveSharedSettings(edits, packData);
 	json layered = base;
-	MergeInto(layered, edits);
-	try {
-		feature->LoadSettings(layered);
-	} catch (const std::exception& e) {
-		logger::warn("Could not apply Baseline values to {}, keeping its settings: {}", feature->GetName(), e.what());
-		try {
-			feature->LoadSettings(current);
-		} catch (...) {
-		}
-	}
+	layered.update(edits, true);
+	LoadLayeredSettings(feature, layered, current);
 }
 
 void State::ClearEditsUnderPack(const std::string& packId)
@@ -953,8 +942,7 @@ bool State::HasEditsUnderBaselines(Feature* feature)
 			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 			json current;
 			feature->SaveSettings(current);
-			const auto base = featureBases.find(name);
-			shared = SharesSettings(DiffFromBase(current, base != featureBases.end() ? base->second : json::object()), packData);
+			shared = SharesSettings(DiffFromFeatureBase(name, current), packData);
 		}
 	}
 	editsUnderBaselines[name] = shared;

@@ -2,15 +2,54 @@
 
 #include "../Widget.h"
 
+struct LightingTemplateDirectionalColor
+{
+	float3 min;
+	float3 max;
+	bool operator==(const LightingTemplateDirectionalColor&) const = default;
+};
+
+struct LightingTemplateDALC
+{
+	LightingTemplateDirectionalColor directional[3];
+	float3 specular;
+	float fresnelPower;
+	bool operator==(const LightingTemplateDALC&) const = default;
+};
+
+/** @brief The BGSLightingTemplate fields a LightingTemplateWidget edits. */
+struct LightingTemplateSettings
+{
+	float3 ambient;
+	float3 directional;
+	float3 fogColorNear;
+	float3 fogColorFar;
+	float fogNear;
+	float fogFar;
+	float directionalXY;
+	float directionalZ;
+	float directionalFade;
+	float clipDist;
+	float fogPower;
+	float fogClamp;
+	float lightFadeStart;
+	float lightFadeEnd;
+	LightingTemplateDALC dalc;
+	bool operator==(const LightingTemplateSettings&) const = default;
+};
+
 /**
  * @brief Widget for editing interior lighting template properties.
  *
  * Exposes ambient, directional, fog, and DALC settings from a
  * BGSLightingTemplate form for live in-game editing.
  */
-class LightingTemplateWidget : public Widget
+class LightingTemplateWidget : public SettingsWidget<LightingTemplateSettings>
 {
 public:
+	using DirectionalColor = LightingTemplateDirectionalColor;
+	using DALC = LightingTemplateDALC;
+
 	RE::BGSLightingTemplate* lightingTemplate = nullptr;
 
 	/**
@@ -26,48 +65,8 @@ public:
 		form = a_lightingTemplate;
 		lightingTemplate = a_lightingTemplate;
 		LoadFromGameSettings();
-		vanillaSettings = settings;
-		originalSettings = settings;
+		CaptureVanillaSettings();
 	}
-
-	struct DirectionalColor
-	{
-		float3 min;
-		float3 max;
-		bool operator==(const DirectionalColor&) const = default;
-	};
-
-	struct DALC
-	{
-		DirectionalColor directional[3];
-		float3 specular;
-		float fresnelPower;
-		bool operator==(const DALC&) const = default;
-	};
-
-	struct Settings
-	{
-		float3 ambient;
-		float3 directional;
-		float3 fogColorNear;
-		float3 fogColorFar;
-		float fogNear;
-		float fogFar;
-		float directionalXY;
-		float directionalZ;
-		float directionalFade;
-		float clipDist;
-		float fogPower;
-		float fogClamp;
-		float lightFadeStart;
-		float lightFadeEnd;
-		DALC dalc;
-		bool operator==(const Settings&) const = default;
-	};
-
-	Settings settings;
-	Settings vanillaSettings;
-	Settings originalSettings;
 
 	~LightingTemplateWidget();
 
@@ -83,15 +82,6 @@ public:
 	/** @brief Serializes current lighting template settings to the JSON blob. */
 	void SaveSettings() override;
 
-	/** @brief Returns true if the current settings differ from the last saved state. */
-	bool HasUnsavedChanges() const override;
-	UndoHistory::SnapshotPtr CaptureEdits() const override { return UndoHistory::Capture(settings); }
-	void RestoreEdits(const UndoHistory::Snapshot& snapshot) override
-	{
-		settings = UndoHistory::Get<Settings>(snapshot);
-		ApplyChanges();
-	}
-
 	/** @brief Collects all searchable lighting template settings for the search dropdown. */
 	std::vector<SearchResult> CollectSearchableSettings() const override;
 
@@ -106,9 +96,6 @@ public:
 
 	/** @brief Applies the current settings to the game's lighting template form. */
 	void ApplyChanges() override;
-
-	/** @brief Reverts settings to vanilla values and re-applies them to the game data. */
-	void RevertChanges() override;
 
 private:
 	void DrawDALCSettings();

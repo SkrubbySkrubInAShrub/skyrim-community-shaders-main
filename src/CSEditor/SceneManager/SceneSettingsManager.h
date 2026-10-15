@@ -184,26 +184,15 @@ public:
 	/// Every scene file the pack of this name currently owns, across every scene directory in Presets/<Name>/.
 	static std::vector<std::filesystem::path> FindPresetFiles(const std::string& packId);
 
-	static constexpr const char* kDefaultPresetVersion = "1.0.0";
-
 	using PresetType = UnifiedPresetCatalog::PresetType;
 
-	/** @brief Display + artwork inputs for ExportPreset. Artwork sources are absolute paths to copy
-	 *  into Presets/<Name>/; empty source with clear* = drop that field on re-export. */
-	struct PresetExportInfo
+	/** @brief Manifest + artwork inputs for ExportPreset. The inherited artwork paths are the pack's existing ones;
+	 *  sources are absolute paths to copy into Presets/<Name>/; empty source with clear* = drop that field on re-export. */
+	struct PresetExportInfo : PackManifest
 	{
+		PresetExportInfo() { version = kDefaultVersion; }
+
 		PresetType type = PresetType::CS;
-		std::string name;
-		std::string version = kDefaultPresetVersion;
-		std::string author;
-		std::string description;
-		std::vector<std::string> tags;
-		/// Community Shaders version this export was authored on (MAJOR.MINOR.PATCH).
-		std::string csVersion;
-		/// Feature short names the pack expects loaded.
-		std::vector<std::string> requiredFeatures;
-		/// Plugin file names (.esp/.esm/.esl) the pack was made with.
-		std::vector<std::string> requiredPlugins;
 		std::filesystem::path logoSource;
 		std::filesystem::path coverSource;
 		std::vector<std::filesystem::path> screenshotSources;
@@ -220,20 +209,9 @@ public:
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const PresetExportInfo& info);
 
-	/// Scene-relevant fields of a unified pack manifest. Artwork paths are relative to the pack folder.
-	struct PresetMetadata
+	/// A unified pack manifest as the Scene Manager reads it.
+	struct PresetMetadata : PackManifest
 	{
-		std::string name;
-		std::string version;
-		std::string author;
-		std::string description;
-		std::vector<std::string> tags;
-		std::string csVersion;
-		std::vector<std::string> requiredFeatures;
-		std::vector<std::string> requiredPlugins;
-		std::string logo;
-		std::string cover;
-		std::vector<std::string> screenshots;
 		std::filesystem::path path;
 		std::optional<float> transitionHours;  // Period transition the preset ships, if any
 	};

@@ -258,17 +258,6 @@ void ImageSpaceWidget::ApplyChanges()
 	SetImageSpaceValues();
 }
 
-void ImageSpaceWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	ApplyChanges();
-}
-
-bool ImageSpaceWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
-}
-
 std::vector<Widget::SearchResult> ImageSpaceWidget::CollectSearchableSettings() const
 {
 	std::vector<SearchResult> results;

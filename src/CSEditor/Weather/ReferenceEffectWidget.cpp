@@ -162,17 +162,6 @@ void ReferenceEffectWidget::ApplyChanges()
 	Widget::ForceCurrentWeatherReinit();
 }
 
-void ReferenceEffectWidget::RevertChanges()
-{
-	settings = vanillaSettings;
-	ApplyChanges();
-}
-
-bool ReferenceEffectWidget::HasUnsavedChanges() const
-{
-	return !(settings == originalSettings);
-}
-
 std::vector<Widget::SearchResult> ReferenceEffectWidget::CollectSearchableSettings() const
 {
 	return {
