@@ -359,24 +359,19 @@ bool SceneSettingsManager::HasAnyUserEntries() const
 void SceneSettingsManager::ClearAllUserEntries()
 {
 	// Unresolved raw entries stay in the document: they belong to features this session cannot judge.
-	const auto clear = [](std::vector<SettingEntry>& sourceEntries) {
-		return std::erase_if(sourceEntries,
-				   [](const SettingEntry& entry) { return entry.source == EntrySource::User; }) != 0;
-	};
-
 	bool changed = false;
 	for (auto& [type, sourceEntries] : entries)
-		if (IsEntryListSceneType(type) && clear(sourceEntries)) {
+		if (IsEntryListSceneType(type) && EraseUserEntries(sourceEntries) != 0) {
 			MarkEntryListUserSettingsModified(type);
 			changed = true;
 		}
 	for (auto& [weatherId, config] : weatherSceneConfigs)
-		if (clear(config.entries)) {
+		if (EraseUserEntries(config.entries) != 0) {
 			PrepareWeatherUserSettingsMutation(weatherId, false);
 			changed = true;
 		}
 	for (auto& [configKey, config] : locationSceneConfigs)
-		if (clear(config.entries)) {
+		if (EraseUserEntries(config.entries) != 0) {
 			locationUserSettingsModified = true;
 			changed = true;
 		}

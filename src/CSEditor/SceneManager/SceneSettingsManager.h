@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -142,6 +143,12 @@ public:
 		// so a document authored by another implementation round-trips with its field intact.
 		bool retainSerializedTransition = false;
 	};
+
+	/** @brief Removes the user's entries, leaving the overwrites. @return How many were removed. */
+	static size_t EraseUserEntries(std::vector<SettingEntry>& entries)
+	{
+		return std::erase_if(entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+	}
 
 	/// One indexed value in an atomic scene-setting update.
 	struct EntryValueUpdate
@@ -419,6 +426,13 @@ public:
 		bool IsPeriodActive(TimeOfDayPeriod period) const
 		{
 			return timeOfDayEnabled ? period != TimeOfDayPeriod::Count : period == TimeOfDayPeriod::Count;
+		}
+
+		/** @brief Drops the user's entries and time-of-day choice, before the user document is read again. */
+		void ClearUserLayer()
+		{
+			EraseUserEntries(entries);
+			userTimeOfDayEnabled.reset();
 		}
 	};
 
@@ -1124,6 +1138,15 @@ private:
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
 	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
+	/**
+	 * @brief Removes one entry of a weather or location config. An overwrite is also stripped from its backing
+	 * file, along with every other entry that file supplied for the same setting.
+	 * @param overwritePath The backing file of one of the config's overwrite entries.
+	 * @param prepareUserEdit Readies the config's raw user settings before a user entry's removal is saved.
+	 */
+	void RemovePeriodicEntry(PeriodicSceneConfig& config, size_t index,
+		const std::function<std::filesystem::path(const SettingEntry&)>& overwritePath,
+		const std::function<void()>& prepareUserEdit);
 	/** @brief Whether the weather holds an entry for this setting and period, optionally of one source. */
 	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,

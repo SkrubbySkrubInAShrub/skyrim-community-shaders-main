@@ -46,7 +46,8 @@ namespace
 	using PresetExportInfo = SceneSettingsManager::PresetExportInfo;
 	using PresetType = SceneSettingsManager::PresetType;
 
-	constexpr const char* kExportPopupId = "##ScenePresetExport";
+	/// Fixed ID behind the translated title, so the popup survives a language switch.
+	constexpr const char* kExportPopupId = "###ScenePresetExport";
 	constexpr const char* kPickerPopupId = "##ScenePresetExportPicker";
 
 	/// The list scrolls rather than growing past the screen, like the copy preview does.
@@ -80,9 +81,7 @@ namespace
 	std::string formEditSummary;
 	std::string pickerSearch;
 
-	bool dialogActive = false;
-	bool pendingOpen = false;
-	bool exportRequested = false;
+	Util::DeferredModal dialog;
 	/// Also write the base Post Processing settings as the pack's Baseline file: how Post Processing presets are made.
 	bool includePostProcessing = false;
 	/// Opened from Base Settings: a Baseline export with the form cut down to what a Baseline needs.
@@ -871,7 +870,6 @@ namespace
 			                                      T(TKEY("scene_export_confirm"), "Export") :
 			                                      T(TKEY("scene_export_replace_confirm"), "Delete and replace");
 			exportConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
-			exportRequested = true;
 			exportConfirmation.Request();
 			ImGui::CloseCurrentPopup();
 		}
@@ -950,8 +948,7 @@ const char* ScenePresetExport::GetSummary()
 
 void ScenePresetExport::Open()
 {
-	dialogActive = true;
-	pendingOpen = true;
+	dialog.Request();
 	ResetFormFields();
 	// The Presets page may never have scanned this session, and packs may have changed since.
 	UnifiedPresetCatalog::GetSingleton().Discover();
@@ -974,28 +971,18 @@ void ScenePresetExport::OpenBaseline(const std::string& featureShortName)
 
 void ScenePresetExport::Draw()
 {
-	if (!dialogActive)
-		return;
-
 	auto* manager = SceneSettingsManager::GetSingleton();
-	if (!manager) {
-		dialogActive = false;
+	if (!manager)
 		return;
-	}
 
-	if (pendingOpen) {
-		ImGui::OpenPopup(kExportPopupId);
-		pendingOpen = false;
-	}
-
-	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-	ImGui::SetNextWindowSize(ImVec2(kModalWidth * Util::GetUIScale(), 0.0f), ImGuiCond_Always);
-	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-		// The name picker is a popup of its own and takes the first Escape.
-		const bool closing = !ImGui::IsPopupOpen(kPickerPopupId) && EditorWindow::ClosePopupOnEscape();
-		if (!closing)
-			DrawForm(*manager);
-		ImGui::EndPopup();
+	if (dialog.IsActive()) {
+		const auto title = std::format("{}{}", T(TKEY("scene_export_title"), "Export preset"), kExportPopupId);
+		dialog.Draw(title.c_str(), kModalWidth * Util::GetUIScale(), [manager] {
+			// The name picker is a popup of its own and takes the first Escape.
+			const bool closing = !ImGui::IsPopupOpen(kPickerPopupId) && EditorWindow::ClosePopupOnEscape();
+			if (!closing)
+				DrawForm(*manager);
+		});
 	}
 
 	if (exportConfirmation.Draw()) {
@@ -1016,13 +1003,7 @@ void ScenePresetExport::Draw()
 				catalog.ReapplyIfInUse(sanitizedName);
 			}
 		}
-		exportRequested = false;
-	} else if (!exportConfirmation.IsOpen()) {
-		exportRequested = false;
 	}
-
-	if (!ImGui::IsPopupOpen(kExportPopupId) && !exportRequested)
-		dialogActive = false;
 }
 
 #undef I18N_KEY_PREFIX

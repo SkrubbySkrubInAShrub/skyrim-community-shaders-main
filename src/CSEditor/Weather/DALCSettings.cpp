@@ -34,15 +34,7 @@ void DALCSettings::Write(RE::BGSDirectionalAmbientLightingColors& target) const
 bool DrawDALCControls(Widget& widget, DALCSettings& dalc, const char* inheritedTooltip)
 {
 	bool changed = false;
-	auto draw = [&](auto&& control) {
-		if (inheritedTooltip)
-			PushInheritedStyle();
-		changed |= control();
-		if (inheritedTooltip) {
-			Util::AddTooltip(inheritedTooltip);
-			PopInheritedStyle();
-		}
-	};
+	auto draw = [&](auto&& control) { changed |= DrawInherited(inheritedTooltip, control); };
 	auto colorEdit = [&](const char* label, float3& color) {
 		draw([&] { return WeatherUtils::DrawColorEdit(label, color); });
 	};

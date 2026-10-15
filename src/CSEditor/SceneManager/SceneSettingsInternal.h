@@ -78,6 +78,17 @@ namespace SceneSettingsInternal
 	/** @brief Parses a JSON object file, refusing files over kMaxSceneOverwriteFileSize. */
 	bool ReadBoundedSceneJson(const std::filesystem::path& path, json& data);
 
+	/**
+	 * @brief Readies one weather or location's raw user settings in section for an edit and returns them.
+	 * @param canonicalKey The target's key as it is written back.
+	 * @param namesTarget Whether a raw key, possibly spelled differently, names the same target.
+	 * @param replaceMalformedEntries Empty a non-array "entries" in every raw object naming the target.
+	 * @param dropAliasMetadata Called on those objects other than canonicalKey's, whose metadata it duplicates.
+	 */
+	json& PrepareRawUserTarget(json& section, const std::string& canonicalKey,
+		const std::function<bool(const std::string&)>& namesTarget, bool replaceMalformedEntries,
+		const std::function<void(json&)>& dropAliasMetadata = {});
+
 	/** @brief Whether a value is a float: TOD and weather can only interpolate floats, not toggles or enums. */
 	bool IsNumericValue(const json& value);
 
@@ -172,6 +183,11 @@ namespace SceneSettingsInternal
 	/** @brief Whether the entry addresses this exact setting. */
 	bool IsSameSetting(const SceneSettingsManager::SettingEntry& entry, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
+
+	/** @brief Whether entries hold this setting at this period, from any source or only the given one. */
+	bool HasEntryForPeriod(const std::vector<SceneSettingsManager::SettingEntry>& entries, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, SceneSettingsManager::TimeOfDayPeriod period,
+		std::optional<SceneSettingsManager::EntrySource> source);
 
 	/** @brief "path / Feature.key" name for log lines. */
 	std::string GetSettingLogName(const std::string& featureShortName,

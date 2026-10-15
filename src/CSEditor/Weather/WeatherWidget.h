@@ -117,6 +117,9 @@ public:
 	/** @brief Returns true if this weather has a parent weather for inheritance. */
 	bool HasParent() const;
 
+	/** @brief Whether the editor lets weathers inherit and this one has a parent to inherit from. */
+	bool InheritsFromParent() const;
+
 	/** @brief Writes the current widget settings into the game's TESWeather data. */
 	void SetWeatherValues();
 

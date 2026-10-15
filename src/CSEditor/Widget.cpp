@@ -938,6 +938,12 @@ bool Widget::MatchesSearch(const std::string& settingId) const
 		[&](const SearchResult& r) { return r.settingId == settingId; });
 }
 
+void Widget::AutoApply(bool changed)
+{
+	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges)
+		ApplyChanges();
+}
+
 bool Widget::MatchesAnySearch(std::initializer_list<const char*> settingIds) const
 {
 	return std::any_of(settingIds.begin(), settingIds.end(), [&](const char* settingId) {

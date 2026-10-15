@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 
 namespace WeatherUtils::TexturePath
 {
@@ -74,6 +75,26 @@ namespace WeatherUtils
 			if (w->form == form)
 				return w->GetEditorID();
 		return "";
+	}
+
+	RE::TESForm* ReadFormRef(const json& saved, const std::string& key, const std::vector<std::unique_ptr<Widget>>& widgets,
+		RE::TESForm* fallback)
+	{
+		const auto it = saved.find(key);
+		if (it == saved.end() || !it->is_string())
+			return fallback;
+		const auto& id = it->get_ref<const std::string&>();
+		if (id.empty())
+			return nullptr;
+		if (auto* form = FindFormByEditorID(id, widgets))
+			return form;
+		// Visual effects once saved the load-order form ID in hex, with zero for none.
+		constexpr size_t kHexFormIdDigits = 8;
+		RE::FormID formId = 0;
+		const auto* end = id.data() + id.size();
+		if (id.size() == kHexFormIdDigits && std::from_chars(id.data(), end, formId, 16).ptr == end)
+			return formId ? RE::TESForm::LookupByID(formId) : nullptr;
+		return fallback;
 	}
 }
 
@@ -234,6 +255,15 @@ const char* WeatherUtils::TranslateControlLabel(std::string_view label)
 
 	// Fallback: return the original label via T() which caches a stable null-terminated copy
 	return T(std::string(label).c_str(), std::string(label).c_str());
+}
+
+std::vector<Widget::SearchResult> WeatherUtils::LabelSearchResults(const SearchTabs& tabs)
+{
+	std::vector<Widget::SearchResult> results;
+	for (const auto& [tab, ids] : tabs)
+		for (const auto& id : ids)
+			results.push_back({ TranslateControlLabel(id), tab, id });
+	return results;
 }
 
 static std::string BuildLocalizedControlLabel(const std::string& label)

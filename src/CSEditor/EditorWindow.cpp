@@ -1471,18 +1471,17 @@ void EditorWindow::SetupResources()
 	WeatherPickerWindow::GetSingleton()->Load();
 	InvalidateJsonAttachmentCache();
 
-	// Populate all widget collections using WidgetFactory templates
-	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets);
-	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets);
+	// Widgets load their saves as they are made, and saved form references resolve through the
+	// collections of the forms they name, so those are populated first.
+	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
+	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
 	WidgetFactory::PopulateWidgets<ImageSpaceWidget, RE::TESImageSpace>(imageSpaceWidgets);
 	WidgetFactory::PopulateWidgets<VolumetricLightingWidget, RE::BGSVolumetricLighting>(volumetricLightingWidgets);
 	WidgetFactory::PopulateWidgets<PrecipitationWidget, RE::BGSShaderParticleGeometryData>(precipitationWidgets);
 	WidgetFactory::PopulateWidgets<LensFlareWidget, RE::BGSLensFlare>(lensFlareWidgets);
 	WidgetFactory::PopulateWidgets<ReferenceEffectWidget, RE::BGSReferenceEffect>(referenceEffectWidgets);
-
-	// Cache simple form widgets for form picker performance
-	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
-	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
+	WidgetFactory::PopulateWidgets<LightingTemplateWidget, RE::BGSLightingTemplate>(lightingTemplateWidgets);
+	WidgetFactory::PopulateWidgets<WeatherWidget, RE::TESWeather>(weatherWidgets);
 }
 
 void EditorWindow::ReloadFormEdits(const FormEditSources::FormKeySet& keys)

@@ -349,6 +349,23 @@ void PushInheritedStyle();
 /** @brief Pop the inherited style pushed by PushInheritedStyle. Always call after the corresponding push. */
 void PopInheritedStyle();
 
+/**
+ * @brief Draws a control, styled as inherited and explained by inheritedTooltip on hover while that is set.
+ * @return What draw returned.
+ */
+template <class Draw>
+bool DrawInherited(const char* inheritedTooltip, Draw&& draw)
+{
+	if (inheritedTooltip)
+		PushInheritedStyle();
+	const bool result = draw();
+	if (inheritedTooltip) {
+		Util::AddTooltip(inheritedTooltip);
+		PopInheritedStyle();
+	}
+	return result;
+}
+
 // Time of Day (TOD) helper functions
 namespace TOD
 {
@@ -528,6 +545,21 @@ namespace WeatherUtils
 	std::string FindEditorIDByForm(const RE::TESForm* form, const std::vector<std::unique_ptr<Widget>>& widgets);
 
 	/**
+	 * @brief Reads a form reference saved with FindEditorIDByForm; older saves' hex form IDs still read.
+	 * @return The form; null for a saved "" (none); fallback when the key is absent or names no known form.
+	 */
+	RE::TESForm* ReadFormRef(const json& saved, const std::string& key, const std::vector<std::unique_ptr<Widget>>& widgets,
+		RE::TESForm* fallback);
+
+	/** @copydoc ReadFormRef */
+	template <class T>
+	T* ReadFormRef(const json& saved, const std::string& key, const std::vector<std::unique_ptr<Widget>>& widgets, T* fallback)
+	{
+		auto* form = ReadFormRef(saved, key, widgets, static_cast<RE::TESForm*>(fallback));
+		return form ? form->As<T>() : nullptr;
+	}
+
+	/**
 	 * @brief Set the current widget context for undo tracking. Call at the start of widget Draw().
 	 * @param widget The widget being drawn.
 	 */
@@ -539,6 +571,12 @@ namespace WeatherUtils
 	 * @return Localized label string (stable pointer valid for the session).
 	 */
 	const char* TranslateControlLabel(std::string_view label);
+
+	/** @brief Setting ids per tab name, for ids that double as the English control label. */
+	using SearchTabs = std::vector<std::pair<std::string, std::vector<std::string>>>;
+
+	/** @brief One search result per setting id, shown under its translated label. */
+	std::vector<Widget::SearchResult> LabelSearchResults(const SearchTabs& tabs);
 
 	/**
 	 * @brief Draw an int8-range slider with undo and palette tracking.

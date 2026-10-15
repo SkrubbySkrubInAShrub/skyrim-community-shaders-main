@@ -109,10 +109,7 @@ namespace
 		bool removeUnticked = false;
 		bool featureLocked = false;
 		bool failed = false;
-		bool active = false;
-		bool pendingOpen = false;
-		/// The ID the popup opened under; other DrawExport callers have a different ID stack and stay out.
-		ImGuiID popupId = 0;
+		Util::DeferredModal modal;
 		std::vector<std::string> packNames;
 	};
 	Session session;
@@ -631,8 +628,7 @@ void FeatureOverwritesPanel::BeginExport(Feature* feature)
 				session.features.push_back({ .shortName = candidate->GetShortName(), .label = candidate->GetDisplayName() });
 	}
 	CollectExistingNames();
-	session.active = true;
-	session.pendingOpen = true;
+	session.modal.Request();
 }
 
 void FeatureOverwritesPanel::BeginExportInto(Feature* feature, const std::string& packId)
@@ -648,25 +644,11 @@ void FeatureOverwritesPanel::BeginExportInto(Feature* feature, const std::string
 
 void FeatureOverwritesPanel::DrawExport()
 {
-	if (!session.active)
+	if (!session.modal.IsActive())
 		return;
-
 	const auto title = std::format("{}{}", T(TKEY("export.title"), "Export Feature Settings"), kPopupId);
-	const ImGuiID popupId = ImGui::GetID(title.c_str());
-	if (std::exchange(session.pendingOpen, false)) {
-		session.popupId = popupId;
-		ImGui::OpenPopup(title.c_str());
-	}
-	if (popupId != session.popupId)
-		return;
-
-	const float width = ImGui::GetFontSize() * (session.featureLocked ? kLockedModalWidthEm : kModalWidthEm);
-	ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, FLT_MAX));
-	bool open = true;
-	if (auto popup = Util::CenteredPopupModal(title.c_str(), &open))
-		DrawContents();
-	if (!ImGui::IsPopupOpen(title.c_str()))
-		session.active = false;
+	session.modal.Draw(title.c_str(), ImGui::GetFontSize() * (session.featureLocked ? kLockedModalWidthEm : kModalWidthEm),
+		DrawContents);
 }
 
 void FeatureOverwritesPanel::DrawExportButton(Feature* feature, const char* id)

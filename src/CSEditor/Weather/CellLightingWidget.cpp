@@ -128,28 +128,16 @@ void CellLightingWidget::DrawWidget()
 			const ImGuiTabItemFlags inheritFlags = GetTabFlagsForOverride(CellLightingTab::kInheritance);
 
 			const char* inheritedTooltip = T(TKEY("inherited_from_lighting_template"), "Inherited from lighting template");
-			auto drawInherited = [inheritedTooltip](bool inherited, auto draw) -> bool {
-				if (inherited)
-					PushInheritedStyle();
-				const bool result = draw();
-				if (inherited) {
-					Util::AddTooltip(inheritedTooltip);
-					PopInheritedStyle();
-				}
-				return result;
+			auto drawInherited = [inheritedTooltip](bool inherited, auto draw) {
+				return DrawInherited(inherited ? inheritedTooltip : nullptr, draw);
 			};
 
 			if (Util::BeginPillTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
 				BeginScrollableContent("##BasicScroll");
 
 				auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
-					if (!matches)
-						return;
-					if (ShouldOpenSearchSection())
-						ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-					if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
+					if (matches && SearchHeader(label))
 						draw();
-					}
 				};
 
 				drawMatchedHeader(MatchesAnySearch({ CellLightingSetting::kAmbientColor, CellLightingSetting::kDirectionalColor }), T(TKEY("ambient_directional"), "Ambient & Directional"), [&]() {
@@ -271,9 +259,7 @@ void CellLightingWidget::DrawWidget()
 			Util::EndPillTabBar();
 		}
 
-		if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-			ApplyChanges();
-		}
+		AutoApply(changed);
 	}
 	ImGui::End();
 }
@@ -380,24 +366,18 @@ void CellLightingWidget::ApplyChanges()
 
 std::vector<Widget::SearchResult> CellLightingWidget::CollectSearchableSettings() const
 {
-	const std::vector<std::pair<std::string, std::vector<std::string>>> entries = {
+	std::vector<std::string> inheritLabels;
+	for (const auto& flag : kInheritFlags)
+		inheritLabels.emplace_back(flag.label);
+	return WeatherUtils::LabelSearchResults({
 		{ CellLightingTab::kBasic, { CellLightingSetting::kAmbientColor, CellLightingSetting::kDirectionalColor,
 									   CellLightingSetting::kXYRotation, CellLightingSetting::kZRotation, CellLightingSetting::kDirectionalFade,
 									   CellLightingSetting::kLightFadeStart, CellLightingSetting::kLightFadeEnd, CellLightingSetting::kClipDistance } },
 		{ CellLightingTab::kFog, { CellLightingSetting::kFogNearColor, CellLightingSetting::kFogFarColor,
 									 CellLightingSetting::kFogNear, CellLightingSetting::kFogFar, CellLightingSetting::kFogPower, CellLightingSetting::kFogClampMax } },
 		{ CellLightingTab::kDalc, { DALCSetting::kAll.begin(), DALCSetting::kAll.end() } },
-	};
-
-	std::vector<SearchResult> results;
-	for (const auto& [tab, names] : entries) {
-		for (const auto& name : names) {
-			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
-		}
-	}
-	for (const auto& flag : kInheritFlags)
-		results.push_back({ WeatherUtils::TranslateControlLabel(flag.label), CellLightingTab::kInheritance, flag.label });
-	return results;
+		{ CellLightingTab::kInheritance, std::move(inheritLabels) },
+	});
 }
 
 #undef I18N_KEY_PREFIX

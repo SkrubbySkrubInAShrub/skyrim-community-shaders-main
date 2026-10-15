@@ -68,8 +68,7 @@ void ReferenceEffectWidget::DrawWidget()
 					changed = true;
 			}
 
-			if (changed && editorWindow->settings.autoApplyChanges)
-				ApplyChanges();
+			AutoApply(changed);
 		}
 		EndScrollableContent();
 	}
@@ -84,15 +83,9 @@ void ReferenceEffectWidget::LoadSettings()
 		return;
 
 	LoadSavedSettings([this] {
-		// Forms are saved as hex form IDs; zero means none.
-		auto readForm = [this]<class T>(const char* key, T*& form) {
-			if (!js.contains(key))
-				return;
-			const auto formID = static_cast<RE::FormID>(std::stoul(js[key].get<std::string>(), nullptr, 16));
-			form = formID ? RE::TESForm::LookupByID<T>(formID) : nullptr;
-		};
-		readForm("artObject", settings.artObject);
-		readForm("effectShader", settings.effectShader);
+		const auto* editorWindow = EditorWindow::GetSingleton();
+		settings.artObject = WeatherUtils::ReadFormRef(js, "artObject", editorWindow->artObjectWidgets, settings.artObject);
+		settings.effectShader = WeatherUtils::ReadFormRef(js, "effectShader", editorWindow->effectShaderWidgets, settings.effectShader);
 		ReadSaved("faceTarget", settings.faceTarget);
 		ReadSaved("attachToCamera", settings.attachToCamera);
 		ReadSaved("inheritRotation", settings.inheritRotation);
@@ -112,8 +105,9 @@ void ReferenceEffectWidget::LoadFromGameSettings()
 
 void ReferenceEffectWidget::SaveSettings()
 {
-	js["artObject"] = settings.artObject ? std::format("{:08X}", settings.artObject->GetFormID()) : "00000000";
-	js["effectShader"] = settings.effectShader ? std::format("{:08X}", settings.effectShader->GetFormID()) : "00000000";
+	const auto* editorWindow = EditorWindow::GetSingleton();
+	js["artObject"] = WeatherUtils::FindEditorIDByForm(settings.artObject, editorWindow->artObjectWidgets);
+	js["effectShader"] = WeatherUtils::FindEditorIDByForm(settings.effectShader, editorWindow->effectShaderWidgets);
 	js["faceTarget"] = settings.faceTarget;
 	js["attachToCamera"] = settings.attachToCamera;
 	js["inheritRotation"] = settings.inheritRotation;
@@ -141,11 +135,7 @@ void ReferenceEffectWidget::ApplyChanges()
 
 std::vector<Widget::SearchResult> ReferenceEffectWidget::CollectSearchableSettings() const
 {
-	return {
-		{ WeatherUtils::TranslateControlLabel(ReferenceEffectSetting::kArtObject), "", ReferenceEffectSetting::kArtObject },
-		{ WeatherUtils::TranslateControlLabel(ReferenceEffectSetting::kEffectShader), "", ReferenceEffectSetting::kEffectShader },
-		{ WeatherUtils::TranslateControlLabel(ReferenceEffectSetting::kFaceTarget), "", ReferenceEffectSetting::kFaceTarget },
-		{ WeatherUtils::TranslateControlLabel(ReferenceEffectSetting::kAttachToCamera), "", ReferenceEffectSetting::kAttachToCamera },
-		{ WeatherUtils::TranslateControlLabel(ReferenceEffectSetting::kInheritRotation), "", ReferenceEffectSetting::kInheritRotation },
-	};
+	return WeatherUtils::LabelSearchResults({ { "", { ReferenceEffectSetting::kArtObject, ReferenceEffectSetting::kEffectShader,
+														ReferenceEffectSetting::kFaceTarget, ReferenceEffectSetting::kAttachToCamera,
+														ReferenceEffectSetting::kInheritRotation } } });
 }

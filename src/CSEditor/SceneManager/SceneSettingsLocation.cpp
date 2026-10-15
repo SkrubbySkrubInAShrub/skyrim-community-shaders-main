@@ -142,8 +142,7 @@ void SceneSettingsManager::RemoveLocationTarget(LocationTargetType type, const s
 	if (it == locationSceneConfigs.end())
 		return;
 
-	const auto removedEntries = std::erase_if(it->second.entries,
-		[](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+	const auto removedEntries = EraseUserEntries(it->second.entries);
 	// Shipped overwrites keep the config alive; without them nothing is left to remember.
 	if (it->second.entries.empty())
 		locationSceneConfigs.erase(it);
@@ -279,60 +278,29 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 	locationUserSettingsModified = true;
 	if (!unresolvedLocationUserSettings.is_object())
 		unresolvedLocationUserSettings = json::object();
-	const auto* sectionName = GetLocationSectionName(type);
-	auto& section = unresolvedLocationUserSettings[sectionName];
-	if (!section.is_object())
-		section = json::object();
 	const auto canonicalFormKey = CanonicalizeResolvedLocationFormKey(formKey);
 	const auto targetKey = GetLocationConfigKey(type, canonicalFormKey);
 	// Pinning the mode keeps a later preset from flipping which set the user's edits land in.
 	if (auto* config = FindLocationConfig(type, canonicalFormKey))
 		config->userTimeOfDayEnabled = config->timeOfDayEnabled;
-	if (replaceMalformedEntries) {
-		for (auto& [rawFormKey, rawConfig] : section.items()) {
-			if (!rawConfig.is_object() ||
-				GetLocationConfigKey(type, CanonicalizeResolvedLocationFormKey(rawFormKey)) != targetKey)
-				continue;
-			auto entriesIt = rawConfig.find("entries");
-			if (entriesIt != rawConfig.end() && !entriesIt->is_array())
-				*entriesIt = json::array();
-			if (rawFormKey != canonicalFormKey) {
-				rawConfig.erase("type");
-				rawConfig.erase("name");
-				rawConfig.erase("editorId");
-				rawConfig.erase("coc");
-			}
-		}
-	}
-
-	auto& rawConfig = section[canonicalFormKey];
-	if (!rawConfig.is_object())
-		rawConfig = json::object();
-	if (replaceMalformedEntries) {
-		auto entriesIt = rawConfig.find("entries");
-		if (entriesIt != rawConfig.end() && !entriesIt->is_array())
-			*entriesIt = json::array();
-	}
+	PrepareRawUserTarget(
+		unresolvedLocationUserSettings[GetLocationSectionName(type)], canonicalFormKey,
+		[&](const std::string& rawFormKey) {
+			return GetLocationConfigKey(type, CanonicalizeResolvedLocationFormKey(rawFormKey)) == targetKey;
+		},
+		replaceMalformedEntries,
+		[](json& alias) {
+			for (const char* key : { "type", "name", "editorId", "coc" })
+				alias.erase(key);
+		});
 }
 
 void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index)
 {
-	auto* config = FindLocationConfig(type, formKey);
-	if (!config || index >= config->entries.size())
-		return;
-
-	const auto entry = config->entries[index];
-	const bool userEntry = entry.source == EntrySource::User;
-	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty() &&
-		!RemoveSettingFromOverwriteFile(GetLocationOverwritePath(formKey, entry), entry.settingPath, entry.settingKey))
-		return;
-	config->entries.erase(config->entries.begin() + static_cast<ptrdiff_t>(index));
-	BumpEntryPresentationRevision();
-	if (userEntry) {
-		PrepareLocationUserSettingsMutation(type, formKey, false);
-		SaveAllUserSettings();
-	}
-	ReapplyIfActive();
+	if (auto* config = FindLocationConfig(type, formKey))
+		RemovePeriodicEntry(
+			*config, index, [&formKey](const SettingEntry& entry) { return GetLocationOverwritePath(formKey, entry); },
+			[this, type, &formKey] { PrepareLocationUserSettingsMutation(type, formKey, false); });
 }
 
 std::vector<std::string> SceneSettingsManager::MatchingRawLocationKeys(const json& section,
@@ -431,9 +399,5 @@ bool SceneSettingsManager::HasLocationEntry(LocationTargetType type, std::string
 	const std::string& featureShortName, const std::vector<std::string>& settingPath,
 	const std::string& settingKey, TimeOfDayPeriod period, std::optional<EntrySource> source) const
 {
-	const auto& config = GetLocationConfig(type, formKey);
-	return std::any_of(config.entries.begin(), config.entries.end(), [&](const auto& entry) {
-		return (!source || entry.source == *source) && entry.period == period &&
-		       IsSameSetting(entry, featureShortName, settingPath, settingKey);
-	});
+	return HasEntryForPeriod(GetLocationConfig(type, formKey).entries, featureShortName, settingPath, settingKey, period, source);
 }

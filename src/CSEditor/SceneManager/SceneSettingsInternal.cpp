@@ -161,6 +161,34 @@ namespace SceneSettingsInternal
 		return true;
 	}
 
+	json& PrepareRawUserTarget(json& section, const std::string& canonicalKey,
+		const std::function<bool(const std::string&)>& namesTarget, bool replaceMalformedEntries,
+		const std::function<void(json&)>& dropAliasMetadata)
+	{
+		const auto resetMalformedEntries = [replaceMalformedEntries](json& rawConfig) {
+			if (!replaceMalformedEntries)
+				return;
+			if (auto entriesIt = rawConfig.find("entries"); entriesIt != rawConfig.end() && !entriesIt->is_array())
+				*entriesIt = json::array();
+		};
+		if (!section.is_object())
+			section = json::object();
+		if (replaceMalformedEntries) {
+			for (auto& [rawKey, rawConfig] : section.items()) {
+				if (!rawConfig.is_object() || !namesTarget(rawKey))
+					continue;
+				resetMalformedEntries(rawConfig);
+				if (dropAliasMetadata && rawKey != canonicalKey)
+					dropAliasMetadata(rawConfig);
+			}
+		}
+		auto& rawConfig = section[canonicalKey];
+		if (!rawConfig.is_object())
+			rawConfig = json::object();
+		resetMalformedEntries(rawConfig);
+		return rawConfig;
+	}
+
 	bool IsNumericValue(const json& value)
 	{
 		return value.is_number_float();
@@ -591,6 +619,16 @@ namespace SceneSettingsInternal
 		return entry.featureShortName == featureShortName &&
 		       entry.settingPath == settingPath &&
 		       entry.settingKey == settingKey;
+	}
+
+	bool HasEntryForPeriod(const std::vector<SceneSettingsManager::SettingEntry>& entries, const std::string& featureShortName,
+		const std::vector<std::string>& settingPath, const std::string& settingKey, SceneSettingsManager::TimeOfDayPeriod period,
+		std::optional<SceneSettingsManager::EntrySource> source)
+	{
+		return std::ranges::any_of(entries, [&](const SceneSettingsManager::SettingEntry& entry) {
+			return (!source || entry.source == *source) && entry.period == period &&
+			       IsSameSetting(entry, featureShortName, settingPath, settingKey);
+		});
 	}
 
 	std::string GetSettingLogName(const std::string& featureShortName,

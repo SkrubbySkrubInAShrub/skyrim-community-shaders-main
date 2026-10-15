@@ -103,9 +103,7 @@ void VolumetricLightingWidget::DrawWidget()
 		Util::EndPillTabBar();
 	}
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 	ImGui::End();
 }
 

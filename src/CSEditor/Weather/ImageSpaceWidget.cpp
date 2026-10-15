@@ -90,7 +90,6 @@ ImageSpaceWidget::~ImageSpaceWidget()
 void ImageSpaceWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	auto editorWindow = EditorWindow::GetSingleton();
 
 	if (BeginWidgetWindow(false, true, false, nullptr, "##ImageSpaceSearch")) {
 		DrawWidgetHeader("##ImageSpaceSearch", false, true);
@@ -149,9 +148,7 @@ void ImageSpaceWidget::DrawWidget()
 
 			PropertyDrawer::EndTable();
 
-			if (changed && editorWindow->settings.autoApplyChanges) {
-				ApplyChanges();
-			}
+			AutoApply(changed);
 		}
 	}
 	EndScrollableContent();

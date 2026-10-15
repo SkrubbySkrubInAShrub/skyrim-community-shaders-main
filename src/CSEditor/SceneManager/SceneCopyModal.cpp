@@ -191,8 +191,7 @@ namespace
 		bool scrollToCursor = false;
 		bool showUnauthored = false;
 		bool focusSearch = false;
-		bool active = false;
-		bool pendingOpen = false;
+		Util::DeferredModal modal;
 		/// The swap button sits above the list, so it applies next frame rather than under rows already fetched.
 		bool swapPending = false;
 		/// Enter commits only from the search box or a row, never from a chip or button it would also press.
@@ -1255,29 +1254,19 @@ void SceneCopyModal::Open(const SceneContextId& page)
 	session = { .page = page,
 		.pageName = SceneSettingsManager::GetSingleton()->GetSceneContextDisplayName(page),
 		.pageIcon = GetSceneIcon(page),
-		.focusSearch = true,
-		.active = true,
-		.pendingOpen = true };
+		.focusSearch = true };
+	session.modal.Request();
 	ResetSelection();
 }
 
 void SceneCopyModal::Draw(const SceneContextId& page)
 {
-	if (!session.active || session.page != page)
+	if (!session.modal.IsActive() || session.page != page)
 		return;
-
 	const auto title = std::format("{}{}", T(TKEY("scene_page_copy_title"), "Copy settings"), kPopupId);
-	if (std::exchange(session.pendingOpen, false))
-		ImGui::OpenPopup(title.c_str());
-
-	const float width = std::min(ImGui::GetFontSize() * kModalWidthEm,
-		ImGui::GetMainViewport()->WorkSize.x * kMaxViewportWidthShare);
-	ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, FLT_MAX));
-	bool open = true;
-	if (auto popup = Util::CenteredPopupModal(title.c_str(), &open))
-		DrawContents();
-	if (!ImGui::IsPopupOpen(title.c_str()))
-		session.active = false;
+	session.modal.Draw(title.c_str(),
+		std::min(ImGui::GetFontSize() * kModalWidthEm, ImGui::GetMainViewport()->WorkSize.x * kMaxViewportWidthShare),
+		DrawContents);
 }
 
 bool SceneCopyModal::HasSources(const SceneContextId& page)

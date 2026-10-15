@@ -388,6 +388,17 @@ public:
 	/** @brief Returns true if a search is active or the user navigated from search, indicating sections should be expanded. */
 	bool ShouldOpenSearchSection() const { return searchBuffer[0] != '\0' || navigatedFromSearch; }
 
+	/** @brief Applies the edits at once when they changed and the editor is set to apply changes as they are made. */
+	void AutoApply(bool changed);
+
+	/** @brief Default-open collapsing header, forced open while a search drives the view. @return Whether it is open. */
+	bool SearchHeader(const char* label) const
+	{
+		if (ShouldOpenSearchSection())
+			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+		return ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+	}
+
 	/**
 	 * @brief Check if the given setting is currently highlighted by search navigation.
 	 * @param settingId The setting identifier to check.

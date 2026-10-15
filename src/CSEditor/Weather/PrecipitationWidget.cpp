@@ -162,8 +162,7 @@ void PrecipitationWidget::DrawWidget()
 			Util::EndPillTabBar();
 		}
 
-		if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges)
-			ApplyChanges();
+		AutoApply(changed);
 	}
 	ImGui::End();
 }
@@ -325,17 +324,9 @@ void PrecipitationWidget::RevertChanges()
 
 std::vector<Widget::SearchResult> PrecipitationWidget::CollectSearchableSettings() const
 {
-	const std::vector<std::pair<std::string, std::vector<std::string>>> entries = {
+	return WeatherUtils::LabelSearchResults({
 		{ PrecipitationTab::kParticle, { PrecipitationSetting::kType, PrecipitationSetting::kSizeX, PrecipitationSetting::kSizeY, PrecipitationSetting::kGravityVelocity, PrecipitationSetting::kRotationVelocity } },
 		{ PrecipitationTab::kPosition, { PrecipitationSetting::kCenterOffsetMin, PrecipitationSetting::kCenterOffsetMax, PrecipitationSetting::kStartRotationRange, PrecipitationSetting::kBoxSize, PrecipitationSetting::kParticleDensity } },
 		{ PrecipitationTab::kTexture, { PrecipitationSetting::kNumSubtexturesX, PrecipitationSetting::kNumSubtexturesY, PrecipitationSetting::kParticleTexture } },
-	};
-
-	std::vector<SearchResult> results;
-	for (const auto& [tab, names] : entries) {
-		for (const auto& name : names) {
-			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
-		}
-	}
-	return results;
+	});
 }

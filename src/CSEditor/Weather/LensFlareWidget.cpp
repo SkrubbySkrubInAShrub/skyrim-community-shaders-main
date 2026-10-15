@@ -34,9 +34,7 @@ void LensFlareWidget::DrawWidget()
 		drawSection(LensFlareSetting::kFadeDistRadiusScale, "Fade Distance", settings.fadeDistRadiusScale);
 		drawSection(LensFlareSetting::kColorInfluence, "Color", settings.colorInfluence);
 
-		if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-			ApplyChanges();
-		}
+		AutoApply(changed);
 	}
 	EndScrollableContent();
 	ImGui::End();
@@ -72,8 +70,5 @@ void LensFlareWidget::ApplyChanges()
 
 std::vector<Widget::SearchResult> LensFlareWidget::CollectSearchableSettings() const
 {
-	return {
-		{ LensFlareSetting::kFadeDistRadiusScale, "", LensFlareSetting::kFadeDistRadiusScale },
-		{ LensFlareSetting::kColorInfluence, "", LensFlareSetting::kColorInfluence },
-	};
+	return WeatherUtils::LabelSearchResults({ { "", { LensFlareSetting::kFadeDistRadiusScale, LensFlareSetting::kColorInfluence } } });
 }

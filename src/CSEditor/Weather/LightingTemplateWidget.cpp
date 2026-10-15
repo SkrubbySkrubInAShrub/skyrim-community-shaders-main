@@ -98,13 +98,8 @@ void LightingTemplateWidget::DrawBasicSettings()
 {
 	bool changed = false;
 	auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
-		if (!matches)
-			return;
-		if (ShouldOpenSearchSection())
-			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-		if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
+		if (matches && SearchHeader(label))
 			draw();
-		}
 	};
 
 	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor }), T(TKEY("ambient_directional"), "Ambient & Directional"), [&]() {
@@ -127,9 +122,7 @@ void LightingTemplateWidget::DrawBasicSettings()
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kClipDistance, settings.clipDist, 0.0f, 163840.0f);
 	});
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void LightingTemplateWidget::DrawFogSettings()
@@ -160,15 +153,12 @@ void LightingTemplateWidget::DrawFogSettings()
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFogClamp, settings.fogClamp, 0.0f, 1.0f);
 	});
 
-	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {
-		ApplyChanges();
-	}
+	AutoApply(changed);
 }
 
 void LightingTemplateWidget::DrawDALCSettings()
 {
-	if (DrawDALCControls(*this, settings.dalc) && EditorWindow::GetSingleton()->settings.autoApplyChanges)
-		ApplyChanges();
+	AutoApply(DrawDALCControls(*this, settings.dalc));
 }
 
 #undef I18N_KEY_PREFIX
@@ -244,20 +234,12 @@ void LightingTemplateWidget::SaveSettings()
 
 std::vector<Widget::SearchResult> LightingTemplateWidget::CollectSearchableSettings() const
 {
-	const std::vector<std::pair<std::string, std::vector<std::string>>> entries = {
+	return WeatherUtils::LabelSearchResults({
 		{ LightingTemplateTab::kBasic, { LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor,
 										   LightingTemplateSetting::kDirectionalXY, LightingTemplateSetting::kDirectionalZ, LightingTemplateSetting::kDirectionalFade,
 										   LightingTemplateSetting::kLightFadeStart, LightingTemplateSetting::kLightFadeEnd, LightingTemplateSetting::kClipDistance } },
 		{ LightingTemplateTab::kFog, { LightingTemplateSetting::kFogColorNear, LightingTemplateSetting::kFogColorFar,
 										 LightingTemplateSetting::kFogNear, LightingTemplateSetting::kFogFar, LightingTemplateSetting::kFogPower, LightingTemplateSetting::kFogClamp } },
 		{ LightingTemplateTab::kDalc, { DALCSetting::kAll.begin(), DALCSetting::kAll.end() } },
-	};
-
-	std::vector<SearchResult> results;
-	for (const auto& [tab, names] : entries) {
-		for (const auto& name : names) {
-			results.push_back({ WeatherUtils::TranslateControlLabel(name), tab, name });
-		}
-	}
-	return results;
+	});
 }

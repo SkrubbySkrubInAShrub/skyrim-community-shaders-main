@@ -404,7 +404,7 @@ void SceneSettingsManager::LoadAllUserSettings()
 	auto path = GetUserSettingsFilePath();
 	logger::info("[SceneSettings] Loading user settings from: {}", path.string());
 	for (auto type : { SceneType::InteriorOnly, SceneType::TimeOfDay })
-		std::erase_if(entries[type], [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
+		EraseUserEntries(entries[type]);
 	unresolvedUserEntries[SceneType::InteriorOnly].clear();
 	unresolvedUserEntries[SceneType::TimeOfDay].clear();
 	BumpEntryPresentationRevision();
@@ -489,10 +489,8 @@ void SceneSettingsManager::LoadAllUserSettings()
 
 void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 {
-	for (auto& [_, config] : locationSceneConfigs) {
-		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-		config.userTimeOfDayEnabled.reset();
-	}
+	for (auto& [_, config] : locationSceneConfigs)
+		config.ClearUserLayer();
 	unresolvedLocationUserSettings = json::object();
 	locationUserSettingsModified = false;
 	locationTransitionSeconds = kDefaultLocationTransitionSeconds;
@@ -619,10 +617,8 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 
 void SceneSettingsManager::LoadWeatherUserSettings()
 {
-	for (auto& [_, config] : weatherSceneConfigs) {
-		std::erase_if(config.entries, [](const SettingEntry& entry) { return entry.source == EntrySource::User; });
-		config.userTimeOfDayEnabled.reset();
-	}
+	for (auto& [_, config] : weatherSceneConfigs)
+		config.ClearUserLayer();
 	unresolvedWeatherUserSettings = json::object();
 	weatherUserSettingsModified = false;
 	if (!userSettingsDocumentLoaded || !userSettingsDocumentWritable || !preservedUserSettingsRoot.is_object())
