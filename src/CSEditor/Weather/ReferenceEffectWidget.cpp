@@ -2,6 +2,7 @@
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
+#include "Globals.h"
 
 #include <format>
 
@@ -130,7 +131,23 @@ void ReferenceEffectWidget::ApplyChanges()
 	if (settings.inheritRotation)
 		referenceEffect->data.flags.set(RE::BGSReferenceEffect::Flag::kInheritRotation);
 
-	Widget::ForceCurrentWeatherReinit();
+	RestartStaleSkyEffect();
+}
+
+void ReferenceEffectWidget::RestartStaleSkyEffect() const
+{
+	auto* sky = globals::game::sky;
+	if (!sky || !sky->currentWeather || sky->currentWeather->referenceEffect != referenceEffect)
+		return;
+
+	auto& liveEffect = sky->currentReferenceEffect;
+	const auto* modelEffect = netimmerse_cast<RE::ModelReferenceEffect*>(liveEffect.get());
+	if (!modelEffect || modelEffect->artObject == settings.artObject)
+		return;
+
+	// Mirrors the engine teardown: a controller-less effect plays stopEffect, then Sky::Update spawns one with the new art.
+	liveEffect->controller = nullptr;
+	liveEffect.reset();
 }
 
 std::vector<Widget::SearchResult> ReferenceEffectWidget::CollectSearchableSettings() const

@@ -17,8 +17,7 @@ struct ReferenceEffectSettings
  * @brief Widget for editing visual effect (BGSReferenceEffect) form data.
  *
  * Allows picking art objects and effect shaders, and toggling behavioral
- * flags such as face-target and attach-to-camera. Requires manual apply
- * because changes trigger a weather reinit.
+ * flags such as face-target and attach-to-camera.
  */
 class ReferenceEffectWidget : public SettingsWidget<ReferenceEffectSettings>
 {
@@ -45,16 +44,13 @@ public:
 	/** @brief Returns the human-readable widget type name for window sizing. */
 	const char* GetWidgetTypeName() const override { return "Visual Effect"; }
 
-	/** @brief Returns true because form reference changes trigger a weather reinit. */
-	bool RequiresManualApply() const override { return true; }
-
 	/** @brief Deserializes reference effect settings from the stored JSON blob. */
 	void LoadSettings() override;
 
 	/** @brief Serializes current reference effect settings to the JSON blob. */
 	void SaveSettings() override;
 
-	/** @brief Writes the current settings into the game's BGSReferenceEffect and triggers a weather reinit. */
+	/** @brief Writes the current settings into the game's BGSReferenceEffect and refreshes the live sky effect. */
 	void ApplyChanges() override;
 
 	/** @brief Collects all searchable reference effect settings for the search dropdown. */
@@ -64,6 +60,9 @@ public:
 
 private:
 	void LoadFromGameSettings();
+
+	/** @brief Restarts the current weather's sky effect when it still shows a different art object than this form. */
+	void RestartStaleSkyEffect() const;
 
 	std::vector<RE::BGSArtObject*> artObjectArray;
 	std::vector<RE::TESEffectShader*> effectShaderArray;
