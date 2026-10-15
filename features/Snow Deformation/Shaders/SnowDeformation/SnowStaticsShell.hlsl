@@ -2876,13 +2876,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 {
 	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
 	float3 shadePos = input.WorldPos;
-#ifdef SNOW_OBJECT_PRINTS
-	// The print under this coat pixel, on tops only: depth and its slope. The
-	// coat has already stepped off the print's bare core (Masks.y), so what
-	// shades here is the rim.
-	const float3 printAt = float3(input.worldXY, input.WorldPos.z + ShellCameraPosAdjust.z);
-	const float3 print = SnowPrints::DepthSlope(printAt) * smoothstep(0.5, 0.75, input.geoNz);
-#endif
 #ifdef PATCH
 	// Trench detail tiles by parallax occlusion, the ground's own: the mask
 	// across the trench profile at the sheet point, the view ray marched
@@ -3044,13 +3037,24 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	}
 #endif
 #ifdef SNOW_OBJECT_PRINTS
-	// The rim slopes into the print: the dent, -kPrintDentDepth x depth, added
-	// to the surface's slope as the patch adds its detail.
-	[branch] if (any(abs(print.yz) > 1e-4))
+	// The print under this coat pixel: depth and slope. The coat has already
+	// stepped off the print's bare core (Masks.y), so what shades here is the
+	// rim. It slopes into the print, the dent (-kPrintDentDepth x depth) added
+	// to the surface's slope as the patch adds its detail; a slope is a
+	// heightfield's, so tops only.
+	const float3 print = SnowPrints::DepthSlope(float3(worldXY, snowWorldZAbs));
+	[branch] if (input.geoNz > 0.5 && any(abs(print.yz) > 1e-4))
 	{
-		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) - kPrintDentDepth * print.yz;
+		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) - kPrintDentDepth * smoothstep(0.5, 0.75, input.geoNz) * print.yz;
 		normalWS = normalize(float3(-g, 1.0));
 	}
+	// The dent shadows its own rim at a low sun, as strong as the snow's
+	// parallax shadow (Parallax Shadow). Taken before the lighting's state is
+	// live, which saves four registers.
+	float printLit = 1.0;
+	[branch] if (input.geoNz > 0.5 && print.x > 0.005 && SnowParallax.y > 0.001)
+		printLit = SnowPrints::DentSunShadow(float3(worldXY, snowWorldZAbs), SharedData::DirLightDirection.xyz, -frameNormalWS.xy / max(frameNormalWS.z, 0.1),
+			kPrintDentDepth, SnowParallax.y * smoothstep(0.5, 0.75, input.geoNz), screenNoise);
 #endif
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
@@ -3444,11 +3448,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		sunShadow *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise), TrenchDetailShadow);
 #endif
 #ifdef SNOW_OBJECT_PRINTS
-	// The dent shadows its own rim at a low sun, as strong as the snow's
-	// parallax shadow (Parallax Shadow).
-	[branch] if (print.x > 0.005 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= SnowPrints::DentSunShadow(printAt, -kPrintDentDepth * print.x, L, -frameNormalWS.xy / max(frameNormalWS.z, 0.1), kPrintDentDepth,
-			SnowParallax.y, screenNoise);
+	sunShadow *= printLit;
 #endif
 
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,

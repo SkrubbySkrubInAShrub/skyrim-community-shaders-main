@@ -376,11 +376,8 @@ namespace SnowLighting
 		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 || SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5)
 			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 #	if defined(PROJECTED_UV)
-		// The facet normal, written as Lighting's triFaceNormal so the compiler
-		// folds the two. Prints lie on tops: the flank under one keeps its snow.
-		const float3 faceNormal = normalize(-cross(ddx(worldRel), ddy(worldRel)));
 		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
-			s.printBare = SnowPrints::Bare(worldRel + FrameBuffer::CameraPosAdjust.xyz) * smoothstep(0.5, 0.75, faceNormal.z);
+			s.printBare = SnowPrints::Bare(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 #	endif
 	}
 #endif
@@ -406,12 +403,16 @@ namespace SnowLighting
 		// on snow-classified draws only (the sparkle pass then discards).
 		[flatten] if (s.underWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 			vertexAlpha = 0.0;
-		// In a print the object goes bare (Snow Trenches on Objects): -1 puts a
-		// top's projWeight under every reader's threshold, where 0 would leave
-		// it barely under the projection's own threshold.
-		[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
-			vertexAlpha = lerp(vertexAlpha, -1.0, s.printBare);
 		return vertexAlpha;
+	}
+
+	// Snow Trenches on Objects: in a print the object goes bare at any facing.
+	// The weight itself drops, to -1 at the core, under every reader's
+	// threshold: the vertex alpha only scales the facing term, which is near 0
+	// on a wall. Never raised; printBare is 0 off snow-classified draws.
+	float PrintBareWeight(State s, float projWeight)
+	{
+		return lerp(projWeight, min(projWeight, -1.0), s.printBare);
 	}
 
 	// Vertex Alpha Fades Snow: 0 at alpha 1 (ours), 1 from alpha 0.75 down
