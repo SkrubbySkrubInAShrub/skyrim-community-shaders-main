@@ -53,6 +53,7 @@ public:
 	static constexpr float kHdrMenuScenePauseOrMap = 0.58f;
 	static constexpr float kHdrMenuSceneMainOrLoading = 1.f;
 
+	static constexpr uint kHdrPaperWhiteMin = 80;
 	static constexpr uint kHdrPeakNitsMin = 400;
 	static constexpr uint kHdrPeakNitsMax = 10000;
 	// AutoHDR expansion stops looking good past this brightness, so its peak is capped here.
