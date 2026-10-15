@@ -378,7 +378,8 @@ void UnifiedPresetCatalog::SaveActiveState() const
 	// Only this section is written now; the rest of the user config waits for Save Settings.
 	const auto path = Util::PathHelpers::GetSettingsUserPath();
 	std::error_code ec;
-	auto document = std::filesystem::exists(path, ec) ? Util::FileHelpers::ReadJsonObject(path, "user config") : json::object();
+	auto document = std::filesystem::exists(path, ec) ? Util::FileHelpers::ReadJsonObject(path, "user config") :
+	                                                    std::optional<json>(json::object());
 	if (!document) {
 		logger::warn("[Presets] Active pack state not saved: {} could not be read", Util::PathHelpers::ToUtf8(path));
 		return;
@@ -799,10 +800,10 @@ void UnifiedPresetCatalog::QueueBaselineOverlap(const std::string& packId, const
 		if (auto name = feature->GetDisplayName(); std::ranges::find(overlapFeatureNames, name) == overlapFeatureNames.end())
 			overlapFeatureNames.push_back(std::move(name));
 
-	std::string packs;
+	std::string packNames;
 	for (const auto& id : overlapPackIds) {
 		const auto* pack = FindPack(id);
-		packs += (packs.empty() ? "" : ", ") + (pack && !pack->name.empty() ? pack->name : id);
+		packNames += (packNames.empty() ? "" : ", ") + (pack && !pack->name.empty() ? pack->name : id);
 	}
 	std::string names;
 	for (const auto& name : overlapFeatureNames)
@@ -813,7 +814,7 @@ void UnifiedPresetCatalog::QueueBaselineOverlap(const std::string& packId, const
 	overlapPrompt.message = std::vformat(T("menu.presets.overlap_message",
 											 "{} sets {} features you have changed: {}.\n\n"
 											 "Your changes are kept and still win. Use the preset's values to drop them for the settings it sets."),
-		std::make_format_args(packs, count, names));
+		std::make_format_args(packNames, count, names));
 	overlapPrompt.confirmLabel = T("menu.presets.overlap_use_preset", "Use Preset Values");
 	overlapPrompt.cancelLabel = T("menu.presets.overlap_keep", "Keep My Changes");
 	overlapPrompt.focus = Util::ConfirmationPopup::Focus::Cancel;

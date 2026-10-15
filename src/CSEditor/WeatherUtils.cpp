@@ -1053,11 +1053,7 @@ namespace TOD
 			}
 
 			// Color picker popup
-			static std::map<std::string, bool> wasPopupOpenInherit;
-			bool isPopupOpen = ImGui::BeginPopup(id.c_str());
-			bool wasOpen = wasPopupOpenInherit[scopedId];
-
-			if (isPopupOpen) {
+			if (ImGui::BeginPopup(id.c_str())) {
 				if (colorCache.find(scopedId) == colorCache.end()) {
 					colorCache[scopedId] = colors[i];
 				}
@@ -1083,7 +1079,6 @@ namespace TOD
 				}
 			}
 
-			wasPopupOpenInherit[scopedId] = isPopupOpen;
 			ImGui::EndDisabled();
 
 			if (inheritFlag) {
