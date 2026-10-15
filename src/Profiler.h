@@ -109,6 +109,9 @@ public:
 
 	/**
 	 * @brief Begins a named GPU/CPU timing pass within the current frame.
+	 *
+	 * Passes that share a name within one frame are summed into one sample, so one row can
+	 * time work spread across the frame.
 	 * @param name Pass identifier (e.g. "Feature::PassName"). Implicitly calls BeginFrame if needed.
 	 */
 	void BeginPass(const std::string& name);
@@ -121,7 +124,8 @@ public:
 	 *
 	 * A pass that simply stops calling BeginPass keeps publishing its stale rolling window until
 	 * RetireStaleTimers drops the row - so an idle-skipped pass reads as still costing full price.
-	 * Skipping IS the measurement; this records it.
+	 * Skipping IS the measurement; this records it. The zero lands only if no pass of that name
+	 * ran in the same frame.
 	 * @param name Pass identifier, same as BeginPass.
 	 */
 	void MarkPassSkipped(const std::string& name);
@@ -175,6 +179,8 @@ private:
 			float cpuMs = 0.0f;
 		};
 		std::vector<TimerPair> timers;
+		/** @brief Names marked skipped while this frame was written. */
+		std::vector<std::string> skipped;
 		uint32_t activeCount = 0;
 		bool inFlight = false;
 	};
@@ -203,11 +209,16 @@ private:
 	};
 	std::vector<KnownTimer> knownTimers;
 	std::unordered_map<std::string, size_t> knownTimerIndex;
+	/** @brief Skip marks made before the frame's first BeginPass; they join that frame. */
+	std::vector<std::string> pendingSkipped;
 	uint64_t collectedFrames = 0;
 	float totalTimeMs = 0.0f;
 	float cpuTotalTimeMs = 0.0f;
 
 	void CollectResults();
+
+	/** @brief The known timer for a name, created on first use. */
+	KnownTimer& FindOrAddTimer(const std::string& name);
 
 	/** @brief Drops timers that have not been sampled for kTimerRetireFrames, so disabled passes stop reporting stale values. */
 	void RetireStaleTimers();

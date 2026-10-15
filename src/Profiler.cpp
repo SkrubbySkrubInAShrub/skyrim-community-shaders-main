@@ -68,9 +68,11 @@ void Profiler::Release()
 	for (auto& frame : frames) {
 		frame.disjoint = nullptr;
 		frame.timers.clear();
+		frame.skipped.clear();
 		frame.activeCount = 0;
 		frame.inFlight = false;
 	}
+	pendingSkipped.clear();
 	results.clear();
 	knownTimers.clear();
 	knownTimerIndex.clear();
@@ -90,6 +92,8 @@ void Profiler::BeginFrame()
 
 	auto& frame = frames[writeFrame];
 	frame.activeCount = 0;
+	frame.skipped.clear();
+	frame.skipped.swap(pendingSkipped);
 	frame.inFlight = true;
 	frameActive = true;
 	context->Begin(frame.disjoint.get());
@@ -143,16 +147,19 @@ void Profiler::MarkPassSkipped(const std::string& name)
 	if (!initialized)
 		return;
 
+	// Resolved when the frame is collected, against the passes that ran in it.
+	(frameActive ? frames[writeFrame].skipped : pendingSkipped).push_back(name);
+}
+
+Profiler::KnownTimer& Profiler::FindOrAddTimer(const std::string& name)
+{
 	auto [it, inserted] = knownTimerIndex.try_emplace(name, knownTimers.size());
 	if (inserted) {
 		KnownTimer kt;
 		kt.name = name;
 		knownTimers.push_back(std::move(kt));
 	}
-	auto& known = knownTimers[it->second];
-	known.gpu.PushSample(0.0f);
-	known.cpu.PushSample(0.0f);
-	known.lastSampleFrame = collectedFrames;
+	return knownTimers[it->second];
 }
 
 void Profiler::EndFrame()
@@ -190,6 +197,7 @@ void Profiler::CollectResults()
 		float cpuMs = 0.0f;
 	};
 	std::unordered_map<std::string, ActiveTimerData> activeTimers;
+	std::vector<const std::string*> activeOrder;
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
 
@@ -206,21 +214,31 @@ void Profiler::CollectResults()
 				continue;
 
 			float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
-			auto& entry = activeTimers[timer.name];
-			entry.gpuMs += ms;
-			entry.cpuMs += timer.cpuMs;
+			auto [entry, first] = activeTimers.try_emplace(timer.name);
+			if (first)
+				activeOrder.push_back(&entry->first);
+			entry->second.gpuMs += ms;
+			entry->second.cpuMs += timer.cpuMs;
 			activeTotalMs += ms;
 			activeCpuTotalMs += timer.cpuMs;
+		}
 
-			auto [it, inserted] = knownTimerIndex.try_emplace(timer.name, knownTimers.size());
-			if (inserted) {
-				KnownTimer kt;
-				kt.name = timer.name;
-				knownTimers.push_back(std::move(kt));
-			}
-			auto& known = knownTimers[it->second];
-			known.gpu.PushSample(ms);
-			known.cpu.PushSample(timer.cpuMs);
+		// One sample per name per frame, so a row timed in several places reads as their sum.
+		for (const std::string* name : activeOrder) {
+			const auto& sums = activeTimers[*name];
+			auto& known = FindOrAddTimer(*name);
+			known.gpu.PushSample(sums.gpuMs);
+			known.cpu.PushSample(sums.cpuMs);
+			known.lastSampleFrame = collectedFrames;
+		}
+		for (const auto& name : frame.skipped) {
+			if (activeTimers.contains(name))
+				continue;
+			auto& known = FindOrAddTimer(name);
+			if (known.lastSampleFrame == collectedFrames)
+				continue;
+			known.gpu.PushSample(0.0f);
+			known.cpu.PushSample(0.0f);
 			known.lastSampleFrame = collectedFrames;
 		}
 	}
