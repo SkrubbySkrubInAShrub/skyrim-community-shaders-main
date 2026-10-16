@@ -1040,11 +1040,16 @@ struct RuneGlyph
 	float3 emission;
 };
 
+// The game lights its frost decal brighter than the shells light the same
+// albedo; this lift matches the two (CODE-NOTES, "Frost marks as white as the
+// game's").
+static const float kFrostMarkLift = 1.4;
+
 // Every frost mark over a point, through its own uv plane, laid over one
 // another as the game stacks decals, the newest on top. Each is its own
-// quarter of the decal atlas, whole wherever the game clipped the decal, and
-// fades into the snow over the outer part of its round. Stops once the stack
-// is opaque.
+// quarter of the decal atlas, whole wherever the game clipped the decal, matte
+// as the game's decal is, and fades into the snow over the outer part of its
+// round. Stops once the stack is opaque.
 RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 {
 	RuneGlyph g;
@@ -1063,7 +1068,6 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 			const uint2 span = FrostCells[cell.y * 64 + cell.x];
 			float4 colour = 0.0;
 			float3 normalW = 0.0;
-			float gloss = 0.0;
 			[loop] for (uint j = 0; j < span.y && colour.a < 0.995; j++)
 			{
 				const uint mark = FrostCellList[span.x + span.y - 1u - j];
@@ -1114,16 +1118,14 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 						const float3 bitangent = normalize(float3(-slope.z, slope.x, 0.0) / det);
 						nw = normalize(tangent * nts.x + bitangent * nts.y + float3(0.0, 0.0, nts.z));
 					}
-					colour += float4(d.rgb, 1.0) * a;
+					colour += float4(saturate(d.rgb * kFrostMarkLift), 1.0) * a;
 					normalW += nw * a;
-					gloss += (hasNormal > 0.5 ? n.a : 0.0) * a;
 				}
 			}
 			[branch] if (colour.a > 1e-4)
 			{
 				g.colour = float4(colour.rgb / colour.a, colour.a);
 				g.normalTS = normalize(normalW);
-				g.gloss = gloss / colour.a;
 			}
 		}
 	}
