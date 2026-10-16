@@ -53,16 +53,17 @@ namespace SceneSettingsInternal
 		       type == SceneSettingsManager::SceneType::TimeOfDay;
 	}
 
-	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context)
+	std::optional<float> ReadTransitionControl(const json& object, const char* key,
+		SceneSettingsManager::TransitionControl control, std::string_view context)
 	{
-		const auto transitionIt = object.find(kTimeOfDayTransitionHoursKey);
+		const auto transitionIt = object.find(key);
 		if (transitionIt == object.end())
 			return std::nullopt;
-		if (const auto hours = transitionIt->is_number() ? transitionIt->get<float>() : -1.0f;
-			std::isfinite(hours) && hours >= 0.0f && hours <= SceneSettingsManager::kMaxTimeOfDayTransitionHours)
-			return hours;
-		logger::warn("[SceneSettings] {} in {} must be a number in 0..{}; ignoring it",
-			kTimeOfDayTransitionHoursKey, context, SceneSettingsManager::kMaxTimeOfDayTransitionHours);
+		const auto& spec = SceneSettingsManager::GetTransitionControlSpec(control);
+		if (const auto value = transitionIt->is_number() ? transitionIt->get<float>() : NAN;
+			std::isfinite(value) && value >= spec.min && value <= spec.max)
+			return value;
+		logger::warn("[SceneSettings] {} in {} must be a number in {}..{}; ignoring it", key, context, spec.min, spec.max);
 		return std::nullopt;
 	}
 

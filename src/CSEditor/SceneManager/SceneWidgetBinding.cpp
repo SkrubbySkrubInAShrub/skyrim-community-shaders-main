@@ -1402,7 +1402,7 @@ void SceneWidgetBinding::Guard::DrawTransitionSlot()
 	}
 
 	if (SceneTransitionField::Draw("##SceneTransition", seconds,
-			manager->GetLocationTransitionSeconds(), editable)) {
+			manager->GetTransitionControl(SceneSettingsManager::TransitionControl::LocationSeconds), editable)) {
 		// One call for every entry the control owns, so an aggregate lands as a single atomic edit.
 		manager->SetLocationEntryTransitionSeconds(
 			contextId.locationType, contextId.locationFormKey, owned, seconds);

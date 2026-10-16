@@ -32,7 +32,6 @@ namespace SceneSettingsInternal
 	/// Earlier open-shaders name for the locationTypes section and its "Category" type; read and migrated.
 	constexpr const char* kLegacyLocationTypeSectionName = "categories";
 	constexpr const char* kLegacyLocationTypeName = "Category";
-	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;
 
@@ -51,8 +50,9 @@ namespace SceneSettingsInternal
 	/** @brief Whether a scene type keeps its entries in a flat list: interior or time of day. */
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type);
 
-	/** @brief The period transition an object carries, or nullopt when absent or out of range. */
-	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context);
+	/** @brief The transition control an object carries under key, or nullopt when absent or out of range. */
+	std::optional<float> ReadTransitionControl(const json& object, const char* key,
+		SceneSettingsManager::TransitionControl control, std::string_view context);
 
 	/** @brief A directory's subdirectories or regular files in stable path order; errors are logged. */
 	std::vector<std::filesystem::path> GetSortedDirectoryPaths(

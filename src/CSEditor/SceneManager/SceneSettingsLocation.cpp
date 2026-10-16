@@ -320,19 +320,6 @@ std::vector<std::string> SceneSettingsManager::MatchingRawLocationKeys(const jso
 	return keys;
 }
 
-void SceneSettingsManager::SetLocationTransitionSeconds(float seconds, bool deferSave)
-{
-	if (!std::isfinite(seconds) || !TryEnsureLocationDataLoaded())
-		return;
-	seconds = std::clamp(seconds, 0.0f, kMaxLocationTransitionSeconds);
-	if (std::abs(locationTransitionSeconds - seconds) < kBlendEpsilon)
-		return;
-	locationTransitionSeconds = seconds;
-	locationTransitionModified = true;
-	locationUserSettingsModified = true;
-	ReapplyAndSaveOrDefer(deferSave);
-}
-
 std::optional<float> SceneSettingsManager::GetLocationEntryTransitionSeconds(
 	LocationTargetType type, std::string_view formKey, size_t index) const
 {

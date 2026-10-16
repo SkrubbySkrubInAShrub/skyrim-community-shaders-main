@@ -366,7 +366,7 @@ SceneSettingsManager::BlendedPeriods SceneSettingsManager::GetBlendedPeriods() c
 {
 	const auto boundaries = GetPeriodStartHours();
 	// A shifted period must still fit a whole blend; periods that grow with the blend never limit it.
-	float blendHours = timeOfDayTransitionHours;
+	float blendHours = GetTransitionControl(TransitionControl::TimeOfDayHours);
 	for (int index = 0; index < kPeriodCount; ++index) {
 		const float blendLengthsNeeded = 1.0f + kBlendOffsets[index] - kBlendOffsets[(index + 1) % kPeriodCount];
 		if (blendLengthsNeeded > 0.0f)
@@ -397,32 +397,49 @@ std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetT
 		return factors;
 	}
 
-	// Inside the blend-out zone: cross-fade into the next period.
-	const float weight = hoursToEnd / blendHours;
+	// Inside the blend-out zone: cross-fade into the next period. The ease is symmetric, so either side can be eased.
+	const float weight = EaseTransition(hoursToEnd / blendHours);
 	factors[lookup.index] = weight;
 	factors[(lookup.index + 1) % kPeriodCount] = 1.0f - weight;
 	return factors;
 }
 
-void SceneSettingsManager::SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave)
+void SceneSettingsManager::SetTransitionControl(TransitionControl control, std::optional<float> value, bool deferSave)
 {
-	if (hours) {
-		if (!std::isfinite(*hours))
+	const auto& spec = GetTransitionControlSpec(control);
+	if (value) {
+		if (!std::isfinite(*value))
 			return;
-		*hours = std::clamp(*hours, 0.0f, kMaxTimeOfDayTransitionHours);
+		*value = std::clamp(*value, spec.min, spec.max);
 	}
-	if (hours.has_value() == userTimeOfDayTransitionHours.has_value() &&
-		(!hours || std::abs(*userTimeOfDayTransitionHours - *hours) < kBlendEpsilon))
+	auto& user = userTransitionControls[static_cast<size_t>(control)];
+	if (value.has_value() == user.has_value() && (!value || std::abs(*user - *value) < kBlendEpsilon))
 		return;
-	userTimeOfDayTransitionHours = hours;
-	RefreshTimeOfDayTransitionHours();
+	// The location duration is saved inside the location section, which only exists once it has loaded.
+	if (control == TransitionControl::LocationSeconds) {
+		if (!TryEnsureLocationDataLoaded())
+			return;
+		locationTransitionModified = true;
+		locationUserSettingsModified = true;
+	}
+	user = value;
+	RefreshTransitionControls();
 	ReapplyAndSaveOrDefer(deferSave);
 }
 
-void SceneSettingsManager::RefreshTimeOfDayTransitionHours()
+void SceneSettingsManager::RefreshTransitionControls()
 {
-	const auto presetHours = activePresetMetadata ? activePresetMetadata->transitionHours : std::nullopt;
-	timeOfDayTransitionHours = userTimeOfDayTransitionHours.value_or(presetHours.value_or(kDefaultTimeOfDayTransitionHours));
+	for (size_t index = 0; index < kTransitionControlCount; ++index) {
+		const auto preset = activePresetMetadata ? activePresetMetadata->transitionControls[index] : std::nullopt;
+		transitionControls[index] = userTransitionControls[index].value_or(preset.value_or(kTransitionControlSpecs[index].defaultValue));
+	}
+}
+
+float SceneSettingsManager::EaseTransition(float linear) const
+{
+	const float progress = std::clamp(linear, 0.0f, 1.0f);
+	const float smoother = progress * progress * progress * (progress * (progress * 6.0f - 15.0f) + 10.0f);
+	return std::lerp(progress, smoother, GetTransitionControl(TransitionControl::Ease));
 }
 
 SceneSettingsManager::PeriodLookup SceneSettingsManager::FindBlendPeriod(const BlendedPeriods& blended)

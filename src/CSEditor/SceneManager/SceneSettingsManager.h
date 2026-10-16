@@ -77,6 +77,47 @@ public:
 	static constexpr float kDefaultTimeOfDayTransitionHours = 1.0f;
 	/// Upper bound for the setting; the applied blend is also capped so every period fits it.
 	static constexpr float kMaxTimeOfDayTransitionHours = 2.0f;
+	/// Default duration used by location float transitions.
+	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
+	/// Largest accepted typed location transition duration.
+	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
+	/// Weather transition length relative to each weather's own, applied through fWeatherTransMin/Max.
+	static constexpr float kDefaultWeatherTransitionScale = 1.0f;
+	static constexpr float kMinWeatherTransitionScale = 0.1f;
+	static constexpr float kMaxWeatherTransitionScale = 10.0f;
+	/// Weight of smootherstep over a linear blend; 0 is linear.
+	static constexpr float kDefaultTransitionEase = 1.0f;
+
+	/// Global transition controls a preset ships and the user can override.
+	enum class TransitionControl
+	{
+		TimeOfDayHours,
+		LocationSeconds,
+		WeatherScale,
+		Ease,
+		Count
+	};
+	static constexpr size_t kTransitionControlCount = static_cast<size_t>(TransitionControl::Count);
+	using TransitionControlValues = std::array<std::optional<float>, kTransitionControlCount>;
+
+	/// Manifest key, accepted range and default of one transition control.
+	struct TransitionControlSpec
+	{
+		const char* key;
+		float min;
+		float max;
+		float defaultValue;
+	};
+	static constexpr std::array<TransitionControlSpec, kTransitionControlCount> kTransitionControlSpecs = { {
+		{ "periodTransitionHours", 0.0f, kMaxTimeOfDayTransitionHours, kDefaultTimeOfDayTransitionHours },
+		{ "locationTransitionSeconds", 0.0f, kMaxLocationTransitionSeconds, kDefaultLocationTransitionSeconds },
+		{ "weatherTransitionScale", kMinWeatherTransitionScale, kMaxWeatherTransitionScale, kDefaultWeatherTransitionScale },
+		{ "transitionEase", 0.0f, 1.0f, kDefaultTransitionEase },
+	} };
+	static constexpr const TransitionControlSpec& GetTransitionControlSpec(TransitionControl control)
+	{
+		return kTransitionControlSpecs[static_cast<size_t>(control)];
+	}
 
 	/// Listens for LoadingMenu close to detect cell transitions, deferring reset work until then.
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -221,7 +262,7 @@ public:
 	struct PresetMetadata : PackManifest
 	{
 		std::filesystem::path path;
-		std::optional<float> transitionHours;  // Period transition the preset ships, if any
+		TransitionControlValues transitionControls;  // Transition controls the preset ships, if any
 	};
 
 	/// Whether a preset version is a semantic MAJOR.MINOR.PATCH triple.
@@ -337,13 +378,17 @@ public:
 	/// Per-period blend weights for the current game hour. Weights sum to 1.
 	std::array<float, kPeriodCount> GetTimeOfDayFactors() const;
 
-	/// Hours at the end of each period spent blending into the next, after presets and the user's value.
-	float GetTimeOfDayTransitionHours() const { return timeOfDayTransitionHours; }
-	/// Whether the user's own value overrides whatever the presets supply.
-	bool HasUserTimeOfDayTransitionHours() const { return userTimeOfDayTransitionHours.has_value(); }
-	/// Set and persist the user's period blend zone, clamped to 0..kMaxTimeOfDayTransitionHours.
-	/// nullopt drops it, handing the value back to the presets.
-	void SetTimeOfDayTransitionHours(std::optional<float> hours, bool deferSave = false);
+	/** @brief The control's value: the user's, else the active preset's, else the default. */
+	float GetTransitionControl(TransitionControl control) const { return transitionControls[static_cast<size_t>(control)]; }
+	/** @brief The user's own value, or nullopt while the preset or default supplies it. */
+	std::optional<float> GetUserTransitionControl(TransitionControl control) const
+	{
+		return userTransitionControls[static_cast<size_t>(control)];
+	}
+	/** @brief Set and persist the user's value, clamped to the control's range; nullopt hands it back to the preset. */
+	void SetTransitionControl(TransitionControl control, std::optional<float> value, bool deferSave = false);
+	/** @brief Linear progress in 0..1 eased toward smootherstep by the Ease control. */
+	float EaseTransition(float linear) const;
 
 	/// Returns the period the time-of-day blend is in: mid-blend, the outgoing one.
 	static TimeOfDayPeriod GetCurrentPeriod();
@@ -508,15 +553,6 @@ public:
 	/// Every target kind shares one directory; each target's type comes from its form, not its path.
 	static std::filesystem::path GetLocationOverwritesDir(const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
-	/// Default duration used by location float transitions.
-	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
-	/// Largest accepted typed location transition duration.
-	static constexpr float kMaxLocationTransitionSeconds = 300.0f;
-
-	/// Return the global location float transition duration in seconds.
-	float GetLocationTransitionSeconds() const { return locationTransitionSeconds; }
-	/// Set and persist the global location float transition duration.
-	void SetLocationTransitionSeconds(float seconds, bool deferSave = false);
 	/// Return an entry-specific location transition duration, or null for the global duration.
 	std::optional<float> GetLocationEntryTransitionSeconds(
 		LocationTargetType type, std::string_view formKey, size_t index) const;
@@ -902,8 +938,7 @@ public:
 		std::map<SceneType, std::vector<SettingEntry>> entries;
 		std::map<RE::FormID, WeatherSceneConfig> weatherSceneConfigs;
 		std::map<std::string, LocationSceneConfig> locationSceneConfigs;
-		std::optional<float> userTimeOfDayTransitionHours;
-		float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
+		TransitionControlValues userTransitionControls;
 		json document;
 
 		bool operator==(const UserSettingsSnapshot& other) const { return document == other.document; }
@@ -940,8 +975,8 @@ private:
 	bool locationUserSettingsModified = false;
 	bool locationTransitionModified = false;
 	std::optional<PresetMetadata> activePresetMetadata;
-	float timeOfDayTransitionHours = kDefaultTimeOfDayTransitionHours;
-	std::optional<float> userTimeOfDayTransitionHours;
+	TransitionControlValues userTransitionControls;
+	std::array<float, kTransitionControlCount> transitionControls = GetDefaultTransitionControls();
 	bool dataLoaded = false;
 	bool deferredSceneChangesPending = false;
 	std::chrono::steady_clock::time_point deferredSceneChangesDeadline{};
@@ -977,7 +1012,6 @@ private:
 	json unresolvedLocationUserSettings = json::object();
 	bool locationDataLoaded = false;
 	bool gameDataReady = false;
-	float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
 
 	using SettingAddress = SettingIdentity;
 	/** @brief One value pushed into a feature through its catalog-backed settings document. */
@@ -1312,8 +1346,8 @@ private:
 	// --- Location float transitions ---
 	/// Seconds on the game clock, so transitions freeze with the game rather than the wall clock.
 	float GetPauseAwareTime() const;
-	/// Smoothstep position of a transition at the given time.
-	static float EaseLocationTransition(const LocationTransition& transition, float now);
+	/// Eased position of a transition at the given time.
+	float EaseLocationTransition(const LocationTransition& transition, float now) const;
 	/** @brief Whether the transition has run its full duration. */
 	static bool IsLocationTransitionFinished(const LocationTransition& transition, float now);
 	/** @brief Starts a transition for each location-driven address whose value or membership changed. */
@@ -1414,8 +1448,17 @@ private:
 	/// Re-reads the active pack's manifest.
 	void DiscoverPresetMetadata();
 
-	/** @brief Re-derives the period transition: the user's value, else the active pack's, else the default. */
-	void RefreshTimeOfDayTransitionHours();
+	/** @brief Re-derives every transition control: the user's value, else the active pack's, else the default. */
+	void RefreshTransitionControls();
+
+	/** @brief Every transition control at its default, for initialization. */
+	static constexpr std::array<float, kTransitionControlCount> GetDefaultTransitionControls()
+	{
+		std::array<float, kTransitionControlCount> values{};
+		for (size_t index = 0; index < kTransitionControlCount; ++index)
+			values[index] = kTransitionControlSpecs[index].defaultValue;
+		return values;
+	}
 
 	/// Discover overwrite files for a single weather SPID folder.
 	void DiscoverWeatherOverwritesForSpid(RE::FormID weatherId, const std::filesystem::path& weatherDir);

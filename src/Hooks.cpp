@@ -13,6 +13,7 @@
 #include "TruePBR.h"
 #include "Util.h"
 
+#include "CSEditor/SceneManager/WeatherTransition.h"
 #include "Features/Effects11.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
@@ -374,6 +375,17 @@ namespace WeatherExtensions
 			if (globals::features::effects11.loaded)
 				globals::features::effects11.OnSkyUpdateColors(sky);
 			globals::features::skySync.OnSkyUpdateColors(sky);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct Sky_UpdateWeather
+	{
+		static void thunk(RE::Sky* sky)
+		{
+			WeatherTransition::BeforeUpdate(sky);
+			func(sky);
+			WeatherTransition::AfterUpdate(sky);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -1132,6 +1144,7 @@ namespace Hooks
 		logger::info("Hooking weather extensions");
 		stl::detour_thunk<WeatherExtensions::Precipitation_Restore>(REL::RelocationID(25640, 26181));
 		stl::detour_thunk<WeatherExtensions::Sky_UpdateColors>(REL::RelocationID(25686, 26233));
+		stl::detour_thunk<WeatherExtensions::Sky_UpdateWeather>(REL::RelocationID(25684, 26231));
 		stl::detour_thunk<WeatherExtensions::Sky_SetDirectionalAmbientColors>(REL::RelocationID(98989, 105643));
 
 		logger::info("Hooking MenuManager::DrawInterfaceStart for menu TAA");

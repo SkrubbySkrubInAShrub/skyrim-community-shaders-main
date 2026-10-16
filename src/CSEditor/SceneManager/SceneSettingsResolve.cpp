@@ -136,7 +136,7 @@ float SceneSettingsManager::GetPauseAwareTime() const
 	return globals::state ? globals::state->timer : 0.0f;
 }
 
-float SceneSettingsManager::EaseLocationTransition(const LocationTransition& transition, float now)
+float SceneSettingsManager::EaseLocationTransition(const LocationTransition& transition, float now) const
 {
 	const auto linear = transition.duration > 0.0f ?
 	                        std::clamp((now - transition.startTime) / transition.duration, 0.0f, 1.0f) :
@@ -144,8 +144,7 @@ float SceneSettingsManager::EaseLocationTransition(const LocationTransition& tra
 	// start + (target - start) can miss target by an ulp, which would leave the setting reading as edited.
 	if (linear >= 1.0f)
 		return transition.targetValue;
-	const auto smooth = linear * linear * (3.0f - 2.0f * linear);
-	return transition.startValue + (transition.targetValue - transition.startValue) * smooth;
+	return transition.startValue + (transition.targetValue - transition.startValue) * EaseTransition(linear);
 }
 
 bool SceneSettingsManager::IsLocationTransitionFinished(const LocationTransition& transition, float now)
@@ -182,7 +181,7 @@ void SceneSettingsManager::StartLocationTransitions(
 		auto nextDurationIt = pendingLocationTransitionDurations.find(address);
 		const float duration = nextDurationIt != pendingLocationTransitionDurations.end() ?
 		                           nextDurationIt->second :
-		                           locationTransitionSeconds;
+		                           GetTransitionControl(TransitionControl::LocationSeconds);
 		const bool durationChanged = previousDurationIt != lastLocationTransitionDurations.end() &&
 		                             nextDurationIt != pendingLocationTransitionDurations.end() &&
 		                             std::abs(previousDurationIt->second - nextDurationIt->second) >= kBlendEpsilon;
@@ -914,8 +913,9 @@ void SceneSettingsManager::RecordLocationTransitionDuration(const SettingEntry& 
 	}
 	if (!IsNumericValue(entry.value))
 		return;
-	const auto duration = entry.transitionSeconds.value_or(locationTransitionSeconds);
-	transitionDurations[address] = std::clamp(std::isfinite(duration) ? duration : locationTransitionSeconds,
+	const auto globalSeconds = GetTransitionControl(TransitionControl::LocationSeconds);
+	const auto duration = entry.transitionSeconds.value_or(globalSeconds);
+	transitionDurations[address] = std::clamp(std::isfinite(duration) ? duration : globalSeconds,
 		0.0f, kMaxLocationTransitionSeconds);
 }
 

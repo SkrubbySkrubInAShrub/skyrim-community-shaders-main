@@ -45,7 +45,7 @@ Presets/MyPack/
 
 Only the **active** pack's scene files load. Applying another pack swaps the Scene Manager layer to it; a pack without scene files clears it. Your own Scene Manager edits stay in `SceneSettings/SceneManager.json` and always apply on top.
 
-Export writes `version` (`MAJOR.MINOR.PATCH`), `type` (`CS` or `E11`, the pipeline the preset targets) and `periodTransitionHours` into the metadata alongside the display fields below. Choosing **E11 Preset** also saves the active Effects 11 layout into `effects11/` (`enbseries.ini` + `enbseries/`) and records `effects11.path` in the manifest.
+Export writes `version` (`MAJOR.MINOR.PATCH`), `type` (`CS` or `E11`, the pipeline the preset targets) and the transition controls `periodTransitionHours`, `locationTransitionSeconds`, `weatherTransitionScale` and `transitionEase` into the metadata alongside the display fields below. Each applies while the pack is active, unless the user has set their own on the Scene Manager page. Choosing **E11 Preset** also saves the active Effects 11 layout into `effects11/` (`enbseries.ini` + `enbseries/`) and records `effects11.path` in the manifest.
 
 ### Baseline pack (feature defaults)
 

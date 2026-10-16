@@ -417,7 +417,8 @@ try {
 	if (info.type != PresetType::Baseline || !manifest.contains(UnifiedPresetCatalog::kPresetTypeKey))
 		manifest[UnifiedPresetCatalog::kPresetTypeKey] = UnifiedPresetCatalog::GetPresetTypeName(info.type);
 	if (info.type != PresetType::Baseline)
-		manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
+		for (size_t index = 0; index < kTransitionControlCount; ++index)
+			manifest[kTransitionControlSpecs[index].key] = transitionControls[index];
 	if (exportEffects11) {
 		if (auto sceneControl = E11Handoff::ToManifest(); sceneControl.empty())
 			manifest.erase(UnifiedPresetCatalog::kSceneControlKey);
@@ -520,8 +521,12 @@ std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPr
 		return std::nullopt;
 
 	const auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot);
-	return PresetMetadata{ PackManifest::Read(manifest, Util::PathHelpers::ToUtf8(packRoot.filename())), manifestPath,
-		ReadTimeOfDayTransitionHours(manifest, Util::PathHelpers::ToUtf8(manifestPath)) };
+	PresetMetadata metadata{ PackManifest::Read(manifest, Util::PathHelpers::ToUtf8(packRoot.filename())), manifestPath };
+	const auto context = Util::PathHelpers::ToUtf8(manifestPath);
+	for (size_t index = 0; index < kTransitionControlCount; ++index)
+		metadata.transitionControls[index] = ReadTransitionControl(manifest, kTransitionControlSpecs[index].key,
+			static_cast<TransitionControl>(index), context);
+	return metadata;
 }
 
 void SceneSettingsManager::DiscoverPresetMetadata()
@@ -529,7 +534,7 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 	activePresetMetadata = ReadPresetMetadata(GetActiveScenePackRoot());
 	if (activePresetMetadata)
 		logger::info("[SceneSettings] Active scene preset: '{}'", activePresetMetadata->name);
-	RefreshTimeOfDayTransitionHours();
+	RefreshTransitionControls();
 	// Features the pack hands back from Effects 11 are driven by this layer, so they follow the same pack
 	UnifiedPresetCatalog::GetSingleton().LoadSceneControl();
 }

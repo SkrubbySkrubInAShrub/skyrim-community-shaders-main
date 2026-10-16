@@ -1870,7 +1870,6 @@
     "feature.scene_manager.debug": "调试",
     "feature.scene_manager.location_transition": "地点过渡",
     "feature.scene_manager.location_transition_reset": "重置##LocationTransition",
-    "feature.scene_manager.location_transition_reset_tooltip": "恢复默认时长。",
     "feature.scene_manager.location_transition_tooltip": "在地点之间移动时，地点覆盖设置平滑切入和退出所需的秒数。\n可在 CS 编辑器中为单项设置指定独立的过渡时长。",
     "feature.scene_manager.not_in_game": "请加载存档，以查看此处生效的设置并打开 CS 编辑器。",
     "feature.scene_manager.open_editor": "打开场景管理器",
