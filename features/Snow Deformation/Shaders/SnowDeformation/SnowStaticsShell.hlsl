@@ -637,7 +637,8 @@ float ProjNoiseDetiled(float3 a_p, float3 a_triW, float3 a_dx, float3 a_dy)
 // included. The more painted of the pre-decal snapshot and the live copy wins.
 // Lighting writes nothing in (32, 40), so a live note there over a bare
 // snapshot is a snow decal's 48 blended in at (live - pre) / (48 - pre):
-// painted from half cover.
+// painted from half cover. On a snow-textured shape a decal that turned a
+// judged note unknown or bare covered it whole (a cliff's roots skirt): bare.
 float SkinMasksY(int2 a_px)
 {
 	float live = PreSkinMasks.Load(int3(a_px, 0)).y;
@@ -649,8 +650,11 @@ float SkinMasksY(int2 a_px)
 		float liveN = live >= 256.0 ? live / 256.0 : live;
 		float preN = pre >= 256.0 ? pre / 256.0 : pre;
 		bool lifted = liveEnc == 2.0 && preEnc < 3.0 && liveN > 32.25 && liveN >= 24.0 + 0.5 * preN;
-		[flatten] if (preEnc > liveEnc || (preEnc == liveEnc && SkinRecolorWeight(pre) > SkinRecolorWeight(live)))
+		bool covered = TexturedSnow > 0.5 && preN >= 1.5 && liveN < 2.5;
+		[flatten] if (!covered && (preEnc > liveEnc || (preEnc == liveEnc && SkinRecolorWeight(pre) > SkinRecolorWeight(live))))
 			live = pre;
+		[flatten] if (covered)
+			live = 2.0;
 		[flatten] if (lifted)
 			live = 48.0;
 	}
