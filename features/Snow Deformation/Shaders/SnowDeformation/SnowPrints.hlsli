@@ -98,7 +98,7 @@ namespace SnowPrints
 	// the 4 x 4 height-tested texels, as the ground's trench map is read: the
 	// grid's steps come out as smooth curves. The inner 2 x 2 goes first; when
 	// it holds nothing the outer ring gives at most 0.31 of its deepest texel,
-	// under Bare's band, so it is skipped.
+	// under Bare's lowest threshold, so it is skipped.
 	float Depth(float3 a_world)
 	{
 		const float2 tf = a_world.xy / kTexel - 0.5;
@@ -123,16 +123,32 @@ namespace SnowPrints
 		return d;
 	}
 
-	// How much of the game's projected snow a print takes off a surface point:
-	// past half a full print's stored depth (Snow Resistance's share), the
-	// B-spline's own edge, and none as the resistance nears 100 %.
-	float Bare(float3 a_world)
+	// Print depth at a surface point as a share of a full print's (Snow
+	// Resistance's); 0 where none.
+	float Share(float3 a_world)
 	{
 		const float full = SharedData::snowDeformationSettings.PrintFullDepth;
-		float bare = 0.0;
+		float share = 0.0;
 		[branch] if (full > 0.001)
-			bare = smoothstep(0.35, 0.65, Depth(a_world) / full) * saturate(4.0 * full);
-		return bare;
+			share = Depth(a_world) / full;
+		return share;
+	}
+
+	// How much of the game's projected snow a print takes off at a depth
+	// share, a_noise the game's own projection noise there: the edge breaks
+	// up in the noise's flecks within a few units of the sole's outline, the
+	// last snow on low noise as at the projection's own edge. None as the
+	// resistance nears 100 %.
+	float Bare(float a_share, float a_noise)
+	{
+		// The threshold: noise at its 5th percentile (0.05) keeps its snow to a
+		// share of 0.85, at its 95th (0.45) gives it up at 0.38. Never below
+		// 0.36, clear of the 0.31 Depth's early-out can drop.
+		const float noiseLo = 0.05;
+		const float noiseHi = 0.45;
+		const float soft = 0.03;
+		const float thr = max(lerp(0.85, 0.38, (a_noise - noiseLo) / (noiseHi - noiseLo)), 0.36);
+		return smoothstep(thr - soft, thr + soft, a_share) * saturate(4.0 * SharedData::snowDeformationSettings.PrintFullDepth);
 	}
 
 	// Depth at a surface point and its world slope, x = depth, yz = d/dx,

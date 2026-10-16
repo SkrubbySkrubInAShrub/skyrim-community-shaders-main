@@ -30,8 +30,8 @@ namespace SnowLighting
 		float3 projAlbedo;
 		// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
 		bool underWater;
-		// Snow Trenches on Objects: how much of the projection a print takes off.
-		float printBare;
+		// Snow Trenches on Objects: the print's depth share here.
+		float printShare;
 		float lodReplaceW;
 		float3 lodAlbedo;
 		float texWeight;
@@ -352,7 +352,7 @@ namespace SnowLighting
 			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 #	if defined(PROJECTED_UV)
 		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
-			s.printBare = SnowPrints::Bare(worldRel + FrameBuffer::CameraPosAdjust.xyz);
+			s.printShare = SnowPrints::Share(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 #	endif
 	}
 #endif
@@ -384,10 +384,11 @@ namespace SnowLighting
 	// Snow Trenches on Objects: in a print the object goes bare at any facing.
 	// The weight itself drops, to -1 at the core, under every reader's
 	// threshold: the vertex alpha only scales the facing term, which is near 0
-	// on a wall. Never raised; printBare is 0 off snow-classified draws.
-	float PrintBareWeight(State s, float projWeight)
+	// on a wall. The projection's own noise breaks the edge up. Never raised;
+	// printShare is 0 off snow-classified draws.
+	float PrintBareWeight(State s, float projWeight, float projNoise)
 	{
-		return lerp(projWeight, min(projWeight, -1.0), s.printBare);
+		return lerp(projWeight, min(projWeight, -1.0), SnowPrints::Bare(s.printShare, projNoise));
 	}
 
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
