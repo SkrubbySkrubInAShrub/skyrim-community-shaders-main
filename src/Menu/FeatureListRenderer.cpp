@@ -398,7 +398,16 @@ void FeatureListRenderer::RenderFeatureList(
 		if (leftPanelVisible) {
 			ImGui::TableSetupColumn("##ListOfMenus", 0, 2);
 			ImGui::TableSetupColumn("##MenuConfig", 0, 8);
+			const auto previousSort = globals::menu->GetSettings().FeatureListSort;
 			RenderLeftColumn(menuList, selectedMenu, featureSearch, categoryExpansionStates);
+			if (globals::menu->GetSettings().FeatureListSort != previousSort) {
+				// Sort order changed: rebuild now and re-select the same feature
+				std::string reselect;
+				if (const auto* feat = selectedMenu < menuList.size() ? std::get_if<Feature*>(&menuList[selectedMenu]) : nullptr)
+					reselect = (*feat)->GetShortName();
+				menuList = BuildMenuList(featureSearch, categoryExpansionStates, drawGeneralSettings, drawAdvancedSettings);
+				HandlePendingFeatureSelection(reselect, menuList, selectedMenu);
+			}
 			RenderRightColumn(menuList, selectedMenu, pendingFeatureSelection);
 		} else {
 			// When left panel is hidden, right column takes full width
@@ -443,12 +452,20 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
 
-	// Group features by category
+	// Group features by category, or list them flat when sorting alphabetically
+	const auto sortMode = globals::menu->GetSettings().FeatureListSort;
 	std::map<std::string, std::vector<Feature*>> categorizedFeatures;
 	for (Feature* feat : sortedFeatureList) {
 		if (feat->IsInMenu() && feat->loaded) {
-			std::string category(feat->GetCategory());
-			categorizedFeatures[category].push_back(feat);
+			switch (sortMode) {
+			case Menu::FeatureSortMode::Alphabetical:
+				menuList.push_back(feat);  // already in display-name order
+				break;
+			case Menu::FeatureSortMode::Category:
+			default:  // unknown values from a hand-edited config fall back to categories
+				categorizedFeatures[std::string(feat->GetCategory())].push_back(feat);
+				break;
+			}
 		}
 	}
 
@@ -572,9 +589,30 @@ void FeatureListRenderer::RenderLeftColumn(
 			}
 		}
 
-		// Add Features header and search bar after built-in settings
 		Util::DrawSectionHeader(T("menu.features.features", "Features"), true);
-		Util::DrawFeatureSearchBar(featureSearch);
+		const float sortButtonWidth = ImGui::GetFrameHeight();
+		Util::DrawFeatureSearchBar(featureSearch, ImGui::GetContentRegionAvail().x - sortButtonWidth - ImGui::GetStyle().ItemSpacing.x);
+		const float searchBarHeight = ImGui::GetItemRectSize().y;
+		ImGui::SameLine();
+
+		{
+			auto style = Util::TransparentIconButtonStyle();
+			if (Icons::Button("##FeatureSort", Icons::FA(ICON_FA_BARS), ImVec2(sortButtonWidth, searchBarHeight)))
+				ImGui::OpenPopup("##FeatureSortPopup");
+		}
+
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T("menu.features.sort_tooltip", "Sort features"));
+
+		if (ImGui::BeginPopup("##FeatureSortPopup")) {
+			using enum Menu::FeatureSortMode;
+			auto& sort = globals::menu->GetSettings().FeatureListSort;
+			if (ImGui::MenuItem(T("menu.features.sort_by_category", "By Category"), nullptr, sort == Category))
+				sort = Category;
+			if (ImGui::MenuItem(T("menu.features.sort_alphabetically", "Alphabetical"), nullptr, sort == Alphabetical))
+				sort = Alphabetical;
+			ImGui::EndPopup();
+		}
 
 		// Then render the rest (features and categories, but skip already rendered core menus)
 		for (size_t i = 0; i < menuList.size(); i++) {
