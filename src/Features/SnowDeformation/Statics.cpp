@@ -560,13 +560,6 @@ struct GeometryRecord
 
 static std::unordered_map<const void*, GeometryRecord, SD_PointerHash> sGeometryRecordCache;
 
-static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
-{
-	auto& cache = sGeometryRecordCache;
-	static const void* lastGeometry = nullptr;
-	static GeometryRecord* lastRecord = nullptr;
-	const char* name = a_geometry->name.c_str();
-	if (lastRecord && lastGeometry == a_geometry && lastRecord->material == a_material && lastRecord->name == name)
 // The pass blends over the surface beneath it (decal or alpha blend): its
 // Masks write is blended too, and a coat cannot follow its fade.
 static bool PassBlendsOver(RE::BSRenderPass* a_pass)
@@ -578,6 +571,13 @@ static bool PassBlendsOver(RE::BSRenderPass* a_pass)
 	return alpha && alpha->GetAlphaBlending();
 }
 
+static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
+{
+	auto& cache = sGeometryRecordCache;
+	static const void* lastGeometry = nullptr;
+	static GeometryRecord* lastRecord = nullptr;
+	const char* name = a_geometry->name.c_str();
+	if (lastRecord && lastGeometry == a_geometry && lastRecord->material == a_material && lastRecord->name == name)
 		return *lastRecord;
 	if (cache.size() > 16384) {
 		cache.clear();
@@ -598,6 +598,7 @@ static bool PassBlendsOver(RE::BSRenderPass* a_pass)
 			r.pathMountain = path.mountain;
 			r.pathArchitecture = path.architecture;
 			r.pathSnowNamed = path.snowNamed;
+			r.pathGroundSnow = path.groundSnow;
 			if (auto textureSet = a_material->textureSet.get()) {
 				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
@@ -605,7 +606,6 @@ static bool PassBlendsOver(RE::BSRenderPass* a_pass)
 					r.landscapeTex = ContainsNoCase(diffuse, "landscape");
 					r.pavingTex = (ContainsNoCase(diffuse, "floor") || ContainsNoCase(diffuse, "slate")) && !ContainsNoCase(diffuse, "roof");
 					r.bloodTex = ContainsNoCase(diffuse, "blood");
-			r.pathGroundSnow = path.groundSnow;
 				}
 			}
 		}
@@ -743,6 +743,10 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
 		if (rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow) {
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
+			if (rec.pathGroundSnow)
+				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowTexturedGround);
+			if (PassBlendsOver(a_pass))
+				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowTexturedOverlay);
 			bindSnowSet = true;
 		}
 	}
@@ -783,10 +787,6 @@ void SnowDeformation::CapturePreDecalMasks()
 	// The bound viewport is the main pass's: the skins read inside it, +-1 pixel.
 	UINT vpCount = 1;
 	D3D11_VIEWPORT vp{};
-			if (rec.pathGroundSnow)
-				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowTexturedGround);
-			if (PassBlendsOver(a_pass))
-				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowTexturedOverlay);
 	context->RSGetViewports(&vpCount, &vp);
 	winrt::com_ptr<ID3D11Resource> masksRes;
 	masksSRV->GetResource(masksRes.put());
@@ -945,6 +945,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// (Windhelm paving, RenderDoc 2026-09-10).
 	const uint32_t depthBiasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
+	// A snow-textured overlay (rock skirt) keeps its own fade: recolor only,
+	// never a coat (SnowTexturedOverlay).
+	const bool snowTexOverlay = settings.SnowTexturedRecolor && rec.pathSnowNamed && PassBlendsOver(a_pass);
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
 	//
@@ -985,9 +988,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
 			}
-	// A snow-textured overlay (rock skirt) keeps its own fade: recolor only,
-	// never a coat (SnowTexturedOverlay).
-	const bool snowTexOverlay = settings.SnowTexturedRecolor && rec.pathSnowNamed && PassBlendsOver(a_pass);
 		}
 		if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
 			SampleLODDecision(a_pass->geometry, wb.radius, false, cameraInside);
@@ -2972,6 +2972,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.FarHalfExtent = farHalfExtentLive;
 	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
 	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
+	a_scb.TexturedSnow = a_cap.snowTex ? 1.0f : 0.0f;
 	a_scb.AlphaTested = a_cap.alphaTested ? 1.0f : 0.0f;
 	a_scb.DecalMode = a_cap.decalDepth ? 1.0f : 0.0f;
 }
@@ -3049,7 +3050,6 @@ bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
 		desc.Usage = D3D11_USAGE_DEFAULT;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-	a_scb.TexturedSnow = a_cap.snowTex ? 1.0f : 0.0f;
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
