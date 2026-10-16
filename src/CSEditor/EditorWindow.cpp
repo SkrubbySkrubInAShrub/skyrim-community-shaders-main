@@ -2360,8 +2360,11 @@ namespace
 		// The first and last spans run to the frame edges rather than the grab travel limits.
 		auto stripX = [&](float hour) { return hour <= 0.0f ? frameMin.x : hour >= hourMax ? frameMax.x :
 			                                                                                 hourToX(hour); };
+		// Clip the full rounded frame to the strip so the bottom corners match the frame rounding.
 		auto fillSpan = [&](float startHour, float endHour, ImU32 color) {
-			drawList->AddRectFilled(ImVec2(stripX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(stripX(endHour), frameMax.y), color);
+			drawList->PushClipRect(ImVec2(stripX(startHour), frameMax.y - kPeriodStripHeight), ImVec2(stripX(endHour), frameMax.y), true);
+			drawList->AddRectFilled(frameMin, frameMax, color, ImGui::GetStyle().FrameRounding);
+			drawList->PopClipRect();
 		};
 
 		for (std::size_t index = 0; index < segments.count; ++index) {
