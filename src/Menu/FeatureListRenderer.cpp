@@ -21,6 +21,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
+#include "IconsLucide.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
 #include "Menu/IconLoader.h"
@@ -61,6 +62,18 @@ namespace
 		rowMin = ImGui::GetItemRectMin();
 		rowMax = ImGui::GetItemRectMax();
 		return clicked;
+	}
+
+	/** @brief Glyph shown on the sort button for the given feature list sort mode. */
+	Icons::GlyphRef GetSortModeIcon(Menu::FeatureSortMode mode)
+	{
+		switch (mode) {
+		case Menu::FeatureSortMode::Alphabetical:
+			return Icons::LC(ICON_LC_ARROW_DOWN_A_Z);
+		case Menu::FeatureSortMode::Category:
+		default:  // unknown values from a hand-edited config fall back to categories
+			return Icons::LC(ICON_LC_LIST_SORT_ASCENDING);
+		}
 	}
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
@@ -597,7 +610,8 @@ void FeatureListRenderer::RenderLeftColumn(
 
 		{
 			auto style = Util::TransparentIconButtonStyle();
-			if (Icons::Button("##FeatureSort", Icons::FA(ICON_FA_BARS), ImVec2(sortButtonWidth, searchBarHeight)))
+			const auto sortIcon = GetSortModeIcon(globals::menu->GetSettings().FeatureListSort);
+			if (Icons::Button("###FeatureSort", sortIcon, ImVec2(sortButtonWidth, searchBarHeight)))
 				ImGui::OpenPopup("##FeatureSortPopup");
 		}
 
