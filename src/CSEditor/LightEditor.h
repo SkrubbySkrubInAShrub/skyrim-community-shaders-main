@@ -214,6 +214,11 @@ private:
 	float originalShadowDepthBias = 0.0f;
 	float cachedFadeBeforeToggle = 0.0f;
 
+	/// Share of the page height the table keeps when the inspector sits under it.
+	static constexpr float kDefaultStackedTableRatio = 0.45f;
+	/// User-dragged table share of the page height in the stacked layout.
+	float stackedTableRatio = kDefaultStackedTableRatio;
+
 	/** @brief Sorts the gathered light list by the active sort option and direction. */
 	void SortLights();
 	/** @brief Global toggles and Light Placer actions above the light table. */

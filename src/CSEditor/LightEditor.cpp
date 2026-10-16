@@ -464,8 +464,6 @@ namespace
 	/// Below this content width (1080p baseline) the inspector moves under the light table.
 	constexpr float kLightInspectorBesideMinWidth = 640.0f;
 	constexpr float kLightInspectorWidth = 380.0f;
-	/// Share of the page height the table keeps when the inspector sits under it.
-	constexpr float kLightTableHeightRatio = 0.45f;
 	constexpr float kLightSearchWidth = 220.0f;
 	constexpr float kInspectorBgAlpha = 0.5f;
 	constexpr int kFlagGridColumns = 3;
@@ -512,30 +510,7 @@ void LightEditor::DrawSettings()
 	DrawToolbar();
 	ImGui::Spacing();
 
-	const auto& style = ImGui::GetStyle();
-	const float scale = Util::GetUIScale();
-	const ImVec2 avail = ImGui::GetContentRegionAvail();
-	if (avail.x < kLightInspectorBesideMinWidth * scale) {
-		DrawLightTable(ImVec2(avail.x, std::floor(avail.y * kLightTableHeightRatio)));
-		DrawInspector(ImVec2(avail.x, 0.0f));
-	} else {
-		// The split is a two-column table so the divider is a native, remembered resize handle.
-		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
-		const bool split = ImGui::BeginTable("##LightSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, avail);
-		ImGui::PopStyleVar();
-		if (split) {
-			ImGui::TableSetupColumn("##Lights", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("##Inspector", ImGuiTableColumnFlags_WidthFixed, kLightInspectorWidth * scale);
-			ImGui::TableNextRow();
-			if (EditorWindow::GetSingleton()->resetLayout)
-				ImGui::TableSetColumnWidth(1, kLightInspectorWidth * scale);
-			ImGui::TableSetColumnIndex(0);
-			DrawLightTable(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
-			ImGui::TableSetColumnIndex(1);
-			DrawInspector(ImVec2(0.0f, 0.0f));
-			ImGui::EndTable();
-		}
-	}
+	BrowserUI::SplitPane({ "##LightSplit", kLightInspectorBesideMinWidth, kLightInspectorWidth, kDefaultStackedTableRatio }, stackedTableRatio, [this](const ImVec2& size) { DrawLightTable(size); }, [this](const ImVec2& size) { DrawInspector(size); });
 
 	if (isAttaching)
 		ImGui::EndDisabled();

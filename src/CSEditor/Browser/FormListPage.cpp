@@ -45,8 +45,6 @@ namespace
 	/// Below this content width (at the 1080p baseline) the inspector moves under the list.
 	constexpr float kInspectorBesideMinWidth = 620.0f;
 	constexpr float kInspectorWidth = 340.0f;
-	/// Share of the page height the list keeps when the inspector sits under it.
-	constexpr float kStackedListHeightRatio = 0.55f;
 	/// Recent chips are capped so one long editor ID cannot push the rest off the row.
 	constexpr float kRecentChipMaxWidth = 220.0f;
 	constexpr float kMinSearchWidth = 160.0f;
@@ -1309,7 +1307,6 @@ void FormListPage::Draw(Browser::FormListState& state, const Context& context)
 {
 	EditorWindow& editor = *context.editor;
 	const bool hasList = context.widgets != nullptr;
-	const float scale = Util::GetUIScale();
 	if (hasList)
 		RebuildViewIfNeeded(state, context);
 
@@ -1352,35 +1349,11 @@ void FormListPage::Draw(Browser::FormListState& state, const Context& context)
 	DrawRecentRow(state, context);
 	ImGui::Spacing();
 
-	const ImVec2 avail = ImGui::GetContentRegionAvail();
 	if (!editor.settings.browserShowInspector) {
-		DrawList(state, context, avail, active);
+		DrawList(state, context, ImGui::GetContentRegionAvail(), active);
 		return;
 	}
-	if (avail.x < kInspectorBesideMinWidth * scale) {
-		DrawList(state, context, ImVec2(avail.x, std::floor(avail.y * kStackedListHeightRatio)), active);
-		DrawInspector(state, context, ImVec2(avail.x, 0.0f), active);
-		return;
-	}
-
-	// The split is a two-column table so the divider is a native, remembered resize handle.
-	const auto& style = ImGui::GetStyle();
-	ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
-	const bool split = ImGui::BeginTable("##FormListSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, avail);
-	ImGui::PopStyleVar();
-	if (split) {
-		ImGui::TableSetupColumn("##List", ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn("##Inspector", ImGuiTableColumnFlags_WidthFixed, kInspectorWidth * scale);
-		// Must precede TableNextRow: the first row locks the layout, after which widths are ignored.
-		if (editor.resetLayout)
-			ImGui::TableSetColumnWidth(1, kInspectorWidth * scale);
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		DrawList(state, context, ImVec2(0.0f, ImGui::GetContentRegionAvail().y), active);
-		ImGui::TableSetColumnIndex(1);
-		DrawInspector(state, context, ImVec2(0.0f, 0.0f), active);
-		ImGui::EndTable();
-	}
+	BrowserUI::SplitPane({ "##FormListSplit", kInspectorBesideMinWidth, kInspectorWidth, Browser::FormListState::kDefaultStackedRatio }, state.stackedRatio, [&](const ImVec2& size) { DrawList(state, context, size, active); }, [&](const ImVec2& size) { DrawInspector(state, context, size, active); });
 }
 
 #undef I18N_KEY_PREFIX

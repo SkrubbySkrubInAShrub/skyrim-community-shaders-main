@@ -175,4 +175,26 @@ namespace BrowserUI
 
 	/** @brief Table row height that fits one frame-height control plus cell padding. */
 	float RowHeight();
+
+	/** @brief Draws one pane of a SplitPane at the given size; a zero component fills the remaining space. */
+	using PaneDrawer = std::function<void(const ImVec2& size)>;
+
+	/** @brief Layout of a SplitPane. Widths are 1080p baseline and scaled by the UI scale. */
+	struct SplitPaneSpec
+	{
+		/// Unique ID of the pane, also the table ID of the side-by-side layout.
+		const char* id;
+		/// Below this width the detail pane moves under the list.
+		float besideMinWidth;
+		/// Initial detail width of the side-by-side layout.
+		float detailWidth;
+		/// List share of the height in the stacked layout, restored by the editor's layout reset.
+		float defaultStackedRatio;
+	};
+
+	/**
+	 * @brief A list pane next to or, when narrow, above a detail pane, with a draggable divider either way.
+	 * @param stackedRatio List share of the height when stacked; the caller keeps it and the divider updates it.
+	 */
+	void SplitPane(const SplitPaneSpec& spec, float& stackedRatio, const PaneDrawer& drawList, const PaneDrawer& drawDetail);
 }
