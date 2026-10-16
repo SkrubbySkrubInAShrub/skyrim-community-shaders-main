@@ -1115,14 +1115,18 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 #if defined(PSHADER) && defined(SNOW_RUNE_GLYPHS)
 // Rune glyphs and frost marks (Blood.cpp, RenderRuneCapture), for the shells
 // that define SNOW_RUNE_GLYPHS - the landscape shell and the road patch;
-// object skins get theirs from the decal overlay. A 2x2 atlas, one tile per
-// live rune, then per patch of frost marks, redrawn every frame from the
-// game's own decals. A tile is the decals' uv field (rg = uv, b = decal id,
-// a = material alpha); the mark itself comes from the decal's own diffuse and
-// normal map through that uv.
+// object skins get theirs from the decal overlay. Runes: a 2x2 atlas, one tile
+// per live rune. Frost marks: one field round the player holding every one.
+// Both are redrawn every frame from the game's own decals, as uv fields
+// (rg = uv, b = decal id, a = material alpha); the mark itself comes from the
+// decal's own diffuse and normal map through that uv.
 Texture2D<float4> RuneAtlas : register(t90);
 Texture2D<float4> RuneDiffuse[4] : register(t80);
 Texture2D<float4> RuneNormal[4] : register(t84);
+// The frost field: b = (texture slot << 12 | id) / 65535.
+Texture2D<float4> FrostField : register(t117);
+Texture2D<float4> FrostDiffuse[4] : register(t118);
+Texture2D<float4> FrostNormal[4] : register(t122);
 cbuffer RuneCB : register(b7)
 {
 	// x = live tiles
@@ -1131,6 +1135,10 @@ cbuffer RuneCB : register(b7)
 	float4 RuneRects[4];
 	// rgb = the decal material's emissive, w = 1 with a normal map
 	float4 RuneTints[4];
+	// The frost field: xy = world min, z = 1 / texel size, w = 1 while it holds marks
+	float4 FrostRect;
+	// 1 where frost texture slot i has a normal map
+	float4 FrostNormals;
 }
 
 struct RuneGlyph
@@ -1143,8 +1151,69 @@ struct RuneGlyph
 	float3 emission;
 };
 
-// worldDx / worldDy: screen derivatives of worldXY, taken outside any branch.
-RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
+// One frost mark at a point, laid under what is already there: texel k of the
+// field is the mark's, and its uv plane is rebuilt from k's neighbours of the
+// same mark. The normal lands in world axes.
+void FrostMarkAt(int2 k, float4 c, float2 f, float2 worldDx, float2 worldDy, inout float4 colour, inout float3 normalW, inout float gloss)
+{
+	const float4 px = FrostField.Load(int3(k + int2(1, 0), 0));
+	const float4 nx = FrostField.Load(int3(k - int2(1, 0), 0));
+	const float4 py = FrostField.Load(int3(k + int2(0, 1), 0));
+	const float4 ny = FrostField.Load(int3(k - int2(0, 1), 0));
+	const float2 stepX = px.b == c.b ? px.rg - c.rg : (nx.b == c.b ? c.rg - nx.rg : 0.0);
+	const float2 stepY = py.b == c.b ? py.rg - c.rg : (ny.b == c.b ? c.rg - ny.rg : 0.0);
+	const float2 uv = c.rg + stepX * (f.x - float(k.x) - 0.5) + stepY * (f.y - float(k.y) - 0.5);
+	const float2 uvDx = stepX * FrostRect.z;
+	const float2 uvDy = stepY * FrostRect.z;
+	const float2 gradX = uvDx * worldDx.x + uvDy * worldDx.y;
+	const float2 gradY = uvDx * worldDy.x + uvDy * worldDy.y;
+	const uint slot = (uint)round(c.b * 65535.0) >> 12;
+	float4 d = 0.0;
+	float4 n = float4(0.5, 0.5, 1.0, 0.0);
+	float hasNormal = 0.0;
+	[branch] switch (slot)
+	{
+	case 0u:
+		d = FrostDiffuse[0].SampleGrad(SnowSampler, uv, gradX, gradY);
+		n = FrostNormal[0].SampleGrad(SnowSampler, uv, gradX, gradY);
+		hasNormal = FrostNormals.x;
+		break;
+	case 1u:
+		d = FrostDiffuse[1].SampleGrad(SnowSampler, uv, gradX, gradY);
+		n = FrostNormal[1].SampleGrad(SnowSampler, uv, gradX, gradY);
+		hasNormal = FrostNormals.y;
+		break;
+	case 2u:
+		d = FrostDiffuse[2].SampleGrad(SnowSampler, uv, gradX, gradY);
+		n = FrostNormal[2].SampleGrad(SnowSampler, uv, gradX, gradY);
+		hasNormal = FrostNormals.z;
+		break;
+	default:
+		d = FrostDiffuse[3].SampleGrad(SnowSampler, uv, gradX, gradY);
+		n = FrostNormal[3].SampleGrad(SnowSampler, uv, gradX, gradY);
+		hasNormal = FrostNormals.w;
+		break;
+	}
+	const float a = d.a * c.a * (1.0 - colour.a);
+	float3 nw = float3(0.0, 0.0, 1.0);
+	const float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
+	[branch] if (hasNormal > 0.5 && abs(det) > 1e-12)
+	{
+		const float3 nts = normalize(n.xyz * 2.0 - 1.0);
+		// Inverse of [uvDx uvDy]: world xy per unit u, per unit v.
+		const float3 tangent = normalize(float3(uvDy.y, -uvDx.y, 0.0) / det);
+		const float3 bitangent = normalize(float3(-uvDy.x, uvDx.x, 0.0) / det);
+		nw = normalize(tangent * nts.x + bitangent * nts.y + float3(0.0, 0.0, nts.z));
+	}
+	colour += float4(d.rgb, 1.0) * a;
+	normalW += nw * a;
+	gloss += (hasNormal > 0.5 ? n.a : 0.0) * a;
+}
+
+// Every frost mark over a point: the marks of the four field texels round it,
+// each through its own plane, laid over one another as the game stacks
+// decals, so neither the field's texels nor two marks' meeting show.
+RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 {
 	RuneGlyph g;
 	g.colour = 0.0;
@@ -1153,6 +1222,41 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
 	g.tangent = float3(1.0, 0.0, 0.0);
 	g.bitangent = float3(0.0, 1.0, 0.0);
 	g.emission = 0.0;
+	[branch] if (FrostRect.w > 0.5)
+	{
+		const float2 f = (worldXY - FrostRect.xy) * FrostRect.z;
+		[branch] if (all(f > 2.0) && all(f < 2046.0))
+		{
+			const int2 k0 = int2(floor(f - 0.5));
+			float4 colour = 0.0;
+			float3 normalW = 0.0;
+			float gloss = 0.0;
+			// The ids already laid, newest first.
+			float3 seen = -1.0;
+			[loop] for (uint i = 0; i < 4; i++)
+			{
+				const int2 k = k0 + int2(i & 1u, i >> 1u);
+				const float4 c = FrostField.Load(int3(k, 0));
+				[branch] if (c.b > 0.0 && all(c.b != seen))
+					FrostMarkAt(k, c, f, worldDx, worldDy, colour, normalW, gloss);
+				seen = float3(c.b, seen.xy);
+			}
+			[branch] if (colour.a > 1e-4)
+			{
+				g.colour = float4(colour.rgb / colour.a, colour.a);
+				g.normalTS = normalize(normalW);
+				g.gloss = gloss / colour.a;
+			}
+		}
+	}
+	return g;
+}
+
+// worldDx / worldDy: screen derivatives of worldXY, taken outside any branch.
+RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
+{
+	// The frost marks first; a rune's glyph takes the point where it is stronger.
+	RuneGlyph g = SampleFrostMarks(worldXY, worldDx, worldDy);
 	const uint count = min((uint)RuneParams.x, 4u);
 	[unroll] for (uint i = 0; i < 4; i++)
 	{
@@ -1190,6 +1294,10 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
 					g.colour = float4(d.rgb, a);
 					// Lighting adds a material's emissive to the LIGHT, before the texture colour multiplies it: a dark rim glows dark.
 					g.emission = RuneTints[i].rgb * d.rgb * a * RuneRects[i].w;
+					g.normalTS = float3(0.0, 0.0, 1.0);
+					g.gloss = 0.0;
+					g.tangent = float3(1.0, 0.0, 0.0);
+					g.bitangent = float3(0.0, 1.0, 0.0);
 					float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
 					[branch] if (RuneTints[i].w > 0.5 && abs(det) > 1e-12)
 					{

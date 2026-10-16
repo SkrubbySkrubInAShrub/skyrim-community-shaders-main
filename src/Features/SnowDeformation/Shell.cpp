@@ -2136,6 +2136,7 @@ void SnowDeformation::DrawShell()
 		runeTextures[kRuneMaxTiles + i] = runeTileNormal[i].get();
 	}
 	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, runeTextures);
+	BindFrostField(context, true);
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
@@ -2423,6 +2424,7 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(90, 1, nullFinePS);
 	ID3D11ShaderResourceView* nullRuneTextures[2 * kRuneMaxTiles] = {};
 	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullRuneTextures);
+	BindFrostField(context, false);
 	context->PSSetShaderResources(13, 1, nullFinePS);
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);

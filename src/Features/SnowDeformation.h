@@ -1235,8 +1235,11 @@ public:
 	static constexpr uint32_t kRuneMaxTiles = 4;
 	static constexpr uint32_t kRuneTileDim = 512;
 	static constexpr float kRuneTileHalf = 110.0f;
-	/** @brief Frost marks share the rune tiles, after the runes, in tiles twice as wide: a stream lays its marks along a sweep. */
-	static constexpr float kFrostTileHalf = 220.0f;
+	/** @brief The frost field: every live frost mark on the landscape snow, drawn top-down each frame into one window round the player, 8192 units across. */
+	static constexpr uint32_t kFrostFieldDim = 2048;
+	static constexpr float kFrostFieldTexel = 4.0f;
+	/** @brief Distinct frost decal textures the field can show at once. */
+	static constexpr uint32_t kFrostTextures = 4;
 	/** @brief A frost mark whose centre stands more than this over the landscape snow's top is on an object; the object coat wears it. */
 	static constexpr float kFrostDecalAboveSnow = 24.0f;
 	struct RuneSite
@@ -1262,8 +1265,13 @@ public:
 		float4 RuneRects[kRuneMaxTiles];
 		/** @brief rgb = the decal material's emissive, w = 1 when the tile has a normal map. */
 		float4 RuneTints[kRuneMaxTiles];
+		/** @brief The frost field: xy = its world min, z = 1 / texel size, w = 1 while it holds marks. */
+		float4 FrostRect;
+		/** @brief 1 where frost texture slot i has a normal map. */
+		float4 FrostNormals;
 	};
 	STATIC_ASSERT_ALIGNAS_16(RuneCB);
+	static_assert(kFrostTextures == 4, "RuneCB::FrostNormals and the shells' FrostDiffuse / FrostNormal arrays hold four");
 	/** @brief Guards runeSites: written by the spell gather, read by the capture hook. */
 	std::mutex runeLock;
 	std::vector<RuneSite> runeSites;
@@ -1274,7 +1282,7 @@ public:
 	std::unordered_set<uint32_t> runeLifted;
 	std::vector<RuneCapture> runeCaptures;
 	std::unordered_set<const RE::BSGeometry*> runeCaptureSet;
-	/** @brief This frame's frost impact decals (FrostDecalsOnSnow), for the rune tiles the runes leave. */
+	/** @brief This frame's frost impact decals (FrostDecalsOnSnow), every one, for the frost field. */
 	std::vector<RuneCapture> frostCaptures;
 	std::unordered_set<std::string> runeDecalPathsLogged;
 	Texture2D* runeAtlasTexture = nullptr;
@@ -1282,6 +1290,14 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> runeDepthTexture;
 	winrt::com_ptr<ID3D11DepthStencilView> runeDepthDSV;
 	winrt::com_ptr<ID3D11DepthStencilState> runeDepthState;
+	/** @brief The frost field (rune atlas format: uv, slot and id, alpha) and its own depth; its textures by slot. */
+	Texture2D* frostFieldTexture = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> frostDepthTexture;
+	winrt::com_ptr<ID3D11DepthStencilView> frostDepthDSV;
+	winrt::com_ptr<ID3D11ShaderResourceView> frostDiffuse[kFrostTextures];
+	winrt::com_ptr<ID3D11ShaderResourceView> frostNormal[kFrostTextures];
+	bool frostFieldDirty = false;
+	bool frostFieldFailed = false;
 	/** @brief Each live tile's own decal textures, sampled by the shell through the tile's uv field. */
 	winrt::com_ptr<ID3D11ShaderResourceView> runeTileDiffuse[kRuneMaxTiles];
 	winrt::com_ptr<ID3D11ShaderResourceView> runeTileNormal[kRuneMaxTiles];
@@ -1303,7 +1319,10 @@ public:
 	/** @brief From the capture hook: a decal-mode Lighting draw. True when its diffuse is a live rune's decal texture, or a frost impact decal (a_engineDecal, FrostDecalsOnSnow), and it was taken. */
 	bool CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDecal);
 	bool EnsureRuneResources();
-	/** @brief Clears the atlas and draws this frame's rune decals, then its frost marks, into their tiles. After the blood capture, before the shells. */
+	bool EnsureFrostField();
+	/** @brief The frost field and its textures at t117-t125 for a pass that samples them (the landscape shell, the road patch), or null with a_bind false. */
+	void BindFrostField(ID3D11DeviceContext* a_context, bool a_bind);
+	/** @brief Clears the atlas and draws this frame's rune decals into their tiles, and its frost marks into the frost field. After the blood capture, before the shells. */
 	void RenderRuneCapture();
 
 	// ---- Baked undulation field ----

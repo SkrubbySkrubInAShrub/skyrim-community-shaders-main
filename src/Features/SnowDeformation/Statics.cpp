@@ -4285,6 +4285,7 @@ void SnowDeformation::DrawCapturedStatics()
 			patchRuneTextures[kRuneMaxTiles + i] = runeTileNormal[i].get();
 		}
 		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, patchRuneTextures);
+		BindFrostField(context, true);
 
 		// ONE recipe with the shadow caster (FillPatchDrawCB): the caster must
 		// be the exact surface this draw renders.
@@ -4390,6 +4391,7 @@ void SnowDeformation::DrawCapturedStatics()
 		context->DSSetShaderResources(52, 1, nullHeightSRVs);
 		ID3D11ShaderResourceView* nullPatchRune[2 * kRuneMaxTiles] = {};
 		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullPatchRune);
+		BindFrostField(context, false);
 		context->PSSetShaderResources(90, 1, nullPatchRune);
 		globals::profiler->EndPass();
 	}
