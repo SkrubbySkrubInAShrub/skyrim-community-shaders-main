@@ -65,7 +65,18 @@ struct SnowSunLighting
 	float3 directSpecular;  // GGX or glint NDF
 	float3 diffuseLobe;     // -> Albedo RT + ambient term
 	float3 specularLobe;    // -> Reflectance RT (composite expects unscaled)
+	float3 markSpecular;    // a vanilla decal's own (SnowVanillaSpecular)
 };
+
+// A vanilla surface's direct specular for one light, as Lighting's non-PBR
+// path takes it (LightingEval.hlsli EvaluateLighting): specular.rgb =
+// SpecularColor x glossiness, specular.w = specular power. lightColor without
+// the PBR pi compensation; vanilla units, no PBRLightingScale.
+float3 SnowVanillaSpecular(float3 normalWS, float3 V, float3 L, float3 lightColor, float shadow, float4 specular)
+{
+	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, lightColor, shadow, shadow);
+	return VanillaSpecular(context, specular.w, true, 0.0, 0.0, 0.0) * specular.rgb * lightColor * shadow * Color::VanillaNormalization();
+}
 
 // The material + glint frame, built ONCE per pixel and shared by the sun and
 // every point light - the same reuse Lighting.hlsl gets from its single
@@ -115,12 +126,14 @@ SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 
 // worldPos is camera-relative, camPosAdjust the camera's world offset - the
 // pair GetSunlightFogAttenuation expects (same as Lighting/RunGrass).
+// markSpecular: a vanilla decal's specular (SnowVanillaSpecular), 0 for none.
 SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V,
 	float3 worldPos, float3 camPosAdjust, float sunShadow,
-	float2 glintUV, float2 uvDDX, float2 uvDDY)
+	float2 glintUV, float2 uvDDX, float2 uvDDY, float4 markSpecular)
 {
 	// Every direct term carries sunShadow as a factor (PBRFlags 0).
 	DirectLightingOutput lightingOutput = (DirectLightingOutput)0;
+	float3 markLit = 0.0;
 	[branch] if (sunShadow != 0.0)
 	{
 		// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
@@ -138,6 +151,8 @@ SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 
 		float3 L = SharedData::DirLightDirection.xyz;
 		DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, sunColor, sunShadow, sunShadow);
 		EvaluateLighting(context, mtl.material, mtl.tbnTr, glintUV, uvDDX, uvDDY, lightingOutput);
+		[branch] if (any(markSpecular.rgb > 0.0))
+			markLit = SnowVanillaSpecular(normalWS, V, L, sunColor / Color::PBRLightingCompensation, sunShadow, markSpecular);
 	}
 
 	IndirectContext indirectContext = CreateIndirectLightingContext(normalWS, normalWS, V);
@@ -149,6 +164,7 @@ SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 
 	o.directSpecular = lightingOutput.specular;
 	o.diffuseLobe = lobeWeights.diffuse;
 	o.specularLobe = lobeWeights.specular;
+	o.markSpecular = markLit;
 	return o;
 }
 
@@ -157,8 +173,8 @@ SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 
 // compensation is applied here for the same reason as the sun's.
 void SnowEvaluateLightPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V, float3 L,
 	float3 lightColor, float lightShadow,
-	float2 glintUV, float2 uvDDX, float2 uvDDY,
-	inout float3 diffuse, inout float3 specular)
+	float2 glintUV, float2 uvDDX, float2 uvDDY, float4 markSpecular,
+	inout float3 diffuse, inout float3 specular, inout float3 markLit)
 {
 	float3 c = lightColor * Color::PBRLightingCompensation;
 	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, c, lightShadow, lightShadow);
@@ -168,4 +184,6 @@ void SnowEvaluateLightPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V, float3
 
 	diffuse += lightingOutput.diffuse * mtl.material.BaseColor + lightingOutput.transmission;
 	specular += lightingOutput.specular;
+	[branch] if (any(markSpecular.rgb > 0.0))
+		markLit += SnowVanillaSpecular(normalWS, V, L, lightColor, lightShadow, markSpecular);
 }

@@ -3592,6 +3592,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
 	// The print map and its tiles (t114-t115), for the drapes' print twin.
 	BindPrintReaders(context);
+	// Rune glyphs and frost marks, on object snow lying on a surface their
+	// decal covers - with the overlay that would otherwise put the decal back.
+	BindMarkReaders(context, CoatPaintsMarks());
 
 	// Depth prepass for the skins. Unlike the shell's, the private test
 	// depth is written BY the prepass draws themselves rather than through a
@@ -4301,19 +4304,8 @@ void SnowDeformation::DrawCapturedStatics()
 		                                               heightSkinDepth->srv.get() :
 		                                               nullptr;
 		context->PSSetShaderResources(12, 1, &patchSkinPSSRV);
-		// Rune glyphs on the road's snow: the landscape shell's atlas (t90),
-		// tile table (b7) and per-tile textures (t80-t87).
-		ID3D11ShaderResourceView* patchRuneSRV = GetRuneAtlasSRV();
-		context->PSSetShaderResources(90, 1, &patchRuneSRV);
-		ID3D11Buffer* patchRuneCB = runeCB ? runeCB->CB() : nullptr;
-		context->PSSetConstantBuffers(7, 1, &patchRuneCB);
-		ID3D11ShaderResourceView* patchRuneTextures[2 * kRuneMaxTiles];
-		for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
-			patchRuneTextures[i] = runeTileDiffuse[i].get();
-			patchRuneTextures[kRuneMaxTiles + i] = runeTileNormal[i].get();
-		}
-		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, patchRuneTextures);
-		BindFrostField(context, true);
+		// Rune glyphs and frost marks on the road's snow, as the landscape shell paints them.
+		BindMarkReaders(context, true);
 
 		// ONE recipe with the shadow caster (FillPatchDrawCB): the caster must
 		// be the exact surface this draw renders.
@@ -4417,16 +4409,14 @@ void SnowDeformation::DrawCapturedStatics()
 		context->PSSetShaderResources(13, 1, nullHeightSRVs);
 		context->VSSetShaderResources(52, 1, nullHeightSRVs);
 		context->DSSetShaderResources(52, 1, nullHeightSRVs);
-		ID3D11ShaderResourceView* nullPatchRune[2 * kRuneMaxTiles] = {};
-		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullPatchRune);
-		BindFrostField(context, false);
-		context->PSSetShaderResources(90, 1, nullPatchRune);
 		globals::profiler->EndPass();
 	}
 
 	// Volume snow last: it depth-tests against everything above, skins
-	// included, and shades through the same material.
+	// included, and shades through the same material - marks as the skins take them.
+	BindMarkReaders(context, CoatPaintsMarks());
 	DrawVoxelSnow();
+	BindMarkReaders(context, false);
 
 	ID3D11ShaderResourceView* nullUntouchedSRV = nullptr;
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullUntouchedSRV);

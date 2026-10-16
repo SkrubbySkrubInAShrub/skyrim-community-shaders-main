@@ -1132,7 +1132,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("lift_frost_tooltip"), "Lifts a wall of frost, and the small ice effects like it, up onto the snow standing over them instead of leaving them buried underneath it. Frost is the only school this happens to: fire melts its own hole and lightning pits one, so those sit in snow they have already taken away, while frost only hardens what is there and leaves the full layer on top of itself. This is the one thing in the whole feature that MOVES something belonging to the game, so it has its own switch."));
 		ImGui::Checkbox(T(TKEY("frost_decals"), "Frost Marks on Snow"), &settings.FrostDecalsOnSnow);
 		if (auto _ttFrostDecals = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("frost_decals_tooltip"), "A frost spell leaves the game's own frost mark where it lands, and the landscape snow covers the ones on the ground beneath it. With this on, the mark is painted onto the landscape and road snow over it, as object snow already wears it, and fades with it. Marks on something level with the snow's top count too, such as a walkway the snow pokes through."));
+			ImGui::Text("%s", T(TKEY("frost_decals_tooltip"), "A frost spell leaves the game's own frost mark where it lands, and the landscape snow covers the ones on the ground beneath it. With this on, the mark is painted onto the snow over it, lit as the game lights the decal, and fades with it: on the landscape and road snow, and with Spell Marks Over Object Snow on object snow lying on what the mark covers, such as a walkway the snow pokes through."));
 
 		ImGui::SliderFloat(T(TKEY("crust_rate"), "Frost Crust Rate"), &settings.CrustRate, 0.0f, 3.0f, "%.2f /s");
 		if (auto _ttCrustRate = Util::HoverTooltipWrapper())
@@ -1175,10 +1175,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("spell_cat_runes"), "Runes"));
 		ImGui::Checkbox(T(TKEY("rune_decals"), "Rune Glyphs on Snow"), &settings.RuneDecalsOnSnow);
 		if (auto _ttRuneDecal = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("rune_decals_tooltip"), "A rune's glyph is a decal the game lays on the ground, so deep snow covers it. With this on, the glyph is painted onto the snow over it instead, and leaves with the rune. Landscape snow only: a rune cast on a snowy road stays under the road's own snow. One on a rock or a wall is handled by Spell Marks Over Object Snow."));
-		ImGui::SliderFloat(T(TKEY("rune_glow"), "Rune Glyph Glow"), &settings.RuneGlow, 0.0f, 4.0f, "%.2f");
-		if (auto _ttRuneGlow = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("rune_glow_tooltip"), "How strongly the painted glyph glows. The snow lights the glyph with its own material rather than the decal shader, so this is tuned by eye against it, not to the value the game authors."));
+			ImGui::Text("%s", T(TKEY("rune_decals_tooltip"), "A rune's glyph is a decal the game lays on the ground, so deep snow covers it. With this on, the glyph is painted onto the snow over it instead, lit and glowing as the game lights the decal, and leaves with the rune: on the landscape and road snow, and with Spell Marks Over Object Snow on object snow lying on what the glyph covers."));
 		ImGui::Checkbox(T(TKEY("lift_runes"), "Raise Buried Rune Effects"), &settings.LiftRunes);
 		if (auto _ttLiftRunes = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("lift_runes_tooltip"), "Lifts a rune's shimmer, glow and cast flash onto the snow standing over them, so they play at the painted glyph rather than under it. Ground runes only - one cast on a wall stays where it is. What sets a rune off does not move: it still triggers from the ground."));

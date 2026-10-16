@@ -236,10 +236,15 @@ namespace Color
 		return Light(color, isLinear) *
 		       ((ENABLE_LL && !isLinear) ? Math::PI * SharedData::linearLightingSettings.pointLightMult : 1.0f);
 	}
+	/** @brief Lighting's EmitColor conversion for a material whose emissive multiplier is given. */
+	float3 EmitColor(float3 color, float materialEmissiveMult)
+	{
+		return ENABLE_LL ? (pow(abs(color / max(materialEmissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * materialEmissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
+	}
 #	if defined(LIGHTING)
 	float3 EmitColor(float3 color)
 	{
-		return ENABLE_LL ? (pow(abs(color / max(emissiveMult, 1e-5)), SharedData::linearLightingSettings.emitColorGamma) * emissiveMult * SharedData::linearLightingSettings.emitColorMult) : color;
+		return EmitColor(color, emissiveMult);
 	}
 #	endif
 

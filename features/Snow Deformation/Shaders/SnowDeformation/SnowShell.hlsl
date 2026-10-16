@@ -373,9 +373,8 @@ SamplerState SnowSampler : register(s0);
 #	define SNOW_NOISE_TABLE
 #endif
 
-// Shared trench-detail shaping, spell-mark readers, field surfaces and the
-// frost pattern - the verbatim-identical pieces of both shells live in one
-// file.
+// Shared trench-detail shaping, spell-mark readers and field surfaces - the
+// verbatim-identical pieces of both shells live in one file.
 // The landscape shell paints rune glyphs and reads the blood detail tiles
 // (SnowFields.hlsli).
 #define SNOW_RUNE_GLYPHS
@@ -2081,10 +2080,10 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(blood.a * BloodLook.x));
 	}
 	const float bloodCover = blood.a;
-	// A rune's glyph lies on the snow as the game's decal lies on the ground:
-	// its colour over the albedo by its alpha, its glow added after lighting.
-	RuneGlyph rune = SampleRunes(worldXYPS, gDeferredGridDx, gDeferredGridDy);
-	float3 runeEmission = rune.emission;
+	// A rune's glyph or a frost mark lies on the snow as the game's decal lies
+	// on the ground: its colour and normal over the snow's by its alpha, its
+	// specular, gloss and glow put in after lighting.
+	RuneGlyph rune = SampleRunes(worldXYPS, gDeferredGridDx, gDeferredGridDy, kMarkAnyBase);
 	[branch] if (rune.colour.a > 0.004)
 	{
 		kSnowAlbedo = lerp(kSnowAlbedo, rune.colour.rgb, rune.colour.a);
@@ -2122,14 +2121,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	snowRoughness *= 1.0 - wetRough;
 	// Fresh blood is wet and glossy; dried blood is matte like the snow.
 	snowRoughness = lerp(snowRoughness, 0.22, saturate(bloodCover * 2.0) * bloodFresh * BloodLook2.y);
-
-	// The glyph shines where its normal map's alpha says, as the decal does.
-	[branch] if (rune.colour.a > 0.004)
-	{
-		float runeGloss = rune.colour.a * rune.gloss;
-		snowRoughness = lerp(snowRoughness, 0.28, runeGloss);
-		snowF0 = lerp(snowF0, float3(0.06, 0.06, 0.06), runeGloss);
-	}
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -2342,11 +2333,12 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
-		glintUV, glintDuvdx, glintDuvdy);
+		glintUV, glintDuvdx, glintDuvdy, rune.specular);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
 	float3 directSpecular = sunLit.directSpecular;
+	float3 markSpecular = sunLit.markSpecular;
 
 	// Placed lights (fires, lanterns): the clustered LLF list, with each
 	// shadow-casting light's own map sampled at the shell surface.
@@ -2356,7 +2348,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float2 clusterUV;
 		ShellClusterCoords(input.WorldPos, viewZ, clusterUV);
 		SnowLights::AccumulatePointLights(snowMtl, shadePos, shadePos + ShellCameraPosAdjust.xyz,
-			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), directDiffuse, directSpecular);
+			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), rune.specular,
+			directDiffuse, directSpecular, markSpecular);
 	}
 
 	// No AO here: the routed GetIndirectLobeWeights already folds snowAO into
@@ -2389,7 +2382,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	directDiffuse *= Color::PBRLightingScale;
 	directSpecular *= Color::PBRLightingScale;
 	diffuseLobe *= Color::PBRLightingScale;
-	float3 preLit = ambientPart + directDiffuse + runeEmission * Color::PBRLightingScale;
+	// The mark is a vanilla surface: its own specular and glow in vanilla
+	// units, no reflectance and no gloss (Lighting.hlsl:1882).
+	directSpecular = lerp(directSpecular, markSpecular, rune.colour.a);
+	specularLobe *= 1.0 - rune.colour.a;
+	float3 preLit = ambientPart + directDiffuse + rune.emission;
 
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
 	// blend mask goes to NormalGlossiness.w, exactly as Lighting.hlsl's
@@ -2400,7 +2397,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	PS_OUTPUT psout;
 	psout.Diffuse = float4(preLit, alpha);
 	psout.MotionVectors = float4(motionVector, 0.0, alpha);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), (1.0 - snowRoughness) * (1.0 - rune.colour.a), stochasticBlend);
 	// Albedo carries the diffuse lobe (Lighting's PBR tail writes the same),
 	// Specular the direct GGX lobe, Reflectance the environment lobe weight.
 	psout.Albedo = float4(diffuseLobe, alpha);

@@ -997,63 +997,124 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 
 #if defined(PSHADER) && defined(SNOW_RUNE_GLYPHS)
 // Rune glyphs and frost marks (Blood.cpp, RenderRuneCapture), for the shells
-// that define SNOW_RUNE_GLYPHS - the landscape shell and the road patch;
-// object skins get theirs from the decal overlay. Runes: a 2x2 atlas, one tile
-// per live rune, redrawn every frame from the rune's own ground decal as a uv
-// field (rg = uv, b = decal id, a = material alpha). Frost marks: every live
-// one as a uv plane over the ground, listed per cell of a window round the
-// player. Either way the mark itself comes from the decal's own diffuse and
-// normal map through its uv.
+// that define SNOW_RUNE_GLYPHS: the landscape shell, the road patch and the
+// object coat. Runes: a 2x2 atlas, one tile per live rune, redrawn every frame
+// from the rune's own ground decal as a uv field (rg = uv, b = decal id, a =
+// material alpha). Frost marks: every live one as a uv plane over the ground,
+// listed per cell of a window round the player. Either way the mark itself
+// comes from the decal's own textures through its uv, and is the game's
+// vanilla decal laid over the snow: Lighting's albedo, glow and specular, from
+// its material's own constants.
 Texture2D<float4> RuneAtlas : register(t90);
 Texture2D<float4> RuneDiffuse[4] : register(t80);
 Texture2D<float4> RuneNormal[4] : register(t84);
-// Per mark: [2i] = uv at the window's origin, texture slot + 4 x its quarter
-// of the 2x2 decal atlas (4 = the whole texture), material alpha; [2i + 1] =
-// uv per world unit along x, then along y.
+// Per mark: [3i] = uv at the window's origin, texture slot + 4 x its quarter
+// of the 2x2 decal atlas (4 = the whole texture), material alpha; [3i + 1] =
+// uv per world unit along x, then along y; [3i + 2] = x = the lowest, y = the
+// highest point of the surfaces the decal covers.
 StructuredBuffer<float4> FrostPlanes : register(t117);
 Texture2D<float4> FrostDiffuse[4] : register(t118);
 Texture2D<float4> FrostNormal[4] : register(t122);
 // Per cell of the 64 x 64 window: its first entry in FrostCellList and the count.
 StructuredBuffer<uint2> FrostCells : register(t126);
 StructuredBuffer<uint> FrostCellList : register(t127);
+// Glow maps, per rune tile and per frost texture slot: single slots, no four
+// free ones lie in a row.
+Texture2D<float4> RuneGlow0 : register(t88);
+Texture2D<float4> RuneGlow1 : register(t89);
+Texture2D<float4> RuneGlow2 : register(t95);
+Texture2D<float4> RuneGlow3 : register(t96);
+Texture2D<float4> FrostGlow0 : register(t97);
+Texture2D<float4> FrostGlow1 : register(t99);
+Texture2D<float4> FrostGlow2 : register(t111);
+Texture2D<float4> FrostGlow3 : register(t64);
 cbuffer RuneCB : register(b7)
 {
 	// x = live tiles
 	float4 RuneParams;
-	// xy = tile's world min, z = 1 / world size, w = its glow; tile i at (i & 1, i >> 1)
+	// xy = tile's world min, z = 1 / world size, w = 1 where its material has
+	// a glow map; tile i at (i & 1, i >> 1)
 	float4 RuneRects[4];
-	// rgb = the decal material's emissive, w = 1 with a normal map
+	// rgb = the decal material's EmitColor, w = 1 with a normal map
 	float4 RuneTints[4];
 	// The frost window: xy = world min, z = 1 / cell size, w = 1 while it holds marks
 	float4 FrostRect;
 	// 1 where frost texture slot i has a normal map
 	float4 FrostNormals;
+	// The material's SpecularColor (0 without the Specular flag), w = its specular power
+	float4 RuneSpecular[4];
+	// x = the lowest, y = the highest point of the surfaces the rune's decal
+	// covers, z = the material's emissive multiplier
+	float4 RuneReach[4];
+	// Per frost texture slot: SpecularColor and specular power as RuneSpecular,
+	float4 FrostSpecular[4];
+	// EmitColor, w = 1 where the material has a glow map,
+	float4 FrostTints[4];
+	// and the emissive multiplier.
+	float4 FrostEmissiveMults;
 }
 
 struct RuneGlyph
 {
-	float4 colour;     // rgb = the decal's diffuse, a = its alpha here
+	float4 colour;     // rgb = the decal's albedo, a = its alpha here
 	float3 normalTS;   // its normal map
-	float gloss;       // the normal map's alpha, the game's specular mask
 	float3 tangent;    // world direction of +u
 	float3 bitangent;  // world direction of +v
-	float3 emission;
+	float3 emission;   // its glow, alpha included
+	float4 specular;   // rgb = SpecularColor x the normal map's alpha, w = specular power
 };
+
+// A mark reaches only snow lying on a surface its decal covers: the base
+// surface's absolute z against the decal's own span. kMarkAnyBase: no test.
+static const float kMarkAnyBase = -1.0e7;
+static const float kMarkSpanSlack = 4.0;
+bool MarkReaches(float base, float2 span)
+{
+	return base <= kMarkAnyBase || (base >= span.x - kMarkSpanSlack && base <= span.y + kMarkSpanSlack);
+}
+
+// Lighting's glow over the material's EmitColor (Lighting.hlsl, the vanilla branch).
+float3 MarkGlow(float3 emit, float3 glow)
+{
+	glow = Color::Glowmap(glow);
+	return ENABLE_LL ? emit * glow : Color::LinearToSrgb(Color::SrgbToLinear(emit) * Color::SrgbToLinear(glow));
+}
+
+float3 SampleRuneGlow(uint i, float2 uv, float2 gradX, float2 gradY)
+{
+	float3 glow;
+	[branch] switch (i)
+	{
+	case 0u:
+		glow = RuneGlow0.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+		break;
+	case 1u:
+		glow = RuneGlow1.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+		break;
+	case 2u:
+		glow = RuneGlow2.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+		break;
+	default:
+		glow = RuneGlow3.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+		break;
+	}
+	return glow;
+}
 
 // Every frost mark over a point, through its own uv plane, laid over one
 // another as the game stacks decals, the newest on top. Each is its own
-// quarter of the decal atlas, whole wherever the game clipped the decal, matte
-// as the game's decal is, and fades into the snow over the outer part of its
-// round. Stops once the stack is opaque.
-RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
+// quarter of the decal atlas, whole wherever the game clipped the decal, and
+// fades into the snow over the outer part of its round. Stops once the stack
+// is opaque.
+RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy, float base)
 {
 	RuneGlyph g;
 	g.colour = 0.0;
 	g.normalTS = float3(0.0, 0.0, 1.0);
-	g.gloss = 0.0;
 	g.tangent = float3(1.0, 0.0, 0.0);
 	g.bitangent = float3(0.0, 1.0, 0.0);
 	g.emission = 0.0;
+	g.specular = 0.0;
 	[branch] if (FrostRect.w > 0.5)
 	{
 		const float2 rel = worldXY - FrostRect.xy;
@@ -1063,49 +1124,47 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 			const uint2 span = FrostCells[cell.y * 64 + cell.x];
 			float4 colour = 0.0;
 			float3 normalW = 0.0;
+			float3 emission = 0.0;
+			float4 specular = 0.0;
 			[loop] for (uint j = 0; j < span.y && colour.a < 0.995; j++)
 			{
 				const uint mark = FrostCellList[span.x + span.y - 1u - j];
-				const float4 head = FrostPlanes[mark * 2u];
-				const float4 slope = FrostPlanes[mark * 2u + 1u];
+				const float4 head = FrostPlanes[mark * 3u];
+				const float4 slope = FrostPlanes[mark * 3u + 1u];
 				const float2 uv = head.xy + slope.xy * rel.x + slope.zw * rel.y;
 				const uint quarter = (uint)head.z >> 2;
 				const float2 centre = quarter < 4u ? float2(quarter & 1u, quarter >> 1u) * 0.5 + 0.25 : 0.5;
 				const float r = length(uv - centre) * (quarter < 4u ? 4.0 : 2.0);
-				[branch] if (head.w > 0.0 && r < 1.0)
+				[branch] if (head.w > 0.0 && r < 1.0 && MarkReaches(base, FrostPlanes[mark * 3u + 2u].xy))
 				{
 					const float2 gradX = slope.xy * worldDx.x + slope.zw * worldDx.y;
 					const float2 gradY = slope.xy * worldDy.x + slope.zw * worldDy.y;
+					const uint slot = (uint)head.z & 3u;
 					float4 d = 0.0;
 					float4 n = float4(0.5, 0.5, 1.0, 0.0);
-					float hasNormal = 0.0;
-					[branch] switch ((uint)head.z & 3u)
+					[branch] switch (slot)
 					{
 					case 0u:
 						d = FrostDiffuse[0].SampleGrad(SnowSampler, uv, gradX, gradY);
 						n = FrostNormal[0].SampleGrad(SnowSampler, uv, gradX, gradY);
-						hasNormal = FrostNormals.x;
 						break;
 					case 1u:
 						d = FrostDiffuse[1].SampleGrad(SnowSampler, uv, gradX, gradY);
 						n = FrostNormal[1].SampleGrad(SnowSampler, uv, gradX, gradY);
-						hasNormal = FrostNormals.y;
 						break;
 					case 2u:
 						d = FrostDiffuse[2].SampleGrad(SnowSampler, uv, gradX, gradY);
 						n = FrostNormal[2].SampleGrad(SnowSampler, uv, gradX, gradY);
-						hasNormal = FrostNormals.z;
 						break;
 					default:
 						d = FrostDiffuse[3].SampleGrad(SnowSampler, uv, gradX, gradY);
 						n = FrostNormal[3].SampleGrad(SnowSampler, uv, gradX, gradY);
-						hasNormal = FrostNormals.w;
 						break;
 					}
 					const float a = d.a * head.w * (1.0 - smoothstep(0.6, 1.0, r)) * (1.0 - colour.a);
 					float3 nw = float3(0.0, 0.0, 1.0);
 					const float det = slope.x * slope.w - slope.z * slope.y;
-					[branch] if (hasNormal > 0.5 && abs(det) > 1e-12)
+					[branch] if (FrostNormals[slot] > 0.5 && abs(det) > 1e-12)
 					{
 						const float3 nts = normalize(n.xyz * 2.0 - 1.0);
 						// Inverse of the plane's slopes: world xy per unit u, per unit v.
@@ -1113,10 +1172,34 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 						const float3 bitangent = normalize(float3(-slope.z, slope.x, 0.0) / det);
 						nw = normalize(tangent * nts.x + bitangent * nts.y + float3(0.0, 0.0, nts.z));
 					}
-					// The decal is a vanilla surface: Lighting's own diffuse
-					// conversion, without the PBRLightingScale the shells' write
-					// tail applies.
-					colour += float4(Color::Diffuse(d.rgb) / Color::PBRLightingScale, 1.0) * a;
+					float3 emit = Color::EmitColor(FrostTints[slot].rgb, FrostEmissiveMults[slot]);
+					[branch] if (FrostTints[slot].w > 0.5)
+					{
+						float3 glow;
+						[branch] switch (slot)
+						{
+						case 0u:
+							glow = FrostGlow0.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+							break;
+						case 1u:
+							glow = FrostGlow1.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+							break;
+						case 2u:
+							glow = FrostGlow2.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+							break;
+						default:
+							glow = FrostGlow3.SampleGrad(SnowSampler, uv, gradX, gradY).rgb;
+							break;
+						}
+						emit = MarkGlow(emit, glow);
+					}
+					// Lighting's own diffuse conversion, without the
+					// PBRLightingScale the shells' write tail applies; the glow
+					// lights the texture's colour, as Lighting adds it to the light.
+					const float3 albedo = Color::Diffuse(d.rgb);
+					colour += float4(albedo / Color::PBRLightingScale, 1.0) * a;
+					emission += emit * albedo * a;
+					specular += float4(FrostSpecular[slot].rgb * n.a, FrostSpecular[slot].w) * a;
 					normalW += nw * a;
 				}
 			}
@@ -1124,6 +1207,8 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 			{
 				g.colour = float4(colour.rgb / colour.a, colour.a);
 				g.normalTS = normalize(normalW);
+				g.emission = emission;
+				g.specular = specular / colour.a;
 			}
 		}
 	}
@@ -1131,15 +1216,16 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 }
 
 // worldDx / worldDy: screen derivatives of worldXY, taken outside any branch.
-RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
+// base: the absolute z of the surface the snow lies on (MarkReaches).
+RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy, float base)
 {
 	// The frost marks first; a rune's glyph takes the point where it is stronger.
-	RuneGlyph g = SampleFrostMarks(worldXY, worldDx, worldDy);
+	RuneGlyph g = SampleFrostMarks(worldXY, worldDx, worldDy, base);
 	const uint count = min((uint)RuneParams.x, 4u);
 	[unroll] for (uint i = 0; i < 4; i++)
 	{
 		float2 tileUV = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
-		[branch] if (i < count && all(tileUV > 0.0) && all(tileUV < 1.0))
+		[branch] if (i < count && all(tileUV > 0.0) && all(tileUV < 1.0) && MarkReaches(base, RuneReach[i].xy))
 		{
 			// The decal's uv at the nearest texel, carried to this point along
 			// its own plane from a neighbour of the same decal: never filtered
@@ -1169,11 +1255,14 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
 				float a = d.a * c.a;
 				[branch] if (a > g.colour.a)
 				{
-					g.colour = float4(d.rgb, a);
-					// Lighting adds a material's emissive to the LIGHT, before the texture colour multiplies it: a dark rim glows dark.
-					g.emission = RuneTints[i].rgb * d.rgb * a * RuneRects[i].w;
+					const float3 albedo = Color::Diffuse(d.rgb);
+					g.colour = float4(albedo / Color::PBRLightingScale, a);
+					float3 emit = Color::EmitColor(RuneTints[i].rgb, RuneReach[i].z);
+					[branch] if (RuneRects[i].w > 0.5)
+						emit = MarkGlow(emit, SampleRuneGlow(i, uv, gradX, gradY));
+					g.emission = emit * albedo * a;
 					g.normalTS = float3(0.0, 0.0, 1.0);
-					g.gloss = 0.0;
+					g.specular = float4(0.0, 0.0, 0.0, RuneSpecular[i].w);
 					g.tangent = float3(1.0, 0.0, 0.0);
 					g.bitangent = float3(0.0, 1.0, 0.0);
 					float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
@@ -1181,7 +1270,7 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
 					{
 						float4 n = RuneNormal[i].SampleGrad(SnowSampler, uv, gradX, gradY);
 						g.normalTS = normalize(n.xyz * 2.0 - 1.0);
-						g.gloss = n.a;
+						g.specular.rgb = RuneSpecular[i].rgb * n.a;
 						// Inverse of [uvDx uvDy]: world xy per unit u, per unit v.
 						g.tangent = normalize(float3(uvDy.y, -uvDx.y, 0.0) / det);
 						g.bitangent = normalize(float3(-uvDy.x, uvDx.x, 0.0) / det);

@@ -434,9 +434,10 @@ SamplerState SnowSampler : register(s0);
 
 // Shared trench-detail shaping (noise, berm shape/bake tap, detail) - the
 // verbatim-identical pieces of both shells live in one file (M8).
-// The road patch paints rune glyphs as the landscape shell does; the skins
-// leave them to the decal overlay.
-#ifdef PATCH
+// Rune glyphs and frost marks, as the landscape shell paints them: on the
+// road patch, and on object snow lying on a surface their decal covers
+// (SkinShadeInput::markBase), whose decal the overlay then leaves out.
+#ifdef PSHADER
 #	define SNOW_RUNE_GLYPHS
 #endif
 #if defined(PSHADER) && (defined(PATCH) || defined(SNOW_OBJECT_PRINTS))
@@ -2631,6 +2632,10 @@ struct SkinShadeInput
 	// normal only within 0.3 of it: smooth-shaded box meshes carry corner
 	// normals that read a vertical face as half up-facing.
 	float geoNz;
+	// Absolute z of the surface the snow lies on: a mark reaches the pixel
+	// where its decal covers that height (SnowFields.hlsli MarkReaches).
+	// kMarkAnyBase on the road patch.
+	float markBase;
 };
 struct SkinShadeResult
 {
@@ -2943,11 +2948,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	}
 
 #ifdef SNOW_RUNE_GLYPHS
-	// A rune's glyph on the road's snow; the landscape shell's recipe.
+	// A rune's glyph or a frost mark; the landscape shell's recipe.
 #ifdef SNOW_PATCH_DEFERRED
-	RuneGlyph rune = SampleRunes(worldXY, gDeferredGridDx, gDeferredGridDy);
+	RuneGlyph rune = SampleRunes(worldXY, gDeferredGridDx, gDeferredGridDy, input.markBase);
 #else
-	RuneGlyph rune = SampleRunes(worldXY, ddx(worldXY), ddy(worldXY));
+	RuneGlyph rune = SampleRunes(worldXY, ddx(worldXY), ddy(worldXY), input.markBase);
 #endif
 	[branch] if (rune.colour.a > 0.004)
 	{
@@ -3009,14 +3014,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 
 	// Wet print: after the RMAOS overwrite, which would discard it.
 	snowRoughness *= 1.0 - wetRough;
-#ifdef SNOW_RUNE_GLYPHS
-	[branch] if (rune.colour.a > 0.004)
-	{
-		float runeGloss = rune.colour.a * rune.gloss;
-		snowRoughness = lerp(snowRoughness, 0.28, runeGloss);
-		snowF0 = lerp(snowF0, float3(0.06, 0.06, 0.06), runeGloss);
-	}
-#endif
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -3237,12 +3234,18 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	const float glintsHere = glintsLit ? EnableGlints : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+#ifdef SNOW_RUNE_GLYPHS
+	const float4 markSpec = rune.specular;
+#else
+	const float4 markSpec = 0.0;
+#endif
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
-		glintUV, glintDuvdx, glintDuvdy);
+		glintUV, glintDuvdx, glintDuvdy, markSpec);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
 	float3 directSpecular = sunLit.directSpecular;
+	float3 markSpecular = sunLit.markSpecular;
 
 	// Placed lights: same clustered path as the terrain shell, with each
 	// shadow-casting light's own map sampled at the skin/patch surface.
@@ -3252,7 +3255,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
 		SnowLights::AccumulatePointLights(snowMtl, shadePos, shadePos + ShellCameraPosAdjust.xyz,
-			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, gameShadowMask, directDiffuse, directSpecular);
+			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, gameShadowMask, markSpec,
+			directDiffuse, directSpecular, markSpecular);
 	}
 
 	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
@@ -3280,7 +3284,12 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse;
 #ifdef SNOW_RUNE_GLYPHS
-	preLit += rune.emission * Color::PBRLightingScale;
+	// The mark is a vanilla surface: its own specular and glow in vanilla
+	// units, no reflectance and no gloss (SnowShell.hlsl).
+	directSpecular = lerp(directSpecular, markSpecular, rune.colour.a);
+	specularLobe *= 1.0 - rune.colour.a;
+	snowRoughness = lerp(snowRoughness, 1.0, rune.colour.a);
+	preLit += rune.emission;
 #endif
 
 	// Debug view: decision data as flat colors. Patch: R = trample,
@@ -3544,6 +3553,8 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	// No parallax relief on fresh snow: its height variation is the field's
 	// own and the edge noise's (Josef, 2026-09-07); the glints stay.
 	ssi.pom = 0.0;
+	// The volume's top stands Volume Snow Depth (ObjectsDepth) over its surface.
+	ssi.markBase = P.z + ShellCameraPosAdjust.z - ObjectsDepth;
 	SkinShadeResult r = SkinShadeSurface(ssi, normalWS);
 
 	PS_OUTPUT psout;
@@ -4493,8 +4504,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	ssi.pom = 1.0;
 #ifdef PATCH
 	ssi.geoNz = -1.0;
+	ssi.markBase = kMarkAnyBase;
 #else
 	ssi.geoNz = abs(geoFacing.z);
+	ssi.markBase = input.WorldPos.z + ShellCameraPosAdjust.z - input.Lift;
 #endif
 	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
 	normalWS = ssr.normalWS;
@@ -4870,6 +4883,7 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	ssi.detail = 1.0;
 	ssi.pom = 1.0;
 	ssi.geoNz = -1.0;
+	ssi.markBase = kMarkAnyBase;
 	// A heightfield's normal faces up: z from the stored xy.
 	const SkinShadeResult ssr = SkinShadeSurface(ssi, float3(grid.zw, sqrt(saturate(1.0 - dot(grid.zw, grid.zw)))));
 

@@ -51,12 +51,13 @@ namespace SnowLights
 	// gameShadowMask: the game's shadow mask at this pixel, one channel per
 	// shadow light, for a surface lying ON the geometry the mask was drawn
 	// for (the drape); x < 0 = none, sample the light's own map.
+	// markSpecular / markLit: a vanilla decal's specular, SnowEvaluateSunPBR's.
 	void AccumulatePointLights(
 		SnowMaterialCtx mtl,
 		float3 worldPos, float3 worldPosAbs, float3 normalWS, float3 V, float viewZ,
 		float2 clusterUV, float2 glintUV, float2 uvDDX, float2 uvDDY,
-		float4 gameShadowMask,
-		inout float3 diffuse, inout float3 specular)
+		float4 gameShadowMask, float4 markSpecular,
+		inout float3 diffuse, inout float3 specular, inout float3 markLit)
 	{
 		uint clusterIndex = 0;
 		[branch] if (!LightLimitFix::GetClusterIndex(clusterUV, viewZ, clusterIndex))
@@ -91,7 +92,7 @@ namespace SnowLights
 				continue;
 
 			SnowEvaluateLightPBR(mtl, normalWS, V, L, lightColor, lightShadow,
-				glintUV, uvDDX, uvDDY, diffuse, specular);
+				glintUV, uvDDX, uvDDY, markSpecular, diffuse, specular, markLit);
 		}
 	}
 }

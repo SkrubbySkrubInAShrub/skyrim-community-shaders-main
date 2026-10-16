@@ -2083,19 +2083,8 @@ void SnowDeformation::DrawShell()
 	// Blood detail tiles (t66-t69): cell index, pigment atlas, (t68 retired with the soak), clock blocks.
 	ID3D11ShaderResourceView* bloodTileSRVs[4] = { bloodTileIndexSRV.get(), bloodTileAtlasSRV.get(), nullptr, bloodTileClockSRV.get() };
 	context->PSSetShaderResources(66, 4, bloodTileSRVs);
-	// Rune glyph atlas (t90) and its tile table (b7). Unbound reads as no tiles.
-	ID3D11ShaderResourceView* runeSRV = GetRuneAtlasSRV();
-	context->PSSetShaderResources(90, 1, &runeSRV);
-	ID3D11Buffer* runeBuffer = runeCB ? runeCB->CB() : nullptr;
-	context->PSSetConstantBuffers(7, 1, &runeBuffer);
-	// Each tile's own diffuse (t80-t83) and normal map (t84-t87).
-	ID3D11ShaderResourceView* runeTextures[2 * kRuneMaxTiles];
-	for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
-		runeTextures[i] = runeTileDiffuse[i].get();
-		runeTextures[kRuneMaxTiles + i] = runeTileNormal[i].get();
-	}
-	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, runeTextures);
-	BindFrostField(context, true);
+	// Rune glyphs and frost marks. Unbound reads as none.
+	BindMarkReaders(context, true);
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
@@ -2376,10 +2365,7 @@ void SnowDeformation::DrawShell()
 		restoreShellSRVs[i] = prevShellSRVs[i].get();
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11ShaderResourceView* nullFinePS[2] = {};
-	context->PSSetShaderResources(90, 1, nullFinePS);
-	ID3D11ShaderResourceView* nullRuneTextures[2 * kRuneMaxTiles] = {};
-	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullRuneTextures);
-	BindFrostField(context, false);
+	BindMarkReaders(context, false);
 	context->PSSetShaderResources(13, 1, nullFinePS);
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);

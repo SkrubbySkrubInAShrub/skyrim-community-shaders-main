@@ -451,8 +451,6 @@ public:
 		bool RuneDecalsOnSnow = true;
 		/** @brief Paints the game's frost impact decals onto the landscape snow and road snow as object snow wears them: the ones on the ground under the snow, or on something level with its top (a walkway). */
 		bool FrostDecalsOnSnow = true;
-		/** @brief Scale on the painted glyph's emission. */
-		float RuneGlow = 2.0f;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
 		float ForceTrackDepth = 0.45f;
 		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
@@ -1050,6 +1048,8 @@ public:
 	/** @brief From the capture hook: one of the engine's runtime decals that is not blood. Overlay only, never the blood map. */
 	void CaptureDecalOverlay(RE::BSRenderPass* a_pass);
 	bool DecalOverlayWanted() const { return settings.BloodOnSnow || settings.DecalsOnObjectSnow; }
+	/** @brief Object snow paints the rune glyphs and frost marks itself where they reach it: when the overlay would otherwise take their decals (Statics.cpp CaptureDecalOverlay's gate). */
+	bool CoatPaintsMarks() const { return settings.DecalsOnObjectSnow && settings.ProjSnowMatch; }
 	/** @brief The overlay decals' alpha in screen space: x the ones that are not blood, y all of them (the overlay's cover). */
 	Texture2D* decalMaskTexture = nullptr;
 	ID3D11VertexShader* decalMaskVS = nullptr;
@@ -1225,11 +1225,20 @@ public:
 		std::string decalPath;
 		float distSq = 0.0f;
 	};
+	/** @brief A captured rune or frost decal: its draw, and its material as the game's Lighting shader takes it, which the shells light the mark with. */
 	struct RuneCapture
 	{
 		BloodCapture draw;
 		winrt::com_ptr<ID3D11ShaderResourceView> normal;
+		/** @brief The glow map of a Glowmap material; null without one. */
+		winrt::com_ptr<ID3D11ShaderResourceView> glow;
+		/** @brief EmitColor as the game sets it: emissive colour x emissive multiplier. */
 		float3 emissive{ 0.0f, 0.0f, 0.0f };
+		float emissiveMult = 1.0f;
+		/** @brief A Glowmap material: its EmitColor lights through the glow map. */
+		bool glowMap = false;
+		/** @brief SpecularColor x its scale (0 without the Specular flag), w = specular power. */
+		float4 specular{ 0.0f, 0.0f, 0.0f, 0.0f };
 		RE::NiPoint3 centre;
 		float radius = 0.0f;
 	};
@@ -1237,17 +1246,27 @@ public:
 	{
 		/** @brief x = live tiles. */
 		float4 RuneParams;
-		/** @brief xy = tile's world min, z = 1 / world size, w = the glow on its emission. Tile i sits at (i & 1, i >> 1) of the 2x2 atlas. */
+		/** @brief xy = tile's world min, z = 1 / world size, w = 1 where its material has a glow map. Tile i sits at (i & 1, i >> 1) of the 2x2 atlas. */
 		float4 RuneRects[kRuneMaxTiles];
-		/** @brief rgb = the decal material's emissive, w = 1 when the tile has a normal map. */
+		/** @brief rgb = the decal material's EmitColor, w = 1 when the tile has a normal map. */
 		float4 RuneTints[kRuneMaxTiles];
 		/** @brief The frost window: xy = its world min, z = 1 / cell size, w = 1 while it holds marks. */
 		float4 FrostRect;
 		/** @brief 1 where frost texture slot i has a normal map. */
 		float4 FrostNormals;
+		/** @brief The tile's SpecularColor, w = specular power (RuneCapture::specular). */
+		float4 RuneSpecular[kRuneMaxTiles];
+		/** @brief x = the lowest, y = the highest point of the surfaces the rune's decal covers, z = its emissive multiplier. */
+		float4 RuneReach[kRuneMaxTiles];
+		/** @brief Per frost texture slot: SpecularColor and specular power, */
+		float4 FrostSpecular[kFrostTextures];
+		/** @brief EmitColor and w = 1 with a glow map, */
+		float4 FrostTints[kFrostTextures];
+		/** @brief and the emissive multiplier. */
+		float4 FrostEmissiveMults;
 	};
 	STATIC_ASSERT_ALIGNAS_16(RuneCB);
-	static_assert(kFrostTextures == 4, "RuneCB::FrostNormals and the shells' FrostDiffuse / FrostNormal arrays hold four");
+	static_assert(kFrostTextures == 4, "RuneCB's frost rows and the shells' FrostDiffuse / FrostNormal / FrostGlow slots hold four");
 	/** @brief Guards runeSites: written by the spell gather, read by the capture hook. */
 	std::mutex runeLock;
 	std::vector<RuneSite> runeSites;
@@ -1266,7 +1285,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> runeDepthTexture;
 	winrt::com_ptr<ID3D11DepthStencilView> runeDepthDSV;
 	winrt::com_ptr<ID3D11DepthStencilState> runeDepthState;
-	/** @brief Frost marks: two float4s each (uv plane and atlas quarter, from Blood.cpp FitFrostMark), the window's cells (first entry, count) and their lists, and the textures by slot. */
+	/** @brief Frost marks: three float4s each (uv plane and atlas quarter, from Blood.cpp FitFrostMark, and the height span of the surfaces the decal covers), the window's cells (first entry, count) and their lists, and the textures by slot. */
 	winrt::com_ptr<ID3D11Buffer> frostPlaneBuffer;
 	winrt::com_ptr<ID3D11ShaderResourceView> frostPlaneSRV;
 	uint32_t frostPlaneCapacity = 0;
@@ -1280,10 +1299,14 @@ public:
 	std::vector<float4> frostMarkScratch;
 	winrt::com_ptr<ID3D11ShaderResourceView> frostDiffuse[kFrostTextures];
 	winrt::com_ptr<ID3D11ShaderResourceView> frostNormal[kFrostTextures];
+	winrt::com_ptr<ID3D11ShaderResourceView> frostGlow[kFrostTextures];
 	bool frostPlanesFailed = false;
 	/** @brief Each live tile's own decal textures, sampled by the shell through the tile's uv field. */
 	winrt::com_ptr<ID3D11ShaderResourceView> runeTileDiffuse[kRuneMaxTiles];
 	winrt::com_ptr<ID3D11ShaderResourceView> runeTileNormal[kRuneMaxTiles];
+	winrt::com_ptr<ID3D11ShaderResourceView> runeTileGlow[kRuneMaxTiles];
+	/** @brief This frame's decal draws the marks paint themselves, on every snow lying on a surface they cover: the decal overlay leaves them out. */
+	std::unordered_set<const RE::BSGeometry*> markDecals;
 	ConstantBuffer* runeCB = nullptr;
 	ID3D11PixelShader* runePS = nullptr;
 	bool runeResourcesFailed = false;
@@ -1305,8 +1328,10 @@ public:
 	bool EnsureRuneResources();
 	/** @brief Room for a_marks frost marks and a_entries cell entries. */
 	bool EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries);
-	/** @brief The frost planes, textures and cell lists at t117-t127 for a pass that samples them (the landscape shell, the road patch), or null with a_bind false. */
+	/** @brief The frost planes, textures and cell lists at t117-t127 and the glow maps, or null with a_bind false. */
 	void BindFrostField(ID3D11DeviceContext* a_context, bool a_bind);
+	/** @brief Everything the shells read the rune glyphs and frost marks from (RuneCB at b7, the atlas, each tile's and slot's textures, the frost field) for a pass that paints them - the landscape shell, the object snow, the road patch - or null with a_bind false. */
+	void BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bind);
 	/** @brief Clears the atlas and draws this frame's rune decals into their tiles, and finds each frost mark's uv plane and cells. After the blood capture, before the shells. */
 	void RenderRuneCapture();
 

@@ -612,9 +612,24 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDec
 	capture.draw.skinned = false;
 	if (auto* normal = material->normalTexture.get(); normal && normal->rendererTexture && normal->rendererTexture->resourceView)
 		capture.normal.copy_from(normal->rendererTexture->resourceView);
-	if (auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property); lighting && lighting->emissiveColor) {
+	// The material as BSLightingShader loads it for the decal's own draw:
+	// EmitColor = emissive colour x multiplier, the glow map of a Glowmap
+	// material, SpecularColor x scale and the power under the Specular flag.
+	if (auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property)) {
 		const float mult = lighting->emissiveMult;
-		capture.emissive = { lighting->emissiveColor->red * mult, lighting->emissiveColor->green * mult, lighting->emissiveColor->blue * mult };
+		capture.emissiveMult = mult;
+		if (lighting->emissiveColor)
+			capture.emissive = { lighting->emissiveColor->red * mult, lighting->emissiveColor->green * mult, lighting->emissiveColor->blue * mult };
+	}
+	if (material->GetFeature() == RE::BSShaderMaterial::Feature::kGlowMap) {
+		capture.glowMap = true;
+		auto* glow = static_cast<RE::BSLightingShaderMaterialGlowmap*>(material)->glowTexture.get();
+		if (glow && glow->rendererTexture && glow->rendererTexture->resourceView)
+			capture.glow.copy_from(glow->rendererTexture->resourceView);
+	}
+	if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular)) {
+		const float scale = material->specularColorScale;
+		capture.specular = { material->specularColor.red * scale, material->specularColor.green * scale, material->specularColor.blue * scale, material->specularPower };
 	}
 	capture.centre = geometry->worldBound.center;
 	capture.radius = geometry->worldBound.radius;
@@ -797,6 +812,8 @@ namespace
 	// rock) fits twice: centres this close, slopes this alike, one atlas quarter.
 	constexpr float kFrostTwinDistance = 12.0f;
 	constexpr float kFrostTwinSlope = 0.15f;
+	// float4s per mark in FrostPlanes: head, slopes, height span.
+	constexpr uint32_t kFrostMarkRows = 3;
 
 	struct FrostFit
 	{
@@ -814,9 +831,16 @@ namespace
 		// Flat ground under it, square units.
 		float area = 0.0f;
 		float alpha = 0.0f;
+		// The lowest and highest point of the surfaces the decal covers.
+		float zLow = 0.0f;
+		float zHigh = 0.0f;
+		const RE::BSGeometry* geometry = nullptr;
 	};
 
-	bool FitFrostMark(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, FrostFit& a_fit)
+	// A decal geometry's world vertices, uvs and triangles, where the engine
+	// kept a CPU copy.
+	bool ReadDecalMesh(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, std::vector<RE::NiPoint3>& a_points, std::vector<float2>& a_uvs,
+		const uint16_t*& a_indices, uint32_t& a_triangles)
 	{
 		auto* triShape = a_geometry ? a_geometry->AsTriShape() : nullptr;
 		auto* rendererData = triShape ? a_geometry->GetGeometryRuntimeData().rendererData : nullptr;
@@ -832,10 +856,8 @@ namespace
 			return false;
 		const bool full = SD_PositionBytes(descKey, desc) >= 16;
 		const uint32_t uvOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0);
-		thread_local std::vector<RE::NiPoint3> points;
-		thread_local std::vector<float2> uvs;
-		points.resize(vertexCount);
-		uvs.resize(vertexCount);
+		a_points.resize(vertexCount);
+		a_uvs.resize(vertexCount);
 		for (uint32_t v = 0; v < vertexCount; ++v) {
 			const uint8_t* base = rendererData->rawVertexData + size_t(v) * stride;
 			RE::NiPoint3 p;
@@ -848,17 +870,56 @@ namespace
 				memcpy(h, base, sizeof(h));
 				p = { DirectX::PackedVector::XMConvertHalfToFloat(h[0]), DirectX::PackedVector::XMConvertHalfToFloat(h[1]), DirectX::PackedVector::XMConvertHalfToFloat(h[2]) };
 			}
-			points[v] = a_world * p;
+			a_points[v] = a_world * p;
 			uint16_t t[2];
 			memcpy(t, base + uvOffset, sizeof(t));
-			uvs[v] = { DirectX::PackedVector::XMConvertHalfToFloat(t[0]), DirectX::PackedVector::XMConvertHalfToFloat(t[1]) };
+			a_uvs[v] = { DirectX::PackedVector::XMConvertHalfToFloat(t[0]), DirectX::PackedVector::XMConvertHalfToFloat(t[1]) };
+		}
+		a_indices = rendererData->rawIndexData;
+		a_triangles = triangleCount;
+		return true;
+	}
+
+	// Widens [a_low, a_high] to the surfaces a decal covers: its vertices, or
+	// its bound where the engine kept no copy of them.
+	void WidenDecalSpan(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, float& a_low, float& a_high)
+	{
+		thread_local std::vector<RE::NiPoint3> points;
+		thread_local std::vector<float2> uvs;
+		const uint16_t* indices = nullptr;
+		uint32_t triangles = 0;
+		if (ReadDecalMesh(a_geometry, a_world, points, uvs, indices, triangles)) {
+			for (const auto& p : points) {
+				a_low = std::min(a_low, p.z);
+				a_high = std::max(a_high, p.z);
+			}
+		} else if (a_geometry) {
+			const auto& bound = a_geometry->worldBound;
+			a_low = std::min(a_low, bound.center.z - bound.radius);
+			a_high = std::max(a_high, bound.center.z + bound.radius);
+		}
+	}
+
+	bool FitFrostMark(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, FrostFit& a_fit)
+	{
+		thread_local std::vector<RE::NiPoint3> points;
+		thread_local std::vector<float2> uvs;
+		const uint16_t* indices = nullptr;
+		uint32_t triangleCount = 0;
+		if (!ReadDecalMesh(a_geometry, a_world, points, uvs, indices, triangleCount))
+			return false;
+		const uint32_t vertexCount = uint32_t(points.size());
+		a_fit.zLow = FLT_MAX;
+		a_fit.zHigh = -FLT_MAX;
+		for (const auto& p : points) {
+			a_fit.zLow = std::min(a_fit.zLow, p.z);
+			a_fit.zHigh = std::max(a_fit.zHigh, p.z);
 		}
 		// Moments about the first vertex: world coordinates are too large to square in floats.
 		const double ox = points[0].x, oy = points[0].y;
 		double s = 0.0, sx = 0.0, sy = 0.0, su = 0.0, sv = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0;
 		double suu = 0.0, svv = 0.0, sxu = 0.0, syu = 0.0, sxv = 0.0, syv = 0.0;
 		float2 uvLo{ FLT_MAX, FLT_MAX }, uvHi{ -FLT_MAX, -FLT_MAX };
-		const uint16_t* indices = rendererData->rawIndexData;
 		for (uint32_t t = 0; t < triangleCount; ++t) {
 			const uint32_t corner[3] = { indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2] };
 			if (corner[0] >= vertexCount || corner[1] >= vertexCount || corner[2] >= vertexCount)
@@ -948,7 +1009,7 @@ bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 		if (a_marks > frostPlaneCapacity) {
 			const uint32_t capacity = std::max(a_marks + a_marks / 2u, 256u);
 			D3D11_BUFFER_DESC desc{};
-			desc.ByteWidth = capacity * 2u * sizeof(float4);
+			desc.ByteWidth = capacity * kFrostMarkRows * sizeof(float4);
 			desc.Usage = D3D11_USAGE_DYNAMIC;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -961,7 +1022,7 @@ bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
 			srv.Format = DXGI_FORMAT_UNKNOWN;
 			srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-			srv.Buffer.NumElements = capacity * 2u;
+			srv.Buffer.NumElements = capacity * kFrostMarkRows;
 			DX::ThrowIfFailed(device->CreateShaderResourceView(frostPlaneBuffer.get(), &srv, frostPlaneSRV.put()));
 			Util::SetResourceName(frostPlaneSRV.get(), "SnowDeformation::FrostPlanes SRV");
 			frostPlaneCapacity = capacity;
@@ -1025,6 +1086,31 @@ void SnowDeformation::BindFrostField(ID3D11DeviceContext* a_context, bool a_bind
 		srvs[10] = frostListSRV.get();
 	}
 	a_context->PSSetShaderResources(117, 11, srvs);
+	// SnowFields.hlsli FrostGlow0-3.
+	constexpr UINT kGlowSlots[kFrostTextures] = { 97, 99, 111, 64 };
+	for (uint32_t i = 0; i < kFrostTextures; ++i) {
+		ID3D11ShaderResourceView* glow = a_bind ? frostGlow[i].get() : nullptr;
+		a_context->PSSetShaderResources(kGlowSlots[i], 1, &glow);
+	}
+}
+
+void SnowDeformation::BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bind)
+{
+	ID3D11Buffer* buffer = (a_bind && runeCB) ? runeCB->CB() : nullptr;
+	a_context->PSSetConstantBuffers(7, 1, &buffer);
+	ID3D11ShaderResourceView* atlas = a_bind ? GetRuneAtlasSRV() : nullptr;
+	a_context->PSSetShaderResources(90, 1, &atlas);
+	// Each tile's own diffuse (t80-t83) and normal map (t84-t87), and its glow map (SnowFields.hlsli RuneGlow0-3).
+	ID3D11ShaderResourceView* textures[2 * kRuneMaxTiles] = {};
+	constexpr UINT kGlowSlots[kRuneMaxTiles] = { 88, 89, 95, 96 };
+	for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
+		textures[i] = a_bind ? runeTileDiffuse[i].get() : nullptr;
+		textures[kRuneMaxTiles + i] = a_bind ? runeTileNormal[i].get() : nullptr;
+		ID3D11ShaderResourceView* glow = a_bind ? runeTileGlow[i].get() : nullptr;
+		a_context->PSSetShaderResources(kGlowSlots[i], 1, &glow);
+	}
+	a_context->PSSetShaderResources(80, 2 * kRuneMaxTiles, textures);
+	BindFrostField(a_context, a_bind);
 }
 
 void SnowDeformation::RenderRuneCapture()
@@ -1037,6 +1123,7 @@ void SnowDeformation::RenderRuneCapture()
 	runeStatSites = uint32_t(sites.size());
 	runeStatCaptures = uint32_t(runeCaptures.size());
 	runeStatTiles = 0;
+	markDecals.clear();
 
 	// A rune in range whose decal never matched: say so once, with what the
 	// record named, so the log can be read against the decal draws it lists.
@@ -1073,12 +1160,14 @@ void SnowDeformation::RenderRuneCapture()
 		for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
 			runeTileDiffuse[i] = nullptr;
 			runeTileNormal[i] = nullptr;
+			runeTileGlow[i] = nullptr;
 		}
 	}
 	if (!frosted) {
 		for (uint32_t i = 0; i < kFrostTextures; ++i) {
 			frostDiffuse[i] = nullptr;
 			frostNormal[i] = nullptr;
+			frostGlow[i] = nullptr;
 		}
 	}
 	if (!runes && !frosted) {
@@ -1117,14 +1206,13 @@ void SnowDeformation::RenderRuneCapture()
 		context->ClearDepthStencilView(runeDepthDSV.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
 		ID3D11RenderTargetView* rtvs[1] = { runeAtlasTexture->rtv.get() };
 		context->OMSetRenderTargets(1, rtvs, runeDepthDSV.get());
-		const float runeGlow = std::clamp(settings.RuneGlow, 0.0f, 8.0f);
 		std::vector<BloodCapture> list;
+		std::vector<const RuneCapture*> members;
 		for (const auto& site : sites) {
 			if (tiles >= kRuneMaxTiles)
 				break;
 			list.clear();
-			float3 emissive{ 0.0f, 0.0f, 0.0f };
-			const RuneCapture* first = nullptr;
+			members.clear();
 			for (const auto& capture : runeCaptures) {
 				const float dx = capture.centre.x - site.position.x;
 				const float dy = capture.centre.y - site.position.y;
@@ -1133,12 +1221,12 @@ void SnowDeformation::RenderRuneCapture()
 					continue;
 				list.push_back(capture.draw);
 				list.back().decalId = float(list.size());
-				if (!first)
-					first = &capture;
-				emissive = { std::max(emissive.x, capture.emissive.x), std::max(emissive.y, capture.emissive.y), std::max(emissive.z, capture.emissive.z) };
+				members.push_back(&capture);
 			}
 			if (list.empty())
 				continue;
+			// The tile's textures and material are its first decal's.
+			const RuneCapture* first = members.front();
 			const float tileX = float((tiles & 1u) * kRuneTileDim);
 			const float tileY = float((tiles >> 1u) * kRuneTileDim);
 			D3D11_VIEWPORT viewport{ tileX, tileY, float(kRuneTileDim), float(kRuneTileDim), 0.0f, 1.0f };
@@ -1154,15 +1242,24 @@ void SnowDeformation::RenderRuneCapture()
 			cb.NormalZMin = 0.3f;
 			if (DrawBloodList(context, list, cb) == 0)
 				continue;
-			cbRune.RuneRects[tiles] = { cb.WindowOrigin.x, cb.WindowOrigin.y, 1.0f / (2.0f * kRuneTileHalf), runeGlow };
-			cbRune.RuneTints[tiles] = { emissive.x, emissive.y, emissive.z, first->normal ? 1.0f : 0.0f };
+			float low = FLT_MAX, high = -FLT_MAX;
+			for (const RuneCapture* member : members) {
+				WidenDecalSpan(member->draw.geometry.get(), member->draw.world, low, high);
+				markDecals.insert(member->draw.geometry.get());
+			}
+			cbRune.RuneRects[tiles] = { cb.WindowOrigin.x, cb.WindowOrigin.y, 1.0f / (2.0f * kRuneTileHalf), first->glowMap ? 1.0f : 0.0f };
+			cbRune.RuneTints[tiles] = { first->emissive.x, first->emissive.y, first->emissive.z, first->normal ? 1.0f : 0.0f };
+			cbRune.RuneSpecular[tiles] = first->specular;
+			cbRune.RuneReach[tiles] = { low, high, first->emissiveMult, 0.0f };
 			runeTileDiffuse[tiles] = first->draw.diffuse;
 			runeTileNormal[tiles] = first->normal;
+			runeTileGlow[tiles] = first->glow;
 			tiles++;
 		}
 		for (uint32_t i = tiles; i < kRuneMaxTiles; ++i) {
 			runeTileDiffuse[i] = nullptr;
 			runeTileNormal[i] = nullptr;
+			runeTileGlow[i] = nullptr;
 		}
 		runeAtlasDirty = true;
 		if (tiles && !runePaintLogged) {
@@ -1184,7 +1281,15 @@ void SnowDeformation::RenderRuneCapture()
 		const float2 origin{ std::floor((centre.x - half) / kFrostCellSize) * kFrostCellSize, std::floor((centre.y - half) / kFrostCellSize) * kFrostCellSize };
 		uint32_t slots = 0;
 		uint32_t unfitted = 0;
-		float hasNormal[kFrostTextures] = {};
+		// A slot is one material: two texture sets share the frost diffuse and
+		// differ in their glow map.
+		const RuneCapture* slotMaterial[kFrostTextures] = {};
+		auto sameMaterial = [](const RuneCapture& a_a, const RuneCapture& a_b) {
+			return a_a.draw.diffuse.get() == a_b.draw.diffuse.get() && a_a.normal.get() == a_b.normal.get() && a_a.glow.get() == a_b.glow.get() &&
+			       a_a.glowMap == a_b.glowMap && a_a.emissiveMult == a_b.emissiveMult && a_a.emissive.x == a_b.emissive.x && a_a.emissive.y == a_b.emissive.y &&
+			       a_a.emissive.z == a_b.emissive.z && a_a.specular.x == a_b.specular.x && a_a.specular.y == a_b.specular.y && a_a.specular.z == a_b.specular.z &&
+			       a_a.specular.w == a_b.specular.w;
+		};
 		std::vector<FrostFit> fits;
 		fits.reserve(frost.size());
 		for (const RuneCapture* mark : frost) {
@@ -1194,23 +1299,26 @@ void SnowDeformation::RenderRuneCapture()
 				continue;
 			}
 			uint32_t slot = 0;
-			while (slot < slots && frostDiffuse[slot].get() != mark->draw.diffuse.get())
+			while (slot < slots && !sameMaterial(*slotMaterial[slot], *mark))
 				slot++;
 			if (slot == slots) {
 				if (slots >= kFrostTextures)
 					continue;
+				slotMaterial[slot] = mark;
 				frostDiffuse[slot] = mark->draw.diffuse;
 				frostNormal[slot] = mark->normal;
-				hasNormal[slot] = mark->normal ? 1.0f : 0.0f;
+				frostGlow[slot] = mark->glow;
 				slots++;
 			}
 			fit.slot = slot;
 			fit.alpha = std::clamp(mark->draw.alpha, 0.0f, 1.0f);
+			fit.geometry = mark->draw.geometry.get();
 			fits.push_back(fit);
 		}
 		for (uint32_t i = slots; i < kFrostTextures; ++i) {
 			frostDiffuse[i] = nullptr;
 			frostNormal[i] = nullptr;
+			frostGlow[i] = nullptr;
 		}
 		// A decal on two geometries keeps the fit with more flat ground under it.
 		std::vector<uint32_t> byX(fits.size());
@@ -1224,7 +1332,11 @@ void SnowDeformation::RenderRuneCapture()
 				const uint32_t i = byX[a], j = byX[b];
 				if (dropped[i] || dropped[j] || !FrostTwins(fits[i], fits[j]))
 					continue;
-				dropped[fits[i].area < fits[j].area ? i : j] = 1;
+				const uint32_t lost = fits[i].area < fits[j].area ? i : j;
+				FrostFit& kept = fits[lost == i ? j : i];
+				kept.zLow = std::min(kept.zLow, fits[lost].zLow);
+				kept.zHigh = std::max(kept.zHigh, fits[lost].zHigh);
+				dropped[lost] = 1;
 				twins++;
 			}
 		frostMarkScratch.clear();
@@ -1240,6 +1352,7 @@ void SnowDeformation::RenderRuneCapture()
 			const double rx = double(origin.x) - fit.centreX, ry = double(origin.y) - fit.centreY;
 			frostMarkScratch.push_back({ float(cu + fit.slope[0] * rx + fit.slope[2] * ry), float(cv + fit.slope[1] * rx + fit.slope[3] * ry), float(fit.slot + 4u * fit.quarter), fit.alpha });
 			frostMarkScratch.push_back({ float(fit.slope[0]), float(fit.slope[1]), float(fit.slope[2]), float(fit.slope[3]) });
+			frostMarkScratch.push_back({ fit.zLow, fit.zHigh, 0.0f, 0.0f });
 			reach.push_back({ float(fit.centreX) - fit.reachX, float(fit.centreY) - fit.reachY, float(fit.centreX) + fit.reachX, float(fit.centreY) + fit.reachY });
 		}
 		const uint32_t marks = uint32_t(reach.size());
@@ -1304,7 +1417,25 @@ void SnowDeformation::RenderRuneCapture()
 				uploaded = false;
 			}
 			cbRune.FrostRect = { origin.x, origin.y, inv, uploaded ? 1.0f : 0.0f };
+			float hasNormal[kFrostTextures] = {};
+			float emissiveMults[kFrostTextures] = {};
+			for (uint32_t i = 0; i < slots; ++i) {
+				const RuneCapture& material = *slotMaterial[i];
+				hasNormal[i] = material.normal ? 1.0f : 0.0f;
+				emissiveMults[i] = material.emissiveMult;
+				cbRune.FrostSpecular[i] = material.specular;
+				cbRune.FrostTints[i] = { material.emissive.x, material.emissive.y, material.emissive.z, material.glowMap ? 1.0f : 0.0f };
+			}
 			cbRune.FrostNormals = { hasNormal[0], hasNormal[1], hasNormal[2], hasNormal[3] };
+			cbRune.FrostEmissiveMults = { emissiveMults[0], emissiveMults[1], emissiveMults[2], emissiveMults[3] };
+			// The overlay leaves these decals to the marks: every fitted one, twins
+			// included, whose round reaches the window.
+			const float windowSize = kFrostCellSize * float(kFrostCells);
+			if (uploaded)
+				for (const FrostFit& fit : fits)
+					if (float(fit.centreX) + fit.reachX >= origin.x && float(fit.centreX) - fit.reachX < origin.x + windowSize &&
+						float(fit.centreY) + fit.reachY >= origin.y && float(fit.centreY) - fit.reachY < origin.y + windowSize)
+						markDecals.insert(fit.geometry);
 			if (uploaded && !frostPaintLogged) {
 				frostPaintLogged = true;
 				logger::info("[SNOW DEFORMATION] frost marks: first frame {} mark(s) from {} frost decal draw(s): {} twin(s) merged, {} not flat on the ground or without a CPU vertex copy; {} texture(s), {} cell entries",
@@ -1728,6 +1859,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodRectPrevValid = bloodRectFrameValid;
 	bloodRectFrameValid = false;
 	decalMasksLast = 0;
+	// The decals the marks paint themselves (RenderRuneCapture), this frame only.
+	std::unordered_set<const RE::BSGeometry*> marked;
+	marked.swap(markDecals);
 	if (bloodOverlays.empty()) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		return;
@@ -1843,6 +1977,11 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		maskCB.ViewProjRow2 = { m.m[2][0], m.m[2][1], m.m[2][2], m.m[2][3] };
 		maskCB.ViewProjRow3 = { m.m[3][0], m.m[3][1], m.m[3][2], m.m[3][3] };
 		maskCB.CameraAdjust = { adjust.x, adjust.y, adjust.z, 0.0f };
+		// A frost mark or a rune glyph the object snow paints itself stays out
+		// of the cover, so the overlay does not lay the game's decal over it again.
+		const auto kept = std::remove_if(overlays.begin(), overlays.end(), [&](const BloodCapture& a_capture) { return marked.contains(a_capture.geometry.get()); });
+		const bool excluded = kept != overlays.end();
+		overlays.erase(kept, overlays.end());
 		const uint32_t drawn = DrawBloodList(context, overlays, maskCB, decalMaskVS, 1u, false, decalMaskSkinVS);
 		decalMasksLast = uint32_t(std::count_if(overlays.begin(), overlays.end(), [](const BloodCapture& a_capture) { return a_capture.mask; }));
 		ID3D11SamplerState* restoreSampler = savedSampler.get();
@@ -1858,8 +1997,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 			decalMaskLogged = true;
 			logger::info("[SNOW DEFORMATION] decal overlay: first frame drew {} mask draws for {} decals, {} not blood", drawn, overlays.size(), decalMasksLast);
 		}
-		// Nothing drew: no cover to confine the stack to, the overlay as before.
-		cb.Spread.z = drawn ? 1.0f : 0.0f;
+		// Nothing drew: no cover to confine the stack to, the overlay as before -
+		// unless decals were left out, which then have none.
+		cb.Spread.z = (drawn || excluded) ? 1.0f : 0.0f;
 		// The list drew with its own state; back to the screen rectangle.
 		context->OMSetBlendState(bloodOverlayBlendState.get(), nullptr, 0xFFFFFFFF);
 		context->IASetInputLayout(nullptr);
