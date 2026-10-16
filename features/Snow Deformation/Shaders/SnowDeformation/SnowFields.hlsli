@@ -1040,11 +1040,6 @@ struct RuneGlyph
 	float3 emission;
 };
 
-// The game lights its frost decal brighter than the shells light the same
-// albedo; this lift matches the two (CODE-NOTES, "Frost marks as white as the
-// game's").
-static const float kFrostMarkLift = 1.4;
-
 // Every frost mark over a point, through its own uv plane, laid over one
 // another as the game stacks decals, the newest on top. Each is its own
 // quarter of the decal atlas, whole wherever the game clipped the decal, matte
@@ -1118,7 +1113,10 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 						const float3 bitangent = normalize(float3(-slope.z, slope.x, 0.0) / det);
 						nw = normalize(tangent * nts.x + bitangent * nts.y + float3(0.0, 0.0, nts.z));
 					}
-					colour += float4(saturate(d.rgb * kFrostMarkLift), 1.0) * a;
+					// The decal is a vanilla surface: Lighting's own diffuse
+					// conversion, without the PBRLightingScale the shells' write
+					// tail applies.
+					colour += float4(Color::Diffuse(d.rgb) / Color::PBRLightingScale, 1.0) * a;
 					normalW += nw * a;
 				}
 			}
