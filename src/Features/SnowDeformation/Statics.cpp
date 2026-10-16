@@ -846,11 +846,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (engineDecal && settings.DecalsOnObjectSnow && settings.ProjSnowMatch &&
 		a_pass->geometry->GetGeometryRuntimeData().skinInstance == nullptr)
 		CaptureDecalOverlay(a_pass);
-	// A live rune's decal goes to the rune atlas.
-	if (!rec.bloodTex && settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) {
+	// A live rune's decal, or a frost mark, goes to the rune atlas.
+	if (!rec.bloodTex && ((settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) || (engineDecal && settings.FrostDecalsOnSnow))) {
 		const bool decalMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
 		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
-		if (decalMode && CaptureRuneDraw(a_pass))
+		if (decalMode && CaptureRuneDraw(a_pass, engineDecal))
 			return;
 	}
 	if (engineDecal)

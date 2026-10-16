@@ -896,6 +896,52 @@ float ContactAbove(float2 worldPos, float contact)
 	return above;
 }
 
+// A shout's mark at a point (STAMP_MODE_CONE), shaped against the reach it
+// ends at; the front only reveals. x = the distance to the outline across
+// its half-width (1e6 behind the apex or past the end), y = the depth fade
+// times the front's reveal, z = y thinned by the churn's coverage, for a
+// shove, w = the distance along the axis. seg = apex to front, segLenSq its
+// length squared; cone = (final reach, widest half-width, churn seed).
+float4 ShoutMark(float2 worldPos, float2 apex, float2 seg, float segLenSq, float3 cone)
+{
+	float axisLen = sqrt(segLenSq);
+	float2 axis = axisLen > 1e-3 ? seg / axisLen : float2(1.0, 0.0);
+	float2 rel = worldPos - apex;
+	float along = dot(rel, axis);
+	// Signed perpendicular offset, via the 2D cross product.
+	float perp = rel.x * axis.y - rel.y * axis.x;
+	float reach = max(cone.x, axisLen);
+	float u = along / reach;
+	// Outline: two half-superellipses meeting at the waist. t runs
+	// 0 at the waist to 1 at either end.
+	float waist = clamp(ShoutShape.x, 0.05, 0.95);
+	float t = u < waist ? (waist - u) / waist : (u - waist) / (1.0 - waist);
+	float m = max(ShoutShape.y, 1.0);
+	float env = pow(max(1.0 - pow(saturate(t), m), 0.0), 1.0 / m);
+	float halfWidth = max(cone.y * env, 1e-3);
+	// Churn: value noise in the shout's own frame, stretched along
+	// the axis so the breakup reads as streaks thrown forward.
+	float churn = saturate(ShoutChurn.x);
+	float2 np = float2(along / max(ShoutChurn.y * ShoutChurn.z, 1.0), perp / max(ShoutChurn.y, 1.0)) + cone.z;
+	float n = 0.7 * StampNoise(np) + 0.3 * StampNoise(np * 2.9 + 17.3);
+	float edgeCoord = abs(perp) / halfWidth / (1.0 + (n - 0.5) * 0.6 * churn);
+	// Behind the apex, or past the end, is outside the shape.
+	edgeCoord = (along < 0.0 || u > 1.0) ? 1e6 : edgeCoord;
+	// Deepest at the mouth, fading to ShoutShape.w at the end;
+	// revealed by the front as it travels.
+	float fade = lerp(1.0, saturate(ShoutShape.w), smoothstep(saturate(ShoutShape.z), 1.0, u));
+	float lead = reach * CONE_FRONT_LEAD;
+	float frontAlong = axisLen * (1.0 + CONE_FRONT_LEAD);
+	float reveal = 1.0 - smoothstep(frontAlong - lead, frontAlong, along);
+	float coneSoft = fade * reveal;
+	// Coverage thins with distance: near the mouth nearly every
+	// texel is thrown, at the end only the strongest streaks.
+	float band = max(0.2 * churn, 1e-3);
+	float thr = 0.9 * churn * u;
+	float cover = smoothstep(thr - band, thr + band, n);
+	return float4(edgeCoord, coneSoft, coneSoft * cover * lerp(1.0, n, 0.35 * churn), along);
+}
+
 bool StampTexel(uint2 phys)
 {
 	uint2 dims;
@@ -981,43 +1027,10 @@ bool StampTexel(uint2 phys)
 			float coneCarve = 1.0;
 			[branch] if (isCone)
 			{
-				float axisLen = sqrt(segLenSq);
-				float2 axis = axisLen > 1e-3 ? seg / axisLen : float2(1.0, 0.0);
-				float2 rel = worldPos - p0;
-				float along = dot(rel, axis);
-				// Signed perpendicular offset, via the 2D cross product.
-				float perp = rel.x * axis.y - rel.y * axis.x;
-				float4 cone = StampCones[i];
-				float reach = max(cone.x, axisLen);
-				float u = along / reach;
-				// Outline: two half-superellipses meeting at the waist. t runs
-				// 0 at the waist to 1 at either end.
-				float waist = clamp(ShoutShape.x, 0.05, 0.95);
-				float t = u < waist ? (waist - u) / waist : (u - waist) / (1.0 - waist);
-				float m = max(ShoutShape.y, 1.0);
-				float env = pow(max(1.0 - pow(saturate(t), m), 0.0), 1.0 / m);
-				float halfWidth = max(cone.y * env, 1e-3);
-				// Churn: value noise in the shout's own frame, stretched along
-				// the axis so the breakup reads as streaks thrown forward.
-				float churn = saturate(ShoutChurn.x);
-				float2 np = float2(along / max(ShoutChurn.y * ShoutChurn.z, 1.0), perp / max(ShoutChurn.y, 1.0)) + cone.z;
-				float n = 0.7 * StampNoise(np) + 0.3 * StampNoise(np * 2.9 + 17.3);
-				edgeCoord = abs(perp) / halfWidth / (1.0 + (n - 0.5) * 0.6 * churn);
-				// Behind the apex, or past the end, is outside the shape.
-				edgeCoord = (along < 0.0 || u > 1.0) ? 1e6 : edgeCoord;
-				// Deepest at the mouth, fading to ShoutShape.w at the end;
-				// revealed by the front as it travels.
-				float fade = lerp(1.0, saturate(ShoutShape.w), smoothstep(saturate(ShoutShape.z), 1.0, u));
-				float lead = reach * CONE_FRONT_LEAD;
-				float front = axisLen * (1.0 + CONE_FRONT_LEAD);
-				float reveal = 1.0 - smoothstep(front - lead, front, along);
-				coneSoft = fade * reveal;
-				// Coverage thins with distance: near the mouth nearly every
-				// texel is thrown, at the end only the strongest streaks.
-				float band = max(0.2 * churn, 1e-3);
-				float thr = 0.9 * churn * u;
-				float cover = smoothstep(thr - band, thr + band, n);
-				coneCarve = coneSoft * cover * lerp(1.0, n, 0.35 * churn);
+				const float4 shout = ShoutMark(worldPos, p0, seg, segLenSq, StampCones[i].xyz);
+				edgeCoord = shout.x;
+				coneSoft = shout.y;
+				coneCarve = shout.z;
 			}
 
 			[branch] if (mode < 0.5)
@@ -1429,10 +1442,11 @@ Texture2D<float> PrintTops2 : register(t11);
 Texture2DArray<uint> PrintMapIn : register(t12);
 // This frame's spell marks on object snow, three float4s each (SnowDeformation.h
 // PrintSpellMark): (a.xyz, radius), (b.xyz, flags), (depth 0-1, rate per
-// second, 0 at once, -, -). A surface mark lies at a.z, a disc or a capsule
-// from b to a, or with PRINT_SPELL_CONE a wedge from its apex b to a, radius its
-// half-width there. A ray runs from a to b and marks where it first enters an
-// object top (PrintRayCS).
+// second or 0 at once, a cone's final reach, its churn seed). A surface mark
+// lies at a.z, a disc or a capsule from b to a, or with PRINT_SPELL_CONE the
+// ground's shout mark from its apex b to its front a, radius its widest
+// half-width. A ray runs from a to b and marks where it first enters an object
+// top (PrintRayCS).
 StructuredBuffer<float4> PrintSpells : register(t13);
 // Per mark, where its ray entered a top (xyz, w = 1), else w = 0.
 StructuredBuffer<float4> PrintRayHitsIn : register(t14);
@@ -1440,6 +1454,8 @@ RWStructuredBuffer<float4> PrintRayHits : register(u4);
 #define PRINT_SPELL_CONE 1u
 #define PRINT_SPELL_BOWL 2u
 #define PRINT_SPELL_RAY 4u
+// A cone that shoves: the churn thins it as on the ground.
+#define PRINT_SPELL_CHURN 8u
 // A surface mark takes a top within this of its own Z; a ray enters a top it
 // meets from above, no deeper than PRINT_RAY_THICK under it.
 #define PRINT_SPELL_BELOW 48.0
@@ -1569,6 +1585,7 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 	{
 		const float4 s0 = PrintSpells[i * 3u];
 		const float4 s1 = PrintSpells[i * 3u + 1u];
+		const float4 s2 = PrintSpells[i * 3u + 2u];
 		const uint flags = (uint)s1.w;
 		const float radius = max(s0.w, 1.0);
 		float3 at = s0.xyz;
@@ -1585,17 +1602,12 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 		float2 band = float2(PRINT_SPELL_BELOW, PRINT_SPELL_ABOVE);
 		[branch] if (live && (flags & PRINT_SPELL_CONE) != 0u)
 		{
-			// A wedge widening from its apex to radius at its far centre, fading
-			// over its last stretch.
-			const float2 axis = at.xy - from;
-			const float len = max(length(axis), 1.0);
-			const float2 dir = axis / len;
-			const float2 rel = a_worldPos - from;
-			const float along = dot(rel, dir);
-			band += max(along, 0.0) * PRINT_CONE_SLOPE;
-			const float halfWidth = max(radius * saturate(along / len), 1e-3);
-			const float side = abs(dot(rel, float2(-dir.y, dir.x)));
-			f = along > 0.0 ? (1.0 - smoothstep(0.7 * halfWidth, halfWidth, side)) * (1.0 - smoothstep(0.85 * len, len, along)) : 0.0;
+			// The ground's shout mark, with the ground's carve or melt falloff.
+			const float2 seg = at.xy - from;
+			const float4 shout = ShoutMark(a_worldPos, from, seg, dot(seg, seg), float3(s2.z, radius, s2.w));
+			band += max(shout.w, 0.0) * PRINT_CONE_SLOPE;
+			f = (flags & PRINT_SPELL_CHURN) != 0u ? (1.0 - smoothstep(StampFalloffStart, 1.0, shout.x)) * shout.z :
+			                                        (1.0 - smoothstep(MeltFloorStart, 1.0, shout.x)) * shout.y;
 		}
 		else [branch] if (live)
 		{
@@ -1606,12 +1618,12 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 			const float d = length(a_worldPos - (from + seg * t));
 			f = (flags & PRINT_SPELL_BOWL) != 0u ? saturate(1.0 - d / radius) * saturate(1.0 - d / radius) : 1.0 - smoothstep(0.55 * radius, radius, d);
 		}
-		const float want = PrintSpells[i * 3u + 2u].x * f;
+		const float want = s2.x * f;
 		[branch] if (want > best.y)
 		{
 			const float top = PrintTopNear(a_worldPos, at.z, band.x, band.y);
 			[flatten] if (top > -1e8)
-				best = float4(top, want, PrintSpells[i * 3u + 2u].y, 1.0);
+				best = float4(top, want, s2.y, 1.0);
 		}
 	}
 	return best;

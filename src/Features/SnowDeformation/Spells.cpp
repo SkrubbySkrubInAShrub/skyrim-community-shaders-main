@@ -1662,9 +1662,10 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	const float speed = std::max(a_cone.speed, 1.0f);
 	// Held for as long as the front takes to run out, and then a moment more.
 	const float hold = travel / speed + std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
-	// The floor the shouter stands on takes the wedge too, at the shouter's feet.
+	const float seed = static_cast<float>(spellStats.shouts % 97u) * 7.31f;
+	// The floor the shouter stands on takes the same mark, at the shouter's feet.
 	QueueObjectSpellMarkFor(RE::NiPoint3{ tip.x, tip.y, a_cone.position.z }, RE::NiPoint3{ apex.x, apex.y, a_cone.position.z }, halfWidth,
-		MarkForElement(a_cone.element), a_cone.strength, 0.0f, 1.0f, kPrintSpellCone, hold, speed);
+		MarkForElement(a_cone.element), a_cone.strength, 0.0f, 1.0f, kPrintSpellCone, hold, speed, seed);
 	// Measured at the middle of the mark rather than at either end: the apex
 	// is beside the shouter, and the far end may be over a cliff.
 	const RE::NiPoint3 mid = a_cone.position + a_cone.direction * (a_cone.length * 0.5f);
@@ -1685,7 +1686,7 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	opened.coneDir = { a_cone.direction.x, a_cone.direction.y };
 	opened.coneLength = travel;
 	opened.coneSpeed = speed;
-	opened.coneSeed = static_cast<float>(spellStats.shouts % 97u) * 7.31f;
+	opened.coneSeed = seed;
 	opened.radius = halfWidth;
 	opened.strength = strength;
 	opened.rate = kExplosionRate;

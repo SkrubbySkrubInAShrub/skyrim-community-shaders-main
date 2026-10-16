@@ -85,6 +85,7 @@
 	X(LiftRunes) \
 	X(DecalsOnObjectSnow) \
 	X(RuneDecalsOnSnow) \
+	X(FrostDecalsOnSnow) \
 	X(RuneGlow) 	X(ItemEmbedPercent) 	X(ItemSink) 	X(ItemMinRoundness) \
 	X(ItemSnowGripPercent) \
 	X(FrostTexturePath) \

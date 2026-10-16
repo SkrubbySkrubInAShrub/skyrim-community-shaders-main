@@ -1130,6 +1130,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("lift_frost"), "Raise Buried Frost Effects"), &settings.LiftFrostEffects);
 		if (auto _ttLift = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("lift_frost_tooltip"), "Lifts a wall of frost, and the small ice effects like it, up onto the snow standing over them instead of leaving them buried underneath it. Frost is the only school this happens to: fire melts its own hole and lightning pits one, so those sit in snow they have already taken away, while frost only hardens what is there and leaves the full layer on top of itself. This is the one thing in the whole feature that MOVES something belonging to the game, so it has its own switch."));
+		ImGui::Checkbox(T(TKEY("frost_decals"), "Frost Marks on Snow"), &settings.FrostDecalsOnSnow);
+		if (auto _ttFrostDecals = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("frost_decals_tooltip"), "A frost spell leaves the game's own frost mark where it lands, and the landscape snow covers the ones on the ground beneath it. With this on, the mark is painted onto the landscape and road snow over it, as object snow already wears it, and fades with it. Marks on something level with the snow's top count too, such as a walkway the snow pokes through."));
 
 		ImGui::SliderFloat(T(TKEY("crust_rate"), "Frost Crust Rate"), &settings.CrustRate, 0.0f, 3.0f, "%.2f /s");
 		if (auto _ttCrustRate = Util::HoverTooltipWrapper())

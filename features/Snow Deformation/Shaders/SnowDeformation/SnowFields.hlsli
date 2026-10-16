@@ -1113,20 +1113,21 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 #endif
 
 #if defined(PSHADER) && defined(SNOW_RUNE_GLYPHS)
-// Rune glyphs (Blood.cpp, RenderRuneCapture), for the shells that define
-// SNOW_RUNE_GLYPHS - the landscape shell and the road patch; object skins
-// get theirs from the decal overlay. A 2x2 atlas, one tile per live
-// rune, redrawn every frame from the rune's own ground decal. A tile is the
-// decal's uv field (rg = uv, b = covered, a = material alpha); the glyph
-// itself comes from the rune's own diffuse and normal map through that uv.
+// Rune glyphs and frost marks (Blood.cpp, RenderRuneCapture), for the shells
+// that define SNOW_RUNE_GLYPHS - the landscape shell and the road patch;
+// object skins get theirs from the decal overlay. A 2x2 atlas, one tile per
+// live rune, then per patch of frost marks, redrawn every frame from the
+// game's own decals. A tile is the decals' uv field (rg = uv, b = decal id,
+// a = material alpha); the mark itself comes from the decal's own diffuse and
+// normal map through that uv.
 Texture2D<float4> RuneAtlas : register(t90);
 Texture2D<float4> RuneDiffuse[4] : register(t80);
 Texture2D<float4> RuneNormal[4] : register(t84);
 cbuffer RuneCB : register(b7)
 {
-	// x = live tiles, y = glow
+	// x = live tiles
 	float4 RuneParams;
-	// xy = tile's world min, z = 1 / world size; tile i at (i & 1, i >> 1)
+	// xy = tile's world min, z = 1 / world size, w = its glow; tile i at (i & 1, i >> 1)
 	float4 RuneRects[4];
 	// rgb = the decal material's emissive, w = 1 with a normal map
 	float4 RuneTints[4];
@@ -1158,35 +1159,41 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
 		float2 tileUV = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
 		[branch] if (i < count && all(tileUV > 0.0) && all(tileUV < 1.0))
 		{
-			// In from the tile's edge: the neighbour tile is another rune.
-			float2 inTile = clamp(tileUV, 1.5 / 512.0, 1.0 - 2.5 / 512.0);
-			float2 atlasUV = (float2(i & 1u, i >> 1u) + inTile) * 0.5;
-			const float texel = 0.5 / 512.0;
-			float4 c = RuneAtlas.SampleLevel(ShellLinearSampler, atlasUV, 0);
-			float4 cx = RuneAtlas.SampleLevel(ShellLinearSampler, atlasUV + float2(texel, 0.0), 0);
-			float4 cy = RuneAtlas.SampleLevel(ShellLinearSampler, atlasUV + float2(0.0, texel), 0);
-			// All three taps inside the decal: a tap straddling its border
-			// blends uv toward 0. The decal's own border is transparent.
-			[branch] if (min(c.b, min(cx.b, cy.b)) > 0.999)
+			// The decal's uv at the nearest texel, carried to this point along
+			// its own plane from a neighbour of the same decal: never filtered
+			// across two decals, nor across a decal's edge. In from the tile's
+			// edge: the neighbour tile is another site.
+			const float2 f = tileUV * 512.0;
+			const int2 k = clamp(int2(f), 1, 510);
+			const int2 at = int2(i & 1u, i >> 1u) * 512 + k;
+			const float4 c = RuneAtlas.Load(int3(at, 0));
+			[branch] if (c.b > 0.0)
 			{
+				const float4 px = RuneAtlas.Load(int3(at + int2(1, 0), 0));
+				const float4 nx = RuneAtlas.Load(int3(at - int2(1, 0), 0));
+				const float4 py = RuneAtlas.Load(int3(at + int2(0, 1), 0));
+				const float4 ny = RuneAtlas.Load(int3(at - int2(0, 1), 0));
+				const float2 stepX = px.b == c.b ? px.rg - c.rg : (nx.b == c.b ? c.rg - nx.rg : 0.0);
+				const float2 stepY = py.b == c.b ? py.rg - c.rg : (ny.b == c.b ? c.rg - ny.rg : 0.0);
+				const float2 uv = c.rg + stepX * (f.x - float(k.x) - 0.5) + stepY * (f.y - float(k.y) - 0.5);
 				// The uv field is planar, so its world derivative is one
 				// texel's difference, and the screen gradient follows from it.
 				float texelWorld = 1.0 / (RuneRects[i].z * 512.0);
-				float2 uvDx = (cx.rg - c.rg) / texelWorld;
-				float2 uvDy = (cy.rg - c.rg) / texelWorld;
+				float2 uvDx = stepX / texelWorld;
+				float2 uvDy = stepY / texelWorld;
 				float2 gradX = uvDx * worldDx.x + uvDy * worldDx.y;
 				float2 gradY = uvDx * worldDy.x + uvDy * worldDy.y;
-				float4 d = RuneDiffuse[i].SampleGrad(SnowSampler, c.rg, gradX, gradY);
+				float4 d = RuneDiffuse[i].SampleGrad(SnowSampler, uv, gradX, gradY);
 				float a = d.a * c.a;
 				[branch] if (a > g.colour.a)
 				{
 					g.colour = float4(d.rgb, a);
 					// Lighting adds a material's emissive to the LIGHT, before the texture colour multiplies it: a dark rim glows dark.
-					g.emission = RuneTints[i].rgb * d.rgb * a * RuneParams.y;
+					g.emission = RuneTints[i].rgb * d.rgb * a * RuneRects[i].w;
 					float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
 					[branch] if (RuneTints[i].w > 0.5 && abs(det) > 1e-12)
 					{
-						float4 n = RuneNormal[i].SampleGrad(SnowSampler, c.rg, gradX, gradY);
+						float4 n = RuneNormal[i].SampleGrad(SnowSampler, uv, gradX, gradY);
 						g.normalTS = normalize(n.xyz * 2.0 - 1.0);
 						g.gloss = n.a;
 						// Inverse of [uvDx uvDy]: world xy per unit u, per unit v.

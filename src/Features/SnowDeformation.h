@@ -473,6 +473,8 @@ public:
 		bool DecalsOnObjectSnow = true;
 		/** @brief Paints a rune's glyph - an engine decal on the ground the shell covers - onto the landscape shell. */
 		bool RuneDecalsOnSnow = true;
+		/** @brief Paints the game's frost impact decals onto the landscape snow and road snow as object snow wears them: the ones on the ground under the snow, or on something level with its top (a walkway). */
+		bool FrostDecalsOnSnow = true;
 		/** @brief Scale on the painted glyph's emission. */
 		float RuneGlow = 2.0f;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
@@ -931,6 +933,8 @@ public:
 		bool mask = false;
 		/** @brief Burial clock and game hours when the mark was first seen; the detail tiles date it by these, so a redraw does not make it fresh again. */
 		float2 clock{ 0.0f, 0.0f };
+		/** @brief The rune atlas's id for this decal in its tile (Spread.w): which texels share its uv plane. */
+		float decalId = 0.0f;
 	};
 	std::vector<BloodCapture> bloodCaptures;
 	/** @brief Engine decals are baked geometry: one deposit per decal. Keyed by geometry, validated by its buffer and position. */
@@ -1231,6 +1235,10 @@ public:
 	static constexpr uint32_t kRuneMaxTiles = 4;
 	static constexpr uint32_t kRuneTileDim = 512;
 	static constexpr float kRuneTileHalf = 110.0f;
+	/** @brief Frost marks share the rune tiles, after the runes, in tiles twice as wide: a stream lays its marks along a sweep. */
+	static constexpr float kFrostTileHalf = 220.0f;
+	/** @brief A frost mark whose centre stands more than this over the landscape snow's top is on an object; the object coat wears it. */
+	static constexpr float kFrostDecalAboveSnow = 24.0f;
 	struct RuneSite
 	{
 		uint32_t formID = 0;
@@ -1248,9 +1256,9 @@ public:
 	};
 	struct alignas(16) RuneCB
 	{
-		/** @brief x = live tiles, y = glow. */
+		/** @brief x = live tiles. */
 		float4 RuneParams;
-		/** @brief xy = tile's world min, z = 1 / world size. Tile i sits at (i & 1, i >> 1) of the 2x2 atlas. */
+		/** @brief xy = tile's world min, z = 1 / world size, w = the glow on its emission. Tile i sits at (i & 1, i >> 1) of the 2x2 atlas. */
 		float4 RuneRects[kRuneMaxTiles];
 		/** @brief rgb = the decal material's emissive, w = 1 when the tile has a normal map. */
 		float4 RuneTints[kRuneMaxTiles];
@@ -1266,17 +1274,23 @@ public:
 	std::unordered_set<uint32_t> runeLifted;
 	std::vector<RuneCapture> runeCaptures;
 	std::unordered_set<const RE::BSGeometry*> runeCaptureSet;
+	/** @brief This frame's frost impact decals (FrostDecalsOnSnow), for the rune tiles the runes leave. */
+	std::vector<RuneCapture> frostCaptures;
 	std::unordered_set<std::string> runeDecalPathsLogged;
 	Texture2D* runeAtlasTexture = nullptr;
+	/** @brief Where decals overlap in a tile, the most opaque owns the texel: depth 1 - its alpha. */
+	winrt::com_ptr<ID3D11Texture2D> runeDepthTexture;
+	winrt::com_ptr<ID3D11DepthStencilView> runeDepthDSV;
+	winrt::com_ptr<ID3D11DepthStencilState> runeDepthState;
 	/** @brief Each live tile's own decal textures, sampled by the shell through the tile's uv field. */
 	winrt::com_ptr<ID3D11ShaderResourceView> runeTileDiffuse[kRuneMaxTiles];
 	winrt::com_ptr<ID3D11ShaderResourceView> runeTileNormal[kRuneMaxTiles];
 	ConstantBuffer* runeCB = nullptr;
 	ID3D11PixelShader* runePS = nullptr;
-	winrt::com_ptr<ID3D11BlendState> runeBlendState;
 	bool runeResourcesFailed = false;
 	bool runeAtlasDirty = false;
 	bool runePaintLogged = false;
+	bool frostPaintLogged = false;
 	bool runeMissLogged = false;
 	uint32_t runeMissFrames = 0;
 	uint32_t runeStatSites = 0;
@@ -1286,10 +1300,10 @@ public:
 	/** @brief From the spell gather, per live projectile: a proximity record is a rune - lifted once, and listed as a site for its decal. */
 	void ConsiderRune(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes);
 	void PublishRuneSites(const std::unordered_set<uint32_t>& a_present);
-	/** @brief From the capture hook: a decal-mode Lighting draw. True when its diffuse is a live rune's decal texture and it was taken. */
-	bool CaptureRuneDraw(RE::BSRenderPass* a_pass);
+	/** @brief From the capture hook: a decal-mode Lighting draw. True when its diffuse is a live rune's decal texture, or a frost impact decal (a_engineDecal, FrostDecalsOnSnow), and it was taken. */
+	bool CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDecal);
 	bool EnsureRuneResources();
-	/** @brief Clears the atlas and draws this frame's rune decals into their tiles. After the blood capture, before the shells. */
+	/** @brief Clears the atlas and draws this frame's rune decals, then its frost marks, into their tiles. After the blood capture, before the shells. */
 	void RenderRuneCapture();
 
 	// ---- Baked undulation field ----
@@ -4461,10 +4475,15 @@ protected:
 		/** @brief Depth per second it approaches that at; 0 = at once. */
 		float rate = 0.0f;
 		uint32_t flags = 0;
+		/** @brief A cone's final reach from its apex, and the ground mark's churn seed. */
+		float reach = 0.0f;
+		float seed = 0.0f;
 	};
 	static constexpr uint32_t kPrintSpellCone = 1u;
 	static constexpr uint32_t kPrintSpellBowl = 2u;
 	static constexpr uint32_t kPrintSpellRay = 4u;
+	/** @brief A cone that shoves: the churn thins it as on the ground. */
+	static constexpr uint32_t kPrintSpellChurn = 8u;
 	/** @brief Spell marks the print stamp takes a frame; the rest wait for none, as a mark is re-sent while its source lasts. */
 	static constexpr uint32_t kPrintSpellCap = 32;
 
@@ -4606,11 +4625,11 @@ protected:
 	ID3D11ComputeShader* GetPrintRimCS();
 	ID3D11ComputeShader* GetPrintRayCS();
 	void ReleaseObjectPrintShaders();
-	/** @brief One spell mark on object snow this frame (PrintSpellMark), taken while there is room. a_hold > 0 sends it again every frame for that many seconds, a cone's front running out at a_speed. */
-	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f);
+	/** @brief One spell mark on object snow this frame (PrintSpellMark), taken while there is room. a_hold > 0 sends it again every frame for that many seconds, a cone's front running out at a_speed; a_seed is a cone's churn seed. */
+	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f, float a_seed = 0.0f);
 	/** @brief The held marks into this frame's printSpellMarks, aged by a_deltaTime; called where printSpellMarks is cleared. */
 	void ReplayHeldObjectSpellMarks(float a_deltaTime);
-	/** @brief A held mark as it stands at the end of this frame: a cone cut back to its front. */
+	/** @brief A held mark as it stands at the end of this frame: a cone's front where it has run to. */
 	PrintSpellMark HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const;
 	/** @brief Queues one tile's copy into a free staging slot; false when none is free. */
 	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
@@ -4702,8 +4721,8 @@ protected:
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
 	std::vector<SpellEmitter> spellEmitters;
-	/** @brief The object-snow twin of a spell emitter (Snow Trenches on Objects), depth and reach as GatherStamps gives the ground's stamp: a melt at its strength and rate, a pit at Pit Depth over Pit Radius x a_pitScale unless a cone, a carve at Force Carve Depth. Crust and scorch leave no print. a_hold and a_speed as QueueObjectSpellMark's. */
-	void QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f);
+	/** @brief The object-snow twin of a spell emitter (Snow Trenches on Objects), depth and reach as GatherStamps gives the ground's stamp: a melt at its strength and rate, a pit at Pit Depth over Pit Radius x a_pitScale unless a cone, a carve at Force Carve Depth. Crust and scorch leave no print. a_hold, a_speed and a_seed as QueueObjectSpellMark's. */
+	void QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f, float a_seed = 0.0f);
 
 	/** @brief Last XY per projectile (formID), for the capsule sweep. */
 	std::unordered_map<uint32_t, float2> spellPrevPositions;

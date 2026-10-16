@@ -123,11 +123,12 @@ ID3D11ComputeShader* SnowDeformation::GetPrintRayCS()
 	return printRayCS;
 }
 
-void SnowDeformation::QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold, float a_speed)
+void SnowDeformation::QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold, float a_speed, float a_seed)
 {
 	if (!(a_radius > 0.0f) || !(a_depth > 0.0f))
 		return;
-	const PrintSpellMark mark{ a_a, a_b, a_radius, std::min(a_depth, 1.0f), std::max(a_rate, 0.0f), a_flags };
+	const float reach = (a_flags & kPrintSpellCone) ? std::hypot(a_a.x - a_b.x, a_a.y - a_b.y) : 0.0f;
+	const PrintSpellMark mark{ a_a, a_b, a_radius, std::min(a_depth, 1.0f), std::max(a_rate, 0.0f), a_flags, reach, a_seed };
 	if (a_hold > 0.0f) {
 		if (heldPrintSpells.size() >= kPrintSpellCap)
 			return;
@@ -145,10 +146,8 @@ SnowDeformation::PrintSpellMark SnowDeformation::HeldPrintFront(const HeldPrintS
 	PrintSpellMark mark = a_held.mark;
 	if ((mark.flags & kPrintSpellCone) && a_held.speed > 0.0f) {
 		// The ground cone's front: where it has run by the end of this frame.
-		const float travel = std::max(std::hypot(mark.a.x - mark.b.x, mark.a.y - mark.b.y), 1.0f);
-		const float extent = std::clamp(a_held.speed * (a_held.age + a_deltaTime) / travel, 0.0f, 1.0f);
+		const float extent = std::clamp(a_held.speed * (a_held.age + a_deltaTime) / std::max(mark.reach, 1.0f), 0.0f, 1.0f);
 		mark.a = mark.b + (mark.a - mark.b) * extent;
-		mark.radius = std::max(mark.radius * extent, 1.0f);
 	}
 	return mark;
 }
@@ -171,18 +170,19 @@ void SnowDeformation::ReplayHeldObjectSpellMarks(float a_deltaTime)
 	}
 }
 
-void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold, float a_speed)
+void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold, float a_speed, float a_seed)
 {
 	switch (a_mark) {
 	case SpellMark::Melt:
-		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength, a_rate, a_flags, a_hold, a_speed);
+		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength, a_rate, a_flags, a_hold, a_speed, a_seed);
 		break;
 	case SpellMark::Pit:
 		QueueObjectSpellMark(a_a, a_b, (a_flags & kPrintSpellCone) ? std::max(a_radius, 4.0f) : std::max(settings.PitRadius, 4.0f) * a_pitScale,
-			a_strength * std::clamp(settings.PitDepth, 0.0f, 1.0f), 0.0f, a_flags, a_hold, a_speed);
+			a_strength * std::clamp(settings.PitDepth, 0.0f, 1.0f), 0.0f, a_flags, a_hold, a_speed, a_seed);
 		break;
 	case SpellMark::Carve:
-		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f), 0.0f, a_flags, a_hold, a_speed);
+		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f), 0.0f,
+			(a_flags & kPrintSpellCone) ? a_flags | kPrintSpellChurn : a_flags, a_hold, a_speed, a_seed);
 		break;
 	default:
 		break;
@@ -857,7 +857,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 						const auto& mark = printSpellMarks[i];
 						rows[i * 3] = { mark.a.x, mark.a.y, mark.a.z, mark.radius };
 						rows[i * 3 + 1] = { mark.b.x, mark.b.y, mark.b.z, (float)mark.flags };
-						rows[i * 3 + 2] = { mark.depth, mark.rate, 0.0f, 0.0f };
+						rows[i * 3 + 2] = { mark.depth, mark.rate, mark.reach, mark.seed };
 					}
 					a_context->Unmap(printSpellBuffer.get(), 0);
 				}

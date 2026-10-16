@@ -345,19 +345,32 @@ float2 main(VS_OUTPUT input) : SV_Target0
 	return float2(Spread.y > 0.5 ? a : 0.0, a);
 }
 #elif defined(PSHADER) && defined(RUNE)
-// RUNE: a rune's glyph decal into its atlas tile (Blood.cpp, RenderRuneCapture).
-// Not its colour - its UV FIELD: rg = the decal's uv at this ground point,
-// b = covered, a = the material's alpha this frame (the pulse). The shell
-// samples the rune's own textures through it, so the glyph keeps the
-// texture's resolution whatever the tile's. MAX-blended; pieces of one decal
-// carry the same uv where they overlap.
-float4 main(VS_OUTPUT input) : SV_Target0
+// RUNE: a rune's glyph decal, or a frost mark, into its atlas tile (Blood.cpp,
+// RenderRuneCapture). Not its colour - its UV FIELD: rg = the decal's uv at
+// this ground point, b = its id in the tile over 65535 (0 = none), a = the
+// material's alpha this frame (the pulse, the fade). The shell samples the
+// decal's own textures through it, so the mark keeps the texture's
+// resolution whatever the tile's. Where decals overlap, the most opaque owns
+// the texel (depth 1 - its alpha); pieces of one decal tie.
+struct RUNE_OUTPUT
+{
+	float4 Field : SV_Target0;
+	float Depth : SV_Depth;
+};
+
+RUNE_OUTPUT main(VS_OUTPUT input)
 {
 	if (any(input.Logical < 0.0) || any(input.Logical >= MapDim))
 		discard;
 	if (input.NormalZ < NormalZMin)
 		discard;
-	return float4(saturate(input.UV), 1.0, saturate(MaterialAlpha));
+	const float a = Diffuse.Sample(LinearSampler, input.UV).a * saturate(MaterialAlpha);
+	if (a < 1.0 / 255.0)
+		discard;
+	RUNE_OUTPUT o;
+	o.Field = float4(saturate(input.UV), Spread.w / 65535.0, saturate(MaterialAlpha));
+	o.Depth = 1.0 - a;
+	return o;
 }
 #elif defined(PSHADER)
 struct PS_OUTPUT
