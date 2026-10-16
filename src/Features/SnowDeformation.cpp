@@ -1102,6 +1102,10 @@ void SnowDeformation::PrepassSimulation()
 		std::clamp(settings.ShoutMarkFadeStart, 0.0f, 0.98f), std::clamp(settings.ShoutMarkFarDepth, 0.0f, 1.0f) };
 	perFrameData.ShoutChurn = { std::clamp(settings.ShoutChurn, 0.0f, 1.0f), std::max(settings.ShoutStreakSize, 4.0f),
 		std::max(settings.ShoutStreakLength, 1.0f), 0.0f };
+	// The ground snow as the shell draws it (ShellCB's UndulationAmp, UndulationScale, RimStyle.w).
+	perFrameData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
+	perFrameData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
+	perFrameData.AccumulationScale = GetAccumulationDepthScale();
 
 	float deltaTime = *globals::game::deltaTime;
 	// Taken here rather than beside the trench work below because the refill is
@@ -1362,7 +1366,8 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.InjectValid == 0 &&
 		perFrameData.RefillAmount <= 0.0f &&
 		perFrameData.ClearMap == 0 &&
-		perFrameData.ContactDim < 0.5f;
+		perFrameData.ContactDim < 0.5f &&
+		printSpellMarks.empty();
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
 	deformIdleBlockers =
 		((scroll.x != 0 || scroll.y != 0) ? 1u : 0u) |
@@ -1372,7 +1377,8 @@ void SnowDeformation::PrepassSimulation()
 		(perFrameData.ClearMap != 0 ? 16u : 0u) |
 		(deformFlagActive ? 32u : 0u) |
 		(deformFlagSeq <= deformLastNonIdleSeq ? 64u : 0u) |
-		(perFrameData.ContactDim > 0.5f ? 128u : 0u);
+		(perFrameData.ContactDim > 0.5f ? 128u : 0u) |
+		(!printSpellMarks.empty() ? 256u : 0u);
 	// A new Berm Steepness needs one executed run to mark the whole bake dirty.
 	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
 	// The field view keeps the pass awake: a frozen picture is worse than no sleep.

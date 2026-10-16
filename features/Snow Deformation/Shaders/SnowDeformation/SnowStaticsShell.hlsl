@@ -2697,8 +2697,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			detailRelief = TrenchDetailRelief * detailMask * max(saturate(PatchSkinDepth(input.worldXY).x / 10.0), detailMarks.x) * TrampleDetailScale(input.worldXY, input.pixelDeform);
 #	else
 			// The patch's thin-cover rule at the dent's depth, up to the full
-			// relief where the rim is strong.
-			detailRelief = TrenchDetailRelief * detailMask * max(saturate(kPrintDentDepth / 10.0), saturate(printRim));
+			// relief where the rim is strong; prints take twice the slider.
+			detailRelief = 2.0 * TrenchDetailRelief * detailMask * max(saturate(kPrintDentDepth / 10.0), saturate(printRim));
 #	endif
 			trenchTaps = TrenchDetailTapsAt(input.worldXY);
 		}

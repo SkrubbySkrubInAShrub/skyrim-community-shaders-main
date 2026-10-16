@@ -58,6 +58,8 @@
 //   .w  a Force shove's mark: the trench detail wears its powder set there.
 //       Fades with the refill as melt does; never stored (RingCS zeroes it).
 
+#include "SnowDeformation/SnowNoise.hlsli"
+
 #define MAX_STAMPS 256
 
 // Added to a stamp's mode to mark it a cone. Mirrored by kStampModeCone in
@@ -286,6 +288,12 @@ cbuffer PerFrame : register(b0)
 	// Shout mark churn (shoves only): x amount 0-1, y streak size across
 	// (units), z streak length as a multiple of y, w spare.
 	float4 ShoutChurn;
+	// The ground snow as drawn (ShellSurfaceZ), for the body carve: the dune
+	// amplitude and spacing, and the accumulation depth scale.
+	float UndulationAmp;
+	float UndulationScale;
+	float AccumulationScale;
+	float DrawnPad;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -846,6 +854,21 @@ float2 TerrainGroundLayer(float2 worldPos)
 	return float2(terrain.x, max(terrain.y, 1.0));
 }
 
+float ContactAbove(float2 worldPos, float contact);
+
+// ContactAbove against the ground snow as drawn (ShellSurfaceZ): the
+// accumulated layer, with a dune crest (dune >= 0) riding on the depth the
+// carve leaves. Never higher, so a boot level with a walkway still cuts the
+// snow that shows above it.
+float ContactAboveDrawn(float2 worldPos, float contact, float dune)
+{
+	const float2 groundLayer = TerrainGroundLayer(worldPos);
+	const float h = contact - groundLayer.x;
+	// The depth whose drawn top, dune included, lies at the contact.
+	const float left = max(h - dune, h * 8.0 / (8.0 + dune));
+	return min(ContactAbove(worldPos, contact), left / (groundLayer.y * AccumulationScale));
+}
+
 // How far above its snow layer a contact stands, in layers: 0 = on the
 // surface, 1 = clear of it. Two candidate surfaces, the terrain window and
 // the road raster (same max-of-4 read as the patch's PatchSkinDepth), and
@@ -1156,12 +1179,15 @@ bool StampTexel(uint2 phys)
 			// their reach, the floor ItemSink rests them on. Crust bears both like
 			// any carve of unknown weight: no force.
 			const float crustDepth = lerp(1.0, CrustPrintDepth, standingCrust);
+			float dune = 0.0;
+			[branch] if (min(contact.x, contact.y) < CONTACT_NONE * 0.5)
+				dune = max(UndulationNorm(worldPos, UndulationScale) * UndulationAmp, 0.0);
 			float bodyContact = 0.0;
 			float propPrinted = 0.0;
 			[branch] if (contact.x < CONTACT_NONE * 0.5)
-				bodyContact = saturate(1.0 - ContactAbove(worldPos, contact.x)) * crustDepth * cover.x;
+				bodyContact = saturate(1.0 - ContactAboveDrawn(worldPos, contact.x, dune)) * crustDepth * cover.x;
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
-				propPrinted = saturate(1.0 - ContactAbove(worldPos, contact.y)) * crustDepth * cover.y;
+				propPrinted = saturate(1.0 - ContactAboveDrawn(worldPos, contact.y, dune)) * crustDepth * cover.y;
 			bodyReach = max(bodyReach, bodyContact);
 			// A repeat pass deepens by the reach a map texel either side,
 			// tent-weighted: a channel walked into a packed floor eases in over
@@ -1177,7 +1203,7 @@ bool StampTexel(uint2 phys)
 						if (nx != 0 || ny != 0)
 						{
 							const float c = ContactHeight.Load(int3(clamp(ct + int2(round(float2(nx, -ny) * k)), 0, dim - 1), 0)).x;
-							const float r = c < CONTACT_NONE * 0.5 ? saturate(1.0 - ContactAbove(worldPos + float2(nx, ny) * TexelSize, c)) * crustDepth : 0.0;
+							const float r = c < CONTACT_NONE * 0.5 ? saturate(1.0 - ContactAboveDrawn(worldPos + float2(nx, ny) * TexelSize, c, dune)) * crustDepth : 0.0;
 							tent += (nx == 0 || ny == 0 ? 2.0 : 1.0) * r;
 						}
 					}
@@ -1310,7 +1336,7 @@ bool StampTexel(uint2 phys)
 			const float contact = min(contactXY.x, contactXY.y);
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
-				float above = ContactAbove(worldPos, contact);
+				float above = ContactAboveDrawn(worldPos, contact, max(UndulationNorm(worldPos, UndulationScale) * UndulationAmp, 0.0));
 				// A surface UNDER the ground it is measured against is not a
 				// press: nothing a body carries can be there. The carve cannot
 				// tell it from a boot standing on the ground - both saturate to
@@ -1419,6 +1445,9 @@ RWStructuredBuffer<float4> PrintRayHits : register(u4);
 #define PRINT_SPELL_BELOW 48.0
 #define PRINT_SPELL_ABOVE 16.0
 #define PRINT_RAY_THICK 24.0
+// A cone's band widens by this per unit of reach past its apex, both ways, so
+// the wedge follows a pitched roof away from the shouter's feet.
+#define PRINT_CONE_SLOPE 1.0
 
 uint PrintEncode(float a_z, uint a_depth)
 {
@@ -1497,10 +1526,9 @@ float PrintTopGap(float2 a_worldPos, float a_contact)
 	return gap;
 }
 
-// The object top nearest a_z within [a_z - PRINT_SPELL_BELOW, a_z +
-// PRINT_SPELL_ABOVE] over the 2x2 raster texels of both layers; -1e9 where
-// none lies in that band.
-float PrintTopNear(float2 a_worldPos, float a_z)
+// The object top nearest a_z within [a_z - a_below, a_z + a_above] over the
+// 2x2 raster texels of both layers; -1e9 where none lies in that band.
+float PrintTopNear(float2 a_worldPos, float a_z, float a_below, float a_above)
 {
 	float found = -1e9;
 	const float2 local = (a_worldPos - HeightWindowCenter) / HeightHalfExtent;
@@ -1521,7 +1549,7 @@ float PrintTopNear(float2 a_worldPos, float a_z)
 		[unroll] for (uint i = 0; i < 8; i++)
 		{
 			const float g = tops[i] - a_z;
-			[flatten] if (tops[i] > -50000.0 && g >= -PRINT_SPELL_BELOW && g <= PRINT_SPELL_ABOVE && abs(g) < best)
+			[flatten] if (tops[i] > -50000.0 && g >= -a_below && g <= a_above && abs(g) < best)
 			{
 				best = abs(g);
 				found = tops[i];
@@ -1554,6 +1582,7 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 			from = hit.xy;
 		}
 		float f = 0.0;
+		float2 band = float2(PRINT_SPELL_BELOW, PRINT_SPELL_ABOVE);
 		[branch] if (live && (flags & PRINT_SPELL_CONE) != 0u)
 		{
 			// A wedge widening from its apex to radius at its far centre, fading
@@ -1563,6 +1592,7 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 			const float2 dir = axis / len;
 			const float2 rel = a_worldPos - from;
 			const float along = dot(rel, dir);
+			band += max(along, 0.0) * PRINT_CONE_SLOPE;
 			const float halfWidth = max(radius * saturate(along / len), 1e-3);
 			const float side = abs(dot(rel, float2(-dir.y, dir.x)));
 			f = along > 0.0 ? (1.0 - smoothstep(0.7 * halfWidth, halfWidth, side)) * (1.0 - smoothstep(0.85 * len, len, along)) : 0.0;
@@ -1579,7 +1609,7 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 		const float want = PrintSpells[i * 3u + 2u].x * f;
 		[branch] if (want > best.y)
 		{
-			const float top = PrintTopNear(a_worldPos, at.z);
+			const float top = PrintTopNear(a_worldPos, at.z, band.x, band.y);
 			[flatten] if (top > -1e8)
 				best = float4(top, want, PrintSpells[i * 3u + 2u].y, 1.0);
 		}

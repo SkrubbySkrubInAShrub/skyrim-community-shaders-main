@@ -123,25 +123,66 @@ ID3D11ComputeShader* SnowDeformation::GetPrintRayCS()
 	return printRayCS;
 }
 
-void SnowDeformation::QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags)
+void SnowDeformation::QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold, float a_speed)
 {
-	if (printSpellMarks.size() >= kPrintSpellCap || !(a_radius > 0.0f) || !(a_depth > 0.0f))
+	if (!(a_radius > 0.0f) || !(a_depth > 0.0f))
 		return;
-	printSpellMarks.push_back({ a_a, a_b, a_radius, std::min(a_depth, 1.0f), std::max(a_rate, 0.0f), a_flags });
+	const PrintSpellMark mark{ a_a, a_b, a_radius, std::min(a_depth, 1.0f), std::max(a_rate, 0.0f), a_flags };
+	if (a_hold > 0.0f) {
+		if (heldPrintSpells.size() >= kPrintSpellCap)
+			return;
+		heldPrintSpells.push_back({ mark, 0.0f, a_hold, std::max(a_speed, 0.0f) });
+		if (printSpellMarks.size() < kPrintSpellCap)
+			printSpellMarks.push_back(HeldPrintFront(heldPrintSpells.back(), globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f));
+		return;
+	}
+	if (printSpellMarks.size() < kPrintSpellCap)
+		printSpellMarks.push_back(mark);
 }
 
-void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags)
+SnowDeformation::PrintSpellMark SnowDeformation::HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const
+{
+	PrintSpellMark mark = a_held.mark;
+	if ((mark.flags & kPrintSpellCone) && a_held.speed > 0.0f) {
+		// The ground cone's front: where it has run by the end of this frame.
+		const float travel = std::max(std::hypot(mark.a.x - mark.b.x, mark.a.y - mark.b.y), 1.0f);
+		const float extent = std::clamp(a_held.speed * (a_held.age + a_deltaTime) / travel, 0.0f, 1.0f);
+		mark.a = mark.b + (mark.a - mark.b) * extent;
+		mark.radius = std::max(mark.radius * extent, 1.0f);
+	}
+	return mark;
+}
+
+void SnowDeformation::ReplayHeldObjectSpellMarks(float a_deltaTime)
+{
+	if (!settings.EnableSpellIntegration) {
+		heldPrintSpells.clear();
+		return;
+	}
+	for (auto it = heldPrintSpells.begin(); it != heldPrintSpells.end();) {
+		it->age += a_deltaTime;
+		if (it->age >= it->life) {
+			it = heldPrintSpells.erase(it);
+			continue;
+		}
+		if (printSpellMarks.size() < kPrintSpellCap)
+			printSpellMarks.push_back(HeldPrintFront(*it, a_deltaTime));
+		++it;
+	}
+}
+
+void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold, float a_speed)
 {
 	switch (a_mark) {
 	case SpellMark::Melt:
-		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength, a_rate, a_flags);
+		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength, a_rate, a_flags, a_hold, a_speed);
 		break;
 	case SpellMark::Pit:
 		QueueObjectSpellMark(a_a, a_b, (a_flags & kPrintSpellCone) ? std::max(a_radius, 4.0f) : std::max(settings.PitRadius, 4.0f) * a_pitScale,
-			a_strength * std::clamp(settings.PitDepth, 0.0f, 1.0f), 0.0f, a_flags);
+			a_strength * std::clamp(settings.PitDepth, 0.0f, 1.0f), 0.0f, a_flags, a_hold, a_speed);
 		break;
 	case SpellMark::Carve:
-		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f), 0.0f, a_flags);
+		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f), 0.0f, a_flags, a_hold, a_speed);
 		break;
 	default:
 		break;

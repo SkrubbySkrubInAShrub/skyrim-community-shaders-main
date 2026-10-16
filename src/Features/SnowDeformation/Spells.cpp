@@ -1659,9 +1659,12 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	// craters, since a stamp holds full depth across only the inner tenth of
 	// its radius.
 	const float halfWidth = std::max(travel * std::clamp(settings.ShoutMarkWidth, 0.05f, 2.0f) * 0.5f, 8.0f);
+	const float speed = std::max(a_cone.speed, 1.0f);
+	// Held for as long as the front takes to run out, and then a moment more.
+	const float hold = travel / speed + std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
 	// The floor the shouter stands on takes the wedge too, at the shouter's feet.
 	QueueObjectSpellMarkFor(RE::NiPoint3{ tip.x, tip.y, a_cone.position.z }, RE::NiPoint3{ apex.x, apex.y, a_cone.position.z }, halfWidth,
-		MarkForElement(a_cone.element), a_cone.strength, 0.0f, 1.0f, kPrintSpellCone);
+		MarkForElement(a_cone.element), a_cone.strength, 0.0f, 1.0f, kPrintSpellCone, hold, speed);
 	// Measured at the middle of the mark rather than at either end: the apex
 	// is beside the shouter, and the far end may be over a cliff.
 	const RE::NiPoint3 mid = a_cone.position + a_cone.direction * (a_cone.length * 0.5f);
@@ -1675,8 +1678,6 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	if (strength < kMinSpellStrength)
 		return;
 
-	const float speed = std::max(a_cone.speed, 1.0f);
-
 	ActiveBlast opened{};
 	opened.cone = true;
 	opened.apex = { apex.x, apex.y };
@@ -1688,8 +1689,7 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	opened.radius = halfWidth;
 	opened.strength = strength;
 	opened.rate = kExplosionRate;
-	// Held for as long as the front takes to run out, and then a moment more.
-	opened.remaining = travel / speed + std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+	opened.remaining = hold;
 	opened.element = a_cone.element;
 	opened.mark = MarkForElement(a_cone.element);
 	opened.pitScale = 1.0f;
@@ -1706,7 +1706,7 @@ void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* 
 	// On an object, a crater where its flight first meets a top (PrintRayCS),
 	// at once: object snow is too thin to dig through over a moment.
 	QueueObjectSpellMarkFor(a_blast.position, a_blast.position + a_blast.direction * std::max(a_blast.landingReach, kBlastLandingReach), a_blast.radius,
-		MarkForElement(a_blast.element), 1.0f, 0.0f, a_blast.pitScale, kPrintSpellRay);
+		MarkForElement(a_blast.element), 1.0f, 0.0f, a_blast.pitScale, kPrintSpellRay, std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold));
 
 	// A bolt dies between frames, so the last sighting sits short of the
 	// impact - the faster it flew, the shorter. Carrying the flight on to the
@@ -1756,6 +1756,7 @@ void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
 	printSpellMarks.clear();
+	ReplayHeldObjectSpellMarks(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 	// Live counts are re-counted below every frame. Event counts arrive from
 	// SINKS between frames, so a full reset turned each of those into a
 	// one-frame flash no eye could catch: "death events seen 0" never meant
@@ -2340,7 +2341,7 @@ void SnowDeformation::GatherSpellEmitters()
 			float castGroundZ = cast.position.z;
 			tes->GetLandHeight(cast.position, castGroundZ);
 			const float scaled = cast.radius * std::max(settings.BlastRadiusScale, 0.0f);
-			QueueObjectSpellMarkFor(cast.position, cast.position, scaled, MarkForElement(cast.element), 1.0f, 0.0f, 1.0f, 0u);
+			QueueObjectSpellMarkFor(cast.position, cast.position, scaled, MarkForElement(cast.element), 1.0f, 0.0f, 1.0f, 0u, std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold));
 			float strength = 0.0f;
 			float radius = 0.0f;
 			if (!GroundMark(cast.position.z - castGroundZ, scaled, strength, radius))

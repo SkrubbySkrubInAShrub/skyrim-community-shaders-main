@@ -822,7 +822,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("object_print_rim"), "Object Print Rim"), &settings.ObjectPrintRimWidth, 0.0f, 15.0f, "%.1f units");
 		if (auto _ttPrintRim = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (its set, Detail Relief and Detail Coverage) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
+			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (its set and Detail Coverage, at twice Detail Relief) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
 
 		{
 			const char* sets[] = { "By Snow Condition", "Powder", "Wet" };
@@ -1558,9 +1558,9 @@ void SnowDeformation::DrawSettings()
 				else
 					WrapTextF("Update pass: idle (skipped)");
 			} else {
-				static const char* kBlockerNames[8] = { "scroll", "stamps", "inject", "refill", "clear", "map-active", "verdict-stale", "contact" };
+				static const char* kBlockerNames[9] = { "scroll", "stamps", "inject", "refill", "clear", "map-active", "verdict-stale", "contact", "object spells" };
 				std::string held;
-				for (int bit = 0; bit < 8; bit++)
+				for (int bit = 0; bit < 9; bit++)
 					if (deformIdleBlockers & (1u << bit)) {
 						if (!held.empty())
 							held += ", ";

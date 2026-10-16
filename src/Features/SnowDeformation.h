@@ -401,7 +401,7 @@ public:
 		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
 		float CrustSpecular = 0.250f;
 		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
-		std::array<float, 3> CrustTint = { 0.588f, 0.863f, 1.000f };
+		std::array<float, 3> CrustTint = { 0.8235f, 0.8745f, 0.8980f };
 		/** @brief Minutes a crust takes to thaw on its own, with no snowfall at all. Ice answers to temperature rather than to weather, so this runs even under a clear sky where the refill has stopped. */
 		float CrustThawMinutes = 4.0f;
 		/** @brief How completely carving through a crust destroys it, against how deep the cut went. At 1 a shallow print barely dulls the glaze; higher values let any cut break the skin properly, which is what stops a trench through ice reading as a groove in ice cream. */
@@ -599,8 +599,8 @@ public:
 		uint32_t DeformMapResolution = 4096;
 		/** @brief Snow Trenches on Objects: the print map's texels a side (512, 1024 or 2048) at kPrintTexel units each, so the reach around the player is 11, 22 or 44 m. A quality-preset lever. */
 		uint32_t ObjectTrenchResolution = 2048;
-		/** @brief "Object Print Rim": how far past a print's edge, in units (0-15), the snow on an object is broken up: the trench detail reaches this far, fading out. 0 = the print's own edge only. */
-		float ObjectPrintRimWidth = 6.0f;
+		/** @brief "Object Print Rim": how far past a print's edge, in units (0-15), the snow on an object is broken up: the trench detail reaches this far at twice Detail Relief, fading out. 0 = the print's own edge only. */
+		float ObjectPrintRimWidth = 7.5f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 200.0f;
 		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
@@ -825,9 +825,15 @@ public:
 		float4 ShoutShape;
 		/** @brief Shout mark churn: x ShoutChurn, y ShoutStreakSize, z ShoutStreakLength, w spare. */
 		float4 ShoutChurn;
+		/** @brief The ground snow as drawn, which the body carve measures against: the shell's UndulationAmp, UndulationScale and accumulation depth scale (RimStyle.w). Mirror in DeformationUpdateCS.hlsl. */
+		float UndulationAmp;
+		float UndulationScale;
+		float AccumulationScale;
+		float DrawnPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, ContactCenter) == 12432, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, UndulationAmp) == 12544, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
 
 	/** @brief Lower smoothstep edge of a capsule stamp's falloff, in percent of its radius, before fresh snow and Snow Climate ease it (PerFrame::StampFalloffStart): 0 = the softest, widest banks; 100 = full depth to the edge. */
 	static constexpr float kTrenchWallSharpness = 66.0f;
@@ -4504,6 +4510,15 @@ protected:
 	ID3D11ComputeShader* printRayCS = nullptr;
 	/** @brief This frame's spell marks on object snow, from the producers in Spells.cpp; cleared where spellEmitters is. */
 	std::vector<PrintSpellMark> printSpellMarks;
+	/** @brief A one-shot mark sent again every frame for as long as its ground mark lasts, so a frame whose stamp is skipped cannot lose it; a cone's front runs out at speed. */
+	struct HeldPrintSpell
+	{
+		PrintSpellMark mark;
+		float age = 0.0f;
+		float life = 0.0f;
+		float speed = 0.0f;
+	};
+	std::vector<HeldPrintSpell> heldPrintSpells;
 	winrt::com_ptr<ID3D11Buffer> printSpellBuffer;
 	winrt::com_ptr<ID3D11ShaderResourceView> printSpellSRV;
 	winrt::com_ptr<ID3D11Buffer> printRayHitBuffer;
@@ -4591,8 +4606,12 @@ protected:
 	ID3D11ComputeShader* GetPrintRimCS();
 	ID3D11ComputeShader* GetPrintRayCS();
 	void ReleaseObjectPrintShaders();
-	/** @brief One spell mark on object snow this frame (PrintSpellMark), taken while there is room. */
-	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags);
+	/** @brief One spell mark on object snow this frame (PrintSpellMark), taken while there is room. a_hold > 0 sends it again every frame for that many seconds, a cone's front running out at a_speed. */
+	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f);
+	/** @brief The held marks into this frame's printSpellMarks, aged by a_deltaTime; called where printSpellMarks is cleared. */
+	void ReplayHeldObjectSpellMarks(float a_deltaTime);
+	/** @brief A held mark as it stands at the end of this frame: a cone cut back to its front. */
+	PrintSpellMark HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const;
 	/** @brief Queues one tile's copy into a free staging slot; false when none is free. */
 	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
 	/** @brief Folds finished copies into the store. */
@@ -4683,8 +4702,8 @@ protected:
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
 	std::vector<SpellEmitter> spellEmitters;
-	/** @brief The object-snow twin of a spell emitter (Snow Trenches on Objects), depth and reach as GatherStamps gives the ground's stamp: a melt at its strength and rate, a pit at Pit Depth over Pit Radius x a_pitScale unless a cone, a carve at Force Carve Depth. Crust and scorch leave no print. */
-	void QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags);
+	/** @brief The object-snow twin of a spell emitter (Snow Trenches on Objects), depth and reach as GatherStamps gives the ground's stamp: a melt at its strength and rate, a pit at Pit Depth over Pit Radius x a_pitScale unless a cone, a carve at Force Carve Depth. Crust and scorch leave no print. a_hold and a_speed as QueueObjectSpellMark's. */
+	void QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f);
 
 	/** @brief Last XY per projectile (formID), for the capsule sweep. */
 	std::unordered_map<uint32_t, float2> spellPrevPositions;
