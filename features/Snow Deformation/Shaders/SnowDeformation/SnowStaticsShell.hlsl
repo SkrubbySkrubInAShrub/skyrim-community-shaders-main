@@ -2662,9 +2662,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 #if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
 	// Trench detail tiles by parallax occlusion, the ground's own: the mask
 	// across the trench profile at the sheet point, the view ray marched
-	// through the detail heights and the point it meets shaded. Fire marks wear
-	// the wet set, shock and Force marks the powder set, as on the ground. The
-	// print twin runs it across a print's rim.
+	// through the detail heights and the point it meets shaded. Fire marks and
+	// impacts wear the wet set, impacts lifting the relief, as on the ground.
+	// The print twin runs it across a print's rim.
 #	ifdef SNOW_PATCH_DEFERRED
 	const float detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 #	else
@@ -2675,7 +2675,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float detailRelief = 0.0;
 	TrenchDetailTaps trenchTaps = (TrenchDetailTaps)0;
 	float detailHitH = 0.0;
-	float2 detailMarks = 0.0;
+	float detailWet = 0.0;
 	const float2 detailPlane = -normalWS.xy / max(normalWS.z, 0.1);
 	[branch] if (detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
@@ -2690,8 +2690,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		[branch] if (detailMask > 0.001)
 		{
 #	ifdef PATCH
-			detailMarks = smoothstep(kSpellMarkStart, 0.15, SampleDetailMarks(input.trenchGridLocal));
-			detailRelief = TrenchDetailRelief * detailMask * max(saturate(PatchSkinDepth(input.worldXY).x / 10.0), detailMarks.x) * TrampleDetailScale(input.worldXY, input.pixelDeform);
+			const float2 marks = SampleDetailMarks(input.trenchGridLocal);
+			const float meltWet = smoothstep(kSpellMarkStart, 0.15, marks.x);
+			detailWet = max(meltWet, marks.y);
+			detailRelief = TrenchDetailRelief * detailMask * max(saturate(PatchSkinDepth(input.worldXY).x / 10.0), meltWet) * TrampleDetailScale(input.worldXY, input.pixelDeform) *
+			               (1.0 + kImpactReliefBoost * marks.y);
 #	else
 			// The patch's thin-cover rule at the dent's depth, up to the full
 			// relief where the rim is strong; prints take twice the slider.
@@ -2705,7 +2708,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float3 dir = normalize(input.WorldPos);
 		const float4 duv = TrenchDetailStep(trenchTaps, dir.xy);
 		float t = TrenchDetailParallaxT(dir, detailPlane, trenchTaps, duv,
-			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(input.CurrentClip.w / 1500.0))), detailMarks, input.screenNoise);
+			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(input.CurrentClip.w / 1500.0))), detailWet, input.screenNoise);
 		detailHitH = (dir.z - dot(dir.xy, detailPlane)) * t;
 		shadePos = input.WorldPos + dir * t;
 		input.worldXY += dir.xy * t;
@@ -2821,7 +2824,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// ground's gradient, so the two agree where they meet.
 	[branch] if (detailRelief > 0.001)
 	{
-		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) + TrenchDetailGrad(trenchTaps, detailLod, detailMarks) * detailRelief;
+		const float2 g = -normalWS.xy / max(normalWS.z, 0.1) + TrenchDetailGrad(trenchTaps, detailLod, detailWet) * detailRelief;
 		normalWS = normalize(float3(-g, 1.0));
 	}
 #endif
@@ -2841,7 +2844,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		printLit = SnowPrints::DentSunShadow(printAt, SharedData::DirLightDirection.xyz, -frameNormalWS.xy / max(frameNormalWS.z, 0.1), kPrintDentDepth,
 			SnowParallax.y * printTop, screenNoise);
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001)
-		printLit *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, SharedData::DirLightDirection.xyz, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise),
+		printLit *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, SharedData::DirLightDirection.xyz, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailWet, screenNoise),
 			TrenchDetailShadow);
 #endif
 
@@ -3203,7 +3206,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 #ifdef PATCH
 	// The trench detail shadows itself, as on the ground.
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise), TrenchDetailShadow);
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailWet, screenNoise), TrenchDetailShadow);
 #endif
 #ifdef SNOW_OBJECT_PRINTS
 	sunShadow *= printLit;

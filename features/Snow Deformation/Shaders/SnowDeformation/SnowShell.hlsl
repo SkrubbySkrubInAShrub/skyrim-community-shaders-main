@@ -1916,24 +1916,27 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// snow set's own maps, glints and lights. Fades out with the march and
 	// into an object's coat where the two meet; its relief also with thin
 	// cover and on trampled floors. Snow fire has melted (its marks, the heat
-	// round fires) wears the wet set at full relief; a shock's scorch and a
-	// Force shove wear the powder set.
+	// round fires) wears the wet set at full relief; an impact (a sprint, a
+	// landing, a strike, a shove) blends toward it by how hard it hit and lifts
+	// the relief up to 1.5x on top of the thin-cover and trampled rules.
 	const float detailFade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
 	float detailMask = 0.0;
 	float detailRelief = 0.0;
 	TrenchDetailTaps detailTaps = (TrenchDetailTaps)0;
 	float detailLod = 0.0;
 	float detailHitH = 0.0;
-	float2 detailMarks = 0.0;
+	float detailWet = 0.0;
 	const float2 detailPlane = gradZ;
 	float3 shadePos = input.WorldPos;
 #if defined(SNOW_NOISE_TABLE)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		detailMask = TrenchDetailMask(pixelCarve, BermFieldPair(gridLocal), TrenchDetailCoverage) * detailFade * (1.0 - objectMeet.x);
-		detailMarks = smoothstep(kSpellMarkStart, 0.15, SampleDetailMarks(gridLocal));
-		detailMarks.x = max(detailMarks.x, smoothstep(0.1, 0.4, pixelMelt));
-		detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), detailMarks.x) * TrampleDetailScale(worldXYPS, pixelCarve);
+		const float2 marks = SampleDetailMarks(gridLocal);
+		const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
+		detailWet = max(meltWet, marks.y);
+		detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
+		               (1.0 + kImpactReliefBoost * marks.y);
 		detailTaps = TrenchDetailTapsAt(worldXYPS);
 		detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 	}
@@ -1942,7 +1945,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float3 dir = normalize(input.WorldPos);
 		const float4 duv = TrenchDetailStep(detailTaps, dir.xy);
 		float t = TrenchDetailParallaxT(dir, detailPlane, detailTaps, duv,
-			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(shellZ / 1500.0))), detailMarks, screenNoise);
+			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(shellZ / 1500.0))), detailWet, screenNoise);
 		detailHitH = (dir.z - dot(dir.xy, detailPlane)) * t;
 		shadePos = input.WorldPos + dir * t;
 		worldXYPS += dir.xy * t;
@@ -1950,7 +1953,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		detailTaps.uv += duv * t;
 	}
 	[branch] if (detailRelief > 0.001)
-		gradZ += TrenchDetailGrad(detailTaps, detailLod, detailMarks) * detailRelief;
+		gradZ += TrenchDetailGrad(detailTaps, detailLod, detailWet) * detailRelief;
 #endif
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
@@ -2309,7 +2312,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// met, through the detail heights, as strong as Parallax Shadow makes the
 	// snow texture's.
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailMarks, screenNoise), TrenchDetailShadow);
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailWet, screenNoise), TrenchDetailShadow);
 #endif
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;

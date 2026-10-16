@@ -74,8 +74,10 @@ public:
 	static constexpr float kStampModeBowl = 20.0f;
 	/** @brief Added to a carve made by a body (feet, limbs, a body's own shapes): Snow Resistance and its trampled fade apply per texel. Decoded before BOWL and CONE; TrenchStore's carve test strips it. Mirrored by STAMP_MODE_BODY in DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeBody = 40.0f;
-	/** @brief A fraction on a spell carve's mode: a shove (Force), which StampCS records in the map's .w so the trench detail wears its powder set there. Under every decode's 0.5 threshold, so each still reads a carve. Mirrored by STAMP_MODE_SHOVE in DeformationUpdateCS.hlsl. */
-	static constexpr float kStampModeShove = 0.25f;
+	/** @brief A stamp's impact energy (0-1) rides its mode as a fraction, energy x this: under every decode's 0.5 threshold, so each mode still reads as itself. StampCS records it in the map's .w, where the trench detail turns to its wet (clod) set and its relief rises. Mirrored by STAMP_IMPACT_SCALE in DeformationUpdateCS.hlsl. */
+	static constexpr float kStampImpactScale = 0.45f;
+	/** @brief A shove (Force) carries the full impact energy. */
+	static constexpr float kStampModeShove = kStampImpactScale;
 	/** @brief Cap on spell emitters STAMPED per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 	/**
@@ -3924,7 +3926,7 @@ protected:
 	/** @brief Stamp-set changes over the same window, split by mechanism: count changed (a stamp appeared or vanished - the plant-band flicker signature) vs drift (a matched stamp moved past tolerance). Published with the rate. */
 	uint32_t stampSetCountChanges = 0, stampSetDriftChanges = 0;
 	uint32_t stampSetTallyCount = 0, stampSetTallyDrift = 0;
-	/** @brief Changed-texel counts from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. Per channel, the counts name the term (depth / melt-scorch / crust-shove). */
+	/** @brief Changed-texel counts from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. Per channel, the counts name the term (depth / melt-scorch / crust-impact). */
 	uint32_t deformChangedTexels = 0;
 	uint32_t deformChangedDepth = 0;
 	uint32_t deformChangedMelt = 0;
@@ -3934,7 +3936,7 @@ protected:
 	/** @brief Bounding box of the changed texels (map coords), from the same verdict. Valid while count > 0. A few hundred churning texels are sub-pixel in the 512 view; the box is what makes them findable. */
 	uint32_t deformChangedMinX = 0, deformChangedMinY = 0;
 	uint32_t deformChangedMaxX = 0, deformChangedMaxY = 0;
-	/** @brief Runtime-only: the update CS paints result-vs-carried per texel (R depth, G melt/scorch, B crust|shove mark) into a map-sized RGBA8 shown in the menu. Answers WHERE the map claims to be evolving. */
+	/** @brief Runtime-only: the update CS paints result-vs-carried per texel (R depth, G melt/scorch, B crust|impact energy) into a map-sized RGBA8 shown in the menu. Answers WHERE the map claims to be evolving. */
 	bool debugActivityView = false;
 	winrt::com_ptr<ID3D11Texture2D> activityViewTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> activityViewSRV;
@@ -4050,7 +4052,7 @@ protected:
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
 	std::vector<uint8_t> trenchInjectScratch;
 
-	/** @brief Single-channel copy of the map's displaced depth, for the menu. The map itself cannot be shown honestly: ImGui blends by alpha and the map's .w is the Force shove mark, so drawing it directly renders depth through that mark and reads blank right after a load (the mark is never stored). R8_UNORM samples as (depth,0,0,1), so this one cannot lie. */
+	/** @brief Single-channel copy of the map's displaced depth, for the menu. The map itself cannot be shown honestly: ImGui blends by alpha and the map's .w is the impact energy, so drawing it directly renders depth through that energy and reads blank right after a load (the energy is never stored). R8_UNORM samples as (depth,0,0,1), so this one cannot lie. */
 	winrt::com_ptr<ID3D11Texture2D> trenchDebugTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDebugSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> trenchDebugUAV;
@@ -5469,3 +5471,15 @@ protected:
 	};
 	std::unordered_map<uint32_t, CorpseRest> corpseRestStates;
 };
+
+	/** @brief Impact energy per living actor (formID): where its root was and when, its smoothed ground speed, and the fastest fall since it left the ground. */
+	struct ImpactTrack
+	{
+		RE::NiPoint3 prev;
+		double time = 0.0;
+		float speed = 0.0f;
+		float fall = 0.0f;
+		bool seen = false;
+		bool wasInAir = false;
+	};
+	std::unordered_map<uint32_t, ImpactTrack> impactTracks;

@@ -55,8 +55,10 @@
 //         < 0  scorch, which keeps its berm and darkens the shell.
 //       Berm reads x - max(y, 0); scorch reads max(-y, 0).
 //   .z  crust: refrozen snow, resists carving and shades as ice.
-//   .w  a Force shove's mark: the trench detail wears its powder set there.
-//       Fades with the refill as melt does; never stored (RingCS zeroes it).
+//   .w  impact energy, 0-1: how hard something met the snow here (a sprint, a
+//       landing, a strike, a shove). The trench detail wears its wet (clod)
+//       set by it and its relief rises. Max-blended; fades with the refill;
+//       never stored (RingCS zeroes it).
 
 #include "SnowDeformation/SnowNoise.hlsli"
 
@@ -73,10 +75,10 @@
 // Added to a carve made by a body: Snow Resistance and its trampled fade
 // apply. Decoded before BOWL and CONE. Mirrored by kStampModeBody.
 #define STAMP_MODE_BODY 40.0
-// A fraction on a spell carve's mode: a shove (Force), recorded in .w. Under
-// every decode's 0.5 threshold, so all of them still read a carve. Mirrored
-// by kStampModeShove.
-#define STAMP_MODE_SHOVE 0.25
+// A stamp's impact energy rides its mode as a fraction, energy x this: under
+// every decode's 0.5 threshold, so each mode still reads as itself. Recorded
+// in .w. Mirrored by kStampImpactScale.
+#define STAMP_IMPACT_SCALE 0.45
 // Where a bowl carve stops holding full depth, as a fraction of its radius.
 // Zero: a scoured hollow has no floor at all, it curves from the middle. Its
 // own number rather than the melt bowl's, because that one is a FIRE knob and
@@ -401,7 +403,7 @@ groupshared uint gDeltaSum;
 groupshared uint gNonZero;
 
 // Debug: per-texel activity, painted only while the menu view is open.
-// R = depth, G = melt/scorch, B = crust or shove mark; brightness = how far past
+// R = depth, G = melt/scorch, B = crust or impact energy; brightness = how far past
 // stored precision the change is. Max-composed: the CPU clears it once per
 // frame and each executed pass folds its own delta in.
 RWTexture2D<float4> ActivityView : register(u2);
@@ -598,7 +600,7 @@ bool EvolveTexel(uint2 phys)
 	// melt basin from a dug trench.
 	float melted = carried.y;
 	float crust = carried.z;
-	float shove = carried.w;
+	float impact = carried.w;
 
 	{
 		// Wind-biased refill: recovery scales with the intact snow a few
@@ -636,7 +638,7 @@ bool EvolveTexel(uint2 phys)
 		// so it is also the one a night spent waiting would otherwise skip
 		// entirely - the glaze was still there in the morning.
 		crust = max(crust - refill - CrustThaw * GameDeltaTime, 0.0);
-		shove = min(max(shove - refill, 0.0), deformation);
+		impact = max(impact - refill, 0.0);
 
 		// Unsupported-snow slump: see the SLUMP_* block up top for the
 		// design. Runs on the snapshot, like the drift fetch above, and
@@ -690,7 +692,7 @@ bool EvolveTexel(uint2 phys)
 		}
 	}
 
-	float4 result = float4(deformation, melted, crust, shove);
+	float4 result = float4(deformation, melted, crust, impact);
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
@@ -977,7 +979,7 @@ bool StampTexel(uint2 phys)
 	float meltTarget = 0.0;
 	float meltRate = 0.0;
 	float scorch = max(-melted, 0.0);
-	float shove = carried.w;
+	float impact = carried.w;
 	float crustTarget = 0.0;
 	float crustRate = 0.0;
 	// How much of the standing crust gets smashed through this frame.
@@ -1048,6 +1050,7 @@ bool StampTexel(uint2 phys)
 				// than absent, and something heavy enough breaks through and
 				// takes the crust with it - StampEnds[i].w carries how much
 				// weight this shape puts through, unused by carves otherwise.
+		const float impactE = saturate((mode - floor(mode)) / STAMP_IMPACT_SCALE);
 				float force = saturate(StampEnds[i].w);
 				float resist = standingCrust * (1.0 - force);
 				float reach = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist);
@@ -1060,7 +1063,6 @@ bool StampTexel(uint2 phys)
 				else
 				{
 					carve = max(carve, printed);
-					shove = mode > 0.5 * STAMP_MODE_SHOVE ? max(shove, printed) : shove;
 				}
 
 				// Anything that CUTS a crust has broken the skin over it, not
@@ -1068,6 +1070,8 @@ bool StampTexel(uint2 phys)
 				// proportion to how deep it went. Without this a trench
 				// through ice keeps its polish all the way down and reads as
 				// a groove ploughed through ice cream.
+			// Impact energy over the stamp and the ring its throw lands in.
+			impact = max(impact, impactE * coneSoft * (1.0 - smoothstep(0.6, 1.3, edgeCoord)));
 				crustBreak = max(crustBreak, saturate(max(force, printed * CrustBreakOnCarve) * falloff));
 			}
 			else if (mode > 2.5)
@@ -1270,7 +1274,7 @@ bool StampTexel(uint2 phys)
 	crustNow = saturate(crustNow);
 
 	float4 result = float4(total,
-		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, min(shove, total));
+		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, saturate(impact));
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);

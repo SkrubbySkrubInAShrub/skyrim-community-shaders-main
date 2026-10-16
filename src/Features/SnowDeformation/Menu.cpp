@@ -810,7 +810,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_relief"), "Detail Relief"), &settings.TrenchDetailRelief, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttTdRelief = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches, on the ground and on roads. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening). 1 = as authored, 0 = off."));
+			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches, on the ground and on roads. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening), and rises up to 1.5x where something hit the snow hard. 1 = as authored, 0 = off."));
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_roughness"), "Detail Roughness"), &settings.TrenchDetailRoughness, 0.3f, 1.5f, "%.2fx");
 		if (auto _ttTdRough = Util::HoverTooltipWrapper())
@@ -830,7 +830,7 @@ void SnowDeformation::DrawSettings()
 			if (ImGui::Combo(T(TKEY("trench_detail_set"), "Detail Set"), &set, sets, 3))
 				settings.TrenchDetailSet = set == 2 ? 3 : set;
 			if (auto _ttTdSet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition follows the weather: powder on dry snow, fresh or settled, and wet as the snow turns wet, the one fading into the other. The others force one set for comparison."));
+				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition follows the weather: powder on dry snow, fresh or settled, and wet as the snow turns wet, the one fading into the other. Hard hits turn it toward the wet clods, the harder the more: a sprint, a dodge, a landing, a body knocked down, lightning, a Force shout. Fire turns it wet too. The others force one set for comparison; hits and fire still turn it wet."));
 			if (settings.TrenchDetailSet == 0) {
 				const float3 blend = TrenchDetailBlend();
 				if (blend.z > 0.005f)
@@ -1433,9 +1433,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &showDebugTexture);
 			if (showDebugTexture) {
 				// The map's own depth (TrenchDebugCS), copied to a single channel:
-				// ImGui blends by the texture's alpha, and the map's .w is the Force
-				// shove mark, so the map drawn directly shows only where a shove has
-				// been. This is the image that answers "did the trench reach the map".
+				// ImGui blends by the texture's alpha, and the map's .w is the impact
+				// energy, so the map drawn directly shows only where something hit
+				// the snow. This is the image that answers "did the trench reach the map".
 				WrapTextF("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
 				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
 				if (trenchDebugSRV)
@@ -1473,7 +1473,7 @@ void SnowDeformation::DrawSettings()
 			// verdict, so it lags the dispatch by the readback ring.
 			ImGui::Checkbox(T(TKEY("debug_activity_view"), "Update Activity View"), &debugActivityView);
 			if (debugActivityView) {
-				WrapTextF("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or shove mark. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
+				WrapTextF("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or impact energy. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
 				const ImVec2 activityTopLeft = ImGui::GetCursorScreenPos();
 				if (activityViewSRV)
 					ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
@@ -1496,7 +1496,7 @@ void SnowDeformation::DrawSettings()
 				// SlumpRate x 0.5 x dt (~0.0008 at defaults) and scales with the
 				// Snow Slumping slider; storage-precision creep is an order
 				// smaller and scales with nothing.
-				WrapTextF("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/shove %u), mean delta %.5f",
+				WrapTextF("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/impact %u), mean delta %.5f",
 					deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep,
 					deformChangedTexels > 0 ? (double)deformChangedDeltaSum * 1e-6 / (double)deformChangedTexels : 0.0);
 				if (bboxValid) {

@@ -247,6 +247,9 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 		const float stampMode = a_data.StampEnds[i].z;
 		if ((stampMode > kStampModeBody - 0.5f ? stampMode - kStampModeBody : stampMode) > 0.5f)
 			continue;
+		// An impact stamp carves nothing.
+		if (a_data.Stamps[i].z <= 0.0f)
+			continue;
 		cpuCensus.carveStampsTotal++;
 
 		const auto& s = a_data.Stamps[i];

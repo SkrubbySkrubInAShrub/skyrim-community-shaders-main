@@ -114,6 +114,18 @@ static constexpr float kMinPropStampRadius = 5.0f;
 // snow drifts) sit far above the land, and a land-height band starves
 // their stamps there.
 static constexpr float kFallSpeedGate = 300.0f;
+// Impact energy (kStampImpactScale): ground speed past a run, up to a dodge or
+// a gallop's share; a landing by its fall speed; a body down in the snow.
+// Units per second, seconds.
+static constexpr float kImpactSpeedFloor = 400.0f;
+static constexpr float kImpactSpeedSpan = 600.0f;
+static constexpr float kImpactSpeedMax = 0.75f;
+static constexpr float kImpactSpeedSmoothing = 0.1f;
+static constexpr float kImpactFallFloor = 250.0f;
+static constexpr float kImpactFallSpan = 600.0f;
+static constexpr float kImpactKnockedDown = 0.6f;
+static constexpr float kImpactStampMin = 0.03f;
+static constexpr float kImpactTrackGap = 0.25f;
 // Skeletons carry bones that are hidden or never composed for this race
 // (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
 // world transform at the origin. A capsule anchored on one combs a trench
@@ -828,6 +840,46 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// atronach races are all authored Walks and hover by animation instead,
 		// which is what ActorIsFloating below is for.
 		auto* charController = actor->GetCharController();
+		// Impact energy, tracked before the gates below can return and stamped
+		// once the actor has passed them all.
+		float impact = 0.0f;
+		RE::NiPoint3 impactFrom = position;
+		if (!isDead) {
+			if (impactTracks.size() > 512 && !impactTracks.contains(formID))
+				impactTracks.clear();
+			auto& track = impactTracks[formID];
+			const float dt = static_cast<float>(passClockSeconds - track.time);
+			if (!track.seen || dt > 1e-4f) {
+				const bool inAir = charController && (charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
+														 charController->context.currentState == RE::hkpCharacterStateType::kJumping ||
+														 charController->context.currentState == RE::hkpCharacterStateType::kFlying);
+				if (track.seen && dt < kImpactTrackGap && position.GetDistance(track.prev) < kFootDryTeleport) {
+					impactFrom = track.prev;
+					const float ground = std::hypot(position.x - track.prev.x, position.y - track.prev.y) / dt;
+					track.speed += (ground - track.speed) * (1.0f - std::exp(-dt / kImpactSpeedSmoothing));
+					if (inAir)
+						track.fall = std::max(track.fall, (track.prev.z - position.z) / dt);
+				} else {
+					track.speed = 0.0f;
+					track.fall = 0.0f;
+					track.wasInAir = inAir;
+				}
+				float landing = 0.0f;
+				if (track.wasInAir && !inAir) {
+					landing = std::clamp((track.fall - kImpactFallFloor) / kImpactFallSpan, 0.0f, 1.0f);
+					track.fall = 0.0f;
+				}
+				const auto knock = actor->AsActorState()->GetKnockState();
+				const bool down = knock == RE::KNOCK_STATE_ENUM::kDown || knock == RE::KNOCK_STATE_ENUM::kGetUp;
+				if (!inAir)
+					impact = std::max({ std::clamp((track.speed - kImpactSpeedFloor) / kImpactSpeedSpan, 0.0f, kImpactSpeedMax), landing,
+						down ? kImpactKnockedDown : 0.0f });
+				track.prev = position;
+				track.time = passClockSeconds;
+				track.seen = true;
+				track.wasInAir = inAir;
+			}
+		}
 		if (!isDead && !rasterCandidate && charController &&
 			(charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
 				charController->context.currentState == RE::hkpCharacterStateType::kFlying)) {
@@ -851,6 +903,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 			if (probing)
 				skeletonProbe.gapToLand = position.z - landZ;
+			// The map is 2D: an impact on a walkway would churn the trenches below.
+			if (position.z - landZ > kElevatedStampCutoff)
+				impact = 0.0f;
 			if (position.z - landZ > kElevatedStampCutoff && !rasterCandidate) {
 				if (probing)
 					skeletonProbe.verdict = "gated: elevated surface (above land cutoff)";
@@ -1130,6 +1185,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (probing)
 				skeletonProbe.verdict = "gated: alpha settling (newly seen actor)";
 			return;
+		}
+
+		// The impact as a stamp that carves nothing: its energy rides the mode
+		// over the actor's path this frame, out past its feet.
+		if (impact > kImpactStampMin && stampCount < actorCeiling) {
+			float4 stamp{};
+			stamp.x = position.x;
+			stamp.y = position.y;
+			stamp.z = 0.0f;
+			stamp.w = std::clamp(root->worldBound.radius * 0.45f, 16.0f, 120.0f);
+			perFrameData.Stamps[stampCount] = stamp;
+			perFrameData.StampEnds[stampCount] = { impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * impact, 0.0f };
+			stampCount++;
 		}
 
 		// S1: an actor inside the contact window carves by its skinned mesh
@@ -1942,6 +2010,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					 (pits ? 0.0f :
 							 (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate)) };
 		stampCount++;
+		// A strike's impact energy by how much of it reached the ground; a shove
+		// carries the full share in kStampModeShove.
+		if (pits)
+			perFrameData.StampEnds[stampCount].z += kStampImpactScale * (0.6f + 0.4f * std::clamp(emitter.strength, 0.0f, 1.0f));
 		stampStats.spells++;
 	}
 
