@@ -1833,7 +1833,7 @@
     "feature.snow_deformation.road_meshes_depth": "Road Meshes",
     "feature.snow_deformation.road_meshes_depth_tooltip": "Snow layer on road meshes; bridges are ordinary objects. Kept below the surrounding snow classes so the road's course stays readable through the snowfield.",
     "feature.snow_deformation.road_patch_far_level": "Road Snow To The Loaded Grid",
-    "feature.snow_deformation.road_patch_far_level_tooltip": "Carries the road surface past the Object Snow Shape Range to the edge of the loaded cells, from a coarser road-only height map (a texel is 12-16 units out there). Off, road snow beyond that range is the flat road skin, and the line where one hands to the other moves with you.",
+    "feature.snow_deformation.road_patch_far_level_tooltip": "Carries the road surface past the Object Height Map Range to the edge of the loaded cells, from a coarser road-only height map (a texel is 12-16 units out there). Off, road snow beyond that range is the flat road skin, and the line where one hands to the other moves with you.",
     "feature.snow_deformation.roads_group": "Roads",
     "feature.snow_deformation.rune_decals": "Rune Glyphs on Snow",
     "feature.snow_deformation.rune_decals_tooltip": "A rune's glyph is a decal the game lays on the ground, so deep snow covers it. With this on, the glyph is painted onto the snow over it instead, and leaves with the rune. Landscape snow only: a rune cast on a snowy road stays under the road's own snow. One on a rock or a wall is handled by Spell Marks Over Object Snow.",

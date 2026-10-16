@@ -715,14 +715,12 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	if (!anyUpdated) {
 		// Skipping is the measurement: an explicit zero, or the profiler
 		// keeps the stale window or retires the row.
-		globals::profiler->MarkPassSkipped("SnowDeformation::Volume - Scroll");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Volume - Raster");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Volume - Field");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Volume - Bake");
 	}
 
 	// ---- Occupancy: scroll + decay per rebuilding level ----
 	if (anyUpdated)
-		globals::profiler->BeginPass("SnowDeformation::Volume - Scroll");
+		globals::profiler->BeginPass("SnowDeformation::Volume - Bake");
 	for (uint L = 0; L < levels; L++) {
 		auto& lv = voxelLevels[L];
 		if (!lv.updated)
@@ -820,7 +818,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	// profiler row: with the field passes at a quarter of a millisecond,
 	// this is where the building's time goes.
 	if (anyUpdated)
-		globals::profiler->BeginPass("SnowDeformation::Volume - Raster");
+		globals::profiler->BeginPass("SnowDeformation::Volume - Bake");
 	if (anyUpdated) {
 		winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 		context->RSGetState(savedRaster.put());
@@ -937,7 +935,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	// passes then run in the air above surfaces, where the solid blocker
 	// (occupancy at t4) can stop them at a riser or a wall.
 	if (anyUpdated)
-		globals::profiler->BeginPass("SnowDeformation::Volume - Field");
+		globals::profiler->BeginPass("SnowDeformation::Volume - Bake");
 	const bool seedMaps = heightBottomFiltered && heightBottomFiltered->srv && objectSkyOpen && objectSkyOpen->srv;
 	for (uint L = 0; L < levels; L++) {
 		auto& lv = voxelLevels[L];

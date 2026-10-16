@@ -1046,7 +1046,7 @@ void SnowDeformation::BuildTerrainFineWindow()
 	context->CSSetShaderResources(8, 1, &src);
 	context->CSSetUnorderedAccessViews(5, 1, &dst, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
-	globals::profiler->BeginPass("SnowDeformation::Ground - Terrain Fine");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");
 	context->Dispatch((kShellFineDim + 7) / 8, (kShellFineDim + 7) / 8, 1);
 	globals::profiler->EndPass();
 	ID3D11Buffer* nullCB = nullptr;
@@ -1173,7 +1173,7 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	context->CSSetSamplers(0, 1, &sampler);
 	context->CSSetUnorderedAccessViews(0, 1, &windowUAV, nullptr);
 	context->CSSetShader(cs, nullptr, 0);
-	globals::profiler->BeginPass("SnowDeformation::Ground - Terrain Window");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
 	globals::profiler->EndPass();
 	shellTerrainVersion++;

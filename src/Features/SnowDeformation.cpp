@@ -1231,7 +1231,7 @@ void SnowDeformation::PrepassSimulation()
 	// half that grew: the spell branch walks the projectile manager, resolves
 	// records and queries land height per source, all on the render thread.
 	// Sequential rather than nested - the profiler tracks one current pass.
-	globals::profiler->BeginPass("SnowDeformation::Spells - Gather");
+	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 	GatherSpellEmitters();
 	globals::profiler->EndPass();
 
@@ -1403,11 +1403,7 @@ void SnowDeformation::PrepassSimulation()
 		// Skipping IS the measurement. Without an explicit zero the profiler
 		// keeps publishing the stale pre-skip window (or retires the row), so
 		// an idle pass still reads as costing full price.
-		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Scroll");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Accumulation - Tile Scan");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Accumulation - Evolve");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Stamps");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Berms");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 	}
 
 	// Evolve's own gate, inside a running frame: when its last full run
@@ -1506,7 +1502,7 @@ void SnowDeformation::PrepassSimulation()
 				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
 				context->CSSetShader(GetDeformationRingCS(), nullptr, 0);
-				globals::profiler->BeginPass("SnowDeformation::Trails - Map Scroll");
+				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
 				// The blood map shares the origin, so the same ring is cleared.
@@ -1522,7 +1518,7 @@ void SnowDeformation::PrepassSimulation()
 					}
 				}
 			} else {
-				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Scroll");
+				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
 
 			// Evolve reads a snapshot so its neighbour taps (slump support,
@@ -1535,7 +1531,7 @@ void SnowDeformation::PrepassSimulation()
 			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				globals::profiler->BeginPass("SnowDeformation::Accumulation - Snapshot");
+				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->CopyResource(scratch->resource.get(), map->resource.get());
 				globals::profiler->EndPass();
 
@@ -1547,7 +1543,7 @@ void SnowDeformation::PrepassSimulation()
 				ID3D11UnorderedAccessView* scanUAVs[2] = { evolveTileUAV.get(), evolveArgsUAV.get() };
 				context->CSSetUnorderedAccessViews(4, 2, scanUAVs, nullptr);
 				context->CSSetShader(GetDeformationScanEvolveCS(), nullptr, 0);
-				globals::profiler->BeginPass("SnowDeformation::Accumulation - Tile Scan");
+				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				const uint tilesPerAxis = deformMapDim / 8;
 				context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
 				globals::profiler->EndPass();
@@ -1562,12 +1558,11 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(3, 1, &listSRV);
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 				context->CSSetShader(GetDeformationEvolveCS(), nullptr, 0);
-				globals::profiler->BeginPass("SnowDeformation::Accumulation - Evolve");
+				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->DispatchIndirect(evolveArgsBuffer.get(), 0);
 				globals::profiler->EndPass();
 			} else {
-				globals::profiler->MarkPassSkipped("SnowDeformation::Accumulation - Tile Scan");
-				globals::profiler->MarkPassSkipped("SnowDeformation::Accumulation - Evolve");
+				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
 
 			// Stamps + waves RMW the texels evolve just wrote. Sustained
@@ -1603,23 +1598,23 @@ void SnowDeformation::PrepassSimulation()
 				if (tileCount == 0) {
 					// Every stamp lies outside the window; nothing to write.
 					stampDispatched = false;
-					globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Stamps");
+					globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 				} else if (tiled) {
 					ID3D11ShaderResourceView* tileSRV = stampTileSRV.get();
 					context->CSSetShaderResources(2, 1, &tileSRV);
 					context->CSSetShader(GetDeformationStampCS(), nullptr, 0);
-					globals::profiler->BeginPass("SnowDeformation::Trails - Stamps");
+					globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 					context->Dispatch(tileCount, 1, 1);
 					globals::profiler->EndPass();
 				} else {
 					context->CSSetShader(GetDeformationStampAllCS(), nullptr, 0);
-					globals::profiler->BeginPass("SnowDeformation::Trails - Stamps");
+					globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 					context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
 					globals::profiler->EndPass();
 				}
 			} else {
 				stampTilesLast = 0;
-				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Stamps");
+				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
 			// Field view, while the contact SRVs are still bound: the same
 			// texels the stamp pass just read, painted as it read them. The
@@ -1649,9 +1644,9 @@ void SnowDeformation::PrepassSimulation()
 		// each consuming its own mark. The toroidal layout is what makes the
 		// unrebuilt remainder stay valid across scrolls.
 		if (!bermFieldTexture) {
-			globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Berms");
+			globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 		} else {
-			globals::profiler->BeginPass("SnowDeformation::Trails - Berms");
+			globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 			ID3D11UnorderedAccessView* nullUav = nullptr;
 			// The dirty grid moves from UAV (writers) to SRV (scan).
 			context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
@@ -1699,7 +1694,7 @@ void SnowDeformation::PrepassSimulation()
 			// The untouched tiles, from the map's and the berm's occupancy as
 			// they stand after this frame's writers.
 			if (auto* untouchedCS = GetUntouchedTilesCS()) {
-				globals::profiler->BeginPass("SnowDeformation::Ground - Untouched Tiles");
+				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				ID3D11UnorderedAccessView* nullTileUavs[4] = {};
 				context->CSSetUnorderedAccessViews(0, 4, nullTileUavs, nullptr);
 				ID3D11ShaderResourceView* occSrvs[2] = { occupancySRV.get(), bermOccupancySRV.get() };
@@ -1951,7 +1946,7 @@ void SnowDeformation::UpdateUndulationField()
 {
 	auto context = globals::d3d::context;
 	if (!undulationFieldTexture || !undulationFieldCB || !context) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Undulation");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Field Bakes");
 		return;
 	}
 
@@ -1969,16 +1964,16 @@ void SnowDeformation::UpdateUndulationField()
 	                   snapped.x != undulationFieldCenter.x || snapped.y != undulationFieldCenter.y ||
 	                   scale != undulationFieldBakedScale;
 	if (!dirty) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Undulation");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Field Bakes");
 		return;
 	}
 	auto* cs = GetUndulationFieldCS();
 	if (!cs) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Undulation");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Field Bakes");
 		return;
 	}
 
-	globals::profiler->BeginPass("SnowDeformation::Ground - Undulation");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");
 	UndulationFieldCB cbData{};
 	cbData.FieldOriginWorld = { snapped.x - kUndulationFieldHalfExtent + 0.5f * kUndulationFieldTexel,
 		snapped.y - kUndulationFieldHalfExtent + 0.5f * kUndulationFieldTexel };

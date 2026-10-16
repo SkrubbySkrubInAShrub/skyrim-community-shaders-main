@@ -553,7 +553,7 @@ void SnowDeformation::UpdateTerrainWet()
 	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv || !shellTerrainWet || !shellTerrainWet->uav)
 		return;
 	auto context = globals::d3d::context;
-	globals::profiler->BeginPass("SnowDeformation::Ground - Terrain Cut");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");
 	ID3D11Buffer* cb = shellCB->CB();
 	context->CSSetConstantBuffers(0, 1, &cb);
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
@@ -926,7 +926,7 @@ void SnowDeformation::TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11Shad
 	ID3D11DepthStencilView* rawDSV = nullptr;
 	a_context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
 	a_context->OMSetRenderTargets(0, nullptr, nullptr);
-	globals::profiler->BeginPass("SnowDeformation::Ground - Depth Copy");
+	globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
 	DepthSyncRectCB rectData{ { preSnowRect.left, preSnowRect.top }, { preSnowRect.right - preSnowRect.left, preSnowRect.bottom - preSnowRect.top } };
 	depthSyncRectCB->Update(rectData);
 	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
@@ -1444,19 +1444,18 @@ void SnowDeformation::SyncSssDepth()
 	auto* syncCS = (early && marchFirst && marched) ? GetSssSyncCS() : nullptr;
 	if (!syncCS || !shellRasterDepth || !shellRasterDepth->srv || !rasterSized(blended) || !rasterSized(shellEarlyMarks) || !GetSssRestoreCS() ||
 		!DepthSyncRectBuffer()) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shadow Depth Sync");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shadow Depth Restore");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Snow Depth Sync");
 		return;
 	}
 	shellSssRect = ScreenRectBox(&shellEarlyViewport, blended->desc.Width, blended->desc.Height, 0);
-	DispatchSssDepth(syncCS, "SnowDeformation::Ground - Shadow Depth Sync");
+	DispatchSssDepth(syncCS, "SnowDeformation::Shadows - Snow Depth Sync");
 	shellSssSyncFrame = frame;
 }
 
 void SnowDeformation::RestoreSssDepth()
 {
 	if (shellSssSyncFrame == globals::state->frameCount)
-		DispatchSssDepth(GetSssRestoreCS(), "SnowDeformation::Ground - Shadow Depth Restore");
+		DispatchSssDepth(GetSssRestoreCS(), "SnowDeformation::Shadows - Snow Depth Sync");
 }
 
 void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_pass)
@@ -1562,7 +1561,7 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	// The march times its own row; profiler passes do not nest.
 	globals::profiler->EndPass();
 	ss.DrawShadows();
-	globals::profiler->BeginPass("SnowDeformation::Objects - Shadow Depth Restore");
+	globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Depth Sync");
 	dispatch(GetSkinSssRestoreCS());
 	// The UAV writes unbound the blended depth (PS t3) and the mask (PS t45).
 	ID3D11ShaderResourceView* maskSRV = ss.screenSpaceShadowsTexture->srv.get();
@@ -1974,7 +1973,7 @@ void SnowDeformation::DrawShell()
 		// Read by the shell PS (shellGround) and the skins (any capture) only.
 		if (masksRT.SRV && masksRT.texture && !nothingDraws) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
-			globals::profiler->BeginPass("SnowDeformation::Ground - Masks Copy");
+			globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
 			D3D11_TEXTURE2D_DESC masksDesc{};
 			masksRT.texture->GetDesc(&masksDesc);
 			const D3D11_BOX masksBox = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, masksDesc.Width, masksDesc.Height, 1);
@@ -1989,7 +1988,7 @@ void SnowDeformation::DrawShell()
 			}
 			globals::profiler->EndPass();
 		} else {
-			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Masks Copy");
+			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 		}
 		// The G-buffer before any snow, over the blood decals' rectangle: the
 		// overlay puts the decals' own contribution back over thin snow
@@ -2035,7 +2034,7 @@ void SnowDeformation::DrawShell()
 		}
 	}
 	if (!preSnowDepthThisFrame && !preSnowDepthDeferred)
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Copy");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.
@@ -2249,9 +2248,9 @@ void SnowDeformation::DrawShell()
 	const bool earlyMarks = ground && early && shellPSEarlyResolve && shellEarlyPending && shellEarlyMarks;
 	shellDeferredThisFrame = ground;
 	if (!ground) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell Shading");
 	} else {
-		globals::profiler->BeginPass("SnowDeformation::Ground - Shell Setup");
+		globals::profiler->BeginPass("SnowDeformation::Ground - Shell Shading");
 		auto splitRow = [&](const char* a_name) {
 			globals::profiler->EndPass();
 			globals::profiler->BeginPass(a_name);
@@ -2289,9 +2288,9 @@ void SnowDeformation::DrawShell()
 			context->Draw(3, 0);
 			ID3D11ShaderResourceView* nullRasterSRV = nullptr;
 			context->PSSetShaderResources(9, 1, &nullRasterSRV);
+			splitRow("SnowDeformation::Ground - Shell Shading");
 		}
 
-		splitRow("SnowDeformation::Ground - Shell Shading");
 		if (earlyMarks) {
 			// The pending pixels against this frame's land masks; every winner's
 			// depth into the main buffer under LESS_EQUAL, so one something drew
@@ -2457,7 +2456,7 @@ void SnowDeformation::DrawShell()
 	auto& tb = globals::features::terrainBlending;
 	const bool syncable = rasterMarks || preSnowDepthThisFrame;
 	if (!syncable)
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth Sync");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 	if (syncable && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
 		if (auto cs = GetDepthSyncCS(); cs && GetPreSnowCopyCS() && depthSyncRectCB) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
@@ -2477,7 +2476,7 @@ void SnowDeformation::DrawShell()
 			context->CSSetShaderResources(0, 3, syncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, syncUAVs, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::Ground - Depth Sync");
+			globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
 			context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
 			globals::profiler->EndPass();
 

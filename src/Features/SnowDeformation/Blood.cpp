@@ -806,7 +806,7 @@ void SnowDeformation::RenderRuneCapture()
 		return;
 	}
 
-	globals::profiler->BeginPass("SnowDeformation::Spells - Runes");
+	globals::profiler->BeginPass("SnowDeformation::Decals - Capture");
 	const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	context->ClearRenderTargetView(runeAtlasTexture->rtv.get(), zero);
 	ID3D11RenderTargetView* rtvs[1] = { runeAtlasTexture->rtv.get() };
@@ -1199,7 +1199,7 @@ void SnowDeformation::RenderBloodCapture()
 		return;
 
 	auto context = globals::d3d::context;
-	globals::profiler->BeginPass("SnowDeformation::Blood - Capture");
+	globals::profiler->BeginPass("SnowDeformation::Decals - Capture");
 	ID3D11RenderTargetView* rtvs[2] = { bloodMapTexture->rtv.get(), bloodClockTexture->rtv.get() };
 	context->OMSetRenderTargets(2, rtvs, nullptr);
 	context->OMSetBlendState(bloodBlendState.get(), nullptr, 0xFFFFFFFF);
@@ -1289,7 +1289,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodRectFrameValid = false;
 	decalMasksLast = 0;
 	if (bloodOverlays.empty()) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Blood - Overlay");
+		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		return;
 	}
 	const size_t decals = bloodOverlays.size();
@@ -1301,7 +1301,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	if (!DecalOverlayWanted() || !settings.ProjSnowMatch || !a_postSkinDepth || !copies || !EnsureBloodResources())
 		return;
 	auto* context = a_context;
-	globals::profiler->BeginPass("SnowDeformation::Blood - Overlay");
+	globals::profiler->BeginPass("SnowDeformation::Decals - Overlay");
 
 	winrt::com_ptr<ID3D11BlendState> savedBlend;
 	FLOAT savedBlendFactor[4]{};
