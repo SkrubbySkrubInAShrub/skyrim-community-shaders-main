@@ -3536,16 +3536,12 @@ void SnowDeformation::DrawCapturedStatics()
 	context->DSSetShaderResources(40, 1, &farTopSRV);
 	context->PSSetShaderResources(40, 1, &farTopSRV);
 	context->HSSetShaderResources(40, 1, &farTopSRV);
-	// Wide exclusion field (t15) + frost crystal patterns (t16/t17): the
-	// skin's self-shadow march and spell-mark shading read the landscape
-	// shell's slots; the skins draw standalone, so bind explicitly here.
+	// Wide exclusion field (t15): the skin's self-shadow march reads the
+	// landscape shell's slot; the skins draw standalone, so bind explicitly here.
 	ID3D11ShaderResourceView* skinExclusionSRV = GetExclusionFieldSRV();
 	context->PSSetShaderResources(15, 1, &skinExclusionSRV);
 	ID3D11ShaderResourceView* skinBloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, skinBloodSRVs);
-	EnsureFrostPatternTextures();
-	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
-	context->PSSetShaderResources(16, 2, skinFrostSRVs);
 	// The S4 shell's per-pixel footprint cut: vanilla's noise map (PS t21).
 	// Bound whenever it exists: the coat's contour is built from it, and the
 	// coat draws with the 3D rise off.

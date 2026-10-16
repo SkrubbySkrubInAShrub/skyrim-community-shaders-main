@@ -520,58 +520,6 @@ float SampleScorch(float2 gridLocal)
 	return saturate(-v.y);
 }
 
-// Crust at a point: refrozen snow, the map's third channel.
-// Scorch and crust read the SAME quad of the SAME texture at the same place -
-// one reads the negative part of .y, the other .z - so the shells fetch once
-// and split. Same texels, same weights, same order of operations as the two
-// helpers below, which are kept for any caller that needs only one.
-void SampleScorchCrust(float2 gridLocal, out float scorch, out float crust)
-{
-	scorch = 0.0;
-	crust = 0.0;
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
-
-	// Interpolate the quad ONCE, then split. Both originals interpolate
-	// before their saturate, and scorch negates after interpolating - doing
-	// it the other way round changes the answer wherever the quad straddles
-	// zero, which is exactly the rim of a scorch mark.
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	scorch = saturate(-v.y);
-	crust = saturate(v.z);
-}
-
-float SampleCrust(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float c00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).z;
-	float c10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).z;
-	float c01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).z;
-	float c11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).z;
-	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
-}
-
 // A fire or shock mark's weight (either half of .y). Magnitudes per tap, so a
 // melt beside a scorch cannot cancel.
 static const float kSpellMarkStart = 0.02;
@@ -934,63 +882,6 @@ float BermDepthGate(float depth)
 {
 	return smoothstep(3.0, 12.0, depth);
 }
-
-#if defined(PSHADER)
-// Frost pattern taps, shared by the normal, the albedo and the polish so the
-// texture is fetched once and the three always agree about where a crystal
-// is.
-struct FrostTaps
-{
-	float3 normal;   // tangent-space, x along +X, y along +Y
-	float crystal;   // 0 in the gaps, 1 on the crystal
-	bool valid;
-};
-
-// The lattice the stochastic sampler scatters over, kept inside float
-// precision. ComputeStochasticOffsets multiplies by WORLD_SCALE (332.54) and
-// the hash then multiplies by another 1271, both tuned for landscape UVs that
-// live in 0-1. World coordinates are five digits, so the product lands past
-// 1e8 - far beyond the ~1.6e7 where a float32 still has a fraction to take -
-// and frac() returns the same number across whole regions, which is a
-// stochastic sampler that has quietly stopped scattering.
-//
-// So the tile index is wrapped before it ever reaches the hash. The scatter
-// pattern then repeats every WRAP tiles, which at any sane crystal size is
-// tens of thousands of units away. DeformationUpdateCS guards its own noise
-// the same way and for the same reason.
-#define FROST_LATTICE_WRAP 512.0
-
-FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
-{
-	FrostTaps taps;
-	taps.normal = float3(0.0, 0.0, 1.0);
-	taps.crystal = 0.0;
-	taps.valid = false;
-
-	float2 tileUV = worldXY / max(tileSize, 4.0);
-	// Derivatives from the UNWRAPPED coordinate: the wrap below is a cliff one
-	// pixel wide, and a mip level chosen across it would band there.
-#if defined(SNOW_SHELL_DEFERRED) || defined(SNOW_PATCH_DEFERRED)
-	// ComputeTerrainStochasticLodBase's rule on the handed-in derivatives.
-	const float2 tileDx = gDeferredGridDx / max(tileSize, 4.0);
-	const float2 tileDy = gDeferredGridDy / max(tileSize, 4.0);
-	g_terrainStochasticLodBase = 0.5 * log2(max(min(dot(tileDx, tileDx), dot(tileDy, tileDy)), 1e-12)) + SharedData::MipBias;
-#else
-	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(tileUV);
-#endif
-	float2 wrapped = tileUV - FROST_LATTICE_WRAP * floor(tileUV / FROST_LATTICE_WRAP);
-
-	// Divided back out because the sampler expects a landscape UV and converts
-	// it to lattice cells itself; this hands it one cell per texture tile.
-	StochasticOffsets offsets = ComputeStochasticOffsets(wrapped / WORLD_SCALE);
-	float3 n = StochasticEffect(FrostPatternNormal, SnowSampler, wrapped, offsets).xyz * 2.0 - 1.0;
-	n.z = sqrt(saturate(1.0 - dot(n.xy, n.xy)));
-	taps.normal = n;
-	taps.crystal = saturate(StochasticEffect(FrostPatternDiffuse, SnowSampler, wrapped, offsets).x);
-	taps.valid = true;
-	return taps;
-}
-#endif  // PSHADER (frost)
 
 #if defined(PSHADER)
 // Land vertex AO, packed by the CPU window build into the terrain window's

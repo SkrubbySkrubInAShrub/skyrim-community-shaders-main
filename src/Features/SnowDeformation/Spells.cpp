@@ -353,6 +353,28 @@ static bool TraceGroundContact(RE::TES* a_tes, const RE::NiPoint3& a_origin,
 	return false;
 }
 
+// Where a stream from a_origin along a_direction first meets an object, by the
+// game's own collision on the projectile layer. False when the first thing it
+// meets is the land or an actor, or nothing within a_reach.
+static bool TraceStreamObjectHit(RE::TES* a_tes, const RE::NiPoint3& a_origin,
+	const RE::NiPoint3& a_direction, float a_reach, RE::NiPoint3& a_hit)
+{
+	const float toHavok = RE::bhkWorld::GetWorldScale();
+	const RE::NiPoint3 end = a_origin + a_direction * a_reach;
+	RE::bhkPickData pick{};
+	pick.rayInput.from = RE::hkVector4(a_origin.x * toHavok, a_origin.y * toHavok, a_origin.z * toHavok, 0.0f);
+	pick.rayInput.to = RE::hkVector4(end.x * toHavok, end.y * toHavok, end.z * toHavok, 0.0f);
+	pick.rayInput.filterInfo.SetCollisionLayer(RE::COL_LAYER::kProjectile);
+	a_tes->Pick(pick);
+	const RE::hkpCollidable* collidable = pick.rayOutput.rootCollidable;
+	if (!collidable || collidable->GetCollisionLayer() == RE::COL_LAYER::kTerrain)
+		return false;
+	if (auto* ref = RE::TESHavokUtilities::FindCollidableRef(*collidable); ref && ref->As<RE::Actor>())
+		return false;
+	a_hit = a_origin + (end - a_origin) * pick.rayOutput.hitFraction;
+	return true;
+}
+
 // Aim direction of whoever is casting, for streams whose projectile carries no
 // usable velocity.
 static bool ShooterAim(const RE::ObjectRefHandle& a_shooter, RE::NiPoint3& a_direction)
@@ -2252,6 +2274,15 @@ void SnowDeformation::GatherSpellEmitters()
 		// On an object, wherever the stream first meets its top (PrintRayCS).
 		QueueObjectSpellMarkFor(position, position + direction * spellReach, kSpellContactRadius, MarkForElement(element), 1.0f,
 			std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest), kStreamPitScale, kPrintSpellRay);
+
+		// Held on something standing over the snow, the stream stops there, as
+		// its decal does: the land under or behind it is untouched. An object
+		// level with the snow's top counts as snow, as for Frost Marks on Snow.
+		RE::NiPoint3 objectHit{};
+		float objectSnowTop = 0.0f;
+		if (TraceStreamObjectHit(tes, position, direction, spellReach, objectHit) &&
+			!(SampleShellSurface(objectHit.x, objectHit.y, objectSnowTop) && objectHit.z <= objectSnowTop + kFrostDecalAboveSnow))
+			continue;
 
 		RE::NiPoint3 contact{};
 		if (TraceGroundContact(tes, position, direction, spellReach, contact)) {

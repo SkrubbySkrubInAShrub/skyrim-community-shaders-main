@@ -174,8 +174,8 @@ cbuffer ShellCB : register(b0)
 	// offset (624): SnowShadow.hlsli reads its zw for the sun cascades'
 	// REAL atlas slices. Do not drop them.
 	float4 SpellShading;
-	float4 CrustLook;
-	float4 CrustLook2;
+	float4 padCrustLook;
+	float4 padCrustLook2;
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
@@ -365,11 +365,9 @@ Texture2D<uint> UntouchedTiles : register(t57);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);
-// Wide exclusion field + frost crystal patterns; the landscape shell's slots
-// (t15-t17) and readers, bound by the skin draw.
+// Wide exclusion field: the landscape shell's slot (t15) and reader, bound by
+// the skin draw.
 Texture2D<float2> ExclusionFieldMap : register(t15);
-Texture2D<float4> FrostPatternNormal : register(t16);
-Texture2D<float4> FrostPatternDiffuse : register(t17);
 // Baked undulation field (UndulationFieldCS): x = height in world units,
 // yz = its +-kUndulationGradStep shading gradient, over UndulationFieldWindow.
 Texture2D<float4> UndulationFieldMap : register(t29);
@@ -726,10 +724,9 @@ float BermField(float2 gridLocal)
 	return BermFieldPair(gridLocal).x;
 }
 
-// Spell-mark readers (SampleScorch/SampleCrust/SampleMelted), the wide
-// exclusion field, kFireMeltFloor, Undulation, CarveProfile and the frost
-// pattern all live in SnowFields.hlsli, shared with the
-// landscape shell.
+// Spell-mark readers (SampleScorch/SampleMelted), the wide exclusion field,
+// kFireMeltFloor, Undulation and CarveProfile all live in SnowFields.hlsli,
+// shared with the landscape shell.
 
 #ifdef PATCH
 // B-spline bicubic deformation sample; the landscape shell's smoothing,
@@ -2596,7 +2593,7 @@ Texture2D<float> DbgSky : register(t51);
 
 
 // THE skin material and lighting, factored out of the skin's main: taps,
-// two-plane projection, parallax, normal map, frost/crust, RMAOS, cascades +
+// two-plane projection, parallax, normal map, RMAOS, cascades +
 // heightfield march + screen-space shadows, sun PBR, point lights,
 // skylighting.
 struct SkinShadeInput
@@ -2770,14 +2767,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
 	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
-	// The distance fade WITHOUT the crust flattening applied: the frost
-	// crystal replacing the powder grain must not fade with it.
-	const float bumpFadeRaw = bumpFade;
-	// Spell marks (landscape parity): crust flattens the powder
-	// grain here; albedo/polish/grazing terms follow below. Stable grid
-	// position for the fetch (round-31 lesson).
-	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
-	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 #ifdef SNOW_PATCH_DEFERRED
 	// The attribute pass's derivatives (the detail-parallax shift's own is
 	// dropped, as on the ground).
@@ -2946,20 +2935,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
-	// Frost crystal (landscape recipe): the pattern normal rides bumpFadeRaw
-	// so the crystal survives the crust's flattening of the powder grain.
-	FrostTaps frost;
-	frost.normal = float3(0.0, 0.0, 1.0);
-	frost.crystal = 0.0;
-	frost.valid = false;
-	const float frostAmount = (CrustLook2.w > 0.5) ? crustAmount * saturate(CrustLook2.y) : 0.0;
-	[branch] if (frostAmount > 0.001)
-	{
-		frost = SampleFrostPattern(worldXY, CrustLook2.z);
-		normalWS = normalize(normalWS +
-		                     (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
-	}
-
 #ifdef SNOW_RUNE_GLYPHS
 	// A rune's glyph on the road's snow; the landscape shell's recipe.
 #ifdef SNOW_PATCH_DEFERRED
@@ -3005,10 +2980,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 #else
 	const float wetRough = 0.0;
 #endif
-	[branch] if (crustAmount > 0.001)
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
-	[branch] if (frost.valid)
-		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frost.crystal), frostAmount);
 
 	// PBR response; identical constants to the terrain shell.
 	static const float kSnowRoughness = 0.6;
@@ -3029,20 +3000,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 #endif
 
-	// Crust polishes whatever the material ended up being; after the RMAOS
-	// block or an installed map silently discards it (landscape lesson).
-	[branch] if (crustAmount > 0.001)
-	{
-		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
-		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
-	}
-	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
+	// Wet print: after the RMAOS overwrite, which would discard it.
 	snowRoughness *= 1.0 - wetRough;
-	[branch] if (frost.valid)
-	{
-		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
-		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
-	}
 #ifdef SNOW_RUNE_GLYPHS
 	[branch] if (rune.colour.a > 0.004)
 	{
@@ -3277,14 +3236,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
 	float3 directSpecular = sunLit.directSpecular;
-
-	// Ice reads at GRAZING angles (landscape recipe): the one thing white
-	// snow cannot already be doing.
-	[branch] if (crustAmount > 0.001)
-	{
-		float grazing = pow(1.0 - satNdotV, 4.0);
-		directSpecular += grazing * crustAmount * CrustLook.w * SharedData::DirLightColor.xyz * sunShadow;
-	}
 
 	// Placed lights: same clustered path as the terrain shell, with each
 	// shadow-casting light's own map sampled at the skin/patch surface.

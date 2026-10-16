@@ -1126,7 +1126,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_frost"), "Frost"));
 		if (auto _ttFrost = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("spell_cat_frost_tooltip"), "Frost neither removes snow nor throws it aside - it refreezes what is there. Crusted snow bears weight, so tracks across it barely print, and it shades as ice rather than powder. Something heavy enough still breaks through."));
+			ImGui::Text("%s", T(TKEY("spell_cat_frost_tooltip"), "Frost neither removes snow nor throws it aside - it refreezes what is there. Crusted snow bears weight, so tracks across it barely print; something heavy enough still breaks through. What frost looks like is the game's own frost mark, on every snow surface."));
 		ImGui::Checkbox(T(TKEY("lift_frost"), "Raise Buried Frost Effects"), &settings.LiftFrostEffects);
 		if (auto _ttLift = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("lift_frost_tooltip"), "Lifts a wall of frost, and the small ice effects like it, up onto the snow standing over them instead of leaving them buried underneath it. Frost is the only school this happens to: fire melts its own hole and lightning pits one, so those sit in snow they have already taken away, while frost only hardens what is there and leaves the full layer on top of itself. This is the one thing in the whole feature that MOVES something belonging to the game, so it has its own switch."));
@@ -1141,20 +1141,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("crust_radius"), "Frost Crust Radius"), &settings.CrustRadius, 20.0f, 300.0f, "%.0f");
 		if (auto _ttCrustRadius = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("crust_radius_tooltip"), "Reach of a frost source that states none of its own: a frost cloak, a frost atronach's aura (scaled by Frost Atronach Reach) and a body frozen where it fell (scaled by its size). A spell that authors its own area, like Blizzard, uses that instead and ignores this; a held stream keeps its own small reach."));
-
-		ImGui::InputText(T(TKEY("frost_texture_path"), "Frost Texture"), &settings.FrostTexturePath);
-		if (auto _ttFrostTex = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("frost_texture_path_tooltip"), "DDS path (relative to Data) the frost pattern is drawn from, with its _n companion beside it carrying the crystal structure. It must be a TILEABLE surface - a landscape or cave ice texture - rather than a decal: a decal has its content in the middle and nothing at the edges because it is meant to be printed once, so scattering copies of one only ever gives clumps with gaps between them. Press Reload after changing it."));
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("reload_frost_texture"), "Reload"))) {
-			frostPatternNormalSRV = nullptr;
-			frostPatternDiffuseSRV = nullptr;
-			frostPatternAttempted = false;
-		}
-
-		ImGui::SliderFloat(T(TKEY("frost_pattern"), "Frost Crystal Detail"), &settings.FrostPatternStrength, 0.0f, 2.0f, "%.2f");
-		if (auto _ttFrostPat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("frost_pattern_tooltip"), "Rime crystal picked out on crusted snow, drawn from the Frost Texture above (frozen marsh ice by default). This is the surface STRUCTURE only - the polish, colour and sheen that make crusted snow read as ice are separate knobs and are untouched. It is sampled without tiling, so a sheet laid by Blizzard or a breath will not show a grid across it however wide it gets."));
 
 		ImGui::PushID("spell_cat_frost");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
@@ -1173,34 +1159,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("crust_break_radius"), "Frost Break Weight"), &settings.CrustBreakRadius, 8.0f, 120.0f, "%.0f");
 			if (auto _ttCrustBreak = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("crust_break_radius_tooltip"), "Only creatures that carve by stamps read this: those beyond about 44 m from you or past the 16 nearest, such as a distant mammoth or a landing dragon. It is the size a body part must reach before it breaks through a crust instead of printing on it, standing in for weight: low values let anything shatter the glaze, high values let a mammoth walk on it. Nearer creatures carve by their own mesh and always print on a crust at Frost Print Depth."));
-
-			ImGui::SliderFloat(T(TKEY("frost_pattern_scale"), "Frost Crystal Size"), &settings.FrostPatternScale, 16.0f, 512.0f, "%.0f");
-			if (auto _ttFrostScale = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("frost_pattern_scale_tooltip"), "How large the crystal pattern is on the ground. Not a repeat distance - the sampling scatters the texture so there is no repeat to find - just how big the frost structure reads."));
-
-			ImGui::SliderFloat(T(TKEY("crust_gloss"), "Frost Ice Look"), &settings.CrustGloss, 0.0f, 1.0f, "%.2f");
-			if (auto _ttCrustGloss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_gloss_tooltip"), "How strongly crusted snow reads as ice. 0 leaves it looking like ordinary snow that happens to resist footprints."));
-
-			ImGui::SliderFloat(T(TKEY("crust_normal_flatten"), "Frost Ice Smoothness"), &settings.CrustNormalFlatten, 0.0f, 1.0f, "%.2f");
-			if (auto _ttCrustFlat = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_normal_flatten_tooltip"), "How far a crust flattens the snow's own surface grain. This is the strongest of the ice cues by a wide margin - powder reads as grain and ice reads as a sheet, so smoothing the surface says frozen over far louder than any change to shine or colour. Turn this down first if the ice reads too strongly."));
-
-			ImGui::SliderFloat(T(TKEY("crust_roughness"), "Frost Ice Roughness"), &settings.CrustRoughness, 0.02f, 0.60f, "%.2f");
-			if (auto _ttCrustRough = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_roughness_tooltip"), "Surface roughness of fully crusted snow. Loose snow sits near 0.6; lower values tighten the highlight into a glassy sheet. Needs a light source at a grazing angle to show, so judge it in sunlight rather than under cloud."));
-
-			ImGui::SliderFloat(T(TKEY("crust_sheen"), "Frost Ice Sheen"), &settings.CrustSheen, 0.0f, 3.0f, "%.2f");
-			if (auto _ttCrustSheen = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_sheen_tooltip"), "Brightness of the glancing-angle sheen, where a frozen sheet catches the sky and powder does not. Snow is already almost white, so ordinary shine has nowhere left to go - this is the strongest ice cue after smoothness, and the one to reach for if the glaze still reads flat."));
-
-			ImGui::SliderFloat(T(TKEY("crust_specular"), "Frost Ice Shine"), &settings.CrustSpecular, 0.0f, 0.50f, "%.3f");
-			if (auto _ttCrustSpec = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_specular_tooltip"), "How strongly crusted snow reflects. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible next to it - this is a look knob rather than a measurement, so push it until the glaze reads."));
-
-			ImGui::ColorEdit3(T(TKEY("crust_tint"), "Frost Ice Tint"), settings.CrustTint.data());
-			if (auto _ttCrustTint = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_tint_tooltip"), "Colour multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; pure white leaves the colour alone entirely and lets the smoothness and shine carry it."));
 
 			ImGui::SliderFloat(T(TKEY("atronach_frost_reach"), "Frost Atronach Reach"), &settings.AtronachFrostReach, 0.25f, 4.0f, "%.2fx");
 			if (auto _ttAtroFrost = Util::HoverTooltipWrapper())

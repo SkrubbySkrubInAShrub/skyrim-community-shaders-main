@@ -390,18 +390,6 @@ public:
 		float CrustRadius = 90.0f;
 		/** @brief Depth a boot still prints on fully crusted snow, as a fraction of loose snow. NOT zero: actors stand on terrain while the shell floats above them, so a crust that takes no print at all buries feet inside apparent ice. */
 		float CrustPrintDepth = 0.20f;
-		/** @brief How icy crusted snow shades: 0 leaves it looking like powder, 1 gives the full polish. */
-		float CrustGloss = 1.0f;
-		/** @brief Roughness of fully crusted snow. Lower is glassier; snow sits near 0.6. */
-		float CrustRoughness = 0.25f;
-		/** @brief How far a crust flattens the snow's own normal map. The strongest of the ice cues by a distance: powder reads as grain and ice reads as a sheet, so smoothing the surface says "frozen over" louder than reflectance or colour can. */
-		float CrustNormalFlatten = 0.75f;
-		/** @brief Brightness of the grazing-angle sheen on crusted snow. Snow is already near-white, so a specular lobe has almost no headroom above it; a sheet catching the sky at a glancing angle is the one thing powder cannot do, and this is the strongest ice cue after smoothness. */
-		float CrustSheen = 1.50f;
-		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
-		float CrustSpecular = 0.250f;
-		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
-		std::array<float, 3> CrustTint = { 0.8235f, 0.8745f, 0.8980f };
 		/** @brief Minutes a crust takes to thaw on its own, with no snowfall at all. Ice answers to temperature rather than to weather, so this runs even under a clear sky where the refill has stopped. */
 		float CrustThawMinutes = 4.0f;
 		/** @brief How completely carving through a crust destroys it, against how deep the cut went. At 1 a shallow print barely dulls the glaze; higher values let any cut break the skin properly, which is what stops a trench through ice reading as a groove in ice cream. */
@@ -444,20 +432,6 @@ public:
 		float ShoutStreakSize = 8.0f;
 		/** @brief Length of a churn streak as a multiple of its width, along the shout. */
 		float ShoutStreakLength = 1.0f;
-		/**
-		 * @brief DDS the frost pattern is drawn from, relative to Data.
-		 *
-		 * Must be a TILEABLE surface, hence a landscape texture rather than a
-		 * decal: a decal carries its content in the middle and nothing at the
-		 * edges, so the stochastic sampler can only produce clumps with gaps.
-		 * Editable because every modlist has different ice. The `_n` companion
-		 * beside it carries the crystal structure.
-		 */
-		std::string FrostTexturePath = "Textures\\Landscape\\frozenmarshice01.dds";
-		/** @brief How strongly the frost pattern shows on crusted snow. This is the CRYSTAL detail; the polish, colour and sheen that make it read as ice are the knobs below and are untouched by it. */
-		float FrostPatternStrength = 1.0f;
-		/** @brief World units across one tile of the frost pattern. Sampled stochastically, so this sets the size of the crystal detail rather than the size of a repeat - there is no repeat. */
-		float FrostPatternScale = 96.0f;
 		/**
 		 * @brief Raise buried frost effects onto the snow surface instead of leaving them under it.
 		 *
@@ -1698,12 +1672,11 @@ public:
 		/** @brief Parallax on the shells: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = self-shadow strength (0 disables the taps), z = occlusion depth multiplier (0 disables the march, landscape shell only), w spare (the retired Screen-Space Parallax Trenches' reach). */
 		float4 SnowParallax;
 
-		/** @brief x = how dark a shock discharge burns the snow it struck, y = crust shading strength, z = crust roughness, w = how far crust flattens the snow normal map. Mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
+		/** @brief x = how dark a shock discharge burns the snow it struck; yzw spare (the retired crust look), uploaded as 0. Mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
 		float4 SpellShading;
-		/** @brief x = reflectance of fully crusted snow, yz = red and green of its colour cast, w = grazing-angle sheen strength. Mirror any change in SnowShell.hlsl. */
-		float4 CrustLook;
-		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
-		float4 CrustLook2;
+		/** @brief Spare rows (the retired crust look), uploaded as 0 so BorderStyle keeps its offset. Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		float4 padCrustLook;
+		float4 padCrustLook2;
 		/** @brief xy layout keepers (the retired dust switch and trench floor), uploaded as 0; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
 		/** @brief x spare, uploaded as 0; yz = the land-blend contest's depth bonus and carve penalty; w = trench wall slough, 0-1: how far CarveProfile takes the berm field's short blur over the carve (Snow Climate). Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
@@ -2030,7 +2003,7 @@ public:
 	winrt::com_ptr<ID3D11DepthStencilState> arcDepthState;
 	winrt::com_ptr<ID3D11RasterizerState> arcRasterState;
 
-	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and frost textures - a second copy would drift. */
+	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and trench detail textures - a second copy would drift. */
 	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
 	ID3D11VertexShader* GetLightningArcVS();
 	ID3D11PixelShader* GetLightningArcPS();
@@ -4931,13 +4904,6 @@ protected:
 
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
-
-	/** @brief The frost pattern (Settings::FrostTexturePath, a tileable ice texture and its _n), painted onto crusted snow. Its normal map carries the crystal detail; the albedo is a faint whitening on top of it. */
-	winrt::com_ptr<ID3D11ShaderResourceView> frostPatternNormalSRV;
-	winrt::com_ptr<ID3D11ShaderResourceView> frostPatternDiffuseSRV;
-	bool frostPatternAttempted = false;
-	/** @brief Loads the frost pattern once, from Settings::FrostTexturePath; without its _n the crust keeps a smooth glaze. */
-	void EnsureFrostPatternTextures();
 
 	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.

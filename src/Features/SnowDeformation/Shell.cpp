@@ -146,34 +146,6 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 	return false;
 }
 
-void SnowDeformation::EnsureFrostPatternTextures()
-{
-	if (frostPatternAttempted)
-		return;
-	frostPatternAttempted = true;
-
-	// A TILEABLE surface, not a decal. The first attempt reached for the game's
-	// own frost impact art, which was the wrong kind of image: a decal carries
-	// its content in the middle and nothing at the edges, because it is printed
-	// once. Two offset copies of that blended together give clumps with gaps,
-	// which is precisely what it looked like. A landscape texture meets itself
-	// on every side, which is the thing the stochastic sampler assumes.
-	std::string chosen = settings.FrostTexturePath;
-	for (auto& pathChar : chosen)
-		if (pathChar == '/')
-			pathChar = '\\';
-	const std::string base = chosen.size() > 4 ? chosen.substr(0, chosen.size() - 4) : chosen;
-
-	// The normal is what actually matters - it carries the crystal - so the
-	// pattern counts as absent without one and the crust falls back to the
-	// smooth glaze it had before any of this.
-	if (!LoadGameDDS(base + "_n.dds", frostPatternNormalSRV)) {
-		logger::debug("SnowDeformation: no frost pattern normal at {}_n.dds; crust keeps its smooth glaze", base);
-		return;
-	}
-	LoadGameDDS(chosen, frostPatternDiffuseSRV);
-}
-
 void SnowDeformation::EnsureTrenchDetailTextures()
 {
 	if (trenchDetailAttempted)
@@ -1645,20 +1617,7 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
 		0.0f
 	};
-	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f),
-		std::clamp(settings.CrustGloss, 0.0f, 1.0f),
-		std::clamp(settings.CrustRoughness, 0.02f, 0.6f),
-		std::clamp(settings.CrustNormalFlatten, 0.0f, 1.0f) };
-	cbData.CrustLook = { std::clamp(settings.CrustSpecular, 0.0f, 0.5f),
-		settings.CrustTint[0], settings.CrustTint[1],
-		std::max(settings.CrustSheen, 0.0f) };
-	// yzw ride spare room already in this row rather than growing the shared
-	// constant buffer, which is hand-mirrored across two shaders and is the
-	// silent collision CLAUDE.md warns about.
-	cbData.CrustLook2 = { settings.CrustTint[2],
-		std::max(settings.FrostPatternStrength, 0.0f),
-		std::max(settings.FrostPatternScale, 4.0f),
-		frostPatternNormalSRV ? 1.0f : 0.0f };
+	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f), 0.0f, 0.0f, 0.0f };
 	// Fresh snow compacts instead of being thrown: little berm, no cut rim.
 	// Snow Climate moves each lever from that fixed look to the climate's.
 	const float snowSoftness = GetSnowSoftness();
@@ -2145,10 +2104,6 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(kNoiseHashSlot, 1, &noiseSRV);
 	ID3D11ShaderResourceView* trenchDetailSRVs[] = { trenchDetailNormalSRV.get(), trenchDetailHeightSRV.get() };
 	context->PSSetShaderResources(kTrenchDetailSlot, ARRAYSIZE(trenchDetailSRVs), trenchDetailSRVs);
-
-	EnsureFrostPatternTextures();
-	ID3D11ShaderResourceView* frostSRVs[] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
-	context->PSSetShaderResources(16, ARRAYSIZE(frostSRVs), frostSRVs);
 	// Wide exclusion field (t15): read by the surface evaluation and by the
 	// pixel-side melt overrides, so the same stages as the berm.
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();

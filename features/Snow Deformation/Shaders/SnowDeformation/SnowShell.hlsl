@@ -207,20 +207,11 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// march), w spare (the retired Screen-Space Parallax Trenches' reach).
 	float4 SnowParallax;
 
-	// x = scorch darkening strength, y = crust shading strength,
-	// z = roughness of fully crusted snow, w = how far crust flattens the
-	// snow normal map.
+	// x = scorch darkening strength; yzw spare (the retired crust look).
 	float4 SpellShading;
-
-	// x = reflectance of fully crusted snow, yz = its colour cast (red, green),
-	// w = grazing-angle sheen strength. Blue of the cast rides SpellShading is
-	// not needed - see CrustTintBlue below.
-	float4 CrustLook;
-	// x = blue of the crust colour cast. Its own row rather than crowding
-	// CrustLook, which the sheen took. y = frost pattern strength, z = its
-	// world tile size, w = whether the pattern loaded at all. Those three ride
-	// spare room here rather than growing a buffer mirrored across two shaders.
-	float4 CrustLook2;
+	// Spare: the retired crust look's rows, kept for the layout.
+	float4 padCrustLook;
+	float4 padCrustLook2;
 	// xy layout keepers; zw = sun cascades' REAL atlas slices (the shared
 	// atlas moves them with the active-light set).
 	float4 BorderStyle;
@@ -367,11 +358,6 @@ Texture2D<float2> BloodClock : register(t31);
 // a window that reaches the shell's own extent. The near mask at t5 still owns
 // the SHELTER term, which needs geometry and so cannot travel this far.
 Texture2D<float2> ExclusionFieldMap : register(t15);
-
-// The frost pattern (the Frost Texture setting: a tileable ice texture and
-// its _n), painted onto crusted snow.
-Texture2D<float4> FrostPatternNormal : register(t16);
-Texture2D<float4> FrostPatternDiffuse : register(t17);
 
 // Baked undulation field (UndulationFieldCS): x = height in world units,
 // yz = its +-kUndulationGradStep shading gradient, over UndulationFieldWindow.
@@ -642,7 +628,7 @@ float SampleDisplacedFast(float2 gridLocal)
 	return saturate(v.x - max(v.y, 0.0));
 }
 
-// SampleMelted / SampleScorch / SampleCrust live in SnowFields.hlsli
+// SampleMelted / SampleScorch live in SnowFields.hlsli
 //: both shells read the surface-state channels identically.
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
@@ -1976,27 +1962,9 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// agrees on the same anti-tiling offsets. Micro-relief fades with
 	// distance, where the grain frequency aliases instead of detailing.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
-	// The distance fade WITHOUT the crust flattening applied. The flattening
-	// exists to take the powder grain away; the frost crystal replacing it
-	// must not be taken away by the same term.
-	const float bumpFadeRaw = bumpFade;
-
-	// Crust, sampled once and used three times. Flattening the normal map is
-	// the strongest of the three by a distance: powder reads as grain, and ice
-	// reads as a SHEET, so smoothing the surface says "frozen over" far louder
-	// than any change to reflectance or colour can. Roughness and specular
-	// alone were nearly invisible without it.
-	// One quad fetch for both: the scorch read further down wants the same
-	// four texels of the same map at the same place, and both sites are
-	// unconditional, so sharing costs nothing and skips four loads.
-	float scorchRaw = 0.0, crustRaw = 0.0;
-	float crustAmount = 0.0;
+	float scorchRaw = 0.0;
 	[branch] if (!pixelUntouched)
-	{
-		SampleScorchCrust(gridLocal, scorchRaw, crustRaw);
-		crustAmount = saturate(crustRaw * SpellShading.y);
-		bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
-	}
+		scorchRaw = SampleScorch(gridLocal);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXYPS);
 	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
@@ -2073,22 +2041,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
 		normalWS = ShellLuminanceBump(normalWS, worldXYPS, bumpFade);
 
-	// Frost crystal, laid on top of the flattened powder grain rather than
-	// instead of it: the flattening is what reads as frozen over, this puts the
-	// rime back as its own structure. Fetched once and used three times below
-	// (normal, albedo, polish) - they must agree about where a crystal is.
-	FrostTaps frost;
-	frost.normal = float3(0.0, 0.0, 1.0);
-	frost.crystal = 0.0;
-	frost.valid = false;
-	const float frostAmount = (CrustLook2.w > 0.5) ? crustAmount * saturate(CrustLook2.y) : 0.0;
-	[branch] if (frostAmount > 0.001)
-	{
-		frost = SampleFrostPattern(worldXYPS, CrustLook2.z);
-		normalWS = normalize(normalWS +
-							 (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
-	}
-
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
 	// Snow material: the modlist's snow diffuse when available, otherwise a
@@ -2147,20 +2099,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float kSnowRoughness = 0.6;
 	float3 kSnowF0 = float3(0.028, 0.028, 0.028);
 
-	// Crust: refrozen snow shades as ice, not powder. All three cues are on
-	// sliders - physically honest values are far too subtle to see.
-	// ORDER: only the colour cast belongs here. Roughness and reflectance must
-	// be applied AFTER the RMAOS block below, which overwrites both from the
-	// snow material whenever a PBR set is installed.
-	[branch] if (crustAmount > 0.001)
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
-	// A whisper of the pattern in the albedo too, so the crystal reads even
-	// where nothing is catching a highlight. Kept faint on purpose: snow is
-	// already near white, so this can only ever darken the gaps between
-	// crystals rather than brighten the crystals themselves.
-	[branch] if (frost.valid)
-		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frost.crystal), frostAmount);
-
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
 	// roughness / metallic / AO / specular level), with the landscape
 	// config's authored scales.
@@ -2177,29 +2115,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Trench detail: its roughness crank over the mask.
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 
-
-	// Crust polishes whatever the material ended up being, PBR set or not. It
-	// has to come after the block above rather than before it, or an installed
-	// RMAOS map silently discards both.
-	[branch] if (crustAmount > 0.001)
-	{
-		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
-		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
-	}
-	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
+	// Wet print: after the RMAOS overwrite, which would discard it.
 	snowRoughness *= 1.0 - wetRough;
 	// Fresh blood is wet and glossy; dried blood is matte like the snow.
 	snowRoughness = lerp(snowRoughness, 0.22, saturate(bloodCover * 2.0) * bloodFresh * BloodLook2.y);
 
-	// The crystal has to be the part that shines. A normal map alone tilts
-	// facets away from the light and puts the highlight in the gaps between
-	// them - matte structure on glossy ground. Modulating polish by the same
-	// tap that shaped the normal keeps the highlight on the ice.
-	[branch] if (frost.valid)
-	{
-		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
-		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
-	}
 	// The glyph shines where its normal map's alpha says, as the decal does.
 	[branch] if (rune.colour.a > 0.004)
 	{
@@ -2424,16 +2344,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
 	float3 directSpecular = sunLit.directSpecular;
-
-	// Ice reads at GRAZING angles, where a sheet catches the sky and powder
-	// does not. Snow is already near-white, so a specular lobe has almost no
-	// headroom left above it and the honest BRDF response is swallowed - this
-	// adds the one thing white snow cannot already be doing.
-	[branch] if (crustAmount > 0.001)
-	{
-		float grazing = pow(1.0 - satNdotV, 4.0);
-		directSpecular += grazing * crustAmount * CrustLook.w * sunLight;
-	}
 
 	// Placed lights (fires, lanterns): the clustered LLF list, with each
 	// shadow-casting light's own map sampled at the shell surface.

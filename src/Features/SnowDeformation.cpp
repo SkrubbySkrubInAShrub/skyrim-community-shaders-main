@@ -52,12 +52,6 @@
 	X(CrustRate) \
 	X(CrustRadius) \
 	X(CrustPrintDepth) \
-	X(CrustGloss) \
-	X(CrustRoughness) \
-	X(CrustNormalFlatten) \
-	X(CrustSpecular) \
-	X(CrustSheen) \
-	X(CrustTint) \
 	X(CrustBreakRadius) \
 	X(CrustThawMinutes) \
 	X(CrustBreakOnCarve) \
@@ -88,14 +82,11 @@
 	X(FrostDecalsOnSnow) \
 	X(RuneGlow) 	X(ItemEmbedPercent) 	X(ItemSink) 	X(ItemMinRoundness) \
 	X(ItemSnowGripPercent) \
-	X(FrostTexturePath) \
 	X(EnableLightningArcs) \
 	X(LightningArcWidth) \
 	X(LightningArcBrightness) \
 	X(LightningArcLife) \
 	X(LightningArcTint) \
-	X(FrostPatternStrength) \
-	X(FrostPatternScale) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \
