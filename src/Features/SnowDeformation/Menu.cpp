@@ -329,7 +329,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("snow_textured_recolor"), "Recolor Snow-Textured Meshes"), &settings.SnowTexturedRecolor);
 		if (auto _ttStr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, a season mod's swapped-in winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives every unprojected shape whose texture is a snow texture the same treatment: the shell's snow in the object's own shader, the drape's coat, and the written weight the volume snow reads. Needs Recolor Projected Snow."));
+			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, rock piles and their skirts, a season mod's winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives them the shell's snow in the object's own shader, on the texels that read as snow; a plain ground snow texture (snow01, snowrocks01) takes it on every texel where it lies flat, so the stones in a rock pile's ground turn to snow too. Solid shapes also take the drape's coat over that snow; blended overlays such as rock skirts keep their own soft edge and take no coat. Needs Recolor Projected Snow."));
 
 		ImGui::Checkbox(T(TKEY("proj_snow_normals"), "Recolor Projected Snow Normals"), &settings.ProjSnowNormals);
 		if (auto _ttProjNormals = Util::HoverTooltipWrapper())

@@ -72,7 +72,7 @@ cbuffer StaticCB : register(b1)
 	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
 	float FineHalfExtent;  // layout sync with SnowStaticsShell; unused here
 	float LODBatch;  // layout sync with SnowStaticsShell; unused here
-	float padLODCells;  // layout sync with SnowStaticsShell; unused here
+	float TexturedSnow;  // layout sync with SnowStaticsShell; unused here
 }
 
 #if defined(WATER)

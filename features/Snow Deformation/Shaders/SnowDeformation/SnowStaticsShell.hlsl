@@ -326,11 +326,11 @@ cbuffer StaticCB : register(b1)
 	// Near clipmap: half-extent of the fine object window, 0 = off. Shares
 	// the coarse window's centre.
 	float FineHalfExtent;
-	// Large-reference LOD batch (0/1), and the half-width in cells of the
-	// grid around the camera's cell inside which large references show their
-	// real model. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
+	// Large-reference LOD batch (0/1), and a snow-textured shape (0/1, Recolor
+	// Snow-Textured Meshes): both coat off the written verdict alone. Mirror
+	// in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float LODBatch;
-	float padLODCells;
+	float TexturedSnow;
 }
 
 #ifdef SNOW_STATICS_DRAPE
@@ -4341,8 +4341,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// An alpha-tested mesh too: its unknown pixels are the texels the
 			// game discarded (a dungeon's snow planes wrote 48 where their
 			// alpha passed and nothing elsewhere), and the reconstruction
-			// filled the whole plane.
-			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (LODBatch < 0.5 && AlphaTested < 0.5 && edgeW >= edgeThr);
+			// filled the whole plane. A snow-textured shape has no projection
+			// to reconstruct.
+			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (LODBatch < 0.5 && AlphaTested < 0.5 && TexturedSnow < 0.5 && edgeW >= edgeThr);
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;

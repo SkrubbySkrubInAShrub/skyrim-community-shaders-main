@@ -2419,8 +2419,8 @@ public:
 		float FineHalfExtent;
 		/** @brief CapturedSnowStatic::lodBatch as 0/1. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float LODBatch;
-		/** @brief Retired LoadedHalfCells slot (the loaded-grid LOD discard, `4ce62fd1` to its successor). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float padLODCells;
+		/** @brief CapturedSnowStatic::snowTex as 0/1: the coat follows Lighting's written verdict alone, never a reconstruction. Took the padLODCells slot, so the buffer layout is untouched. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float TexturedSnow;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

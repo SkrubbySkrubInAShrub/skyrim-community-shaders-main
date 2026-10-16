@@ -34,6 +34,8 @@ namespace SnowLighting
 		float printShare;
 		float lodReplaceW;
 		float3 lodAlbedo;
+		// Snow-textured recolor: pixel judged, and its snow weight.
+		bool texMatch;
 		float texWeight;
 		// Total accumulated lights before the tail clobbers diffuseColor.
 		float3 projLightTotal;
@@ -47,6 +49,38 @@ namespace SnowLighting
 		float4 landSnowRMAOS;
 		float landSnowFrac;
 	};
+
+	// How much a texel reads as snow: bright and grey. A snowy rocks, grass
+	// snow or path layer keeps its rock, grass and dirt texels. Shared by the
+	// land and snow-textured recolors.
+	float LandSnowTexel(float3 layerColor)
+	{
+#if defined(TRUE_PBR)
+		float3 g = Color::LinearToSrgb(max(layerColor, 0.0));
+#else
+		float3 g = layerColor;
+#endif
+		float lum = dot(g, float3(0.2126, 0.7152, 0.0722));
+		float sat = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
+		float lo = SharedData::snowDeformationSettings.LandRecolorLumLo;
+		return smoothstep(lo, lo + 0.18, lum) * (1.0 - smoothstep(0.10, 0.22, sat));
+	}
+
+	// Snow grain on a recolored surface, in the drape's frame. texN: the snow
+	// normal map through the plane SampleStochastic took with triWeights
+	// (DirectX map, +G along +v; x plane yz, y plane xz, z plane xy).
+	void SnowGrain(inout float3 worldNormal, float3 texN, float3 triWeights, float screenNoise, float weight)
+	{
+		const bool planeX = screenNoise < triWeights.x;
+		const bool planeZ = !planeX && screenNoise >= triWeights.x + triWeights.y;
+		float3 bumpT = planeX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+		float3 bumpB = planeZ ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0);
+		bumpT -= worldNormal * dot(worldNormal, bumpT);
+		bumpB -= worldNormal * dot(worldNormal, bumpB);
+		bumpT *= rsqrt(max(dot(bumpT, bumpT), 1e-8));
+		bumpB *= rsqrt(max(dot(bumpB, bumpB), 1e-8));
+		worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * weight);
+	}
 
 #if defined(LANDSCAPE)
 	// Per-tile snow detection: how much of this pixel's landscape blend is
@@ -177,21 +211,6 @@ namespace SnowLighting
 			s.landSnowBits = bits;
 			s.landRecolor = true;
 		}
-	}
-
-	// How much a snow layer's texel reads as snow: bright and grey. A snowy
-	// rocks, grass snow or path layer keeps its rock, grass and dirt texels.
-	float LandSnowTexel(float3 layerColor)
-	{
-#	if defined(TRUE_PBR)
-		float3 g = Color::LinearToSrgb(max(layerColor, 0.0));
-#	else
-		float3 g = layerColor;
-#	endif
-		float lum = dot(g, float3(0.2126, 0.7152, 0.0722));
-		float sat = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
-		float lo = SharedData::snowDeformationSettings.LandRecolorLumLo;
-		return smoothstep(lo, lo + 0.18, lum) * (1.0 - smoothstep(0.10, 0.22, sat));
 	}
 
 	void LandRecolorLayer(inout State s, uint tile, float weight, inout float3 layerColor, inout float3 layerNormal, inout float4 layerRMAOS)
@@ -438,17 +457,7 @@ namespace SnowLighting
 #		else
 					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
 #		endif
-					// The plane SampleStochastic took (its own test), decoded in that plane's
-					// uv frame: DirectX map, +G along +v (x plane: yz, y: xz, z: xy).
-					const bool planeX = screenNoise < snowTriWeights.x;
-					const bool planeZ = !planeX && screenNoise >= snowTriWeights.x + snowTriWeights.y;
-					float3 bumpT = planeX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-					float3 bumpB = planeZ ? float3(0.0, 1.0, 0.0) : float3(0.0, 0.0, 1.0);
-					bumpT -= worldNormal * dot(worldNormal, bumpT);
-					bumpB -= worldNormal * dot(worldNormal, bumpB);
-					bumpT *= rsqrt(max(dot(bumpT, bumpT), 1e-8));
-					bumpB *= rsqrt(max(dot(bumpB, bumpB), 1e-8));
-					worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * snowVerdict);
+					SnowGrain(worldNormal, texN, snowTriWeights, screenNoise, snowVerdict);
 				}
 				// SINGLE RETURN: an early `return` inside a `[branch]` is the
 				// X4000 shape this file has paid for twice. Nested branch.
@@ -538,21 +547,31 @@ namespace SnowLighting
 #endif  // PROJECTED_UV
 
 #if !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-	// Snow-textured shapes without projection (a dirt cliff's snow01 top, a
-	// season swap's alternate set, drifts), flagged by the statics hook: the
-	// shell's snow set at the texel's own brightness, in the object's own
-	// shader. The weight is written back like projected snow for the coat.
-	void SnowTexturedRecolor(inout State s, float3 rawBaseColor, float3 worldNormal, float3 worldRel, float screenNoise,
-		inout float3 baseColor, inout float4 rawRMAOS)
+	// Snow-textured shapes without projection (dirt cliff snow tops, rock pile
+	// bases and skirts, season swaps, drifts), flagged by the statics hook:
+	// the shell's snow set on the texels LandSnowTexel calls snow, on every
+	// texel of a plain landscape snow set (SnowTexturedGround). Facing from
+	// the vertex normal.
+	void SnowTexturedRecolor(inout State s, float3 rawBaseColor, float3 vertexNormal, float3 worldRel, float screenNoise,
+		inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
 		[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 && !s.underWater &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
 		{
-			s.texWeight = SnowDeformation::ClassifyLODSnow(rawBaseColor) * smoothstep(0.35, 0.65, worldNormal.z);
+			s.texMatch = true;
+			float texel = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowTexturedGround) != 0 ? 1.0 : LandSnowTexel(rawBaseColor);
+			s.texWeight = texel * smoothstep(0.35, 0.65, vertexNormal.z);
 			[branch] if (s.texWeight > 0.003)
 			{
 				float3 snowTexWorld = worldRel + FrameBuffer::CameraPosAdjust.xyz;
-				float3 snowTexWeights = Triplanar::GetWeights(worldNormal, worldNormal);
+				float3 snowTexWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
+				// The texture's own bump goes with its colour; the snow grain replaces it.
+				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+				{
+					worldNormal = normalize(lerp(worldNormal, vertexNormal, s.texWeight));
+					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+					SnowGrain(worldNormal, texN, snowTexWeights, screenNoise, s.texWeight);
+				}
 				float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
 				float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowTexSample : Color::LinearToSrgb(snowTexSample)) : Color::ColorToLinear(snowTexSample);
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
@@ -599,9 +618,11 @@ namespace SnowLighting
 			masksY = 2.0;
 #	endif
 #	if !defined(WORLD_MAP) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-		// The snow-textured recolor's weight, same encoding, for the same coat.
-		[flatten] if (s.texWeight > 0.003)
-			masksY = s.texWeight >= 0.5 ? 48.0 : 2.0;
+		// The snow-textured recolor's verdict, same encoding, on every texel it
+		// judged: an unwritten 0 reads "unknown" and the coat reconstructs. An
+		// overlay blends into the note beneath it, so it never claims paint.
+		[flatten] if (s.texMatch)
+			masksY = (s.texWeight >= 0.5 && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowTexturedOverlay) == 0) ? 48.0 : 2.0;
 #	endif
 #	if (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 		// The LOD brightness recolor's weight, same encoding, for the same coat.

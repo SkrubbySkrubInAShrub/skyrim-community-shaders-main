@@ -99,6 +99,8 @@ namespace Permutation
 		static const uint SnowProjectedNoAlpha = (1 << 20);
 		static const uint SnowMultipassBase = (1 << 21);
 		static const uint SnowObjectBarePass = (1 << 22);
+		static const uint SnowTexturedOverlay = (1 << 23);
+		static const uint SnowTexturedGround = (1 << 24);
 	}
 
 	cbuffer PerShader : register(b4)
