@@ -521,6 +521,11 @@ void UnifiedPresetCatalog::Discover()
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Presets();
 
+	// With nothing saved, the Legacy install still runs by default; show it as the active pack without persisting.
+	if (activePackId.empty() && !activePipeline && PresetManager::GetSingleton().IsLegacyActive() &&
+		globals::features::effects11.IsActive() && FindPack(kEffects11LegacyPackId))
+		activePackId = kEffects11LegacyPackId;
+
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
 	});

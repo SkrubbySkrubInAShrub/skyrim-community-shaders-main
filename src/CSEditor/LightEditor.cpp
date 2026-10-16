@@ -1235,9 +1235,11 @@ bool LightEditor::LightSettings::operator==(const LightSettings& other) const
 {
 	const auto& lhs = data;
 	const auto& rhs = other.data;
+	// Under InverseSquare the radius is derived from fade/size/cutoff every frame, so those already cover it.
+	const bool radiusDerived = lhs.flags.any(LightLimitFix::LightFlags::InverseSquare);
 	return lhs.flags.underlying() == rhs.flags.underlying() && lhs.cutoffOverride == rhs.cutoffOverride &&
 	       lhs.lighFormId == rhs.lighFormId && lhs.diffuse.red == rhs.diffuse.red && lhs.diffuse.green == rhs.diffuse.green &&
-	       lhs.diffuse.blue == rhs.diffuse.blue && lhs.radius == rhs.radius && lhs.size == rhs.size && lhs.fade == rhs.fade &&
+	       lhs.diffuse.blue == rhs.diffuse.blue && (radiusDerived || lhs.radius == rhs.radius) && lhs.size == rhs.size && lhs.fade == rhs.fade &&
 	       pos.x == other.pos.x && pos.y == other.pos.y && pos.z == other.pos.z && tesFlags.underlying() == other.tesFlags.underlying();
 }
 
@@ -1301,6 +1303,7 @@ void LightEditor::RequestSelect(const LightInfo& light)
 		pendingAutoSelect = false;
 		savedSelection = {};
 		selected = light;
+		selected.isSelected = true;  // list entries predate the selection; avoids one frame of the inspector's empty state
 	};
 	if (HasUnwrittenChanges())
 		EditorWindow::GetSingleton()->RequestToolPrompt(*this, EditorWindow::ToolPromptReason::Switch, select);
@@ -3053,6 +3056,8 @@ void LightEditor::RefreshLPJsonState()
 	// SyncLPFlagsToRuntime only updates `current`; apply the JSON InverseSquare/Linear state to `original`
 	// too, so RestoreOriginal can't re-assert a stale IS bit (which makes ProcessLight re-inflate the radius).
 	ApplyLPFalloffFlags(original.data, lpFlagSet);
+	// LP TES bits mirror the JSON flags, not the shared LIGH form; keep the baseline in step so the untouched light reads clean.
+	original.tesFlags = current.tesFlags;
 }
 
 void LightEditor::ApplyLPFalloffFlags(LLFCommon::RuntimeLightDataExt& data, const std::set<std::string>& lpFlagSet)
