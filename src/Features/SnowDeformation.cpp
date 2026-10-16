@@ -143,6 +143,7 @@
 	X(BloodSpreadSeconds) \
 	X(DeformMapResolution) \
 	X(ObjectTrenchResolution) \
+	X(ObjectPrintRimWidth) \
 	X(RangeTrenchesM) \
 	X(RangeActorTrenchesM) \
 	X(RangeSkinsM) \

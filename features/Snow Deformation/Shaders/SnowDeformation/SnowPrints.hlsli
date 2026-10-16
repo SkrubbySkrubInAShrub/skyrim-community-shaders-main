@@ -3,9 +3,11 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 // Snow Trenches on Objects, the readers: Lighting's bare floor
-// (SnowLighting.hlsli) and the drape's print twin (SnowStaticsShell.hlsl,
-// SNOW_OBJECT_PRINTS). The map is DeformationUpdateCS.hlsl's PrintMap; its
-// frame this frame is SharedData's PrintRect.
+// (SnowLighting.hlsli), the drape's print twin (SnowStaticsShell.hlsl,
+// SNOW_OBJECT_PRINTS), and the volume's PS (VOXEL), which has them for when
+// it follows the projected snow onto objects (VOLUME-SNOW.md). The map is
+// DeformationUpdateCS.hlsl's PrintMap; its frame this frame is SharedData's
+// PrintRect. The rim (SNOW_PRINT_RIM) is PrintRimCS's.
 
 #ifndef __SNOW_PRINTS_HLSLI__
 #define __SNOW_PRINTS_HLSLI__
@@ -176,6 +178,47 @@ namespace SnowPrints
 		}
 		return r;
 	}
+
+#ifdef SNOW_PRINT_RIM
+	// The rim map (DeformationUpdateCS.hlsl PrintRimCS): how strongly the snow
+	// around a print is disturbed, packed and addressed as the map, one
+	// surface a texel.
+	Texture2D<uint> PrintRim : register(t116);
+	// Mirror PRINT_RIM_APRON: texels a rim reaches past its print.
+	static const int kRimApron = 5;
+
+	float RimTexel(int2 a_texel, int a_mask, float a_z)
+	{
+		const uint v = PrintRim.Load(int3(a_texel & a_mask, 0));
+		const float z = float(v >> 10) * 0.25 - kZOffset;
+		return float(v & 1023u) * saturate(2.0 - abs(a_z - z) / 6.0) * (1.0 / 1023.0);
+	}
+
+	// Rim strength, 0-1 as a print's depth, at a point on a surface: bilinear
+	// over this surface's rim texels. The tile mask is read where the rim's
+	// farthest print could lie: that tile and the three after it cover them all.
+	float Rim(float3 a_world)
+	{
+		const float2 tf = a_world.xy / kTexel - 0.5;
+		const float2 t0f = floor(tf);
+		const int2 t0 = int2(t0f);
+		const int4 rect = SharedData::snowDeformationSettings.PrintRect;
+		float r = 0.0;
+		[branch] if (all(t0 >= rect.xy) && all(t0 + 1 < rect.zw))
+		{
+			uint3 dims;
+			PrintMap.GetDimensions(dims.x, dims.y, dims.z);
+			const int m = int(dims.x) - 1;
+			[branch] if (PrintTiles.Load(int3(((t0 - kRimApron) >> kTileShift) & (m >> kTileShift), 0)) != 0u)
+			{
+				const float2 f = tf - t0f;
+				r = lerp(lerp(RimTexel(t0, m, a_world.z), RimTexel(t0 + int2(1, 0), m, a_world.z), f.x),
+					lerp(RimTexel(t0 + int2(0, 1), m, a_world.z), RimTexel(t0 + int2(1, 1), m, a_world.z), f.x), f.y);
+			}
+		}
+		return r;
+	}
+#endif
 
 	// Sun visibility through a print's dent at a point on it: the dent lies
 	// -a_dentDepth x depth under the surface's tangent plane (slope a_g). Four

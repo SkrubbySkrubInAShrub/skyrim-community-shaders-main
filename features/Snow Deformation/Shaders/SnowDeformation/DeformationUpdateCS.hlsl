@@ -1379,11 +1379,18 @@ cbuffer PrintFrame : register(b1)
 	uint PrintRingRectCount;
 	int4 PrintRingRects[2];
 	uint PrintRingTotal;
-	uint PrintPad0;
-	uint2 PrintPad1;
+	float PrintRimWidth;
+	uint PrintSpellCount;
+	uint PrintPad1;
 }
 
 RWTexture2DArray<uint> PrintMap : register(u0);
+// The rim: how strongly the snow around a print is disturbed, the print's
+// depth fading to nothing PrintRimWidth units past its edge, with that print's
+// Z. One surface a texel, the strongest; packed and addressed as the map.
+RWTexture2D<uint> PrintRim : register(u3);
+// Texels the rim reaches past a print at most. Mirror kRimApron (SnowPrints.hlsli).
+#define PRINT_RIM_APRON 5
 // One uint per world tile of PRINT_TILE texels the window touches, row-major
 // from the window's first tile; 1 where the stamp changed a texel.
 RWByteAddressBuffer PrintWrites : register(u1);
@@ -1394,6 +1401,24 @@ StructuredBuffer<uint> PrintBlocks : register(t2);
 Texture2D<float> PrintTops1 : register(t10);
 Texture2D<float> PrintTops2 : register(t11);
 Texture2DArray<uint> PrintMapIn : register(t12);
+// This frame's spell marks on object snow, three float4s each (SnowDeformation.h
+// PrintSpellMark): (a.xyz, radius), (b.xyz, flags), (depth 0-1, rate per
+// second, 0 at once, -, -). A surface mark lies at a.z, a disc or a capsule
+// from b to a, or with PRINT_SPELL_CONE a wedge from its apex b to a, radius its
+// half-width there. A ray runs from a to b and marks where it first enters an
+// object top (PrintRayCS).
+StructuredBuffer<float4> PrintSpells : register(t13);
+// Per mark, where its ray entered a top (xyz, w = 1), else w = 0.
+StructuredBuffer<float4> PrintRayHitsIn : register(t14);
+RWStructuredBuffer<float4> PrintRayHits : register(u4);
+#define PRINT_SPELL_CONE 1u
+#define PRINT_SPELL_BOWL 2u
+#define PRINT_SPELL_RAY 4u
+// A surface mark takes a top within this of its own Z; a ray enters a top it
+// meets from above, no deeper than PRINT_RAY_THICK under it.
+#define PRINT_SPELL_BELOW 48.0
+#define PRINT_SPELL_ABOVE 16.0
+#define PRINT_RAY_THICK 24.0
 
 uint PrintEncode(float a_z, uint a_depth)
 {
@@ -1412,7 +1437,8 @@ int2 PrintWorldTexel(uint2 a_phys, uint a_dim)
 }
 
 // The body over a point this frame (x: the contact texel holding the point,
-// no dilation) and its sole (y). CONTACT_NONE where no body drew.
+// no dilation) and its sole (y); where no body drew, a loose prop's underside
+// as both. CONTACT_NONE where neither did.
 float2 PrintContact(float2 a_worldPos)
 {
 	float2 contact = CONTACT_NONE;
@@ -1421,7 +1447,8 @@ float2 PrintContact(float2 a_worldPos)
 	{
 		const int dim = (int)ContactDim;
 		const int2 ct = int2(float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim);
-		contact = ContactHeight.Load(int3(clamp(ct, 0, dim - 1), 0)).xx;
+		const float2 own = ContactHeight.Load(int3(clamp(ct, 0, dim - 1), 0));
+		contact = own.xx;
 		[branch] if (contact.x < CONTACT_NONE * 0.5)
 		{
 			[unroll] for (int oy = -2; oy <= 2; oy++)
@@ -1432,6 +1459,8 @@ float2 PrintContact(float2 a_worldPos)
 						contact.y = min(contact.y, c);
 				}
 		}
+		else
+			contact = own.yy;
 	}
 	return contact;
 }
@@ -1466,6 +1495,96 @@ float PrintTopGap(float2 a_worldPos, float a_contact)
 		gap = best < 1e8 ? best : -1.0;
 	}
 	return gap;
+}
+
+// The object top nearest a_z within [a_z - PRINT_SPELL_BELOW, a_z +
+// PRINT_SPELL_ABOVE] over the 2x2 raster texels of both layers; -1e9 where
+// none lies in that band.
+float PrintTopNear(float2 a_worldPos, float a_z)
+{
+	float found = -1e9;
+	const float2 local = (a_worldPos - HeightWindowCenter) / HeightHalfExtent;
+	[branch] if (all(abs(local) < 1.0))
+	{
+		float2 dims;
+		PrintTops1.GetDimensions(dims.x, dims.y);
+		const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+		const int2 t0 = int2(clamp(uv * dims - 0.5, 0.0, dims - 1.001));
+		const int2 t1 = min(t0 + 1, int2(dims) - 1);
+		const float tops[8] = {
+			PrintTops1.Load(int3(t0.x, t0.y, 0)), PrintTops1.Load(int3(t1.x, t0.y, 0)),
+			PrintTops1.Load(int3(t0.x, t1.y, 0)), PrintTops1.Load(int3(t1.x, t1.y, 0)),
+			PrintTops2.Load(int3(t0.x, t0.y, 0)), PrintTops2.Load(int3(t1.x, t0.y, 0)),
+			PrintTops2.Load(int3(t0.x, t1.y, 0)), PrintTops2.Load(int3(t1.x, t1.y, 0))
+		};
+		float best = 1e9;
+		[unroll] for (uint i = 0; i < 8; i++)
+		{
+			const float g = tops[i] - a_z;
+			[flatten] if (tops[i] > -50000.0 && g >= -PRINT_SPELL_BELOW && g <= PRINT_SPELL_ABOVE && abs(g) < best)
+			{
+				best = abs(g);
+				found = tops[i];
+			}
+		}
+	}
+	return found;
+}
+
+// The strongest spell mark on an object top at a point this frame: x = the
+// top's Z, y = the depth it wants (0-1), z = its rate per second (0 = at
+// once), w = 1 where one lands.
+float4 PrintSpellVerdict(float2 a_worldPos)
+{
+	float4 best = 0.0;
+	[loop] for (uint i = 0; i < PrintSpellCount; i++)
+	{
+		const float4 s0 = PrintSpells[i * 3u];
+		const float4 s1 = PrintSpells[i * 3u + 1u];
+		const uint flags = (uint)s1.w;
+		const float radius = max(s0.w, 1.0);
+		float3 at = s0.xyz;
+		float2 from = s1.xy;
+		bool live = true;
+		[branch] if ((flags & PRINT_SPELL_RAY) != 0u)
+		{
+			const float4 hit = PrintRayHitsIn[i];
+			live = hit.w > 0.5;
+			at = hit.xyz;
+			from = hit.xy;
+		}
+		float f = 0.0;
+		[branch] if (live && (flags & PRINT_SPELL_CONE) != 0u)
+		{
+			// A wedge widening from its apex to radius at its far centre, fading
+			// over its last stretch.
+			const float2 axis = at.xy - from;
+			const float len = max(length(axis), 1.0);
+			const float2 dir = axis / len;
+			const float2 rel = a_worldPos - from;
+			const float along = dot(rel, dir);
+			const float halfWidth = max(radius * saturate(along / len), 1e-3);
+			const float side = abs(dot(rel, float2(-dir.y, dir.x)));
+			f = along > 0.0 ? (1.0 - smoothstep(0.7 * halfWidth, halfWidth, side)) * (1.0 - smoothstep(0.85 * len, len, along)) : 0.0;
+		}
+		else [branch] if (live)
+		{
+			// A disc, or a capsule from its last point: full to half its radius,
+			// gone at it; a bowl slopes from its centre.
+			const float2 seg = at.xy - from;
+			const float t = saturate(dot(a_worldPos - from, seg) / max(dot(seg, seg), 1e-4));
+			const float d = length(a_worldPos - (from + seg * t));
+			f = (flags & PRINT_SPELL_BOWL) != 0u ? saturate(1.0 - d / radius) * saturate(1.0 - d / radius) : 1.0 - smoothstep(0.55 * radius, radius, d);
+		}
+		const float want = PrintSpells[i * 3u + 2u].x * f;
+		[branch] if (want > best.y)
+		{
+			const float top = PrintTopNear(a_worldPos, at.z);
+			[flatten] if (top > -1e8)
+				best = float4(top, want, PrintSpells[i * 3u + 2u].y, 1.0);
+		}
+	}
+	return best;
 }
 
 // The print a point takes this frame. x = the sole's Z, y = depth 0-1, z =
@@ -1515,7 +1634,20 @@ uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
 	return slot;
 }
 
-// This frame's prints over the CPU's block list.
+// The depth already printed at a texel on the surface at a_z, 0 if none.
+uint PrintDepthAt(uint2 a_phys, float a_z)
+{
+	const uint a = PrintMap[uint3(a_phys, 0)];
+	const uint b = PrintMap[uint3(a_phys, 1)];
+	uint depth = 0u;
+	[flatten] if ((a & 1023u) > 0u && abs(a_z - PrintZ(a)) < PRINT_SAME_SURFACE)
+		depth = a & 1023u;
+	else if ((b & 1023u) > 0u && abs(a_z - PrintZ(b)) < PRINT_SAME_SURFACE)
+		depth = b & 1023u;
+	return depth;
+}
+
+// This frame's prints over the CPU's block list: bodies and props, then spells.
 [numthreads(8, 8, 1)] void PrintStampCS(uint3 GTid
 										: SV_GroupThreadID, uint3 Gid
 										: SV_GroupID) {
@@ -1524,12 +1656,70 @@ uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
 	const uint packed = PrintBlocks[Gid.x];
 	const uint2 phys = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
 	const int2 world = PrintWorldTexel(phys, dims.x);
-	const float3 verdict = PrintVerdict((float2(world) + 0.5) * PRINT_TEXEL);
+	const float2 worldPos = (float2(world) + 0.5) * PRINT_TEXEL;
+	const float3 verdict = PrintVerdict(worldPos);
 	const uint depth = (uint)round(verdict.y * 1023.0);
-	[branch] if (verdict.z > 2.5 && depth > 0u && PrintWrite(phys, verdict.x, depth) < 2u)
+	bool wrote = verdict.z > 2.5 && depth > 0u && PrintWrite(phys, verdict.x, depth) < 2u;
+	// A melt approaches its target at its rate; a pit or a shove lands at once.
+	[branch] if (PrintSpellCount > 0u)
+	{
+		const float4 spell = PrintSpellVerdict(worldPos);
+		[branch] if (spell.w > 0.5)
+		{
+			const uint was = PrintDepthAt(phys, spell.x);
+			const float target = min(spell.y, 1.0) * 1023.0;
+			const uint want = (uint)round(spell.z > 0.0 ? min(target, float(was) + spell.z * 1023.0 * DeltaTime) : target);
+			[flatten] if (want > was && PrintWrite(phys, spell.x, want) < 2u)
+				wrote = true;
+		}
+	}
+	[branch] if (wrote)
 	{
 		const uint2 tile = uint2((world >> PRINT_TILE_SHIFT) - (PrintWindowMin >> PRINT_TILE_SHIFT));
 		PrintWrites.Store((tile.y * ((dims.x >> PRINT_TILE_SHIFT) + 1u) + tile.x) * 4u, 1u);
+	}
+}
+
+// Where each ray mark first enters an object top from above: marched along
+// the top raster's two layers a texel at a time, a hit where the ray passes
+// from over a top to no deeper than PRINT_RAY_THICK under it.
+[numthreads(32, 1, 1)] void PrintRayCS(uint3 DTid
+									   : SV_DispatchThreadID) {
+	const uint i = DTid.x;
+	[branch] if (i < PrintSpellCount)
+	{
+		float4 hit = 0.0;
+		const float4 s0 = PrintSpells[i * 3u];
+		const float4 s1 = PrintSpells[i * 3u + 1u];
+		[branch] if (((uint)s1.w & PRINT_SPELL_RAY) != 0u)
+		{
+			float2 dims;
+			PrintTops1.GetDimensions(dims.x, dims.y);
+			const float texel = 2.0 * HeightHalfExtent / max(dims.x, 1.0);
+			const uint steps = min((uint)ceil(length(s1.xyz - s0.xyz) / max(texel, 1.0)), 1024u);
+			float2 was = float2(1e9, 1e9);
+			[loop] for (uint k = 0; k <= steps; k++)
+			{
+				const float3 p = lerp(s0.xyz, s1.xyz, float(k) / float(max(steps, 1u)));
+				const float2 local = (p.xy - HeightWindowCenter) / HeightHalfExtent;
+				float2 gap = float2(1e9, 1e9);
+				float2 top = 0.0;
+				[branch] if (all(abs(local) < 1.0))
+				{
+					const int2 t = int2(clamp(float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5) * dims, 0.0, dims - 1.0));
+					top = float2(PrintTops1.Load(int3(t, 0)), PrintTops2.Load(int3(t, 0)));
+					gap = float2(top.x > -50000.0 ? p.z - top.x : 1e9, top.y > -50000.0 ? p.z - top.y : 1e9);
+				}
+				const bool2 entered = was > 0.0 && gap <= 0.0 && gap >= -PRINT_RAY_THICK;
+				[branch] if (any(entered))
+				{
+					hit = float4(p.xy, entered.x ? top.x : top.y, 1.0);
+					break;
+				}
+				was = gap;
+			}
+		}
+		PrintRayHits[i] = hit;
 	}
 }
 
@@ -1553,6 +1743,7 @@ uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
 		const uint2 phys = uint2(world & int(dims.x - 1));
 		PrintMap[uint3(phys, 0)] = 0u;
 		PrintMap[uint3(phys, 1)] = 0u;
+		PrintRim[phys] = 0u;
 	}
 }
 
@@ -1568,6 +1759,53 @@ uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
 		const uint v = PrintMap[uint3(phys, s)];
 		PrintMap[uint3(phys, s)] = (v & 1023u) > PrintRefillQuanta ? v - PrintRefillQuanta : 0u;
 	}
+}
+
+// The rim over the listed blocks, from the map as it stands: every print
+// within PrintRimWidth of a texel offers its depth, fading by smoothstep with
+// the distance past its own texel's edge; the strongest wins with its Z.
+[numthreads(8, 8, 1)] void PrintRimCS(uint3 GTid
+									  : SV_GroupThreadID, uint3 Gid
+									  : SV_GroupID) {
+	uint3 dims;
+	PrintMapIn.GetDimensions(dims.x, dims.y, dims.z);
+	const uint packed = PrintBlocks[Gid.x];
+	const uint2 phys = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
+	const int2 world = PrintWorldTexel(phys, dims.x);
+	const float width = max(PrintRimWidth, 0.0);
+	const int reach = min((int)ceil(width / PRINT_TEXEL + 0.5), PRINT_RIM_APRON);
+	float best = 0.0;
+	uint bestZ = 0u;
+	[loop] for (int dy = -reach; dy <= reach; dy++)
+	{
+		[loop] for (int dx = -reach; dx <= reach; dx++)
+		{
+			const int2 w = world + int2(dx, dy);
+			const float past = max((length(float2(dx, dy)) - 0.5) * PRINT_TEXEL, 0.0);
+			const float f = saturate(1.0 - past / max(width, 1e-3));
+			const float fall = f * f * (3.0 - 2.0 * f);
+			[branch] if (fall > 0.0 && all(w >= PrintWindowMin) && all(w < PrintWindowMin + int(dims.x)))
+			{
+				const uint2 p = uint2(w & int(dims.x - 1));
+				const uint a = PrintMapIn.Load(int4(p, 0, 0));
+				const uint b = PrintMapIn.Load(int4(p, 1, 0));
+				const float va = float(a & 1023u) * fall;
+				const float vb = float(b & 1023u) * fall;
+				[flatten] if (va > best)
+				{
+					best = va;
+					bestZ = a >> 10;
+				}
+				[flatten] if (vb > best)
+				{
+					best = vb;
+					bestZ = b >> 10;
+				}
+			}
+		}
+	}
+	const uint strength = min((uint)round(best), 1023u);
+	PrintRim[phys] = strength > 0u ? (bestZ << 10) | strength : 0u;
 }
 
 // The field view's crop. Top half: each print texel's verdict this frame

@@ -1191,6 +1191,10 @@ void SnowDeformation::DrawVoxelSnow()
 	// The march's road taps read the object snow cone.
 	ID3D11ShaderResourceView* coneSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
 	context->PSSetShaderResources(13, 1, &coneSRV);
+	// Snow Trenches on Objects (t114-t116): SnowPrints' readers are compiled
+	// into this PS for when the volume follows the projected snow onto
+	// objects and takes their prints.
+	BindPrintReaders(context);
 
 	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 	context->RSGetState(savedRaster.put());

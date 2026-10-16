@@ -535,6 +535,9 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	// the hazard has grown into it.
 	const float baseRadius = std::clamp(runtime.radius > 1.0f ? runtime.radius : base->data.radius,
 		kHazardRadiusMin, kHazardRadiusMax);
+	// On whatever it stands on, a roof or a ledge as much as the ground.
+	QueueObjectSpellMarkFor(position, position, baseRadius, MarkForElement(element), 1.0f, std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest),
+		std::clamp(baseRadius / kPitReferenceRadius, kPitScaleMin, kPitScaleMax), 0u);
 
 	float heightFade = 0.0f;
 	float radius = 0.0f;
@@ -1009,6 +1012,9 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	// atronach's whole body is the source, where a cloak wraps one mage.
 	const float cloakReach = (a_cloak.reachOverride > 0.0f ? a_cloak.reachOverride : std::max(baseReach, 1.0f)) *
 	                         std::max(a_cloak.reachScale, 0.01f) * (burning ? kDeathAuraReach : 1.0f);
+	// Heat melts the snow on whatever the wearer stands on.
+	if (MarkForElement(a_cloak.element) == SpellMark::Melt)
+		QueueObjectSpellMarkFor(position, position, cloakReach, SpellMark::Melt, 1.0f, std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale, 1.0f, 0u);
 	if (!GroundMark(position.z + (burning ? 0.0f : kCloakCentreHeight) - groundZ, cloakReach, heightFade, radius))
 		return;
 	if (heightFade < kMinSpellStrength)
@@ -1587,11 +1593,13 @@ void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_
 			controller && (controller->context.currentState == RE::hkpCharacterStateType::kInAir ||
 							  controller->context.currentState == RE::hkpCharacterStateType::kFlying))
 			continue;
+		// Over a roof or a ledge the dasher still scours what it runs on; only
+		// the ground's furrow wants the ground beneath.
+		bool overGround = true;
 		if (auto* tes = globals::game::tes) {
 			float landZ = position.z;
 			tes->GetLandHeight(position, landZ);
-			if (position.z - landZ > kDashGroundBand)
-				continue;
+			overGround = position.z - landZ <= kDashGroundBand;
 		}
 
 		const float dx = current.x - last.x;
@@ -1609,6 +1617,9 @@ void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_
 			halfWidth = root->worldBound.radius * kDashWidthOfBound;
 		halfWidth = std::clamp(halfWidth * std::max(settings.DashGougeScale, 0.05f),
 			kDashWidthMin, kDashWidthMax);
+		QueueObjectSpellMarkFor(position, RE::NiPoint3{ last.x, last.y, position.z }, halfWidth, SpellMark::Carve, 1.0f, 0.0f, 1.0f, kPrintSpellBowl);
+		if (!overGround)
+			continue;
 
 		SpellEmitter emitter{};
 		// A capsule, which is what the map has always drawn a swept body as -
@@ -1648,6 +1659,9 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	// craters, since a stamp holds full depth across only the inner tenth of
 	// its radius.
 	const float halfWidth = std::max(travel * std::clamp(settings.ShoutMarkWidth, 0.05f, 2.0f) * 0.5f, 8.0f);
+	// The floor the shouter stands on takes the wedge too, at the shouter's feet.
+	QueueObjectSpellMarkFor(RE::NiPoint3{ tip.x, tip.y, a_cone.position.z }, RE::NiPoint3{ apex.x, apex.y, a_cone.position.z }, halfWidth,
+		MarkForElement(a_cone.element), a_cone.strength, 0.0f, 1.0f, kPrintSpellCone);
 	// Measured at the middle of the mark rather than at either end: the apex
 	// is beside the shouter, and the far end may be over a cliff.
 	const RE::NiPoint3 mid = a_cone.position + a_cone.direction * (a_cone.length * 0.5f);
@@ -1688,6 +1702,11 @@ void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* 
 {
 	if (a_blast.element == SpellElement::None || !a_tes)
 		return;
+
+	// On an object, a crater where its flight first meets a top (PrintRayCS),
+	// at once: object snow is too thin to dig through over a moment.
+	QueueObjectSpellMarkFor(a_blast.position, a_blast.position + a_blast.direction * std::max(a_blast.landingReach, kBlastLandingReach), a_blast.radius,
+		MarkForElement(a_blast.element), 1.0f, 0.0f, a_blast.pitScale, kPrintSpellRay);
 
 	// A bolt dies between frames, so the last sighting sits short of the
 	// impact - the faster it flew, the shorter. Carrying the flight on to the
@@ -1736,6 +1755,7 @@ void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* 
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
+	printSpellMarks.clear();
 	// Live counts are re-counted below every frame. Event counts arrive from
 	// SINKS between frames, so a full reset turned each of those into a
 	// one-frame flash no eye could catch: "death events seen 0" never meant
@@ -2046,6 +2066,7 @@ void SnowDeformation::GatherSpellEmitters()
 			// every moving source in this feature draws, and it follows the
 			// real flight, so a cyclone rounding a slope or stopping at a wall
 			// marks where it actually went rather than where it was aimed.
+			QueueObjectSpellMark(position, position, std::max(settings.ForceTrackWidth, 4.0f), std::clamp(settings.ForceTrackDepth, 0.0f, 1.0f), 0.0f, kPrintSpellBowl);
 			float trackGroundZ = position.z;
 			tes->GetLandHeight(position, trackGroundZ);
 			float trackStrength = 0.0f;
@@ -2226,6 +2247,10 @@ void SnowDeformation::GatherSpellEmitters()
 		float strength = 0.0f;
 		float radius = 0.0f;
 
+		// On an object, wherever the stream first meets its top (PrintRayCS).
+		QueueObjectSpellMarkFor(position, position + direction * spellReach, kSpellContactRadius, MarkForElement(element), 1.0f,
+			std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest), kStreamPitScale, kPrintSpellRay);
+
 		RE::NiPoint3 contact{};
 		if (TraceGroundContact(tes, position, direction, spellReach, contact)) {
 			spellStats.groundContacts++;
@@ -2315,6 +2340,7 @@ void SnowDeformation::GatherSpellEmitters()
 			float castGroundZ = cast.position.z;
 			tes->GetLandHeight(cast.position, castGroundZ);
 			const float scaled = cast.radius * std::max(settings.BlastRadiusScale, 0.0f);
+			QueueObjectSpellMarkFor(cast.position, cast.position, scaled, MarkForElement(cast.element), 1.0f, 0.0f, 1.0f, 0u);
 			float strength = 0.0f;
 			float radius = 0.0f;
 			if (!GroundMark(cast.position.z - castGroundZ, scaled, strength, radius))

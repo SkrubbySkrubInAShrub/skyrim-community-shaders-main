@@ -820,6 +820,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTdCover = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trench_detail_coverage_tooltip"), "How far across a trench the detail reaches. 0 = the trench floor only, 1 = the floor and walls to just past the rim, 2 = out over the berm, 2.5 = the berm's whole apron. The edge fades softly at every setting and every snow depth, and the detail fades out where a trench meets an object."));
 
+		ImGui::SliderFloat(T(TKEY("object_print_rim"), "Object Print Rim"), &settings.ObjectPrintRimWidth, 0.0f, 15.0f, "%.1f units");
+		if (auto _ttPrintRim = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (its set, Detail Relief and Detail Coverage) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
+
 		{
 			const char* sets[] = { "By Snow Condition", "Powder", "Wet" };
 			int set = settings.TrenchDetailSet == 3 ? 2 : settings.TrenchDetailSet == 1 ? 1 : 0;

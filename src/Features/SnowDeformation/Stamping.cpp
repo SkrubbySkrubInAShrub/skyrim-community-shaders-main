@@ -1676,11 +1676,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// the prop's own root, so it can never find the prop too high;
 		// something dropped on a table or still falling therefore cut the
 		// ground a storey beneath it at full depth.
-		if (position.z - groundZ > kElevatedStampCutoff)
-			return;
+		const bool elevated = position.z - groundZ > kElevatedStampCutoff;
 		// Inside the contact window a moving prop carves by its own render
 		// mesh (DrawContactCapture, per texel in the stamp pass); its
-		// collision shapes stay out of the stamp list.
+		// collision shapes stay out of the stamp list. An elevated one is
+		// drawn too: each texel's height test keeps it off the ground, and the
+		// object it lands on takes its print (Snow Trenches on Objects).
 		if (!contactShadersFailed) {
 			const auto& bound = root->worldBound;
 			if (bound.radius > 0.0f &&
@@ -1700,6 +1701,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				return;
 			}
 		}
+		if (elevated)
+			return;
 		// Band reference: whichever is higher, the land or the prop's own
 		// root — elevated resting surfaces keep their stamps.
 		const float supportZ = std::max(groundZ, position.z);

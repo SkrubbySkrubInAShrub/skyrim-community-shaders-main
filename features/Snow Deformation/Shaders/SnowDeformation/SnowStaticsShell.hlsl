@@ -456,10 +456,15 @@ static float gDeferredZDx;
 static float gDeferredZDy;
 #endif
 #include "SnowDeformation/SnowFields.hlsli"
-#if defined(PSHADER) && defined(SNOW_OBJECT_PRINTS)
+#if defined(PSHADER) && (defined(SNOW_OBJECT_PRINTS) || defined(VOXEL))
 // Snow Trenches on Objects: the drape's print twin, chosen per draw where the
-// print map holds prints. Lighting has already bared the print's core.
+// print map holds prints; Lighting has already bared the print's core. The
+// volume's PS takes the same readers (bound by DrawVoxelSnow) for when it
+// follows the projected snow onto objects.
+#	define SNOW_PRINT_RIM
 #	include "SnowDeformation/SnowPrints.hlsli"
+#endif
+#if defined(PSHADER) && defined(SNOW_OBJECT_PRINTS)
 // The dent under a full print, in units (Object Print Depth); the stored
 // depth already carries Snow Resistance's share.
 static const float kPrintDentDepth = 4.0;
@@ -2653,6 +2658,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// heightfield's: tops only.
 	const float3 printAt = float3(input.worldXY, input.WorldPos.z + ShellCameraPosAdjust.z);
 	const float3 print = SnowPrints::DepthSlope(printAt);
+	// The broken snow around it (Object Print Rim), as a share of a full print.
+	const float printRim = SnowPrints::Rim(printAt) / max(SharedData::snowDeformationSettings.PrintFullDepth, 0.001);
 	const float printTop = smoothstep(0.5, 0.75, input.geoNz);
 #endif
 #if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
@@ -2678,10 +2685,10 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 #	ifdef PATCH
 		detailMask = TrenchDetailMask(input.pixelDeform, BermFieldPair(input.trenchGridLocal), TrenchDetailCoverage) * detailFade;
 #	else
-		// No berm on an object: the depth as a share of a full print stands in
-		// for both the carve and its short blur.
+		// No berm on an object: the depth as a share of a full print is the
+		// carve, and the rim, which reaches past it, the blur around it.
 		const float printRel = print.x / max(SharedData::snowDeformationSettings.PrintFullDepth, 0.001);
-		detailMask = TrenchDetailMask(printRel, float2(0.0, printRel), TrenchDetailCoverage) * detailFade * printTop;
+		detailMask = TrenchDetailMask(printRel, float2(0.0, max(printRel, printRim)), TrenchDetailCoverage) * detailFade * printTop;
 #	endif
 		[branch] if (detailMask > 0.001)
 		{
@@ -2689,8 +2696,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			detailMarks = smoothstep(kSpellMarkStart, 0.15, SampleDetailMarks(input.trenchGridLocal));
 			detailRelief = TrenchDetailRelief * detailMask * max(saturate(PatchSkinDepth(input.worldXY).x / 10.0), detailMarks.x) * TrampleDetailScale(input.worldXY, input.pixelDeform);
 #	else
-			// A dusting: the patch's thin-cover rule at the dent's depth.
-			detailRelief = TrenchDetailRelief * detailMask * saturate(kPrintDentDepth / 10.0);
+			// The patch's thin-cover rule at the dent's depth, up to the full
+			// relief where the rim is strong.
+			detailRelief = TrenchDetailRelief * detailMask * max(saturate(kPrintDentDepth / 10.0), saturate(printRim));
 #	endif
 			trenchTaps = TrenchDetailTapsAt(input.worldXY);
 		}

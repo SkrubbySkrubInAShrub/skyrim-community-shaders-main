@@ -599,6 +599,8 @@ public:
 		uint32_t DeformMapResolution = 4096;
 		/** @brief Snow Trenches on Objects: the print map's texels a side (512, 1024 or 2048) at kPrintTexel units each, so the reach around the player is 11, 22 or 44 m. A quality-preset lever. */
 		uint32_t ObjectTrenchResolution = 2048;
+		/** @brief "Object Print Rim": how far past a print's edge, in units (0-15), the snow on an object is broken up: the trench detail reaches this far, fading out. 0 = the print's own edge only. */
+		float ObjectPrintRimWidth = 6.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 200.0f;
 		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
@@ -4418,8 +4420,10 @@ protected:
 	static constexpr uint32_t kPrintMirrorPerFrame = 4;
 	static constexpr uint32_t kPrintRecord = 'SNOP';
 	static constexpr uint32_t kPrintRecordVersion = 1;
-	/** @brief PS slots of the print readers (SnowPrints.hlsli): t114 the print map, t115 its tile mask. */
+	/** @brief PS slots of the print readers (SnowPrints.hlsli): t114 the print map, t115 its tile mask, t116 the rim (the drapes' twin). */
 	static constexpr UINT kPrintReaderSlot = 114;
+	/** @brief Print texels a rim reaches past its print at most. Mirrors PRINT_RIM_APRON and kRimApron. */
+	static constexpr int kPrintRimApron = 5;
 
 	/** @brief Per-frame constants of the print passes (b1). Layout must match PrintFrame in DeformationUpdateCS.hlsl. */
 	struct alignas(16) PrintFrameCB
@@ -4431,11 +4435,32 @@ protected:
 		/** @brief Arriving texels in world print-texel space (x0, y0, w, h). */
 		DirectX::XMINT4 RingRects[2];
 		uint RingTotal;
-		uint Pad0;
-		uint Pad1[2];
+		/** @brief Object Print Rim, units. */
+		float RimWidth;
+		/** @brief Marks in printSpellBuffer this frame. */
+		uint SpellCount;
+		uint Pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PrintFrameCB);
 	static_assert(sizeof(PrintFrameCB) == 64, "PrintFrameCB must match the fxc-reflected PrintFrame");
+
+	/** @brief One spell's mark on object snow this frame. A surface mark lies at a.z: a disc at a, a capsule from b to a, or with kPrintSpellCone a wedge from its apex b to a, radius its half-width there. With kPrintSpellRay it is a ray from a to b that PrintRayCS follows to the first object top it enters. Mirrors PrintSpells in DeformationUpdateCS.hlsl. */
+	struct PrintSpellMark
+	{
+		RE::NiPoint3 a;
+		RE::NiPoint3 b;
+		float radius = 0.0f;
+		/** @brief The depth it wants, 0-1 of the snow, as the ground stamp's. */
+		float depth = 0.0f;
+		/** @brief Depth per second it approaches that at; 0 = at once. */
+		float rate = 0.0f;
+		uint32_t flags = 0;
+	};
+	static constexpr uint32_t kPrintSpellCone = 1u;
+	static constexpr uint32_t kPrintSpellBowl = 2u;
+	static constexpr uint32_t kPrintSpellRay = 4u;
+	/** @brief Spell marks the print stamp takes a frame; the rest wait for none, as a mark is re-sent while its source lasts. */
+	static constexpr uint32_t kPrintSpellCap = 32;
 
 	/** @brief One tile of the map known to hold prints or to have held them since its last write: the refill dispatch domain. */
 	struct PrintLiveTile
@@ -4466,6 +4491,8 @@ protected:
 	};
 
 	Texture2D* printMap = nullptr;
+	/** @brief The rim around each print (PrintRimCS): one R32_UINT texel per print texel, packed and addressed as the map, rebuilt from it. */
+	Texture2D* printRim = nullptr;
 	ConstantBuffer* printFrameCB = nullptr;
 	winrt::com_ptr<ID3D11Buffer> printBlockBuffer;
 	winrt::com_ptr<ID3D11ShaderResourceView> printBlockSRV;
@@ -4473,7 +4500,22 @@ protected:
 	ID3D11ComputeShader* printRingCS = nullptr;
 	ID3D11ComputeShader* printRefillCS = nullptr;
 	ID3D11ComputeShader* printViewCS = nullptr;
+	ID3D11ComputeShader* printRimCS = nullptr;
+	ID3D11ComputeShader* printRayCS = nullptr;
+	/** @brief This frame's spell marks on object snow, from the producers in Spells.cpp; cleared where spellEmitters is. */
+	std::vector<PrintSpellMark> printSpellMarks;
+	winrt::com_ptr<ID3D11Buffer> printSpellBuffer;
+	winrt::com_ptr<ID3D11ShaderResourceView> printSpellSRV;
+	winrt::com_ptr<ID3D11Buffer> printRayHitBuffer;
+	winrt::com_ptr<ID3D11ShaderResourceView> printRayHitSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> printRayHitUAV;
+	uint32_t printSpellsLast = 0;
+	bool printRayFailed = false;
 	bool printCSFailed = false;
+	/** @brief The rim kernel failed to compile: prints go on without a rim. */
+	bool printRimFailed = false;
+	/** @brief The width the rim was last built at; a change rebuilds it over every live tile. */
+	float printRimWidthLast = -1.0f;
 	uint32_t printMapDim = 0;
 	DirectX::XMINT2 printWindowMin = { 0, 0 };
 	bool printWindowValid = false;
@@ -4546,7 +4588,11 @@ protected:
 	ID3D11ComputeShader* GetPrintRingCS();
 	ID3D11ComputeShader* GetPrintRefillCS();
 	ID3D11ComputeShader* GetPrintViewCS();
+	ID3D11ComputeShader* GetPrintRimCS();
+	ID3D11ComputeShader* GetPrintRayCS();
 	void ReleaseObjectPrintShaders();
+	/** @brief One spell mark on object snow this frame (PrintSpellMark), taken while there is room. */
+	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags);
 	/** @brief Queues one tile's copy into a free staging slot; false when none is free. */
 	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
 	/** @brief Folds finished copies into the store. */
@@ -4570,7 +4616,7 @@ protected:
 	void PublishPrintTiles(ID3D11DeviceContext* a_context);
 	/** @brief Whether a world bound reaches a tile holding prints: the drapes' twin choice. */
 	bool PrintsUnder(const RE::NiBound& a_bound) const;
-	/** @brief Binds the print map and its tile mask for the readers (PS t114-t115) while the published rect is live, else nulls them. */
+	/** @brief Binds the print map, its tile mask and the rim for the readers (PS t114-t116) while the published rect is live, else nulls them. */
 	void BindPrintReaders(ID3D11DeviceContext* a_context) const;
 
 public:
@@ -4637,6 +4683,8 @@ protected:
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
 	std::vector<SpellEmitter> spellEmitters;
+	/** @brief The object-snow twin of a spell emitter (Snow Trenches on Objects), depth and reach as GatherStamps gives the ground's stamp: a melt at its strength and rate, a pit at Pit Depth over Pit Radius x a_pitScale unless a cone, a carve at Force Carve Depth. Crust and scorch leave no print. */
+	void QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags);
 
 	/** @brief Last XY per projectile (formID), for the capsule sweep. */
 	std::unordered_map<uint32_t, float2> spellPrevPositions;

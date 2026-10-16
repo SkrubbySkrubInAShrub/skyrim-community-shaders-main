@@ -99,6 +99,55 @@ ID3D11ComputeShader* SnowDeformation::GetPrintViewCS()
 	return printViewCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetPrintRimCS()
+{
+	if (!printRimCS && !printRimFailed) {
+		printRimCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRimCS"));
+		if (!printRimCS) {
+			printRimFailed = true;
+			logger::warn("[SNOW DEFORMATION] print rim kernel failed to compile; object prints go on without their rim");
+		}
+	}
+	return printRimCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetPrintRayCS()
+{
+	if (!printRayCS && !printRayFailed) {
+		printRayCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRayCS"));
+		if (!printRayCS) {
+			printRayFailed = true;
+			logger::warn("[SNOW DEFORMATION] print ray kernel failed to compile; spells that strike objects leave no print there");
+		}
+	}
+	return printRayCS;
+}
+
+void SnowDeformation::QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags)
+{
+	if (printSpellMarks.size() >= kPrintSpellCap || !(a_radius > 0.0f) || !(a_depth > 0.0f))
+		return;
+	printSpellMarks.push_back({ a_a, a_b, a_radius, std::min(a_depth, 1.0f), std::max(a_rate, 0.0f), a_flags });
+}
+
+void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags)
+{
+	switch (a_mark) {
+	case SpellMark::Melt:
+		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength, a_rate, a_flags);
+		break;
+	case SpellMark::Pit:
+		QueueObjectSpellMark(a_a, a_b, (a_flags & kPrintSpellCone) ? std::max(a_radius, 4.0f) : std::max(settings.PitRadius, 4.0f) * a_pitScale,
+			a_strength * std::clamp(settings.PitDepth, 0.0f, 1.0f), 0.0f, a_flags);
+		break;
+	case SpellMark::Carve:
+		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f), 0.0f, a_flags);
+		break;
+	default:
+		break;
+	}
+}
+
 bool SnowDeformation::EnsurePrintShaders()
 {
 	if (printCSFailed)
@@ -113,12 +162,14 @@ bool SnowDeformation::EnsurePrintShaders()
 
 void SnowDeformation::ReleaseObjectPrintShaders()
 {
-	for (auto** cs : { &printStampCS, &printRingCS, &printRefillCS, &printViewCS }) {
+	for (auto** cs : { &printStampCS, &printRingCS, &printRefillCS, &printViewCS, &printRimCS, &printRayCS }) {
 		if (*cs)
 			(*cs)->Release();
 		*cs = nullptr;
 	}
 	printCSFailed = false;
+	printRimFailed = false;
+	printRayFailed = false;
 }
 
 void SnowDeformation::CreatePrintResources(uint32_t a_dim)
@@ -148,6 +199,22 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 	uavDesc.Texture2DArray = { 0, 0, 2 };
 	printMap->CreateUAV(uavDesc);
 	printMapDim = a_dim;
+
+	delete printRim;
+	printRim = nullptr;
+	D3D11_TEXTURE2D_DESC rimDesc = mapDesc;
+	rimDesc.ArraySize = 1;
+	printRim = new Texture2D(rimDesc, "SnowDeformation::PrintRim");
+	D3D11_SHADER_RESOURCE_VIEW_DESC rimSrvDesc{};
+	rimSrvDesc.Format = rimDesc.Format;
+	rimSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	rimSrvDesc.Texture2D.MipLevels = 1;
+	printRim->CreateSRV(rimSrvDesc);
+	D3D11_UNORDERED_ACCESS_VIEW_DESC rimUavDesc{};
+	rimUavDesc.Format = rimDesc.Format;
+	rimUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+	printRim->CreateUAV(rimUavDesc);
+	printRimWidthLast = -1.0f;
 
 	delete printTiles;
 	printTiles = nullptr;
@@ -188,6 +255,45 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 		blockSrvDesc.Buffer.NumElements = kPrintBlockCap;
 		DX::ThrowIfFailed(device->CreateShaderResourceView(printBlockBuffer.get(), &blockSrvDesc, printBlockSRV.put()));
 		Util::SetResourceName(printBlockSRV.get(), "SnowDeformation::PrintBlocks SRV");
+	}
+
+	if (!printSpellBuffer) {
+		D3D11_BUFFER_DESC spellDesc{};
+		spellDesc.ByteWidth = kPrintSpellCap * 3u * sizeof(float4);
+		spellDesc.Usage = D3D11_USAGE_DYNAMIC;
+		spellDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		spellDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		spellDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		spellDesc.StructureByteStride = sizeof(float4);
+		DX::ThrowIfFailed(device->CreateBuffer(&spellDesc, nullptr, printSpellBuffer.put()));
+		Util::SetResourceName(printSpellBuffer.get(), "SnowDeformation::PrintSpells");
+		D3D11_SHADER_RESOURCE_VIEW_DESC spellSrvDesc{};
+		spellSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		spellSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		spellSrvDesc.Buffer.NumElements = kPrintSpellCap * 3u;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(printSpellBuffer.get(), &spellSrvDesc, printSpellSRV.put()));
+		Util::SetResourceName(printSpellSRV.get(), "SnowDeformation::PrintSpells SRV");
+
+		D3D11_BUFFER_DESC hitDesc{};
+		hitDesc.ByteWidth = kPrintSpellCap * sizeof(float4);
+		hitDesc.Usage = D3D11_USAGE_DEFAULT;
+		hitDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		hitDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		hitDesc.StructureByteStride = sizeof(float4);
+		DX::ThrowIfFailed(device->CreateBuffer(&hitDesc, nullptr, printRayHitBuffer.put()));
+		Util::SetResourceName(printRayHitBuffer.get(), "SnowDeformation::PrintRayHits");
+		D3D11_SHADER_RESOURCE_VIEW_DESC hitSrvDesc{};
+		hitSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		hitSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		hitSrvDesc.Buffer.NumElements = kPrintSpellCap;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(printRayHitBuffer.get(), &hitSrvDesc, printRayHitSRV.put()));
+		Util::SetResourceName(printRayHitSRV.get(), "SnowDeformation::PrintRayHits SRV");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC hitUavDesc{};
+		hitUavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		hitUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		hitUavDesc.Buffer.NumElements = kPrintSpellCap;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(printRayHitBuffer.get(), &hitUavDesc, printRayHitUAV.put()));
+		Util::SetResourceName(printRayHitUAV.get(), "SnowDeformation::PrintRayHits UAV");
 	}
 
 	if (!printWriteBuffer) {
@@ -460,8 +566,8 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	if (!printMap)
 		return;
 	// The readers let go before the map is a UAV target; PrepassSimulation binds them again.
-	ID3D11ShaderResourceView* nullReaders[2] = {};
-	a_context->PSSetShaderResources(kPrintReaderSlot, 2, nullReaders);
+	ID3D11ShaderResourceView* nullReaders[3] = {};
+	a_context->PSSetShaderResources(kPrintReaderSlot, 3, nullReaders);
 	printFrame++;
 	printStampBlocksLast = printRefillBlocksLast = printMirrorsLast = printInjectsLast = 0;
 
@@ -491,9 +597,9 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			slot.busy = false;
 	}
 
-	ID3D11UnorderedAccessView* nullUAV[3] = {};
+	ID3D11UnorderedAccessView* nullUAV[4] = {};
 	// Copies into and out of the map (mirror, inject) go with no UAV bound.
-	a_context->CSSetUnorderedAccessViews(0, 3, nullUAV, nullptr);
+	a_context->CSSetUnorderedAccessViews(0, 4, nullUAV, nullptr);
 	PollPrintWrites(a_context);
 	PollPrintMirrors(a_context);
 
@@ -534,6 +640,8 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	if (fullClear) {
 		const UINT zero[4] = {};
 		a_context->ClearUnorderedAccessViewUint(printMap->uav.get(), zero);
+		if (printRim)
+			a_context->ClearUnorderedAccessViewUint(printRim->uav.get(), zero);
 		printLive.clear();
 		printLastClearFrame = printFrame;
 	} else if (moved) {
@@ -556,6 +664,9 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		printRefillBank -= (float)quanta / 1023.0f;
 	}
 	cb.RefillQuanta = quanta;
+	cb.RimWidth = std::clamp(settings.ObjectPrintRimWidth, 0.0f, 15.0f);
+	const uint32_t spellCount = (printSpellBuffer && GetPrintRayCS()) ? (uint32_t)std::min<size_t>(printSpellMarks.size(), kPrintSpellCap) : 0u;
+	cb.SpellCount = spellCount;
 	printFrameCB->Update(cb);
 
 	ID3D11Buffer* cbs[2] = { perFrame->CB(), printFrameCB->CB() };
@@ -563,10 +674,11 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	ID3D11UnorderedAccessView* mapUAV = printMap->uav.get();
 
 	if (ringTotal > 0) {
-		a_context->CSSetUnorderedAccessViews(0, 1, &mapUAV, nullptr);
+		ID3D11UnorderedAccessView* ringUAVs[4] = { mapUAV, nullptr, nullptr, printRim ? printRim->uav.get() : nullptr };
+		a_context->CSSetUnorderedAccessViews(0, 4, ringUAVs, nullptr);
 		a_context->CSSetShader(printRingCS, nullptr, 0);
 		a_context->Dispatch((ringTotal + 63) / 64, 1, 1);
-		a_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+		a_context->CSSetUnorderedAccessViews(0, 4, nullUAV, nullptr);
 	}
 	printWindowMin = newMin;
 	printWindowValid = true;
@@ -654,21 +766,39 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
 		(a_frame.HasRoadRaster > 0.5f && heightSkinDepth) ? heightSkinDepth->srv.get() : nullptr
 	};
-	// The object gate needs this frame's contacts and a finished raster; an
-	// unbound raster reads 0, which is a top at sea level.
-	const bool fieldReady = a_trenchPassRan && contactSRVs[0] && contactSRVs[1] && heightMapValid && topSRVs[0] && topSRVs[1];
+	// The object gate needs a finished raster and, for bodies and props, this
+	// frame's contacts; an unbound raster reads 0, which is a top at sea level.
+	const bool fieldReady = a_trenchPassRan && contactSRVs[1] && heightMapValid && topSRVs[0] && topSRVs[1] && (contactSRVs[0] || spellCount > 0);
 
+	// World print-texel rects the stamp covers this frame: the rim is rebuilt
+	// around them when it ran.
+	std::vector<DirectX::XMINT4> stampRects;
 	if (fieldReady) {
 		printBlockScratch.clear();
+		auto texelRect = [](float a_minX, float a_minY, float a_maxX, float a_maxY) {
+			const int32_t x0 = (int32_t)std::floor(a_minX / kPrintTexel);
+			const int32_t y0 = (int32_t)std::floor(a_minY / kPrintTexel);
+			const int32_t x1 = (int32_t)std::floor(a_maxX / kPrintTexel);
+			const int32_t y1 = (int32_t)std::floor(a_maxY / kPrintTexel);
+			return DirectX::XMINT4{ x0, y0, x1 - x0 + 1, y1 - y0 + 1 };
+		};
 		// The stamp reads the contact field 2x2 around each texel centre.
 		const float pad = 2.0f * kPrintTexel;
-		for (const auto& actor : contactActors) {
-			const int32_t x0 = (int32_t)std::floor((actor.minX - pad) / kPrintTexel);
-			const int32_t y0 = (int32_t)std::floor((actor.minY - pad) / kPrintTexel);
-			const int32_t x1 = (int32_t)std::floor((actor.maxX + pad) / kPrintTexel);
-			const int32_t y1 = (int32_t)std::floor((actor.maxY + pad) / kPrintTexel);
-			addBlocks({ x0, y0, x1 - x0 + 1, y1 - y0 + 1 });
+		if (contactSRVs[0]) {
+			for (const auto& actor : contactActors)
+				stampRects.push_back(texelRect(actor.minX - pad, actor.minY - pad, actor.maxX + pad, actor.maxY + pad));
+			for (const auto& prop : contactProps)
+				stampRects.push_back(texelRect(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad));
 		}
+		// A spell's reach: its two points and its radius. A ray's hit is not
+		// known here, so its whole run is covered.
+		for (uint32_t i = 0; i < spellCount; i++) {
+			const auto& mark = printSpellMarks[i];
+			const float r = mark.radius + pad;
+			stampRects.push_back(texelRect(std::min(mark.a.x, mark.b.x) - r, std::min(mark.a.y, mark.b.y) - r, std::max(mark.a.x, mark.b.x) + r, std::max(mark.a.y, mark.b.y) + r));
+		}
+		for (const auto& rect : stampRects)
+			addBlocks(rect);
 		const uint32_t blocks = (uint32_t)printBlockScratch.size();
 		auto readback = std::find_if(printWriteReadbacks.begin(), printWriteReadbacks.end(), [](const PrintWriteReadback& r) { return !r.busy; });
 		if (blocks > 0 && readback != printWriteReadbacks.end() && uploadBlocks()) {
@@ -677,6 +807,29 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			a_context->CSSetShaderResources(2, 1, &blockSRV);
 			a_context->CSSetShaderResources(7, 3, contactSRVs);
 			a_context->CSSetShaderResources(10, 2, topSRVs);
+			ID3D11ShaderResourceView* spellSRVs[2] = { printSpellSRV.get(), printRayHitSRV.get() };
+			if (spellCount > 0) {
+				D3D11_MAPPED_SUBRESOURCE mapped{};
+				if (SUCCEEDED(a_context->Map(printSpellBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+					auto* rows = static_cast<float4*>(mapped.pData);
+					for (uint32_t i = 0; i < spellCount; i++) {
+						const auto& mark = printSpellMarks[i];
+						rows[i * 3] = { mark.a.x, mark.a.y, mark.a.z, mark.radius };
+						rows[i * 3 + 1] = { mark.b.x, mark.b.y, mark.b.z, (float)mark.flags };
+						rows[i * 3 + 2] = { mark.depth, mark.rate, 0.0f, 0.0f };
+					}
+					a_context->Unmap(printSpellBuffer.get(), 0);
+				}
+				// Each ray to the first object top it enters, before the stamp reads the hits.
+				a_context->CSSetShaderResources(13, 1, &spellSRVs[0]);
+				ID3D11UnorderedAccessView* rayUAVs[5] = { nullptr, nullptr, nullptr, nullptr, printRayHitUAV.get() };
+				a_context->CSSetUnorderedAccessViews(0, 5, rayUAVs, nullptr);
+				a_context->CSSetShader(printRayCS, nullptr, 0);
+				a_context->Dispatch((spellCount + 31) / 32, 1, 1);
+				ID3D11UnorderedAccessView* nullRay = nullptr;
+				a_context->CSSetUnorderedAccessViews(4, 1, &nullRay, nullptr);
+			}
+			a_context->CSSetShaderResources(13, 2, spellSRVs);
 			ID3D11UnorderedAccessView* stampUAVs[2] = { mapUAV, printWriteUAV.get() };
 			a_context->CSSetUnorderedAccessViews(0, 2, stampUAVs, nullptr);
 			a_context->CSSetShader(printStampCS, nullptr, 0);
@@ -699,7 +852,42 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			touched.clear();
 		}
 	}
-	if (!printStampBlocksLast)
+	// The rim, rebuilt from the map wherever it can have changed: around this
+	// frame's stamp, or over every live tile and its apron after a refill, an
+	// inject, a clear, a move or a new width.
+	uint32_t rimBlocks = 0;
+	const bool rimAll = fullClear || moved || quanta > 0 || printInjectsLast > 0 || cb.RimWidth != printRimWidthLast;
+	if (printRim && GetPrintRimCS() && ((rimAll && !printLive.empty()) || printStampBlocksLast > 0)) {
+		printBlockScratch.clear();
+		auto addApron = [&](const DirectX::XMINT4& a_rect) {
+			addBlocks({ a_rect.x - kPrintRimApron, a_rect.y - kPrintRimApron, a_rect.z + 2 * kPrintRimApron, a_rect.w + 2 * kPrintRimApron });
+		};
+		if (rimAll)
+			for (const auto& [id, live] : printLive)
+				addApron(TileRect(PrintTileX(id), PrintTileY(id), kPrintTileDim));
+		if (printStampBlocksLast > 0)
+			for (const auto& rect : stampRects)
+				addApron(rect);
+		const uint32_t blocks = (uint32_t)printBlockScratch.size();
+		if (blocks > 0 && uploadBlocks()) {
+			ID3D11ShaderResourceView* mapSRV = printMap->srv.get();
+			a_context->CSSetShaderResources(2, 1, &blockSRV);
+			a_context->CSSetShaderResources(12, 1, &mapSRV);
+			ID3D11UnorderedAccessView* rimUAVs[4] = { nullptr, nullptr, nullptr, printRim->uav.get() };
+			a_context->CSSetUnorderedAccessViews(0, 4, rimUAVs, nullptr);
+			a_context->CSSetShader(printRimCS, nullptr, 0);
+			globals::profiler->BeginPass("SnowDeformation::Objects - Trench Prints");
+			a_context->Dispatch(blocks, 1, 1);
+			globals::profiler->EndPass();
+			a_context->CSSetUnorderedAccessViews(0, 4, nullUAV, nullptr);
+			ID3D11ShaderResourceView* nullSRV = nullptr;
+			a_context->CSSetShaderResources(12, 1, &nullSRV);
+			rimBlocks = blocks;
+		}
+	}
+	if (rimAll && (rimBlocks > 0 || printLive.empty()))
+		printRimWidthLast = cb.RimWidth;
+	if (!printStampBlocksLast && !rimBlocks)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Trench Prints");
 
 	// Rolling mirror: keeps the store, and so the save, current with what the
@@ -739,10 +927,11 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		printStoreTilesLast = printStore.size();
 	}
 
+	printSpellsLast = spellCount;
 	a_context->CSSetShader(nullptr, nullptr, 0);
-	ID3D11ShaderResourceView* nullSRVs[11] = {};
-	a_context->CSSetShaderResources(2, 11, nullSRVs);
-	a_context->CSSetUnorderedAccessViews(0, 3, nullUAV, nullptr);
+	ID3D11ShaderResourceView* nullSRVs[13] = {};
+	a_context->CSSetShaderResources(2, 13, nullSRVs);
+	a_context->CSSetUnorderedAccessViews(0, 4, nullUAV, nullptr);
 	ID3D11Buffer* nullCBs[2] = {};
 	a_context->CSSetConstantBuffers(0, 2, nullCBs);
 }
@@ -807,8 +996,9 @@ bool SnowDeformation::PrintsUnder(const RE::NiBound& a_bound) const
 	if (printTileSumDim <= 0 || printRectPublished.z <= printRectPublished.x || printRectPublished.w <= printRectPublished.y ||
 		!std::isfinite(a_bound.center.x) || !std::isfinite(a_bound.center.y) || !(a_bound.radius >= 0.0f && a_bound.radius < 1e6f))
 		return false;
-	// The twin reads up to a texel and a half past its pixel.
-	const float reach = a_bound.radius + 2.0f * kPrintTexel;
+	// The twin reads up to a texel and a half past its pixel, and the rim
+	// reaches its apron past the print.
+	const float reach = a_bound.radius + (2.0f + (float)kPrintRimApron) * kPrintTexel;
 	const float tileSize = kPrintTexel * (float)kPrintTileDim;
 	const int32_t w = printTileSumDim;
 	const int32_t x0 = std::max((int32_t)std::floor((a_bound.center.x - reach) / tileSize) - printTileSumOrigin.x, 0);
@@ -824,8 +1014,9 @@ bool SnowDeformation::PrintsUnder(const RE::NiBound& a_bound) const
 void SnowDeformation::BindPrintReaders(ID3D11DeviceContext* a_context) const
 {
 	const bool live = printMap && printTiles && printRectPublished.z > printRectPublished.x && printRectPublished.w > printRectPublished.y;
-	ID3D11ShaderResourceView* srvs[2] = { live ? printMap->srv.get() : nullptr, live ? printTiles->srv.get() : nullptr };
-	a_context->PSSetShaderResources(kPrintReaderSlot, 2, srvs);
+	ID3D11ShaderResourceView* srvs[3] = { live ? printMap->srv.get() : nullptr, live ? printTiles->srv.get() : nullptr,
+		(live && printRim) ? printRim->srv.get() : nullptr };
+	a_context->PSSetShaderResources(kPrintReaderSlot, 3, srvs);
 }
 
 void SnowDeformation::SavePrintStore(const SKSE::SerializationInterface* a_intfc)
