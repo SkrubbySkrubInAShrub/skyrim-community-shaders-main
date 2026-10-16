@@ -425,10 +425,7 @@ namespace SharedData
 		float WaterWindowTexel;
 		float WaterWindowDim;
 
-		// Vertex Alpha Fades Snow: where vertex alpha < 1 the drape dissolves
-		// (the skin PS's densityFade); the recolor keeps the pixel. Mirror in
-		// SnowDeformation.h.
-		float ProjAlphaDensity;
+		float padAlphaDensity;
 		// Recolored projected snow also wears the shell snow's normal (vanilla's
 		// own projected normal is a dead write). Mirror in SnowDeformation.h.
 		float ProjSnowNormalEnable;

@@ -23,9 +23,6 @@
 // frost adds its own.
 #define SNOWDEF_SETTINGS_FIELDS(X) \
 	X(EnableSnowDeformation) \
-	X(StampRadius) \
-	X(FootPrintScale) \
-	X(TrenchWallSharpness) \
 	X(SlumpRate) \
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
@@ -154,7 +151,6 @@
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
 	X(CityShells) \
-	X(RoadPatchFarLevel) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
 	X(ProjSnowMatch) \
@@ -164,7 +160,7 @@
 	X(ShelterDriftAngle) \
 	X(ObjectMeetBand) \
 	X(LODObjectSnow) \
-	X(SnowTexturedRecolor) 	X(ProjAlphaDensity) \
+	X(SnowTexturedRecolor) \
 	X(ProjSnowNormals) \
 	X(UnprojectedShapesBare) \
 	X(VolumeSnow) \
@@ -720,7 +716,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.ProjUnauthoredThreshold = std::cos(std::clamp(settings.SeasonsSnowMaxAngle, 0.0f, 90.0f) * (DirectX::XM_PI / 180.0f));
 	data.LODObjectEnable = (settings.EnableSnowDeformation && settings.LODObjectSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowTexturedEnable = (settings.EnableSnowDeformation && settings.SnowTexturedRecolor && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
-	data.ProjAlphaDensity = settings.ProjAlphaDensity ? 1.0f : 0.0f;
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
@@ -1092,15 +1087,14 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
 	perFrameData.BermReach = BermReachScale();
 	perFrameData.BodyPrint = BodyPrintScale();
-	// Sharpness is a percent slider; 100% clamps just below the degenerate
-	// smoothstep(1, 1, x) edge.
 	// Fresh snow cannot hold a cut: walls stamped while it is loose slope
 	// across most of the print. Stamp-time, so a trench keeps the wall it
-	// was cut with until firmer traffic re-cuts it.
+	// was cut with until firmer traffic re-cuts it. The clamp keeps clear of
+	// the degenerate smoothstep(1, 1, x) edge.
 	{
 		const SnowClimateLook look = ComputeSnowClimateLook();
 		const float wallEase = std::lerp(std::lerp(1.0f, 0.3f, GetSnowSoftness()), std::lerp(1.0f, 0.3f, look.slough), look.strength);
-		perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f * wallEase, 0.0f, 0.98f);
+		perFrameData.StampFalloffStart = std::clamp(kTrenchWallSharpness * 0.01f * wallEase, 0.0f, 0.98f);
 	}
 	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
 	perFrameData.ShoutShape = { std::clamp(settings.ShoutMarkWaist, 0.05f, 0.95f), std::clamp(settings.ShoutMarkRoundness, 1.0f, 4.0f),

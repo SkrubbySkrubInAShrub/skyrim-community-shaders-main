@@ -3846,10 +3846,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
 	float pdCoverage = 0.0;
-	// Vertex Alpha Fades Snow: the coat dissolves off sheltered pixels (vertex
-	// alpha thinned), leaving the recolored projected snow lying flat; rides
-	// the distance dither (the one fade allowed to dither), 1 = untouched.
-	float densityFade = 1.0;
 	// The normal z the slope cut reads, the reconstructed projected weight
 	// and its fill gate: the edge breakup and the coat key off the same
 	// values the gates do, so their edge is the shell's.
@@ -3911,10 +3907,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 			[flatten] if (realEnc >= 1.5)
 				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
 		}
-		// Vertex Alpha Fades Snow: on a thinned alpha the coat dissolves and
-		// the recolored projected snow beneath it shows through, flat.
-		[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
-			densityFade = 1.0 - saturate((1.0 - input.ProjFactor) * 4.0);
 		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
 		// occlusion find, decoded by his coverage-alpha shot): every gate
 		// above reads nzPix / wpix from the PRE-SHELL G-buffer - the
@@ -4465,11 +4457,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 #	endif
 
-#	ifndef PATCH
-	// Vertex Alpha Fades Snow: after the coat block, which turns fadeAlpha
-	// into a contour; this one is meant to dither, like the distance fade.
-	fadeAlpha *= densityFade;
-#	endif
 	// Captured before the override: mode 2 renders the value the dither sees.
 	float dbgAlpha = coverageAlpha * fadeAlpha;
 	// Debug view: full visibility; the dither must not hide geometry the

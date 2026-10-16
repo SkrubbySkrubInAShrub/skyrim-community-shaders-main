@@ -17,7 +17,10 @@ static constexpr float kStampSurfaceBand = 40.0f;
 // Sanity clamp on extracted shape radii.
 static constexpr float kMinStampShapeRadius = 4.0f;
 static constexpr float kMaxStampShapeRadius = 128.0f;
-// StampRadius setting value at which shape radii are unscaled.
+// Shape stamps scale Havok collision-shape radii by kStampRadius over
+// kStampRadiusNeutral (the shapes' actual size): half size, since full-size
+// prints read bloated.
+static constexpr float kStampRadius = 10.0f;
 static constexpr float kStampRadiusNeutral = 20.0f;
 // Per-frame movement beyond this (teleport, cell load) breaks the capsule trail.
 static constexpr float kTrailBreakDistance = 256.0f;
@@ -75,6 +78,8 @@ static constexpr float kFootRelativeLenFactor = 0.6f;
 static constexpr float kFootToeExtend = 0.2f;
 // Print half-width as a fraction of the extended heel-toe length.
 static constexpr float kFootWidthRatio = 0.22f;
+// Width multiplier on foot-bone stamps (length stays anatomical).
+static constexpr float kFootPrintScale = 1.0f;
 // Circular print radius (at bone scale 1) for feet without a toe bone (hooves).
 static constexpr float kHoofRadius = 7.0f;
 // Below ~1.5 deformation texels a print aliases away; snow prints collapse
@@ -1240,7 +1245,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 							footLen = len * extend;
 						}
 					}
-					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
+					radius = std::clamp(radius * kFootPrintScale * depthScale,
 						footRadiusFloor, kMaxStampShapeRadius);
 
 					// Absence from the trail map is the lifted latch: a foot in
@@ -1506,9 +1511,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = shapeStamp.a.x;
 					stamp.y = shapeStamp.a.y;
 					stamp.z = carve;
-					// StampRadius scales the shape's own radius; the crust reads the
+					// kStampRadius scales the shape's own radius; the crust reads the
 					// bound sphere, the mass proxy, unchanged.
-					stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale,
+					stamp.w = std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale,
 						texelFloor);
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, kStampModeBody,
@@ -1743,7 +1748,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stamp.x = shapeStamp.a.x;
 				stamp.y = shapeStamp.a.y;
 				stamp.z = carve;
-				stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
+				stamp.w = std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, 0.0f,
 					CrustBreakForce(radius) };
@@ -1779,7 +1784,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = current.x;
 					stamp.y = current.y;
 					stamp.z = carve;
-					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
+					stamp.w = std::max(radius * kStampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
 						CrustBreakForce(radius) };

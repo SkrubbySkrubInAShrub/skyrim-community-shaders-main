@@ -334,12 +334,6 @@ public:
 	struct Settings
 	{
 		bool EnableSnowDeformation = true;
-		/** @brief Scale on Havok collision-shape radii: 20 = the shapes' actual size; the 10 default halves them, which is the intended in-game read (full-size prints read bloated). */
-		float StampRadius = 10.0f;
-		/** @brief Width multiplier on foot-bone stamps (length stays anatomical). */
-		float FootPrintScale = 1.0f;
-		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
-		float TrenchWallSharpness = 66.0f;
 		/** @brief Unsupported-snow settle speed, 0-1. Strips left standing between separate trails sink about halfway toward the shallower side's floor once BOTH sides are dug away; walls and open snow never move. 0 disables the pass. */
 		float SlumpRate = 0.1f;
 		/** @brief Multiplier on the snowfall-driven refill rate. 0 disables refilling. */
@@ -412,7 +406,7 @@ public:
 		float CrustThawMinutes = 4.0f;
 		/** @brief How completely carving through a crust destroys it, against how deep the cut went. At 1 a shallow print barely dulls the glaze; higher values let any cut break the skin properly, which is what stops a trench through ice reading as a groove in ice cream. */
 		float CrustBreakOnCarve = 6.0f;
-		/** @brief Stamp radius past which a shape counts as heavy enough to break a crust rather than print on it. A human foot sits well under this; a mammoth or a landing dragon well over. */
+		/** @brief Stamp radius past which a shape counts as heavy enough to break a crust rather than print on it (CrustBreakForce). Capsule stamps only: bodies outside the contact window (kContactHalfExtent) or past its budget (kContactMaxActors living, kContactMaxCorpses dead) and props outside it, such as a distant mammoth or a landing dragon. The contact carve puts no weight through a crust. */
 		float CrustBreakRadius = 30.0f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
@@ -523,10 +517,8 @@ public:
 		float SkinEdgeFlankWidth = 0.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
-		/** @brief Landscape shell, road class and trench patch inside child worldspaces (the walled cities). Off by default (Josef, 2026-09-17): where those shells meet city meshes they never sit right, and the volume snow takes the ground over there. Object snow stays. */
+		/** @brief Landscape shell, road class and trench patch inside child worldspaces (the walled cities). Off by default (Josef, 2026-09-17): where those shells meet city meshes they never sit right. Off leaves the city ground as the game draws it; object snow stays. */
 		bool CityShells = false;
-		/** @brief The road patch past the object raster: a road-only top map over the loaded-cell square (heightTopRawFar), read by PatchTop and RoadOwnsColumn outside the coarse window, so the road surface runs to the loaded grid's edge instead of handing back to the flat skin at ObjectRasterReachM. */
-		bool RoadPatchFarLevel = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief "Snow PBR Config" (2026-09-22): pins the TruePBR texture set the shell takes its roughness, specular and glint from. Empty = the ranked automatic match. Exists because a modlist can hold several sets whose key contains the snow texture's basename and no rule fits every one - an AutoBlend stub with no glintParameters block once won on the letter B and took the sparkle off both shells. */
@@ -563,7 +555,7 @@ public:
 		float RimTeeth = 0.50f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
 		float SnowResistance = 33.0f;
-		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth and wall softness follow the snow, each with its slider as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
+		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth and wall softness follow the snow, each with its slider (the walls: kTrenchWallSharpness) as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
 		float SnowClimateStrength = 0.75f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
@@ -618,7 +610,7 @@ public:
 		float SkinDepthBias = 64.0f;
 		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces. Default 0: the constant term alone settled the contest with no visible cost. */
 		float SkinSlopeDepthBias = 0.0f;
-		/** @brief Object-skin tessellation cap: no generated edge segment shorter than this many screen pixels. 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole skin. Not bit-identical: it changes the surface. 16 measured -0.32 ms on StaticsShell with no visible change (PERF-RESEARCH 9.6); 32 is the tier value. */
+		/** @brief Road-snow tessellation cap: no generated edge segment shorter than this many screen pixels. Only road skins tessellate (S4 skins draw untessellated), so this caps how finely road snow is subdivided: higher = cheaper, 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole surface. A quality-preset lever. */
 		float SkinTessCapPx = 16.0f;
 		/** @brief Ground snow slope drape, 0-1: how far the layer's stand-off turns from straight up toward the ground normal as the slope steepens (30 to 60 degrees). A vertical-only offset thins to depth*cos(slope) and steep faces show through. Read through SHELL_DRAPE by the ground snow's vertices and its sun caster only. */
 		float SlopeDrape = 1.0f;
@@ -634,9 +626,7 @@ public:
 		bool MultipassSnowFollowsPaint = true;
 		/** @brief "Recolor Snow-Textured Meshes": shapes whose diffuse is a snow texture but which carry no projection (dirt cliffs' snow01 tops, a season swap's alternate sets, drifts) take the baked-snow recolor in Lighting by texel, their skins take the coat, and the written weight reaches the volume. Unprojected shapes only; the projected-pass texel floor that shipped with the 2026-09-14 A/B is not part of it. */
 		bool SnowTexturedRecolor = false;
-		/** @brief "Vertex Alpha Fades Snow" (A/B, 2026-09-22): where a mesh's vertex alpha is below 1 (an authored mask, or XPMF's roof-shelter ramp) the snow loses THICKNESS, not its material: the recolor keeps the pixel and the drape dissolves off it over alpha 1 -> 0.75, so a sheltered spot reads as this mod's snow lying flat. Round 1 (follow the game's blend weight) was invisible; round 2 handed the pixel back to the game's own PD, which covered right but wore the wrong material (Josef, 2026-09-22). */
-		bool ProjAlphaDensity = false;
-		/** @brief "Recolor Projected Snow Normals" (2026-09-22): recolored projected snow also wears the shell snow's NORMAL, perturbed the way the drape's coat does. Vanilla's own projected normal never reaches the G-buffer (Lighting builds worldNormal before the projected block; the block's normal write is dead, upstream included), so without this every projected-snow pixel the coat does not cover wears the object's bump and reads as snow painted on. Rides the snow verdict, so it holds where ProjAlphaDensity dissolves the coat too. */
+		/** @brief "Recolor Projected Snow Normals" (2026-09-22): recolored projected snow also wears the shell snow's NORMAL, perturbed the way the drape's coat does. Vanilla's own projected normal never reaches the G-buffer (Lighting builds worldNormal before the projected block; the block's normal write is dead, upstream included), so without this every projected-snow pixel the coat does not cover wears the object's bump and reads as snow painted on. Rides the snow verdict. */
 		bool ProjSnowNormals = true;
 		/** @brief "Unpainted Shapes Stay Bare" (2026-09-22): a shape of a snow-MATO object that the game draws without projection writes the drape's read-back mask as "known, unpainted", instead of leaving 0 there and having the drape read "unknown" as licence to coat. Found with XPMF, which strips the projected flag from one shape of a building; the shape then overdraws its projected siblings' verdict. Positive snow MATOs only, so mesh replacers and drifts keep the reconstruct path. */
 		bool UnprojectedShapesBare = true;
@@ -728,8 +718,7 @@ public:
 		float WaterWindowTexel;
 		float WaterWindowDim;
 
-		/** @brief Settings::ProjAlphaDensity as 0/1. Mirror in SharedData.hlsli. */
-		float ProjAlphaDensity;
+		float padAlphaDensity;
 		/** @brief Settings::ProjSnowNormals as 0/1. Mirror in SharedData.hlsli. */
 		float ProjSnowNormalEnable;
 		/** @brief The snow set's specular level (F0 scale), for the land recolor. Mirror in SharedData.hlsli. */
@@ -837,6 +826,9 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, ContactCenter) == 12432, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+
+	/** @brief Lower smoothstep edge of a capsule stamp's falloff, in percent of its radius, before fresh snow and Snow Climate ease it (PerFrame::StampFalloffStart): 0 = the softest, widest banks; 100 = full depth to the edge. */
+	static constexpr float kTrenchWallSharpness = 66.0f;
 
 	Settings settings;
 
@@ -2715,7 +2707,8 @@ public:
 	Texture2D* heightTopRawFar = nullptr;
 	float2 farWindowCenter = { 0, 0 };
 	float farHalfExtentLive = 0.0f;
-	bool FarLevelActive() const { return settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
+	/** @brief The far road level can be built (with the road maps): PatchTop and RoadOwnsColumn read it outside the coarse window, so road snow runs to the loaded grid's edge instead of handing back to the flat skin at ObjectRasterReachM. */
+	bool FarLevelActive() const { return heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
 	/** @brief Cone passes the chain ran this frame (of kConeSteps). */
 	uint32_t conePassesCoarse = 0;
 	/** @brief Only road skins, the trench patch, the march's road taps and the debug views read the cones and the near level: true when one of them can this frame. */

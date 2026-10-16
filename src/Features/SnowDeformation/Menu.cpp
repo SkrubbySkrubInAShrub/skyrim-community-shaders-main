@@ -333,11 +333,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("proj_snow_normals"), "Recolor Projected Snow Normals"), &settings.ProjSnowNormals);
 		if (auto _ttProjNormals = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it, including where Vertex Alpha Fades Snow has thinned the drape away."));
-
-		ImGui::Checkbox(T(TKEY("proj_alpha_density"), "Vertex Alpha Fades Snow"), &settings.ProjAlphaDensity);
-		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_alpha_density_tooltip"), "Where a mesh's own vertex alpha thins the snow - an authored mask, or the roof-shelter ramp a mod like XPMF writes - the snow loses its depth there: the raised drape dissolves away and what is left is this mod's snow lying flat on the surface. It keeps this mod's material and sparkle, it just stops standing proud of the mesh. Where the alpha is untouched, nothing changes. Off = the drape covers the thinned spots at full depth."));
+			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it."));
 
 		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
 		if (auto _ttBare = Util::HoverTooltipWrapper())
@@ -379,7 +375,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("skin_tess_cap_px"), "Object Snow Tessellation Cap"), &settings.SkinTessCapPx, 0.0f, 32.0f, "%.0f px");
 		if (auto _ttStc = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "The object snow layer is subdivided so that its rounded rims get enough vertices; at a distance those vertices end up smaller than a pixel and cost GPU time for nothing visible. This is the smallest on-screen size a subdivision segment may have, in pixels. 0 turns the cap off. Up to about 20 it only trims the rims at range; above that it coarsens the whole layer. Read the Object snow line under Pipeline Statistics to see the DS count fall."));
+			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "Caps how finely road snow is subdivided (no other object snow is): no subdivision segment may be smaller on screen than this many pixels. At a distance, finer segments end up smaller than a pixel and cost GPU time for nothing visible. Higher = cheaper: up to about 20 it only trims the rounded edges at range; above that it coarsens the whole road surface. 0 turns the cap off. The Medium and Low presets raise it."));
 
 		ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
@@ -565,7 +561,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Height Map Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
 		if (auto _ttOrr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far around you the top-down height map of the objects reaches. Inside it, snow thins under roofs, bridges and archways, road snow takes its shape and its trenches, footprints can be laid on objects, and Volume Snow finds what shelters it. Past it there is no shelter under cover and no footprints on objects, and road snow goes on only through Road Snow To The Loaded Grid. Keep it at or above the reach of Snow Trenches on Objects, or footprints on objects stop at this range. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: a texel is about 7 world units at the default 100 m, 4 at 58 m. Costs nothing extra to raise; it coarsens the map near you instead."));
+			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far around you the top-down height map of the objects reaches. Inside it, snow thins under roofs, bridges and archways, road snow takes its shape and its trenches, footprints can be laid on objects, and Volume Snow finds what shelters it. Past it there is no shelter under cover and no footprints on objects, and road snow goes on from a coarser road-only map to the edge of the loaded cells. Keep it at or above the reach of Snow Trenches on Objects, or footprints on objects stop at this range. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: a texel is about 7 world units at the default 100 m, 4 at 58 m. Costs nothing extra to raise; it coarsens the map near you instead."));
 
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
@@ -674,10 +670,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("roads_group"), "Roads"));
 		ImGui::Checkbox(T(TKEY("city_shells"), "Landscape And Road Snow In Cities"), &settings.CityShells);
 		if (auto _ttCity = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("city_shells_tooltip"), "Draws the landscape shell and road snow inside the walled cities (their own worldspaces). Off, cities keep object snow only; the ground there is left to the volume snow."));
-		ImGui::Checkbox(T(TKEY("road_patch_far_level"), "Road Snow To The Loaded Grid"), &settings.RoadPatchFarLevel);
-		if (auto _ttRoadFar = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_patch_far_level_tooltip"), "Carries the road surface past the Object Height Map Range to the edge of the loaded cells, from a coarser road-only height map (a texel is 12-16 units out there). Off, road snow beyond that range is the flat road skin, and the line where one hands to the other moves with you."));
+			ImGui::Text("%s", T(TKEY("city_shells_tooltip"), "Draws the landscape shell and road snow inside the walled cities (their own worldspaces). Off, cities keep object snow only; the ground there stays as the game draws it."));
 
 		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
 		if (auto _ttRoad = Util::HoverTooltipWrapper())
@@ -866,11 +859,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
 		if (auto _ttClimate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge and loose snow fallen back into them; settled snow just below freezing keeps the full ridge, lip and teeth; wet snow leaves dark prints with crisp walls. Each trench slider is the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
+			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge and loose snow fallen back into them; settled snow just below freezing keeps the full ridge, lip and teeth; wet snow leaves dark prints with crisp walls. Berm Height, Rim Lip and Rim Teeth are the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, new trenches get sloped sides instead of sharp walls, the ridge beside them shrinks, and the rim loses its lip and teeth. As the snow settles over the following days, the look you set with Trench Wall Sharpness, Berm Height, Rim Lip and Rim Teeth comes back. Trenches keep the walls they were cut with. 0 = off, the snow is always firm. Snow Climate takes over from this as it rises: at 1.00 fresh snow acts through its stickiness and density instead."));
+			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, the ridge beside trenches shrinks and the rim loses its lip and teeth; trenches cut by distant creatures, spells and shouts also get sloped sides instead of sharp walls. As the snow settles over the following days, the look you set with Berm Height, Rim Lip and Rim Teeth comes back and those walls sharpen again; a trench keeps the walls it was cut with. 0 = off, the snow is always firm. Snow Climate takes over from this as it rises: at 1.00 fresh snow acts through its stickiness and density instead."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_settle"), "Fresh Snow Settles In"), &settings.FreshSnowSettleHours, 6.0f, 168.0f, "%.0f game hours");
 		if (auto _ttSettle = Util::HoverTooltipWrapper())
@@ -902,21 +895,9 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
-			if (auto _ttStamp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
-
-			ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
-			if (auto _ttFw = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. 1.00 = the foot's own width (default); higher reads as snow collapsing wider than the foot."));
-
 			ImGui::SliderFloat(T(TKEY("snow_slumping"), "Snow Slumping"), &settings.SlumpRate, 0.0f, 1.0f, "%.2f");
 			if (auto _ttSlump = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_slumping_tooltip"), "Snow dug away on BOTH sides loses its support and settles about halfway into a low uneven bump, so heavy traffic reads as one churned channel instead of a comb of full-height fins. Trench walls and open snow never move. 0 = off; higher = faster settling."));
-
-			ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
-			if (auto _ttSharp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
 
 			ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
 			if (auto _ttFloat = Util::HoverTooltipWrapper())
@@ -1184,7 +1165,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("crust_break_radius"), "Frost Break Weight"), &settings.CrustBreakRadius, 8.0f, 120.0f, "%.0f");
 			if (auto _ttCrustBreak = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crust_break_radius_tooltip"), "Size a shape must reach before it breaks through a crust rather than printing on it, standing in for weight. Low values let anything shatter the glaze; high values let a mammoth walk on it."));
+				ImGui::Text("%s", T(TKEY("crust_break_radius_tooltip"), "Only creatures that carve by stamps read this: those beyond about 44 m from you or past the 16 nearest, such as a distant mammoth or a landing dragon. It is the size a body part must reach before it breaks through a crust instead of printing on it, standing in for weight: low values let anything shatter the glaze, high values let a mammoth walk on it. Nearer creatures carve by their own mesh and always print on a crust at Frost Print Depth."));
 
 			ImGui::SliderFloat(T(TKEY("frost_pattern_scale"), "Frost Crystal Size"), &settings.FrostPatternScale, 16.0f, 512.0f, "%.0f");
 			if (auto _ttFrostScale = Util::HoverTooltipWrapper())
