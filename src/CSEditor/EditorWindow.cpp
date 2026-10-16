@@ -1951,8 +1951,16 @@ namespace
 	/** @brief Forces the sky onto the locked weather, claiming the override slot so nothing lerps away from it. */
 	void ReapplyLock(RE::Sky* sky, RE::TESWeather* weather)
 	{
-		if (sky && weather)
-			Util::ForceWeather(sky, weather, true);
+		if (!sky || !weather)
+			return;
+
+		// ForceWeather resets the sky (sounds, region, flags); when the weather is already showing, only the override slot is missing.
+		if (sky->currentWeather == weather && !sky->lastWeather) {
+			sky->overrideWeather = weather;
+			sky->lastWeatherUpdate = sky->currentGameHour;  // Renews the override's expiry, as ForceWeather does.
+			return;
+		}
+		Util::ForceWeather(sky, weather, true);
 	}
 
 	void SetWeatherThunk(RE::Sky* sky, RE::TESWeather* weather, bool isOverride, bool accelerate)
