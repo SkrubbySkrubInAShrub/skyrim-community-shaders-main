@@ -1124,8 +1124,9 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 Texture2D<float4> RuneAtlas : register(t90);
 Texture2D<float4> RuneDiffuse[4] : register(t80);
 Texture2D<float4> RuneNormal[4] : register(t84);
-// Per mark: [2i] = uv at the window's origin, texture slot, material alpha;
-// [2i + 1] = uv per world unit along x, then along y.
+// Per mark: [2i] = uv at the window's origin, texture slot + 4 x its quarter
+// of the 2x2 decal atlas (4 = the whole texture), material alpha; [2i + 1] =
+// uv per world unit along x, then along y.
 StructuredBuffer<float4> FrostPlanes : register(t117);
 Texture2D<float4> FrostDiffuse[4] : register(t118);
 Texture2D<float4> FrostNormal[4] : register(t122);
@@ -1157,8 +1158,10 @@ struct RuneGlyph
 };
 
 // Every frost mark over a point, through its own uv plane, laid over one
-// another as the game stacks decals, the newest on top, each fading into the
-// snow over the outer part of its round. Stops once the stack is opaque.
+// another as the game stacks decals, the newest on top. Each is its own
+// quarter of the decal atlas, whole wherever the game clipped the decal, and
+// fades into the snow over the outer part of its round. Stops once the stack
+// is opaque.
 RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 {
 	RuneGlyph g;
@@ -1184,15 +1187,17 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 				const float4 head = FrostPlanes[mark * 2u];
 				const float4 slope = FrostPlanes[mark * 2u + 1u];
 				const float2 uv = head.xy + slope.xy * rel.x + slope.zw * rel.y;
-				const float r = length(uv - 0.5);
-				[branch] if (head.w > 0.0 && r < 0.5)
+				const uint quarter = (uint)head.z >> 2;
+				const float2 centre = quarter < 4u ? float2(quarter & 1u, quarter >> 1u) * 0.5 + 0.25 : 0.5;
+				const float r = length(uv - centre) * (quarter < 4u ? 4.0 : 2.0);
+				[branch] if (head.w > 0.0 && r < 1.0)
 				{
 					const float2 gradX = slope.xy * worldDx.x + slope.zw * worldDx.y;
 					const float2 gradY = slope.xy * worldDy.x + slope.zw * worldDy.y;
 					float4 d = 0.0;
 					float4 n = float4(0.5, 0.5, 1.0, 0.0);
 					float hasNormal = 0.0;
-					[branch] switch ((uint)head.z)
+					[branch] switch ((uint)head.z & 3u)
 					{
 					case 0u:
 						d = FrostDiffuse[0].SampleGrad(SnowSampler, uv, gradX, gradY);
@@ -1215,7 +1220,7 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy)
 						hasNormal = FrostNormals.w;
 						break;
 					}
-					const float a = d.a * head.w * (1.0 - smoothstep(0.3, 0.5, r)) * (1.0 - colour.a);
+					const float a = d.a * head.w * (1.0 - smoothstep(0.6, 1.0, r)) * (1.0 - colour.a);
 					float3 nw = float3(0.0, 0.0, 1.0);
 					const float det = slope.x * slope.w - slope.z * slope.y;
 					[branch] if (hasNormal > 0.5 && abs(det) > 1e-12)

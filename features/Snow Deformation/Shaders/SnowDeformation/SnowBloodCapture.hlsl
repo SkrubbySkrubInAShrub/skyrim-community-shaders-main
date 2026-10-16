@@ -248,46 +248,6 @@ VS_OUTPUT main(VS_INPUT input, uint inst : SV_InstanceID)
 #	endif
 #endif
 
-#ifdef FROSTPLANE
-// FROSTPLANE: a frost mark's uv as a plane over the ground (Blood.cpp,
-// RenderRuneCapture). Each triangle, drawn top-down over the frost window,
-// solves its own uv against the window's texels; the PS keeps it for the
-// mark (Spread.w = index * 4 + texture slot), uv at the window's origin and
-// uv per world unit along x and y. A mark's pieces share one plane.
-struct PLANE_OUTPUT
-{
-	float4 Position : SV_POSITION;
-	float NormalZ : TEXCOORD1;
-	nointerpolation float2 PlaneOrigin : TEXCOORD4;
-	nointerpolation float4 PlaneSlope : TEXCOORD5;
-};
-#endif
-
-#if defined(GSHADER) && defined(FROSTPLANE)
-[maxvertexcount(3)] void main(triangle VS_OUTPUT v[3], inout TriangleStream<PLANE_OUTPUT> stream) {
-	const float2 e1 = v[1].Logical - v[0].Logical;
-	const float2 e2 = v[2].Logical - v[0].Logical;
-	const float det = e1.x * e2.y - e1.y * e2.x;
-	[branch] if (abs(det) > 1e-6)
-	{
-		const float2 f1 = v[1].UV - v[0].UV;
-		const float2 f2 = v[2].UV - v[0].UV;
-		// uv per texel along x and along y.
-		const float2 dx = (f1 * e2.y - f2 * e1.y) / det;
-		const float2 dy = (f2 * e1.x - f1 * e2.x) / det;
-		PLANE_OUTPUT o;
-		o.PlaneOrigin = v[0].UV - dx * v[0].Logical.x - dy * v[0].Logical.y;
-		o.PlaneSlope = float4(dx, dy) / TexelSize;
-		[unroll] for (uint i = 0; i < 3; i++)
-		{
-			o.Position = v[i].Position;
-			o.NormalZ = v[i].NormalZ;
-			stream.Append(o);
-		}
-	}
-}
-#endif
-
 #if defined(PSHADER) && defined(OVERLAY)
 struct OVERLAY_OUTPUT
 {
@@ -411,17 +371,6 @@ RUNE_OUTPUT main(VS_OUTPUT input)
 	o.Field = float4(saturate(input.UV), Spread.w / 65535.0, saturate(MaterialAlpha));
 	o.Depth = 1.0 - a;
 	return o;
-}
-#elif defined(PSHADER) && defined(FROSTPLANE)
-RWStructuredBuffer<float4> FrostPlanes : register(u0);
-
-void main(PLANE_OUTPUT input)
-{
-	if (input.NormalZ < NormalZMin)
-		discard;
-	const uint code = (uint)Spread.w;
-	FrostPlanes[(code >> 2) * 2u] = float4(input.PlaneOrigin, float(code & 3u), saturate(MaterialAlpha));
-	FrostPlanes[(code >> 2) * 2u + 1u] = input.PlaneSlope;
 }
 #elif defined(PSHADER)
 struct PS_OUTPUT

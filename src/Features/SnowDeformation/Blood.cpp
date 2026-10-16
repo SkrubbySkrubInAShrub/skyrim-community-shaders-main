@@ -127,13 +127,6 @@ void SnowDeformation::ReleaseBloodShaders()
 	if (runePS)
 		runePS->Release();
 	runePS = nullptr;
-	if (frostPlaneGS)
-		frostPlaneGS->Release();
-	frostPlaneGS = nullptr;
-	if (frostPlanePS)
-		frostPlanePS->Release();
-	frostPlanePS = nullptr;
-	frostPlanesFailed = false;
 	if (decalMaskVS)
 		decalMaskVS->Release();
 	decalMaskVS = nullptr;
@@ -786,41 +779,183 @@ bool SnowDeformation::EnsureRuneResources()
 	return true;
 }
 
+// A frost decal's mark, from the decal's own vertices as the blood tiles read
+// their bounds: the least-squares uv plane over the xy of its flat triangles,
+// each corner weighted by a third of its triangle's area over the ground, and
+// the quarter of the 2x2 decal atlas that uv lies in. The whole geometry at
+// once, so a sliver or a rock face cannot tip it and it is the same every
+// frame. The mark is the decal's whole round, wherever the game clipped it.
+namespace
+{
+	// Flatter triangles shape a mark; up a rock's side the decal's uv runs up
+	// the face, not over the ground.
+	constexpr float kFrostFlatNormalZ = 0.5f;
+	// A mark whose flat triangles miss its plane by more than this (rms, world
+	// units) does not lie on the ground.
+	constexpr float kFrostFitTolerance = 4.0f;
+	// One decal laid on two geometries (the ground and a rock, two shapes of a
+	// rock) fits twice: centres this close, slopes this alike, one atlas quarter.
+	constexpr float kFrostTwinDistance = 12.0f;
+	constexpr float kFrostTwinSlope = 0.15f;
+
+	struct FrostFit
+	{
+		// World xy of the decal's centre, the middle of its atlas quarter.
+		double centreX = 0.0;
+		double centreY = 0.0;
+		// du/dx, dv/dx, du/dy, dv/dy.
+		double slope[4] = {};
+		// Half the extent of its round along world x and y.
+		float reachX = 0.0f;
+		float reachY = 0.0f;
+		// 0-3: a quarter of the 2x2 atlas; 4: all of it.
+		uint32_t quarter = 4;
+		uint32_t slot = 0;
+		// Flat ground under it, square units.
+		float area = 0.0f;
+		float alpha = 0.0f;
+	};
+
+	bool FitFrostMark(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, FrostFit& a_fit)
+	{
+		auto* triShape = a_geometry ? a_geometry->AsTriShape() : nullptr;
+		auto* rendererData = triShape ? a_geometry->GetGeometryRuntimeData().rendererData : nullptr;
+		if (!rendererData || !rendererData->rawVertexData || !rendererData->rawIndexData)
+			return false;
+		const auto desc = rendererData->vertexDesc;
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		const uint32_t stride = uint32_t(descKey & 0xF) * 4;
+		const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
+		const uint32_t triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
+		if (!stride || !vertexCount || !triangleCount || !desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_UV))
+			return false;
+		const bool full = SD_PositionBytes(descKey, desc) >= 16;
+		const uint32_t uvOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0);
+		thread_local std::vector<RE::NiPoint3> points;
+		thread_local std::vector<float2> uvs;
+		points.resize(vertexCount);
+		uvs.resize(vertexCount);
+		for (uint32_t v = 0; v < vertexCount; ++v) {
+			const uint8_t* base = rendererData->rawVertexData + size_t(v) * stride;
+			RE::NiPoint3 p;
+			if (full) {
+				float f[3];
+				memcpy(f, base, sizeof(f));
+				p = { f[0], f[1], f[2] };
+			} else {
+				uint16_t h[3];
+				memcpy(h, base, sizeof(h));
+				p = { DirectX::PackedVector::XMConvertHalfToFloat(h[0]), DirectX::PackedVector::XMConvertHalfToFloat(h[1]), DirectX::PackedVector::XMConvertHalfToFloat(h[2]) };
+			}
+			points[v] = a_world * p;
+			uint16_t t[2];
+			memcpy(t, base + uvOffset, sizeof(t));
+			uvs[v] = { DirectX::PackedVector::XMConvertHalfToFloat(t[0]), DirectX::PackedVector::XMConvertHalfToFloat(t[1]) };
+		}
+		// Moments about the first vertex: world coordinates are too large to square in floats.
+		const double ox = points[0].x, oy = points[0].y;
+		double s = 0.0, sx = 0.0, sy = 0.0, su = 0.0, sv = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0;
+		double suu = 0.0, svv = 0.0, sxu = 0.0, syu = 0.0, sxv = 0.0, syv = 0.0;
+		float2 uvLo{ FLT_MAX, FLT_MAX }, uvHi{ -FLT_MAX, -FLT_MAX };
+		const uint16_t* indices = rendererData->rawIndexData;
+		for (uint32_t t = 0; t < triangleCount; ++t) {
+			const uint32_t corner[3] = { indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2] };
+			if (corner[0] >= vertexCount || corner[1] >= vertexCount || corner[2] >= vertexCount)
+				return false;
+			const RE::NiPoint3 n = (points[corner[1]] - points[corner[0]]).Cross(points[corner[2]] - points[corner[0]]);
+			const float length = n.Length();
+			if (length < 1e-4f || std::abs(n.z) < kFrostFlatNormalZ * length)
+				continue;
+			const double w = std::abs(n.z) / 6.0;
+			for (const uint32_t k : corner) {
+				const double x = points[k].x - ox, y = points[k].y - oy, u = uvs[k].x, v = uvs[k].y;
+				s += w;
+				sx += w * x;
+				sy += w * y;
+				su += w * u;
+				sv += w * v;
+				sxx += w * x * x;
+				syy += w * y * y;
+				sxy += w * x * y;
+				suu += w * u * u;
+				svv += w * v * v;
+				sxu += w * x * u;
+				syu += w * y * u;
+				sxv += w * x * v;
+				syv += w * y * v;
+				uvLo = { std::min(uvLo.x, uvs[k].x), std::min(uvLo.y, uvs[k].y) };
+				uvHi = { std::max(uvHi.x, uvs[k].x), std::max(uvHi.y, uvs[k].y) };
+			}
+		}
+		// Under one square unit of flat ground.
+		if (s < 1.0)
+			return false;
+		const double mx = sx / s, my = sy / s, mu = su / s, mv = sv / s;
+		const double cxx = sxx / s - mx * mx, cyy = syy / s - my * my, cxy = sxy / s - mx * my;
+		const double cxu = sxu / s - mx * mu, cyu = syu / s - my * mu, cxv = sxv / s - mx * mv, cyv = syv / s - my * mv;
+		const double det = cxx * cyy - cxy * cxy;
+		if (cxx <= 0.0 || cyy <= 0.0 || det <= 1e-9 * cxx * cyy)
+			return false;
+		const double bu = (cxu * cyy - cyu * cxy) / det, cu = (cyu * cxx - cxu * cxy) / det;
+		const double bv = (cxv * cyy - cyv * cxy) / det, cv = (cyv * cxx - cxv * cxy) / det;
+		const double jacobian = bu * cv - cu * bv;
+		const double residual = std::max(suu / s - mu * mu - bu * cxu - cu * cyu, 0.0) + std::max(svv / s - mv * mv - bv * cxv - cv * cyv, 0.0);
+		if (std::abs(jacobian) < 1e-12 || residual > double(kFrostFitTolerance * kFrostFitTolerance) * std::abs(jacobian))
+			return false;
+		const int32_t qx = std::clamp(int32_t(std::floor(uvLo.x + uvHi.x)), 0, 1);
+		const int32_t qy = std::clamp(int32_t(std::floor(uvLo.y + uvHi.y)), 0, 1);
+		constexpr float eps = 0.02f;
+		const bool quartered = uvLo.x >= 0.5f * qx - eps && uvHi.x <= 0.5f * qx + 0.5f + eps && uvLo.y >= 0.5f * qy - eps && uvHi.y <= 0.5f * qy + 0.5f + eps;
+		a_fit.quarter = quartered ? uint32_t(qx + 2 * qy) : 4u;
+		const double radius = quartered ? 0.25 : 0.5;
+		const double du = (quartered ? 0.5 * qx + 0.25 : 0.5) - mu;
+		const double dv = (quartered ? 0.5 * qy + 0.25 : 0.5) - mv;
+		a_fit.centreX = ox + mx + (cv * du - cu * dv) / jacobian;
+		a_fit.centreY = oy + my + (bu * dv - bv * du) / jacobian;
+		a_fit.slope[0] = bu;
+		a_fit.slope[1] = bv;
+		a_fit.slope[2] = cu;
+		a_fit.slope[3] = cv;
+		a_fit.reachX = float(radius * std::sqrt(cv * cv + cu * cu) / std::abs(jacobian));
+		a_fit.reachY = float(radius * std::sqrt(bv * bv + bu * bu) / std::abs(jacobian));
+		a_fit.area = float(s);
+		return true;
+	}
+
+	bool FrostTwins(const FrostFit& a_a, const FrostFit& a_b)
+	{
+		if (a_a.quarter != a_b.quarter || a_a.slot != a_b.slot)
+			return false;
+		const double dx = a_a.centreX - a_b.centreX, dy = a_a.centreY - a_b.centreY;
+		if (dx * dx + dy * dy > double(kFrostTwinDistance * kFrostTwinDistance))
+			return false;
+		double scale = 0.0, gap = 0.0;
+		for (uint32_t k = 0; k < 4; ++k) {
+			scale = std::max(scale, std::abs(a_a.slope[k]));
+			gap = std::max(gap, std::abs(a_a.slope[k] - a_b.slope[k]));
+		}
+		return gap <= double(kFrostTwinSlope) * scale;
+	}
+}
+
 bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 {
 	if (frostPlanesFailed)
 		return false;
 	auto* device = globals::d3d::device;
-	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
-	if (!frostPlaneGS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "gs_5_0", "GSHADER", "FROSTPLANE"));
-		if (blob && SUCCEEDED(device->CreateGeometryShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &frostPlaneGS)))
-			Util::SetResourceName(frostPlaneGS, "SnowDeformation::FrostPlaneGS");
-	}
-	if (!frostPlanePS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "FROSTPLANE"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &frostPlanePS)))
-			Util::SetResourceName(frostPlanePS, "SnowDeformation::FrostPlanePS");
-	}
-	if (!frostPlaneGS || !frostPlanePS) {
-		logger::warn("[SNOW DEFORMATION] frost plane shaders failed to compile - frost marks stay off the landscape snow");
-		frostPlanesFailed = true;
-		return false;
-	}
 	try {
 		if (a_marks > frostPlaneCapacity) {
 			const uint32_t capacity = std::max(a_marks + a_marks / 2u, 256u);
 			D3D11_BUFFER_DESC desc{};
 			desc.ByteWidth = capacity * 2u * sizeof(float4);
-			desc.Usage = D3D11_USAGE_DEFAULT;
-			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			desc.Usage = D3D11_USAGE_DYNAMIC;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 			desc.StructureByteStride = sizeof(float4);
 			frostPlaneBuffer = nullptr;
 			frostPlaneSRV = nullptr;
-			frostPlaneUAV = nullptr;
 			DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, frostPlaneBuffer.put()));
 			Util::SetResourceName(frostPlaneBuffer.get(), "SnowDeformation::FrostPlanes");
 			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
@@ -829,12 +964,6 @@ bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 			srv.Buffer.NumElements = capacity * 2u;
 			DX::ThrowIfFailed(device->CreateShaderResourceView(frostPlaneBuffer.get(), &srv, frostPlaneSRV.put()));
 			Util::SetResourceName(frostPlaneSRV.get(), "SnowDeformation::FrostPlanes SRV");
-			D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
-			uav.Format = DXGI_FORMAT_UNKNOWN;
-			uav.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-			uav.Buffer.NumElements = capacity * 2u;
-			DX::ThrowIfFailed(device->CreateUnorderedAccessView(frostPlaneBuffer.get(), &uav, frostPlaneUAV.put()));
-			Util::SetResourceName(frostPlaneUAV.get(), "SnowDeformation::FrostPlanes UAV");
 			frostPlaneCapacity = capacity;
 		}
 		if (!frostCellBuffer) {
@@ -1043,30 +1172,27 @@ void SnowDeformation::RenderRuneCapture()
 		}
 	}
 
-	// Every frost mark as a uv plane over the ground: the plane pass draws each
-	// mark top-down and its triangles solve uv against the window's texels; the
-	// cells list the marks whose bounds reach them. The shells lay every mark
-	// over a point through its own plane, however many there are.
-	uint32_t frostDrawn = 0;
+	// Every frost mark as its own uv plane over the ground, fitted from its
+	// decal's vertices and listed in every cell of the window its round
+	// reaches. The shells lay every mark over a point through its own plane,
+	// inside its quarter of the decal atlas, however many there are.
 	if (frosted) {
 		RE::NiPoint3 centre = frost.front()->centre;
 		if (auto* player = globals::game::player)
 			centre = player->GetPosition();
-		const float half = 0.5f * kFrostFieldTexel * float(kFrostFieldDim);
-		BloodCB cb{};
-		cb.WindowOrigin = { std::floor((centre.x - half) / kFrostCellSize) * kFrostCellSize, std::floor((centre.y - half) / kFrostCellSize) * kFrostCellSize };
-		cb.TexelSize = kFrostFieldTexel;
-		cb.MapDim = float(kFrostFieldDim);
-		cb.MapOrigin = { 0, 0 };
-		cb.Intensity = 1.0f;
-		cb.NormalZMin = 0.3f;
+		const float half = 0.5f * kFrostCellSize * float(kFrostCells);
+		const float2 origin{ std::floor((centre.x - half) / kFrostCellSize) * kFrostCellSize, std::floor((centre.y - half) / kFrostCellSize) * kFrostCellSize };
 		uint32_t slots = 0;
+		uint32_t unfitted = 0;
 		float hasNormal[kFrostTextures] = {};
-		std::vector<BloodCapture> list;
-		list.reserve(frost.size());
-		std::vector<const RuneCapture*> listed;
-		listed.reserve(frost.size());
+		std::vector<FrostFit> fits;
+		fits.reserve(frost.size());
 		for (const RuneCapture* mark : frost) {
+			FrostFit fit;
+			if (!FitFrostMark(mark->draw.geometry.get(), mark->draw.world, fit)) {
+				unfitted++;
+				continue;
+			}
 			uint32_t slot = 0;
 			while (slot < slots && frostDiffuse[slot].get() != mark->draw.diffuse.get())
 				slot++;
@@ -1078,32 +1204,68 @@ void SnowDeformation::RenderRuneCapture()
 				hasNormal[slot] = mark->normal ? 1.0f : 0.0f;
 				slots++;
 			}
-			list.push_back(mark->draw);
-			list.back().decalId = float(uint32_t(listed.size()) * 4u + slot);
-			listed.push_back(mark);
+			fit.slot = slot;
+			fit.alpha = std::clamp(mark->draw.alpha, 0.0f, 1.0f);
+			fits.push_back(fit);
 		}
 		for (uint32_t i = slots; i < kFrostTextures; ++i) {
 			frostDiffuse[i] = nullptr;
 			frostNormal[i] = nullptr;
 		}
-		// Each mark into every cell its bound reaches.
+		// A decal on two geometries keeps the fit with more flat ground under it.
+		std::vector<uint32_t> byX(fits.size());
+		for (uint32_t i = 0; i < byX.size(); ++i)
+			byX[i] = i;
+		std::sort(byX.begin(), byX.end(), [&](uint32_t a_l, uint32_t a_r) { return fits[a_l].centreX < fits[a_r].centreX; });
+		std::vector<uint8_t> dropped(fits.size(), 0);
+		uint32_t twins = 0;
+		for (uint32_t a = 0; a < byX.size(); ++a)
+			for (uint32_t b = a + 1; b < byX.size() && fits[byX[b]].centreX - fits[byX[a]].centreX <= kFrostTwinDistance; ++b) {
+				const uint32_t i = byX[a], j = byX[b];
+				if (dropped[i] || dropped[j] || !FrostTwins(fits[i], fits[j]))
+					continue;
+				dropped[fits[i].area < fits[j].area ? i : j] = 1;
+				twins++;
+			}
+		frostMarkScratch.clear();
+		std::vector<float4> reach;
+		reach.reserve(fits.size());
+		for (uint32_t i = 0; i < fits.size(); ++i) {
+			if (dropped[i])
+				continue;
+			const FrostFit& fit = fits[i];
+			// uv at the window's origin, from the decal's centre.
+			const double cu = fit.quarter < 4u ? 0.5 * (fit.quarter & 1u) + 0.25 : 0.5;
+			const double cv = fit.quarter < 4u ? 0.5 * (fit.quarter >> 1u) + 0.25 : 0.5;
+			const double rx = double(origin.x) - fit.centreX, ry = double(origin.y) - fit.centreY;
+			frostMarkScratch.push_back({ float(cu + fit.slope[0] * rx + fit.slope[2] * ry), float(cv + fit.slope[1] * rx + fit.slope[3] * ry), float(fit.slot + 4u * fit.quarter), fit.alpha });
+			frostMarkScratch.push_back({ float(fit.slope[0]), float(fit.slope[1]), float(fit.slope[2]), float(fit.slope[3]) });
+			reach.push_back({ float(fit.centreX) - fit.reachX, float(fit.centreY) - fit.reachY, float(fit.centreX) + fit.reachX, float(fit.centreY) + fit.reachY });
+		}
+		const uint32_t marks = uint32_t(reach.size());
+		if (!marks && unfitted && !frostFitMissLogged) {
+			frostFitMissLogged = true;
+			logger::warn("[SNOW DEFORMATION] frost marks: none of {} frost decal draw(s) could be fitted (not flat on the ground, or the engine kept no CPU vertex copy) - they stay off the landscape snow", unfitted);
+		}
+		// Each mark into every cell its round reaches.
 		const float inv = 1.0f / kFrostCellSize;
-		auto cellRange = [&](const RuneCapture* a_mark, int32_t& a_x0, int32_t& a_y0, int32_t& a_x1, int32_t& a_y1) {
-			a_x0 = std::max(int32_t(std::floor((a_mark->centre.x - a_mark->radius - cb.WindowOrigin.x) * inv)), 0);
-			a_y0 = std::max(int32_t(std::floor((a_mark->centre.y - a_mark->radius - cb.WindowOrigin.y) * inv)), 0);
-			a_x1 = std::min(int32_t(std::floor((a_mark->centre.x + a_mark->radius - cb.WindowOrigin.x) * inv)), int32_t(kFrostCells) - 1);
-			a_y1 = std::min(int32_t(std::floor((a_mark->centre.y + a_mark->radius - cb.WindowOrigin.y) * inv)), int32_t(kFrostCells) - 1);
+		auto cellRange = [&](uint32_t a_mark, int32_t& a_x0, int32_t& a_y0, int32_t& a_x1, int32_t& a_y1) {
+			const float4& bounds = reach[a_mark];
+			a_x0 = std::max(int32_t(std::floor((bounds.x - origin.x) * inv)), 0);
+			a_y0 = std::max(int32_t(std::floor((bounds.y - origin.y) * inv)), 0);
+			a_x1 = std::min(int32_t(std::floor((bounds.z - origin.x) * inv)), int32_t(kFrostCells) - 1);
+			a_y1 = std::min(int32_t(std::floor((bounds.w - origin.y) * inv)), int32_t(kFrostCells) - 1);
 		};
 		frostCellCounts.assign(kFrostCells * kFrostCells, 0u);
 		uint32_t entries = 0;
-		for (const RuneCapture* mark : listed) {
+		for (uint32_t i = 0; i < marks; ++i) {
 			int32_t x0, y0, x1, y1;
-			cellRange(mark, x0, y0, x1, y1);
+			cellRange(i, x0, y0, x1, y1);
 			for (int32_t y = y0; y <= y1; ++y)
 				for (int32_t x = x0; x <= x1; ++x, ++entries)
 					frostCellCounts[y * kFrostCells + x]++;
 		}
-		if (!list.empty() && EnsureFrostPlanes(uint32_t(list.size()), std::max(entries, 1u))) {
+		if (marks && EnsureFrostPlanes(marks, std::max(entries, 1u))) {
 			std::vector<uint32_t> cells(kFrostCells * kFrostCells * 2u);
 			uint32_t offset = 0;
 			for (uint32_t c = 0; c < kFrostCells * kFrostCells; ++c) {
@@ -1112,44 +1274,41 @@ void SnowDeformation::RenderRuneCapture()
 				offset += frostCellCounts[c];
 			}
 			frostListScratch.assign(std::max(entries, 1u), 0u);
-			for (uint32_t i = 0; i < listed.size(); ++i) {
+			for (uint32_t i = 0; i < marks; ++i) {
 				int32_t x0, y0, x1, y1;
-				cellRange(listed[i], x0, y0, x1, y1);
+				cellRange(i, x0, y0, x1, y1);
 				for (int32_t y = y0; y <= y1; ++y)
 					for (int32_t x = x0; x <= x1; ++x) {
 						const uint32_t c = uint32_t(y) * kFrostCells + uint32_t(x);
 						frostListScratch[cells[c * 2u] + cells[c * 2u + 1u]++] = i;
 					}
 			}
+			bool uploaded = true;
 			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (SUCCEEDED(context->Map(frostPlaneBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+				std::memcpy(mapped.pData, frostMarkScratch.data(), frostMarkScratch.size() * sizeof(float4));
+				context->Unmap(frostPlaneBuffer.get(), 0);
+			} else {
+				uploaded = false;
+			}
 			if (SUCCEEDED(context->Map(frostCellBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 				std::memcpy(mapped.pData, cells.data(), cells.size() * sizeof(uint32_t));
 				context->Unmap(frostCellBuffer.get(), 0);
+			} else {
+				uploaded = false;
 			}
 			if (SUCCEEDED(context->Map(frostListBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 				std::memcpy(mapped.pData, frostListScratch.data(), frostListScratch.size() * sizeof(uint32_t));
 				context->Unmap(frostListBuffer.get(), 0);
+			} else {
+				uploaded = false;
 			}
-			// The plane pass writes only its UAV: no target, the window's viewport.
-			const UINT clear[4] = {};
-			context->ClearUnorderedAccessViewUint(frostPlaneUAV.get(), clear);
-			ID3D11UnorderedAccessView* planeUAV = frostPlaneUAV.get();
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 1, &planeUAV, nullptr);
-			context->OMSetDepthStencilState(nullptr, 0);
-			D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kFrostFieldDim), float(kFrostFieldDim), 0.0f, 1.0f };
-			context->RSSetViewports(1, &viewport);
-			context->GSSetShader(frostPlaneGS, nullptr, 0);
-			context->GSSetConstantBuffers(1, 1, &cb1);
-			context->PSSetShader(frostPlanePS, nullptr, 0);
-			frostDrawn = DrawBloodList(context, list, cb, nullptr, 1u);
-			context->GSSetShader(nullptr, nullptr, 0);
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 0, nullptr, nullptr);
-			cbRune.FrostRect = { cb.WindowOrigin.x, cb.WindowOrigin.y, inv, frostDrawn ? 1.0f : 0.0f };
+			cbRune.FrostRect = { origin.x, origin.y, inv, uploaded ? 1.0f : 0.0f };
 			cbRune.FrostNormals = { hasNormal[0], hasNormal[1], hasNormal[2], hasNormal[3] };
-			if (frostDrawn && !frostPaintLogged) {
+			if (uploaded && !frostPaintLogged) {
 				frostPaintLogged = true;
-				logger::info("[SNOW DEFORMATION] frost marks: first frame found {} plane(s) from {} frost decal draw(s), {} texture(s), {} cell entries",
-					frostDrawn, frostCaptures.size(), slots, entries);
+				logger::info("[SNOW DEFORMATION] frost marks: first frame {} mark(s) from {} frost decal draw(s): {} twin(s) merged, {} not flat on the ground or without a CPU vertex copy; {} texture(s), {} cell entries",
+					marks, frost.size(), twins, unfitted, slots, entries);
 			}
 		}
 	}

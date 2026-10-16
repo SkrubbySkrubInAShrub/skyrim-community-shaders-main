@@ -1235,11 +1235,9 @@ public:
 	static constexpr uint32_t kRuneMaxTiles = 4;
 	static constexpr uint32_t kRuneTileDim = 512;
 	static constexpr float kRuneTileHalf = 110.0f;
-	/** @brief Frost marks: every live one on the landscape snow, as a uv plane over the ground, in a window round the player 8192 units across (2048 texels of 4 for the plane pass), listed per cell of kFrostCellSize. */
-	static constexpr uint32_t kFrostFieldDim = 2048;
-	static constexpr float kFrostFieldTexel = 4.0f;
+	/** @brief Frost marks: every live one on the landscape snow, as a uv plane over the ground fitted from its decal's vertices, in a window round the player of kFrostCells cells kFrostCellSize across, each listing the marks whose round reaches it. */
 	static constexpr uint32_t kFrostCells = 64;
-	static constexpr float kFrostCellSize = kFrostFieldTexel * float(kFrostFieldDim) / float(kFrostCells);
+	static constexpr float kFrostCellSize = 128.0f;
 	/** @brief Distinct frost decal textures the field can show at once. */
 	static constexpr uint32_t kFrostTextures = 4;
 	/** @brief A frost mark whose centre stands more than this over the landscape snow's top is on an object; the object coat wears it. */
@@ -1292,9 +1290,8 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> runeDepthTexture;
 	winrt::com_ptr<ID3D11DepthStencilView> runeDepthDSV;
 	winrt::com_ptr<ID3D11DepthStencilState> runeDepthState;
-	/** @brief Frost marks: each one's uv plane (two float4s, written by the plane pass), the window's cells (first entry, count) and their lists, and the textures by slot. */
+	/** @brief Frost marks: two float4s each (uv plane and atlas quarter, from Blood.cpp FitFrostMark), the window's cells (first entry, count) and their lists, and the textures by slot. */
 	winrt::com_ptr<ID3D11Buffer> frostPlaneBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> frostPlaneUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> frostPlaneSRV;
 	uint32_t frostPlaneCapacity = 0;
 	winrt::com_ptr<ID3D11Buffer> frostCellBuffer;
@@ -1304,8 +1301,7 @@ public:
 	uint32_t frostListCapacity = 0;
 	std::vector<uint32_t> frostCellCounts;
 	std::vector<uint32_t> frostListScratch;
-	ID3D11GeometryShader* frostPlaneGS = nullptr;
-	ID3D11PixelShader* frostPlanePS = nullptr;
+	std::vector<float4> frostMarkScratch;
 	winrt::com_ptr<ID3D11ShaderResourceView> frostDiffuse[kFrostTextures];
 	winrt::com_ptr<ID3D11ShaderResourceView> frostNormal[kFrostTextures];
 	bool frostPlanesFailed = false;
@@ -1318,6 +1314,7 @@ public:
 	bool runeAtlasDirty = false;
 	bool runePaintLogged = false;
 	bool frostPaintLogged = false;
+	bool frostFitMissLogged = false;
 	bool runeMissLogged = false;
 	uint32_t runeMissFrames = 0;
 	uint32_t runeStatSites = 0;
@@ -1330,7 +1327,7 @@ public:
 	/** @brief From the capture hook: a decal-mode Lighting draw. True when its diffuse is a live rune's decal texture, or a frost impact decal (a_engineDecal, FrostDecalsOnSnow), and it was taken. */
 	bool CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDecal);
 	bool EnsureRuneResources();
-	/** @brief The plane pass's shaders, and room for a_marks planes and a_entries cell entries. */
+	/** @brief Room for a_marks frost marks and a_entries cell entries. */
 	bool EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries);
 	/** @brief The frost planes, textures and cell lists at t117-t127 for a pass that samples them (the landscape shell, the road patch), or null with a_bind false. */
 	void BindFrostField(ID3D11DeviceContext* a_context, bool a_bind);
