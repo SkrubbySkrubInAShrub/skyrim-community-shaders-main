@@ -80,7 +80,7 @@ cbuffer ShellCB : register(b0)
 	float2 GridToDeformOffset;
 
 	float WarpedHalfSpan;
-	uint GridDim;
+	uint LayoutKeeper6;  // layout keeper, 0
 	uint TerrainDim;
 	uint TrenchDetailView;
 
@@ -144,7 +144,7 @@ cbuffer ShellCB : register(b0)
 	float DebugNoFarPad;
 	float LayoutKeeper4;
 
-	float ObjBermHeightAmp;
+	float LayoutKeeper7;  // layout keeper, 0
 	// The detail's sun self-shadow, 0 = off.
 	float TrenchDetailShadow;
 	float LayoutKeeper3;
@@ -291,11 +291,7 @@ cbuffer StaticCB : register(b1)
 	// state. Set only with the noise map bound at t21. Mirror in
 	// SnowDeformation.h.
 	float ProjPixelEnable;
-	// >0.5: pre-shell copy of the NORMALROUGHNESS target bound at PS t23 -
-	// the per-pixel nz for the authored-relief coverage cut comes from the
-	// game's own shaded normal (normal maps included), which is where the
-	// purple view's per-stone detail lives. Mirror in SnowDeformation.h.
-	float HasSkinNormalCopy;
+	float padSkinNormalCopy;
 	float padShellMinNz;
 	// Peel tolerance (kPeelTol; the slider was retired at its default):
 	// surfaces within this z-band of a layer's top belong to that layer's
@@ -383,10 +379,6 @@ Texture2D<float4> UndulationFieldMap : register(t29);
 // Lighting.hlsl samples for projWeight), bound by the skin draw when
 // ProjPixelEnable is set; null and unread otherwise.
 Texture2D<float4> ProjNoiseMap : register(t21);
-// Pre-shell copy of the NORMALROUGHNESS target (octahedral view-space, same
-// encode this PS writes): the scene's per-pixel shaded normal under each
-// shell pixel, before any shell overwrote it. Skin PS only.
-Texture2D<float4> PreSkinNormals : register(t23);
 // The game's shadow mask (Lighting's t14): x = sun, one channel per shadow
 // light by mask index. Drawn for the scene's own geometry, so only the drape,
 // which lies on it, may read it.
@@ -559,9 +551,6 @@ static const float kRecolorNearShare = 5.0 / 6.0;
 static const float kDetileRamp = 0.5;
 // Hex-tiled read: triangle-grid cells per noise-map tile (2 sqrt 3).
 static const float kDetileGrid = 3.4641016;
-// The largest shortfall below the solid contour the lumps may hang from
-// (the game's own fade is 0.2 wide).
-static const float kEdgeMaxDrop = 0.12;
 // The coat's facing gate: off. The read-back already proves the game painted
 // the pixel, and the recolor whitened it, wherever it faces.
 static const float kCoatMinNz = -1.0;
@@ -845,9 +834,6 @@ Texture2D<float> ObjectTopFine : register(t34);
 // FarHalfExtent). Readers take it only OUTSIDE the coarse window, so the two
 // never disagree where both have data.
 Texture2D<float> ObjectTopFar : register(t40);
-// P3: per-column sky openness (1 = open sky), baked by ObjectSkyOpenCS at
-// half the raster's resolution from the layer-1 tops.
-Texture2D<float> ObjectSkyOpen : register(t25);
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -867,8 +853,8 @@ static const float kRoadOwnsTop = 8.0;
 
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER) || defined(SNOW_ROAD_MARCH_CS)
 
-// One texel of the object height raster in world units; must match
-// kHeightMapHalfExtent * 2 / kHeightMapDim (SnowDeformation.h).
+// One texel of the object height raster in world units: 8192 units over
+// kHeightMapDim (SnowDeformation.h).
 static const float kHeightTexel = 4.0;
 
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
@@ -909,20 +895,6 @@ float FineTop(float2 worldXY)
 		result = max(max(ObjectTopFine.Load(int3(t0.x, t0.y, 0)), ObjectTopFine.Load(int3(t1.x, t0.y, 0))),
 			max(ObjectTopFine.Load(int3(t0.x, t1.y, 0)), ObjectTopFine.Load(int3(t1.x, t1.y, 0))));
 #endif
-	}
-	return result;
-}
-
-float FineTopPoint(float2 worldXY)
-{
-	float result = -1000000.0;
-	float2 d = abs(worldXY - HeightWindowCenter);
-	[branch] if (FineHalfExtent > 0.0 && max(d.x, d.y) <= FineHalfExtent)
-	{
-		float2 dims;
-		ObjectTopFine.GetDimensions(dims.x, dims.y);
-		int2 tp = int2(FineTexel(worldXY, dims) + 0.5);
-		result = ObjectTopFine.Load(int3(tp, 0));
 	}
 	return result;
 }
@@ -1027,28 +999,6 @@ float ObjectConeDepth(float2 worldXY)
 	float s10 = ObjectSnowCone.Load(int3(t1.x, t0.y, 0));
 	float s01 = ObjectSnowCone.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone.Load(int3(t1.x, t1.y, 0));
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
-// P3: baked sky openness, bilinear (the map is half the raster's resolution;
-// PatchTexel scales by the map's own dims, so nothing here cares). Outside
-// the window there is no data - open sky is the no-op.
-float SampleSkyOpenness(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return 1.0;
-
-	float2 dims;
-	ObjectSkyOpen.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = ObjectSkyOpen.Load(int3(t0.x, t0.y, 0));
-	float s10 = ObjectSkyOpen.Load(int3(t1.x, t0.y, 0));
-	float s01 = ObjectSkyOpen.Load(int3(t0.x, t1.y, 0));
-	float s11 = ObjectSkyOpen.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
@@ -1453,11 +1403,11 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// pixel shader's shading berm has been silently inert on the patch.
 		// The carve's short blur rides the same read (Snow Climate's slough).
 		float2 bermPair = float2(0.0, deform);
-		[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.w > 0.0)
+		[branch] if (BermHeightAmp > 0.005 || CompactLook.w > 0.0)
 			bermPair = BermFieldPair(gridLocal);
-		const float bermD = ObjBermHeightAmp > 0.005 ? bermPair.x : 0.0;
+		const float bermD = BermHeightAmp > 0.005 ? bermPair.x : 0.0;
 		float depth = CarveProfile(deform, bermPair.y, skinDepth, worldXY) +
-		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
+		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * BermHeightAmp * BermDepthGate(skinDepth);
 
 		// Precision pad, NOT a floor. The patch stands on real geometry, so even
 		// a fully worn floor has to clear the object under it or the two z-fight,
@@ -1548,7 +1498,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// Differenced with the (1 - deformation) mask, as the landscape PS does:
 		// the berm drops with the wall. Meet depth like the profile.
 		float2 bermGrad = float2(0.0, 0.0);
-		[branch] if (ObjBermHeightAmp > 0.005 && bermD > 0.003)
+		[branch] if (BermHeightAmp > 0.005 && bermD > 0.003)
 		{
 			const float bStep = BermGradStep();
 			float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
@@ -1562,7 +1512,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 			bermGrad = float2(
 				BermShape(BermField(gridLocal + float2(bStep, 0.0))) * (1.0 - mXP) - BermShape(BermField(gridLocal - float2(bStep, 0.0))) * (1.0 - mXN),
 				BermShape(BermField(gridLocal + float2(0.0, bStep))) * (1.0 - mYP) - BermShape(BermField(gridLocal - float2(0.0, bStep))) * (1.0 - mYN)) / (2.0 * bStep) *
-			          profDepth * ObjBermHeightAmp * BermDepthGate(profDepth);
+			          profDepth * BermHeightAmp * BermDepthGate(profDepth);
 		}
 		// The top's own slope. Without it a road climbing a hill shaded as
 		// flat while the landscape shell beside it carried the hill: ~16
@@ -2044,34 +1994,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = depthBase;
 		coverDepth = depth;
 		upFacing = 1.0;
-	}
-
-	// P3 (edge-research study): SKY EXPOSURE weights the depth - the
-	// literature's accumulation field, the half this pipeline never had.
-	// Two terms: the baked horizontal openness (neighbouring tops shading
-	// the column) for every path, and the vertical cover term (a surface
-	// standing under a higher top in its OWN column takes a dusting) for
-	// the S4 shell only - the graded return of the S4 sheltering whose
-	// binary placement cut cliffed mid-plank; classic draws already carry
-	// their own vertical shelter in the taper above. Applied to the FINAL
-	// depth so the fillet, crest freeze and taper compress uniformly, and
-	// thinning toward the dusting rather than zero, matching the landscape
-	// shell's under-roof rule. The casters share this path, so shadow and
-	// shape stay one surface. lerp(x, min(x, kShelterDust), s) is x when x <= kShelterDust.
-	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001 &&
-				 max(depth, max(coverDepth, depthTarget)) > kShelterDust)
-	{
-		float open = SampleSkyOpenness(worldBase.xy);
-		[flatten] if (ProjPixelEnable > 1.5)
-		{
-			float coverTop = PatchTop(worldBase.xy);
-			[flatten] if (coverTop > -50000.0)
-				open = min(open, 1.0 - smoothstep(kShelterNear, kShelterFar, coverTop - worldBase.z));
-		}
-		float sheltered = 1.0 - open;
-		depth = lerp(depth, min(depth, kShelterDust), sheltered);
-		coverDepth = lerp(coverDepth, min(coverDepth, kShelterDust), sheltered);
-		depthTarget = lerp(depthTarget, min(depthTarget, kShelterDust), sheltered);
 	}
 
 	SkinLift o;
@@ -2638,7 +2560,7 @@ cbuffer VoxelSeedDebugCB : register(b3)
 	int4 DbgScrollDelta;
 	float DbgVoxelSize;
 	float DbgDecay;
-	int DbgDimLegacy;
+	int DbgPadDim;
 	int DbgSliceAxis;
 	int DbgSliceIndex;
 	int DbgSliceXray;
@@ -2875,7 +2797,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Object trench detail: shading-only berm ridge along trails. Geometry
 	// berm waits for the skin rework.
 	float bermC = 0.0;
-	[branch] if (ObjBermHeightAmp > 0.005)
+	[branch] if (BermHeightAmp > 0.005)
 		bermC = BermField(trenchGridLocal);
 #ifdef PATCH
 	// The patch's berm is real geometry (BuildPatchVertex), shaded by the
@@ -2883,7 +2805,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// double it.
 	[branch] if (false)
 #else
-	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003 && input.detail > 0.001)
+	[branch] if (BermHeightAmp > 0.005 && bermC > 0.003 && input.detail > 0.001)
 #endif
 	{
 		const float bStep = BermGradStep();
@@ -2893,7 +2815,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float bermDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
 		// Centre-masked rather than per-tap: this berm is shading-only, and
 		// the mask's job is just to keep the ridge off the dug floor.
-		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
+		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * BermHeightAmp * BermDepthGate(bermDepth), 0.0));
 	}
 
 	// The surface without the trench detail: the snow maps' frame and march
@@ -3430,44 +3352,6 @@ float VoxelFieldAt(float3 relPos)
 	logical = clamp(logical, 0.5, VoxDims.xyz - 0.5);
 	float3 uvw = frac((logical + (float3)VoxOrigin.xyz) / VoxDims.xyz);
 	return VoxelFieldTex.SampleLevel(VoxelWrapSampler, uvw, 0.0);
-}
-
-// Cubic B-spline reconstruction of the field (Sigg & Hadwiger: eight
-// trilinear taps at offset positions). Trilinear is C0 - its gradient jumps
-// at every voxel boundary, and a normal differenced from it prints the
-// voxel lattice into the shading as a grid. Only the normal reads through
-// this; the march itself is fine on trilinear.
-float VoxelFieldCubic(float3 relPos)
-{
-	float3 dim = VoxDims.xyz;
-	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
-	logical = clamp(logical, 1.5, dim - 1.5);
-	// Texel centres at integers for the weights.
-	float3 x = logical - 0.5;
-	float3 i = floor(x);
-	float3 f = x - i;
-	float3 f2 = f * f;
-	float3 f3 = f2 * f;
-	float3 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
-	float3 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-	float3 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
-	float3 w3 = f3 / 6.0;
-	float3 g0 = w0 + w1;
-	float3 g1 = w2 + w3;
-	// Back to centres-at-half for the sampler, torus offset folded in.
-	float3 o = (float3)VoxOrigin.xyz + 0.5;
-	float3 h0 = (i - 1.0 + w1 / g0 + o) / dim;
-	float3 h1 = (i + 1.0 + w3 / g1 + o) / dim;
-	float v = 0.0;
-	v += g0.x * g0.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h0.y, h0.z)), 0.0);
-	v += g1.x * g0.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h0.y, h0.z)), 0.0);
-	v += g0.x * g1.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h1.y, h0.z)), 0.0);
-	v += g1.x * g1.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h1.y, h0.z)), 0.0);
-	v += g0.x * g0.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h0.y, h1.z)), 0.0);
-	v += g1.x * g0.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h0.y, h1.z)), 0.0);
-	v += g0.x * g1.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h1.y, h1.z)), 0.0);
-	v += g1.x * g1.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h1.y, h1.z)), 0.0);
-	return v;
 }
 
 // The 8-tap trilinear combination with per-axis (ga, gb) weights at (ha, hb).
@@ -4029,9 +3913,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 			[flatten] if (realEnc >= 1.5)
 				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
 		}
-		// Vertex Alpha Fades Snow: on a thinned alpha (mirror of Lighting's
-		// AlphaDensityRamp) the coat dissolves and the game's own PD, which
-		// the recolor hands over the same way, shows through.
+		// Vertex Alpha Fades Snow: on a thinned alpha the coat dissolves and
+		// the game's own PD, which the recolor hands over the same way, shows
+		// through.
 		[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
 			densityFade = 1.0 - saturate((1.0 - input.ProjFactor) * 4.0);
 		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
@@ -5124,7 +5008,7 @@ float RoadTapHeight(float2 sampleLocal)
 				const float tapDeform = SampleDeformation(sampleLocal);
 				const float2 tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : float2(0.0, tapDeform);
 				const float tapDepth = CarveProfileNoTeeth(tapDeform, tapBerm.y, depthSmooth) +
-				                       BermShape(tapBerm.x) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+				                       BermShape(tapBerm.x) * saturate(1.0 - tapDeform) * depthSmooth * BermHeightAmp * BermDepthGate(depthSmooth);
 				sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
 			}
 		}

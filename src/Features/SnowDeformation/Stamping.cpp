@@ -698,7 +698,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	skeletonProbe.valid = false;
 	contactProps.clear();
 	contactActors.clear();
-	contactLivingCount = 0;
 	contactCorpseCount = 0;
 	contactCenter = { windowOrigin.x + deformWorldSize * 0.5f, windowOrigin.y + deformWorldSize * 0.5f };
 
@@ -1180,7 +1179,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						contactCorpseCount++;
 						stampStats.corpsesRasterized++;
 					} else {
-						contactLivingCount++;
 						stampStats.actorsRasterized++;
 					}
 				}
@@ -1925,16 +1923,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		perFrameData.Stamps[stampCount] = stamp;
 		if (emitter.cone)
 			perFrameData.StampCones[stampCount] = { emitter.coneLength, stamp.w, emitter.coneSeed, 0.0f };
-		// Pits carry their ring fraction where a melt carries its rate: an
-		// instantaneous mark has no rate to give, and a cloak needs to say it
-		// pocks a ring at its reach rather than a bowl at its feet.
+		// Pits carry 0 where a melt carries its rate: an instantaneous mark has
+		// no rate to give.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
 			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve + kStampModeShove : kStampModeMelt))) +
 				(emitter.cone ? kStampModeCone : 0.0f) + (emitter.bowl ? kStampModeBowl : 0.0f),
 			// A carve reads this as the weight it puts through a crust. A
 			// shout goes through: nothing survives being shoved that hard.
 			shoves ? 1.0f :
-					 (pits ? emitter.ringFraction :
+					 (pits ? 0.0f :
 							 (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate)) };
 		stampCount++;
 		stampStats.spells++;

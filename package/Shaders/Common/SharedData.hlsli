@@ -377,7 +377,7 @@ namespace SharedData
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
-		uint EnableSnowDeformation;
+		uint padEnable;
 
 		uint DebugTerrainOverlay;
 		// Horizon snow (LOD terrain recolor): distance ramp start and 1/band,

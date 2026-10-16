@@ -141,7 +141,6 @@ bool SnowDeformation::EnsureBloodTileResources()
 
 	texture(bloodTileAtlas, atlasDim, DXGI_FORMAT_R8G8B8A8_TYPELESS, kCompute, kBloodTileMips, "SnowDeformation::BloodTileAtlas");
 	srv(bloodTileAtlasSRV, bloodTileAtlas.get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, kBloodTileMips, "SnowDeformation::BloodTileAtlas SRV");
-	srv(bloodTileAtlasRawSRV, bloodTileAtlas.get(), DXGI_FORMAT_R8G8B8A8_UNORM, 1, "SnowDeformation::BloodTileAtlas raw SRV");
 	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
 		uav(bloodTileAtlasUAV[mip], bloodTileAtlas.get(), DXGI_FORMAT_R8G8B8A8_UNORM, mip, "SnowDeformation::BloodTileAtlas UAV");
 

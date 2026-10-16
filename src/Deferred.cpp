@@ -636,11 +636,6 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		if (globals::features::terrainBlending.loaded)
 			defines.push_back({ "TERRAIN_BLENDING", nullptr });
 
-		// SSGI seam shield at the snow shell's border (t16/b7, bound by the
-		// snow feature per frame; exterior composite only).
-		if (globals::features::snowDeformation.loaded)
-			defines.push_back({ "SNOW_DEFORMATION", nullptr });
-
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}
 	return mainCompositeCS;

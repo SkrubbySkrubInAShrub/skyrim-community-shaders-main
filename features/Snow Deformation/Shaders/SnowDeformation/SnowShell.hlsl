@@ -113,7 +113,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float2 GridToDeformOffset;
 
 	float WarpedHalfSpan;
-	uint GridDim;
+	uint LayoutKeeper6;  // layout keeper, 0
 	uint TerrainDim;
 	uint TrenchDetailView;  // 1: trench detail coverage view
 
@@ -176,7 +176,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float DebugNoFarPad;
 	float LayoutKeeper4;
 
-	float ObjBermHeightAmp;
+	float LayoutKeeper7;       // layout keeper, 0
 	float TrenchDetailShadow;  // the detail's sun self-shadow, 0 = off
 	float LayoutKeeper3;       // layout keeper, 0
 	// Units across which the sheet and an object's coat meet, half on each
@@ -434,8 +434,6 @@ struct VS_OUTPUT
 	float4 PreviousClip : TEXCOORD1;
 	float3 WorldPos : TEXCOORD2;
 	float2 GridLocal : TEXCOORD3;
-	float Snowness : TEXCOORD4;
-	float DebugHeight : TEXCOORD5;
 	// xyz: smooth per-vertex terrain normal, w: coverage alpha (taper*fade).
 	float4 TerrainNormalAlpha : TEXCOORD6;
 };
@@ -1270,8 +1268,6 @@ VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, flo
 	// The prepass PS reads CurrentClip.w and the normal's xyz of the rest.
 	vsout.CurrentClip = float4(0.0, 0.0, 0.0, mul(CameraViewProjUnjittered, float4(rel, 1.0)).w);
 	vsout.PreviousClip = 0.0;
-	vsout.Snowness = 0.0;
-	vsout.DebugHeight = 0.0;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, 0.0);
 	return vsout;
 }

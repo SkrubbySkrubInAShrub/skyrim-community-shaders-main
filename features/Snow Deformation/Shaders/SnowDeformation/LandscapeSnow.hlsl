@@ -34,6 +34,8 @@
 // light (as Shadows.cpp kCasterDepthPush for the trench patch).
 #	define LS_CASTER
 static const float kLsCasterPush = 0.0008;
+#else
+#	error "landscape snow raises the shadow-map casters only"
 #endif
 
 // Model space is the draw's translate away from absolute world (landscape
@@ -44,14 +46,9 @@ float3 LsRaise(float3 p, out bool a_raised)
 	float landZ = p.z + LsGeometry.z;
 	float coverage;
 	float terrainHeight;
-#if defined(LS_CASTER)
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 	SHELL_CAST_VIS(castVis, gridLocal, z, coverage)
 	a_raised = castVis >= 0.35 && z > landZ;
-#else
-	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
-	a_raised = z > landZ;
-#endif
 	[branch] if (a_raised)
 	{
 		float3 raised = float3(0.0, 0.0, z);

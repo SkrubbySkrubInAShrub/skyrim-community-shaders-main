@@ -27,7 +27,7 @@ cbuffer ExclusionFieldCB : register(b0)
 	// Texel-snapped world XY at the centre of the field window.
 	float2 FieldCenter;
 	// World units from the centre to an edge.
-	float FieldHalfExtent;
+	float padHalfExtent;
 	float FieldTexelSize;
 
 	// Terrain window addressing, mirroring the shell's SampleTerrain.
@@ -120,8 +120,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gindex 
 	{
 		float2 worldXY = FieldTexelWorldXY(dtid.xy, dims);
 		float terrain = SampleTerrainHeight(worldXY);
-		// EvaluateExclusions walks the whole buffer; feed it the culled list by
-		// evaluating per surviving entry instead.
+		// The culled list, one surviving entry at a time.
 		for (uint listI = 0; listI < tileCount; listI++) {
 			ExclusionResult one = EvaluateExclusionAt(TileList[listI], worldXY, terrain);
 			suppress = max(suppress, one.Suppress);

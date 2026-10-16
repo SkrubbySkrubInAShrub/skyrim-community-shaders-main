@@ -433,7 +433,6 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.OriginVox = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
 	a_cb.ScrollDelta = { 0, 0, 0, 0 };
 	a_cb.VoxelSize = voxelSize;
-	a_cb.DimLegacy = (int)lv.dims.x;
 	a_cb.Dims[0] = (int)lv.dims.x;
 	a_cb.Dims[1] = (int)lv.dims.y;
 	a_cb.Dims[2] = (int)lv.dims.z;

@@ -390,13 +390,6 @@ namespace SnowLighting
 		return lerp(projWeight, min(projWeight, -1.0), s.printBare);
 	}
 
-	// Vertex Alpha Fades Snow: 0 at alpha 1 (ours), 1 from alpha 0.75 down
-	// (the game's own PD). Mirror: SnowStaticsShell.hlsl.
-	float AlphaDensityRamp(float vertexAlpha)
-	{
-		return saturate((1.0 - vertexAlpha) * 4.0);
-	}
-
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
 	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
 	// picks texture vs flat-color projection in Lighting; when the CPU
@@ -404,7 +397,7 @@ namespace SnowLighting
 	// here onto the shell's snow set. Sits after the SPARKLE branch so the
 	// multipass snow pass (technique 14, every surviving pixel already snow)
 	// takes the same set.
-	void ProjectedRecolor(inout State s, float projWeight, float vertexAlpha, float3 vertexNormal, float3 projWorldPos, float screenNoise,
+	void ProjectedRecolor(inout State s, float projWeight, float3 vertexNormal, float3 projWorldPos, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
 		s.projMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !s.underWater &&

@@ -287,13 +287,13 @@ groupshared uint combineTileCount;
 groupshared uint combineTileList[MAX_EXCLUSIONS];
 groupshared uint combineElevated;
 
-// InA = raw tops, InB = raw bottoms. OutA sizes the window, OutMask = shelter mask.
+// InA = raw tops, InB = raw bottoms. OutMask = shelter mask, and sizes the window.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
 									 : SV_DispatchThreadID, uint3 gid
 									 : SV_GroupID, uint gi
 									 : SV_GroupIndex) {
 	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
+	OutMask.GetDimensions(dims.x, dims.y);
 
 	// The exclusions that reach this 8x8 tile. Past its reach an exclusion's
 	// influence is exactly zero and the terms combine by max, so the culled

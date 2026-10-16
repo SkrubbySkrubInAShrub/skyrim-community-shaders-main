@@ -21,7 +21,7 @@ cbuffer VoxelCB : register(b0)
 	int4 ScrollDelta;
 	float VoxelSize;
 	float Decay;
-	int DimLegacy;
+	int padDim;
 	int SliceAxis;
 	int SliceIndex;
 	// >0: the slice is a max over the whole axis (silhouettes), not one plane

@@ -1016,7 +1016,6 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 	const auto camAdjust = a_camAdjust ? *a_camAdjust : fb.GetCameraPosAdjust();
 	const float shellSpacing = kShellGridSpacing;
 	a_cb.GridSpacing = shellSpacing;
-	a_cb.GridDim = kShellGridDim;
 	// The warped grid is camera-centered: snap the center to the COARSEST band
 	// step, then offset by the warped span. Snapping to the base 8 units is not
 	// enough - a coarse-band vertex would then need per-vertex rounding onto its
@@ -1156,7 +1155,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	mainDepth.texture->GetDesc(&mainDesc);
 	if (!shellRasterDepth || shellRasterDepth->desc.Width != mainDesc.Width || shellRasterDepth->desc.Height != mainDesc.Height || !shellTestDepthDSV ||
 		!EnsureDeferredResources() || !EnsureEarlyPrepassResources() || !shellTerrainTexture || !shellTerrainTexture->srv ||
-		!heightTopFiltered || !heightBottomFiltered || !heightTopRaw[heightCurrent] || !heightSkinDepth)
+		!heightBottomFiltered || !heightTopRaw[heightCurrent] || !heightSkinDepth)
 		return;
 
 	auto context = globals::d3d::context;
@@ -1184,7 +1183,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		1.0f / kExclusionFieldHalfExtent,
 		exclusionFieldValid ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
-	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
+	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
 	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	shellCB->Update(cb);
 
@@ -1287,7 +1286,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
-	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
+	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), nullptr, heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	ID3D11ShaderResourceView* waterSRVs[2] = { ShellWaterSRV(), waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
@@ -1698,8 +1697,6 @@ void SnowDeformation::DrawShell()
 		const float capPx = std::clamp(settings.SkinTessCapPx, 0.0f, 64.0f);
 		cbData.SkinTessCapSlope = (focalPx > 1.0f && capPx > 0.0f) ? capPx / focalPx : 0.0f;
 	}
-	// Object trench detail follows the landscape set.
-	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
@@ -1950,7 +1947,7 @@ void SnowDeformation::DrawShell()
 	// on; they change size only in Prepass, so they hold for the next frame's
 	// caster too.
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
-	cbData.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
+	cbData.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
 	shellCB->Update(cbData);
 
 	// Snapshot for next frame's shadow-caster injection (it runs at the
@@ -2000,14 +1997,6 @@ void SnowDeformation::DrawShell()
 		bloodPreSnowValid = false;
 		if (!bloodOverlays.empty() && DecalOverlayWanted() && bloodPreDecalValid)
 			CopyBloodTargets(false);
-		// Pre-shell normals for the S4 shell's per-pixel footprint cut
-		// (per-pixel nz, normal maps included). Gated on the 3D toggle so
-		// the off-cost is zero; the null SRV keeps HasSkinNormalCopy off.
-		// The pre-shell normals copy is retired: it only existed above depth
-		// 0.05, so the S4 footprint changed with the depth slider, and it
-		// held the projected snow's own normal on painted pixels. The skin
-		// reads the recolor's real weight from LandMasksCopy instead.
-		preSkinNormalsCopySRV = nullptr;
 	}
 
 	// The ground snow: the landscape replay's prepass (S1 before the opaque
@@ -2029,7 +2018,6 @@ void SnowDeformation::DrawShell()
 	// the shell's pixels, where the main depth keeps the pre-snow value until
 	// a statics pass writes: then no copy is taken without one, and with one
 	// DrawCapturedStatics takes it (in the skins' first fill when it can).
-	shellPrepassThisFrame = false;
 	preSnowDepthThisFrame = false;
 	preSnowDepthDeferred = false;
 	if (shellGround || capturedLoaded > 0 || (settings.VolumeSnow && !capturedStatics.empty())) {
@@ -2080,18 +2068,16 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 	// The PS evaluates the terrain/deformation fields for per-pixel coverage
-	// and normals, so the field textures must be bound to both stages; the
+	// and normals; the trench patch VS reads the deformation map (t1). The
 	// snow maps and scene depth are PS-only. The depth SRV is a copy (Terrain
 	// Blending's blended depth when available), never the bound DSV, so
 	// sampling it here is legal; the PS fades the shell where it hovers close
 	// in front of any geometry so it dissolves into statics (walkways, mesh
 	// roads, rocks).
-	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
-	context->VSSetShaderResources(0, 6, shellSRVs);
+	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), nullptr, heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
+	context->VSSetShaderResources(1, 1, &shellSRVs[1]);
 	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
-	context->VSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
-	context->VSSetShaderResources(13, 1, &fineSRV);
 	ID3D11ShaderResourceView* waterSRV = waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
 	ID3D11ShaderResourceView* waterSRVs[2] = { waterSRV, waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
 	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
@@ -2120,7 +2106,6 @@ void SnowDeformation::DrawShell()
 	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
 	// patch): the object-depth cap on the shell's layer.
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
-	context->VSSetShaderResources(11, 2, objectCapSRVs);
 	context->PSSetShaderResources(11, 2, objectCapSRVs);
 	// Land grain height copy (t10) for the two-sided edge contest.
 	if (landMasksCopySRV) {
@@ -2195,18 +2180,6 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* cloudShadowSRV = globals::features::cloudShadows.texCubemapCloudOccCopy->srv.get();
 		context->PSSetShaderResources(25, 1, &cloudShadowSRV);
 	}
-	// One-shot audit: settles whether the t60 bind fires at all (feature off,
-	// texture absent) before reaching for a capture.
-	{
-		static std::atomic<bool> loggedShadowBind{ false };
-		if (!loggedShadowBind.exchange(true))
-			logger::info("[SNOW DEFORMATION] shell far-shadow bind: terrainShadows loaded={} tex={} enabled={} | cloudShadows loaded={} tex={}",
-				globals::features::terrainShadows.loaded,
-				globals::features::terrainShadows.texShadowHeight != nullptr,
-				globals::features::terrainShadows.settings.EnableTerrainShadow,
-				globals::features::cloudShadows.loaded,
-				globals::features::cloudShadows.texCubemapCloudOccCopy != nullptr);
-	}
 	// Comparison sampler (s2), shared by the crisp cascade path and the
 	// point-light shadow path.
 	if (cbData.CrispShadows > 0.5f || PointShadowAtlasSRV()) {
@@ -2274,7 +2247,6 @@ void SnowDeformation::DrawShell()
 		context->Begin(shellStatsQuery[shellStatsRing][1].get());
 	}
 	const bool earlyMarks = ground && early && shellPSEarlyResolve && shellEarlyPending && shellEarlyMarks;
-	shellPrepassThisFrame = ground;
 	shellDeferredThisFrame = ground;
 	if (!ground) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell");
@@ -2284,28 +2256,10 @@ void SnowDeformation::DrawShell()
 			globals::profiler->EndPass();
 			globals::profiler->BeginPass(a_name);
 		};
-		// The fields the captured statics' hull and domain stages inherit.
-		context->HSSetConstantBuffers(0, 1, cbs);
-		context->DSSetConstantBuffers(0, 1, cbs);
-		context->DSSetConstantBuffers(4, 3, sharedBuffers);
-		context->HSSetShaderResources(0, 6, shellSRVs);
-		context->DSSetShaderResources(0, 6, shellSRVs);
-		context->HSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
-		context->DSSetShaderResources(kTerrainWetSlot, 1, &wetSRV);
-		context->HSSetShaderResources(13, 1, &fineSRV);
-		context->DSSetShaderResources(13, 1, &fineSRV);
-		context->HSSetShaderResources(27, 2, waterSRVs);
-		context->DSSetShaderResources(27, 2, waterSRVs);
-		context->HSSetShaderResources(19, 1, &waterNearSRV);
-		context->DSSetShaderResources(19, 1, &waterNearSRV);
-		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
-		context->DSSetShaderResources(8, 1, &dsHeightSRV);
-		context->DSSetShaderResources(11, 2, objectCapSRVs);
+		// The fields the trench patch's domain stage inherits.
 		context->DSSetShaderResources(14, 1, &bermSRV);
 		context->DSSetShaderResources(15, 1, &exclusionSRV);
 		context->DSSetShaderResources(29, 1, &undulationSRV);
-		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
-		context->DSSetSamplers(0, 1, &dsSampler);
 
 		if (!earlyMarks) {
 			// The replay's prepass: raster depth, the deferred attributes and the
@@ -2444,8 +2398,6 @@ void SnowDeformation::DrawShell()
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);
-		ID3D11Buffer* nullSharedCBs[3] = {};
-		context->DSSetConstantBuffers(4, 3, nullSharedCBs);
 		ID3D11SamplerState* nullDSSampler = nullptr;
 		context->DSSetSamplers(0, 1, &nullDSSampler);
 	}
@@ -2456,11 +2408,7 @@ void SnowDeformation::DrawShell()
 	context->PSSetConstantBuffers(0, 1, &nullCB);
 	ID3D11ShaderResourceView* nullSRVs[16] = {};
 	context->VSSetShaderResources(0, 16, nullSRVs);
-	ID3D11ShaderResourceView* nullFarSRVs[2] = {};
-	context->VSSetShaderResources(24, 1, &nullFarSRVs[0]);
-	context->VSSetShaderResources(26, 1, &nullFarSRVs[1]);
 	context->PSSetShaderResources(0, 16, nullSRVs);
-	context->VSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
 	context->PSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
 	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or

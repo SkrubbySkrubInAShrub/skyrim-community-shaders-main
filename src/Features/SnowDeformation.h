@@ -141,20 +141,6 @@ public:
 		return span * a_spacing;
 	}
 
-	/** @brief World offset from the grid centre of vertex index a_u (centred) along one axis: SnowGrid.hlsli WarpAxis. */
-	static float ShellWarpAxis(int a_u, float a_spacing = kShellGridSpacing)
-	{
-		float a = float(std::abs(a_u));
-		float off = 0.0f;
-		for (int band = 0; band < kShellWarpBands; ++band) {
-			const float take = std::min(a, kShellWarpBandVerts[band]);
-			off += take * kShellWarpBandMul[band];
-			a -= take;
-		}
-		off += a * kShellWarpBandMul[kShellWarpBands - 1];
-		return (a_u < 0 ? -off : off) * a_spacing;
-	}
-
 	// Terrain data window: 16x16 cells at land-vertex resolution (128 units),
 	// cell-anchored so texels never resample as the camera moves. Sized with
 	// margin so the warped grid never samples past the window even with the
@@ -273,7 +259,6 @@ public:
 		{
 			std::string name;
 			std::string model;
-			float centerZ = 0.0f;
 			float radius = 0.0f;
 			float topZ = 0.0f;
 			float distXY = 0.0f;
@@ -709,7 +694,7 @@ public:
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
-		uint EnableSnowDeformation;
+		uint padEnable;
 
 		uint DebugTerrainOverlay;
 		/** @brief Horizon snow (LOD terrain recolor): distance ramp start and 1/band, aligned to the shell edge. */
@@ -1209,7 +1194,6 @@ public:
 	void BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasRawSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileAtlasUAV[kBloodTileMips];
 	winrt::com_ptr<ID3D11Texture2D> bloodTileClock;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileClockSRV;
@@ -1362,8 +1346,6 @@ public:
 	/** @brief Rebakes on recenter/Spacing change; no-ops when current. Called once per frame from Prepass. */
 	void UpdateUndulationField();
 	ID3D11ShaderResourceView* GetUndulationFieldSRV() const { return undulationFieldTexture ? undulationFieldTexture->srv.get() : nullptr; }
-	/** @brief World XY of the corner of texel (0,0) of the current deformation window. */
-	float2 GetWindowOrigin() const { return windowOrigin; }
 
 	/** @brief Creates the ping-pong deformation textures and the per-frame constant buffer. */
 	virtual void SetupResources() override;
@@ -1470,9 +1452,6 @@ public:
 
 	/** @brief Copies a LOGICAL-space box out of the toroidal map into a staging texture laid out logically: up to four physical segments split at the wrap seam, each landing at its logical offset in the destination. Every CPU read of the map routes through this so no site does its own torus arithmetic. a_physOrigin is the MapOrigin the source content was written under. */
 	void CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_src, int a_x0, int a_y0, int a_w, int a_h, DirectX::XMINT2 a_physOrigin);
-	/** @brief Returns the berm field bake compute shader, compiling it on first use. */
-	ID3D11ComputeShader* GetBermFieldCS();
-	ID3D11ComputeShader* bermFieldCS = nullptr;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Draws the ImGui settings UI, including the debug view of the deformation map. Implemented in SnowDeformation/Menu.cpp. */
@@ -1581,7 +1560,8 @@ public:
 		float2 GridToDeformOffset;
 
 		float WarpedHalfSpan;
-		uint GridDim;
+		/** @brief Layout keeper, uploaded as 0. */
+		uint LayoutKeeper6;
 		uint TerrainDim;
 		/** @brief 1 = the trench detail coverage view (debugTrenchDetailView). Claims the retired debug-planes keeper. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		uint TrenchDetailView;
@@ -1650,8 +1630,8 @@ public:
 		float DebugNoFarPad;
 		float LayoutKeeper4;
 
-		/** @brief The object snow's berm height (the landscape's). */
-		float ObjBermHeightAmp;
+		/** @brief Layout keeper, uploaded as 0. */
+		float LayoutKeeper7;
 		/** @brief Trench detail: sun self-shadow fade, Settings::ParallaxDepth up to 1 (the presets set it), 0 = off; its occlusion scales by SnowParallax.y (Parallax Shadow) as the snow texture's does. Claims a retired churn keeper. */
 		float TrenchDetailShadow;
 		/** @brief Layout keeper, uploaded as 0. */
@@ -1713,7 +1693,7 @@ public:
 		float4 TrampleStyle;
 		/** @brief Shell tessellation screen-size cap: x = target pixels per segment (0 = the distance factor alone), yz = viewport half size in pixels, w = viewport depth range (MaxDepth - MinDepth). Appended last; mirror in both shells. */
 		float4 TessScreen;
-		/** @brief GetDimensions of the field maps every landscape-shell pass binds, 0 where unbound: x deformation (t1), y berm field (t14), z object maps (t4), w exclusion field (t15). All square. Landscape shell only (SnowShell.hlsl SNOW_FIELD_DIMS); appended last. */
+		/** @brief GetDimensions of the field maps every landscape-shell pass binds, 0 where unbound: x deformation (t1), y berm field (t14), z object maps (t5), w exclusion field (t15). All square. Landscape shell only (SnowShell.hlsl SNOW_FIELD_DIMS); appended last. */
 		float4 FieldDims;
 		/** @brief Snow climate at the player (TRACK-VARIATION-RESEARCH.md 3.2): x = air temperature (C), y = cooling per world unit of height, z = the player's world z, w = freshness. Overrides applied. SnowShell.hlsl only; appended last. */
 		float4 SnowClimate;
@@ -1936,8 +1916,6 @@ public:
 	ID3D11PixelShader* shellFillPS = nullptr;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
-	/** @brief The prepass ran this frame, so shellRasterDepth marks the shell's pixels; DepthSync is skipped otherwise. */
-	bool shellPrepassThisFrame = false;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
 	/** @brief Read view of shellTestDepth for the object-snow prepass's write-back into the main depth. */
@@ -2272,10 +2250,6 @@ public:
 	uint32_t preDecalMasksFrame = UINT32_MAX;
 	void CapturePreDecalMasks();
 
-	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Bound at skin PS t23. */
-	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
-
 	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
 		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box = nullptr);
@@ -2402,8 +2376,7 @@ public:
 		float ProjNoiseTiling;
 		/** @brief 2 = the S4 shell owns this draw (SKIN-PLACEMENT-PLAN S4 phase 1): the rolling-ball fillet grown vertically over the fill-covered slice of the projected footprint, per-pixel coverage from the reconstructed vanilla weight. 0 = classic path (no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjPixelEnable;
-		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float HasSkinNormalCopy;
+		float padSkinNormalCopy;
 		float padShellMinNz;
 		/** @brief kPeelTol (the retired Plane Merge Height, fixed at its default) - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
@@ -2475,7 +2448,6 @@ public:
 	Buffer* meshBounds = nullptr;
 	uint32_t meshBoundsNext = 0;
 	ID3D11ComputeShader* smoothBoundsCS = nullptr;
-	uint32_t SmoothedBoundsSlot(void* a_vertexBuffer) const;
 
 	/** @brief Cluster cull: a precombined cell chunk's box contains the camera, so the whole-skin test can never reject it. Each unique mesh is cut into at most one thread group's worth of clusters (64 triangles each until that would exceed the cap, proportionally larger after), each with its own local box; ClusterCullCS tests them against the same depth pyramid and compacts the survivors' indices, in order, into clusterScratchIB, which both skin loops draw through the same indirect arguments. Implemented in SnowDeformation/Statics.cpp. */
 	static constexpr uint32_t kClusterGroup = 256;
@@ -2666,7 +2638,7 @@ public:
 	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
 	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
 	/** @brief ONE StaticsCB recipe for both the visible skin draw and the shadow caster - the caster must be the exact surface the shell renders, and a drifted copy of this fill would be the CB-mirror class of bug. Presence flags come from the call site (the caster looks resources up without creating them). */
-	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, bool a_hasSkinNormalCopy, StaticsCB& a_scb) const;
+	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, StaticsCB& a_scb) const;
 	/** @brief ONE StaticsCB recipe for the trench patch, shared by the visible patch draw and its shadow caster for the same drift reason as FillSkinDrawCB. Implemented in SnowDeformation/Statics.cpp. */
 	void FillPatchDrawCB(StaticsCB& a_scb) const;
 
@@ -2680,7 +2652,6 @@ public:
 	static constexpr uint kHeightMapDim = 2048;
 	/** @brief Repose slope of the object snow cone (rise per world unit); sets the road verge bank down to a shallower landscape class. The retired Mound Steepness at its last default. */
 	static constexpr float kObjectConeSlope = 3.0f;
-	static constexpr float kHeightMapHalfExtent = 4096.0f;
 	/** @brief The live half-extent: Settings::ObjectRasterReachM in world units. Every window fill, texel derivation and shader mirror must take it from here - the texel size is derived from it, so a call site left on the constant addresses a different grid. */
 	float ObjectRasterHalfExtent() const { return std::clamp(settings.ObjectRasterReachM, 29.0f, 234.0f) * kUnitsPerMeter; }
 	/** @brief The player is in a child worldspace (a walled city); sampled once per frame in Prepass. */
@@ -2731,15 +2702,14 @@ public:
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
-	/** @brief Processed maps: CombineCS's OutA, never written (its size sets the dispatch and FieldDims.z), and the smooth shelter/suppression mask the shell samples (t5), plus the object cone chains' ping-pong scratch. */
-	Texture2D* heightTopFiltered = nullptr;
+	/** @brief Processed maps: the smooth shelter/suppression mask the shell samples (t5; its size sets CombineCS's dispatch and FieldDims.z), and the object cone chains' ping-pong scratch. */
 	Texture2D* heightBottomFiltered = nullptr;
 	Texture2D* heightScratch = nullptr;
 	/** @brief Cone-transformed snow SURFACE height over the object top raster; the skin's edge taper reads it with one tap. */
 	Texture2D* objectSnowCone = nullptr;
 	/** @brief The peeled second layer: ping-pong accumulated raw top of the highest up-facing surface more than kPeelTol below layer 1 per column. The layer-1 cone seed reads it as the plane-continuation test behind every upward rim. */
 	Texture2D* heightTop2Raw[2] = { nullptr, nullptr };
-	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
+	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution, for the volume's seed. */
 	Texture2D* objectSkyOpen = nullptr;
 	/** @brief Per 8x8 tile of the layer-1 raw maps, 1 where no texel holds both a top and a bottom: the layer-1 merge writes it (u3), the shelter mask skips tiles whose 5x5 block is all 1 (t4). */
 	Texture2D* heightTileEmpty = nullptr;
@@ -2911,8 +2881,6 @@ public:
 	/** @brief A wide ring's voxels a side in x and y (Settings::VolumeRingShape), and the flat shape's in z. */
 	static constexpr uint kVoxelDimWide = 512;
 	static constexpr uint kVoxelDimFlatZ = 128;
-	/** @brief Grid size of the far rings (Settings::VolumeFineLevels and beyond): half the voxels a side at twice the voxel, so the extent is a full ring's and the work an eighth. */
-	static constexpr uint kVoxelFarDim = 128;
 	/** @brief Voxels a side per axis for a level: the shape's, halved per axis on the far rings. */
 	DirectX::XMUINT3 VoxelDimsForLevel(uint a_level) const;
 	/** @brief The largest dims any level uses (the shape's fine dims): the shared support volume's size. */
@@ -2933,7 +2901,7 @@ public:
 		float VoxelSize;
 		/** @brief Occupancy lost per frame; a voxel not re-rasterised fades out. */
 		float Decay;
-		int DimLegacy;
+		int padDim;
 		int SliceAxis;
 		int SliceIndex;
 		/** @brief >0: the slice is a max over the whole fixed axis (silhouettes), not one plane. */
@@ -3144,10 +3112,6 @@ public:
 	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger) that fade coverage to bare ground. Fires get noisy-edged MELT BASINS instead: the shell's depth thins toward a small floor that never vanishes and never sinks below terrain (negative values in the shelter-mask channel; see CombineCS). */
 	/** @brief Must match MAX_EXCLUSIONS in HeightMapProcessCS.hlsl. When the gather overflows, the nearest sources win (distance sort in the gather). */
 	static constexpr uint kMaxExclusions = 256;
-	static constexpr float kDoorClearRadius = 110.0f;
-	static constexpr float kDoorForwardExtent = 70.0f;
-	static constexpr float kLoadDoorClearRadius = 150.0f;
-	static constexpr float kLoadDoorForwardExtent = 150.0f;
 	/** @brief Melt circle around a dropped burning torch. Carried torches never melt: a moving basin warps the bearer's own trails. */
 	static constexpr float kTorchClearRadius = 40.0f;
 	/** @brief Living actors this far above the LAND height stand on an elevated structure and do not stamp (2D-map interim gate; drift tops below this keep trails). */
@@ -3262,7 +3226,7 @@ public:
 	struct alignas(16) ExclusionFieldCB
 	{
 		float2 FieldCenter;
-		float FieldHalfExtent;
+		float padHalfExtent;
 		float FieldTexelSize;
 
 		float2 TerrainWindowOrigin;
@@ -3382,7 +3346,7 @@ public:
 	uint32_t skinCullStagingCount[kSkinCullRing] = {};
 	/** @brief One-shot: name every skin submitted this frame, and log the culled and decal-state ones with their verdict when the census reads back. */
 	bool skinCullLogArmed = false;
-	/** @brief Debug: LogIceJourney logs every geometry's capture verdict (once per geometry and outcome), not only the ice/drift families. */
+	/** @brief Debug: LogCaptureVerdict logs every geometry's capture verdict (once per geometry and outcome). */
 	bool debugLogAllJourneys = false;
 	std::vector<std::string> skinCullLogNames[kSkinCullRing];
 	int skinCullRing = 0;
@@ -3535,8 +3499,7 @@ public:
 	std::unordered_set<const void*> contactDynamicLogged;
 	/** @brief This frame's actors drawn by their skinned meshes; their bone stamps are skipped. */
 	std::vector<ContactProp> contactActors;
-	/** @brief This frame's living and corpse entries in contactActors, against their separate caps. */
-	uint contactLivingCount = 0;
+	/** @brief This frame's corpse entries in contactActors, against their cap. */
 	uint contactCorpseCount = 0;
 	/** @brief FormIDs of the living actors that hold this frame's raster slots: the player and the nearest inside the contact window, up to kContactMaxActors. Anyone else inside the window prints by bones. Before this the slots went in process-list order, so a near NPC could print by bones while a far one rasterized. */
 	std::vector<uint32_t> contactPriority;
@@ -4674,8 +4637,6 @@ protected:
 		SpellMark mark = SpellMark::Melt;
 		/** @brief Pits only: multiplier on the discharge radius, so a big blast forks wider than a bolt. */
 		float pitScale = 1.0f;
-		/** @brief Pits only: 0 marks a pocked disc, >0 marks a pocked RING at that fraction of the radius - a cloak crackles around its wearer rather than under them. */
-		float ringFraction = 0.0f;
 		/** @brief Crust only: multiplier on the glazing rate, carrying the source's magnitude and how far above the snow it sits. */
 		float rateScale = 1.0f;
 		/** @brief Carve a scooped hollow rather than a walled trench. A body hurled through snow leaves a furrow with sloped sides, not a slot. */
@@ -5415,13 +5376,6 @@ protected:
 	std::vector<RE::ObjectRefHandle> propScanMovers[kPropScanInterval];
 	/** @brief Placed hazards the last full scan found, replayed through ConsiderHazard every frame because the emitter list is rebuilt per frame. */
 	std::vector<RE::ObjectRefHandle> propScanHazards[kPropScanInterval];
-	size_t PropScanMoverCount() const
-	{
-		size_t n = 0;
-		for (const auto& slice : propScanMovers)
-			n += slice.size();
-		return n;
-	}
 	size_t PropScanHazardCount() const
 	{
 		size_t n = 0;

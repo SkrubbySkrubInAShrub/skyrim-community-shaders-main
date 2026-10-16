@@ -161,22 +161,4 @@ float ExclusionReach(uint index)
 	return 1.4 * max(ExclusionPosRadius[index].w, 1.0) * (1.0 + length(dirExtType.xy)) + 1.2 * max(abs(dirExtType.z), 1.0);
 }
 
-// Every exclusion in the buffer, combined.
-ExclusionResult EvaluateExclusions(float2 worldXY, float terrain)
-{
-	ExclusionResult result;
-	result.Suppress = 0.0;
-	result.Melt = 0.0;
-	result.Flatten = 0.0;
-
-	for (uint exclusionI = 0; exclusionI < ExclusionCount; exclusionI++) {
-		ExclusionResult one = EvaluateExclusionAt(exclusionI, worldXY, terrain);
-		result.Suppress = max(result.Suppress, one.Suppress);
-		result.Melt = max(result.Melt, one.Melt);
-		result.Flatten += one.Flatten * (1.0 - result.Flatten);
-	}
-
-	return result;
-}
-
 #endif

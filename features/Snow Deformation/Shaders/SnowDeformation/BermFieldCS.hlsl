@@ -180,19 +180,6 @@ bool BermTexel(uint2 phys)
 	return berm != 0.0 || blur != 0.0;
 }
 
-[numthreads(8, 8, 1)]
-void main(uint3 dtid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint GIdx : SV_GroupIndex)
-{
-	if (GIdx == 0)
-		gBermNonZero = 0;
-	GroupMemoryBarrierWithGroupSync();
-	if (BermTexel(dtid.xy))
-		InterlockedOr(gBermNonZero, 1u);
-	GroupMemoryBarrierWithGroupSync();
-	if (GIdx == 0)
-		OutBermOccupancy[Gid.xy] = gBermNonZero;
-}
-
 // Indirect over ScanBermCS's list: only tiles whose inputs changed (plus
 // the tap-reach halo) rebuild; everything else keeps last frame's bake,
 // which the toroidal layout keeps valid across scrolls.

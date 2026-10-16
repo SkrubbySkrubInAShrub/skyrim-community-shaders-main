@@ -288,7 +288,6 @@ namespace
 		winrt::com_ptr<ID3D11VertexShader> savedVS;
 		ID3D11ShaderResourceView* savedVSSRVs[kLsSRVCount]{};
 		ID3D11Buffer* savedVSCB[2]{};
-		ID3D11SamplerState* savedVSSampler = nullptr;
 
 		// Snow on Landscape: this frame's depth-prepass landscape draws, the
 		// replay's shaders, and the counts (this frame's, the last full one's).
@@ -447,7 +446,6 @@ namespace
 			context->VSSetShaderResources(0, kLsSRVCount, ls.savedVSSRVs);
 			context->VSSetConstantBuffers(11, 1, &ls.savedVSCB[0]);
 			context->VSSetConstantBuffers(13, 1, &ls.savedVSCB[1]);
-			context->VSSetSamplers(0, 1, &ls.savedVSSampler);
 			for (auto*& srv : ls.savedVSSRVs) {
 				if (srv)
 					srv->Release();
@@ -458,9 +456,6 @@ namespace
 					cb->Release();
 				cb = nullptr;
 			}
-			if (ls.savedVSSampler)
-				ls.savedVSSampler->Release();
-			ls.savedVSSampler = nullptr;
 		}
 		context->VSSetShader(ls.savedVS.get(), nullptr, 0);
 		ls.savedVS = nullptr;
@@ -655,7 +650,7 @@ void SnowDeformation::InstallLandscapeSnow()
 bool SnowDeformation::LandscapeSnowRefresh()
 {
 	ls.cbValid = false;
-	if (!lastShellCBData || !shellTerrainTexture || !shellTerrainTexture->srv || !GetDeformationSRV() || !heightTopFiltered || !heightBottomFiltered ||
+	if (!lastShellCBData || !shellTerrainTexture || !shellTerrainTexture->srv || !GetDeformationSRV() || !heightBottomFiltered ||
 		!heightTopRaw[heightCurrent] || !heightSkinDepth || !shellSnowSampler || !ShellFootprintHasSnow())
 		return false;
 
@@ -695,7 +690,7 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y, 1.0f / kExclusionFieldHalfExtent,
 		exclusionFieldValid ? 1.0f : 0.0f };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
-	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightTopFiltered), mapDim(exclusionFieldTexture) };
+	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
 	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
 
 	if (!ls.shellCB)
@@ -716,7 +711,6 @@ void SnowDeformation::LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs)
 	std::fill(s, s + kLsSRVCount, nullptr);
 	s[0] = shellTerrainTexture->srv.get();
 	s[1] = GetDeformationSRV();
-	s[4] = heightTopFiltered->srv.get();
 	s[5] = heightBottomFiltered->srv.get();
 	s[8] = shellSnowHeightSRV.get();
 	s[11] = heightTopRaw[heightCurrent]->srv.get();
@@ -784,18 +778,14 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 	ID3D11ShaderResourceView* srvs[kLsSRVCount];
 	LandscapeSurfaceSRVs(srvs);
 	ID3D11SamplerState* sampler = shellSnowSampler.get();
-	auto* state = globals::state;
-	ID3D11Buffer* shared[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	const auto& shaders = ls.shade;
 	a_context->VSSetShader(shaders.vs.get(), nullptr, 0);
 	a_context->HSSetShader(shaders.hs.get(), nullptr, 0);
 	a_context->DSSetShader(shaders.ds.get(), nullptr, 0);
 	a_context->HSSetConstantBuffers(0, 1, &a_shellCB);
 	a_context->DSSetConstantBuffers(0, 1, &a_shellCB);
-	a_context->DSSetConstantBuffers(4, 3, shared);
 	a_context->HSSetShaderResources(0, kLsSRVCount, srvs);
 	a_context->DSSetShaderResources(0, kLsSRVCount, srvs);
-	a_context->HSSetSamplers(0, 1, &sampler);
 	a_context->DSSetSamplers(0, 1, &sampler);
 	a_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
 	ID3D11Buffer* drawCB = ls.drawCB->CB();
@@ -984,16 +974,12 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			for (auto* b : cbs)
 				if (b)
 					b->Release();
-			ID3D11Buffer* shared[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
-			context->HSSetConstantBuffers(4, 3, shared);
-			context->DSSetConstantBuffers(4, 3, shared);
 			context->HSSetConstantBuffers(11, 1, &own[0]);
 			context->DSSetConstantBuffers(11, 1, &own[0]);
 			context->HSSetConstantBuffers(13, 1, &own[1]);
 			context->DSSetConstantBuffers(13, 1, &own[1]);
 			context->HSSetShaderResources(0, kLsSRVCount, ls.srvs);
 			context->DSSetShaderResources(0, kLsSRVCount, ls.srvs);
-			context->HSSetSamplers(0, 1, &ls.sampler);
 			context->DSSetSamplers(0, 1, &ls.sampler);
 			context->VSSetShader(entry->shaders.vs.get(), nullptr, 0);
 			context->HSSetShader(entry->shaders.hs.get(), nullptr, 0);
@@ -1008,11 +994,9 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			context->VSGetShaderResources(0, kLsSRVCount, ls.savedVSSRVs);
 			context->VSGetConstantBuffers(11, 1, &ls.savedVSCB[0]);
 			context->VSGetConstantBuffers(13, 1, &ls.savedVSCB[1]);
-			context->VSGetSamplers(0, 1, &ls.savedVSSampler);
 			context->VSSetShaderResources(0, kLsSRVCount, ls.srvs);
 			context->VSSetConstantBuffers(11, 1, &own[0]);
 			context->VSSetConstantBuffers(13, 1, &own[1]);
-			context->VSSetSamplers(0, 1, &ls.sampler);
 			context->VSSetShader(entry->shaders.vsRaise.get(), nullptr, 0);
 			slot.raise[cat]++;
 			entry->raiseAttaches++;

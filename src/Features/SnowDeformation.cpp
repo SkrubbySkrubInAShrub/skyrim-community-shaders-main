@@ -693,7 +693,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.WindowOrigin = windowOrigin;
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
-	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
 	                           (LandBlendActive() ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (LandRecolorActive() && shellSnowRmaosSRV ? 512u : 0u);
 	// Water raster frame (t104): the window's min corner, texel size, dim.
@@ -972,8 +971,7 @@ void SnowDeformation::PrepassSimulation()
 	auto context = globals::d3d::context;
 
 	// Keep t101 bound even while paused or disabled: the lighting shader
-	// samples it whenever the feature is compiled in (and gates on
-	// EnableSnowDeformation from FeatureData).
+	// samples it whenever the feature is compiled in.
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	// Water raster (t104) for Lighting's underwater veto; null until captured.
@@ -1797,15 +1795,6 @@ ID3D11ComputeShader* SnowDeformation::GetExclusionFieldCS()
 	return exclusionFieldCS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetBermFieldCS()
-{
-	if (!bermFieldCS) {
-		logger::debug("Compiling BermFieldCS");
-		bermFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0"));
-	}
-	return bermFieldCS;
-}
-
 ID3D11ComputeShader* SnowDeformation::GetDeformationRingCS()
 {
 	if (!deformationRingCS) {
@@ -2146,9 +2135,6 @@ void SnowDeformation::ClearShaderCache()
 	noiseHashBaked = false;
 	// The next UpdateUndulationField rebakes with the fresh CS.
 	undulationFieldValid = false;
-	if (bermFieldCS)
-		bermFieldCS->Release();
-	bermFieldCS = nullptr;
 	if (exclusionFieldCS)
 		exclusionFieldCS->Release();
 	exclusionFieldCS = nullptr;
@@ -2490,7 +2476,7 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	const uint64_t terrain = TextureBytes(texOf(shellTerrainTexture));
 	const uint64_t heights = TextureBytes(texOf(heightTopRaw[0])) + TextureBytes(texOf(heightTopRaw[1])) +
 	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +
-	                         TextureBytes(texOf(heightTopFiltered)) + TextureBytes(texOf(heightBottomFiltered)) +
+	                         TextureBytes(texOf(heightBottomFiltered)) +
 	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
 	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +
 	                         SRVBytes(shellSnowRmaosSRV.get()) + SRVBytes(shellSnowHeightSRV.get());

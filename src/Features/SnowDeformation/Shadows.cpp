@@ -389,11 +389,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		prevVSCBs[0].attach(cbs[0]);
 		prevVSCBs[1].attach(cbs[1]);
 	}
-	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVs[6];
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVs[2];
 	{
-		ID3D11ShaderResourceView* srvs[6] = {};
-		context->VSGetShaderResources(0, 6, srvs);
-		for (uint32_t i = 0; i < 6; i++)
+		ID3D11ShaderResourceView* srvs[2] = {};
+		context->VSGetShaderResources(0, 2, srvs);
+		for (uint32_t i = 0; i < 2; i++)
 			prevVSSRVs[i].attach(srvs[i]);
 	}
 	// The patch caster binds t11-t13 (top / skin depth / cone).
@@ -425,11 +425,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->PSGetShaderResources(4, 1, &srv);
 		prevPSSRV4.attach(srv);
 	}
-	// The water windows (t19, t27, t28).
-	static constexpr UINT kCasterExtraSlots[3] = { 19, 27, 28 };
-	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsExtra[3];
-	for (uint32_t i = 0; i < 3; i++)
-		context->VSGetShaderResources(kCasterExtraSlots[i], 1, prevVSSRVsExtra[i].put());
 
 	// ---- Common caster state.
 	context->PSSetShader(nullptr, nullptr, 0);  // depth-only
@@ -442,34 +437,15 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	ID3D11ShaderResourceView* nullPSSRV = nullptr;
 	context->PSSetShaderResources(4, 1, &nullPSSRV);
 
-	// Snow field textures for the patch VS: terrain window, deformation,
-	// height field.
-	ID3D11ShaderResourceView* vsSRVs[6] = { shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
-		GetDeformationSRV(), nullptr, nullptr,
-		heightTopFiltered ? heightTopFiltered->srv.get() : nullptr,
-		heightBottomFiltered ? heightBottomFiltered->srv.get() : nullptr };
-	context->VSSetShaderResources(0, 6, vsSRVs);
-	// SampleTerrain's taps, cut as DrawShell cut them for this CB.
-	ID3D11ShaderResourceView* casterWetSRV = TerrainWetSRV();
-	context->VSSetShaderResources(kTerrainWetSlot, 1, &casterWetSRV);
-	// The land-exact height layer (t13).
-	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
-	context->VSSetShaderResources(13, 1, &casterFineSRV);
+	// Snow field textures for the patch VS: terrain window, deformation.
+	ID3D11ShaderResourceView* vsSRVs[2] = { shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr, GetDeformationSRV() };
+	context->VSSetShaderResources(0, 2, vsSRVs);
 	// The berm field (t14).
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
-	// The wide exclusion field (t15).
-	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
-	context->VSSetShaderResources(15, 1, &exclusionSRV);
 	// The baked undulation (t29).
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
-	// The shore cap's water windows.
-	ID3D11ShaderResourceView* waterSRV = waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
-	ID3D11ShaderResourceView* waterSRVs[2] = { waterSRV, waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
-	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
-	context->VSSetShaderResources(27, 2, waterSRVs);
-	context->VSSetShaderResources(19, 1, &waterNearSRV);
 	ID3D11Buffer* cb0 = shellCB->CB();
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -577,26 +553,19 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->VSSetConstantBuffers(0, 2, cbs);
 	}
 	{
-		ID3D11ShaderResourceView* srvs[6];
-		for (uint32_t i = 0; i < 6; i++)
+		ID3D11ShaderResourceView* srvs[2];
+		for (uint32_t i = 0; i < 2; i++)
 			srvs[i] = prevVSSRVs[i].get();
-		context->VSSetShaderResources(0, 6, srvs);
+		context->VSSetShaderResources(0, 2, srvs);
 		// t14 was not saved (nothing else in the frame uses it); clear it.
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
-		context->VSSetShaderResources(15, 1, &nullBermSRV);
-		context->VSSetShaderResources(13, 1, &nullBermSRV);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);
-		context->VSSetShaderResources(kTerrainWetSlot, 1, &nullBermSRV);
 		// The patch caster's map set.
 		ID3D11ShaderResourceView* skinSrvs[4];
 		for (uint32_t i = 0; i < 4; i++)
 			skinSrvs[i] = prevVSSRVsSkin[i].get();
 		context->VSSetShaderResources(10, 4, skinSrvs);
-		for (uint32_t i = 0; i < 3; i++) {
-			ID3D11ShaderResourceView* srv = prevVSSRVsExtra[i].get();
-			context->VSSetShaderResources(kCasterExtraSlots[i], 1, &srv);
-		}
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();

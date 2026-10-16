@@ -51,7 +51,7 @@ cbuffer StaticCB : register(b1)
 	float SteepThin;            // layout sync with SnowStaticsShell; unused here
 	float ProjNoiseTiling;    // layout sync with SnowStaticsShell; unused here
 	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
-	float HasSkinNormalCopy;  // layout sync with SnowStaticsShell; unused here
+	float padSkinNormalCopy;  // layout sync with SnowStaticsShell
 	float padShellMinNz;
 	// Peel tolerance ("Plane Merge Height" knob): surfaces within this
 	// z-band of a layer's top belong to that layer's plane. Mirror in

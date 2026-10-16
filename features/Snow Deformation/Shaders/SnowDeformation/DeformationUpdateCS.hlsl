@@ -1058,14 +1058,7 @@ bool StampTexel(uint2 phys)
 				// a strike keeps the same shape frame after frame instead of
 				// boiling, and two strikes never share one.
 				float2 centre = Stamps[i].xy;
-				float ringFrac = StampEnds[i].w;
-
-				// A cloak pocks a RING at its reach rather than a bowl at its
-				// feet, so the core distance folds around the ring radius.
-				float coreDist = ringFrac > 0.001 ?
-				                     abs(dist - radius * ringFrac) / max(radius * (1.0 - ringFrac), 1e-3) :
-				                     edgeCoord;
-				float shape = 1.0 - smoothstep(0.15, 1.0, coreDist);
+				float shape = 1.0 - smoothstep(0.15, 1.0, edgeCoord);
 
 				// Arc legs fork from a POINT of discharge, so they mean nothing
 				// on a wedge - and their seed is the stamp centre, which for a
