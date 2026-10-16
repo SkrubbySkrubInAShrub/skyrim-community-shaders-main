@@ -47,8 +47,8 @@ float2 FieldTexelWorldXY(uint2 texel, float2 dims)
 	return FieldCenter + (float2(texel) - dims * 0.5 + 0.5) * FieldTexelSize;
 }
 
-// Bilinear terrain height, matching the shell's own sampling so the Z gate
-// agrees with the surface the clearing is judged against.
+// Bilinear terrain height for the Z gate: the surface the clearing is judged
+// against. The ground snow itself stands on the land-exact layer instead.
 float SampleTerrainHeight(float2 worldXY)
 {
 	float2 t = (worldXY - TerrainWindowOrigin) / TerrainTexelSize;

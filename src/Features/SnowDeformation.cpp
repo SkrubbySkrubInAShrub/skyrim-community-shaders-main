@@ -609,8 +609,8 @@ void SnowDeformation::SetupResources()
 			minmaxBlendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
-			// RT2 carries a second channel (G = road-heightfield bit); MAX on
-			// it means "any road wrote this texel".
+			// RT2 carries a second channel (G = a road's top, kNoRoadTop off
+			// roads); MAX on it keeps the highest road surface.
 			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = (i == 2) ?
 			                                                            (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN) :
 			                                                            D3D11_COLOR_WRITE_ENABLE_RED;

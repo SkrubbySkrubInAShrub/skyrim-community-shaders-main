@@ -225,7 +225,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m, a 24 px Object Snow Tessellation Cap and Snow Trenches on Objects at 22 m. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m, a 32 px cap and Snow Trenches on Objects at 11 m. Every preset turns Tessellate Trenches on (off costs more, not less) and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m, a 24 px Object Snow Tessellation Cap and Snow Trenches on Objects at 22 m. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m, a 32 px cap and Snow Trenches on Objects at 11 m. Every preset turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[kQualityPresetCount] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < kQualityPresetCount; i++) {
@@ -262,7 +262,7 @@ void SnowDeformation::DrawSettings()
 			shellSnowTextureAttempted = false;
 		}
 		if (auto _ttPbrCfg = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_pbr_config_tooltip"), "The shell takes its roughness, specular level and sparkle from a TruePBR texture set, matched by the snow texture's file name. A modlist often holds several sets whose name contains that word - a blend variant, a glacier, a grass edge - and some of them carry no sparkle settings at all, which leaves the snow flat and dull. Leave this empty to take the best automatic match, or type a set's name (its JSON file name, without the extension) to pin it. The set in use is shown beside this box; press Reload after changing it."));
+			ImGui::Text("%s", T(TKEY("snow_pbr_config_tooltip"), "The shell takes its roughness, specular level and sparkle from a TruePBR texture set, matched by the snow texture's file name. A modlist often holds several sets whose name contains that word - a blend variant, a glacier, a grass edge - and some of them carry no sparkle settings at all, which leaves the snow flat and dull. Leave this empty to take the best automatic match, or type a set's name (its JSON file name, without the extension) to pin it. The set in use is shown beside this box and updates as you type."));
 		ImGui::SameLine();
 		if (snowPBRSetName.empty())
 			ImGui::TextDisabled("%s", T(TKEY("snow_pbr_config_none"), "(no match - built-in snow)"));
@@ -287,7 +287,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);
 			if (auto _ttHm = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow's own bumps, drifts, berms and the objects under it shade the snow behind them through a short march along the sun over the snow height field, on both the ground shell and object snow. Turn it off to check whether dark patches on open snow at a low sun come from this march rather than from the game's shadows."));
+				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow shades itself: bumps, drifts, berms and trench rims cast soft shadows onto the snow behind them, found by a short march toward the sun over the snow's height, on the ground snow and on object snow. It fades out as the sun nears the horizon, where the game's own shadows take over. Off, the snow is shaded by the game's shadows and Snow Contact Shadows only. The Low preset turns it off."));
 			ImGui::SliderFloat(T(TKEY("shelter_max_height"), "Shelter Max Height"), &settings.ShelterMaxHeight, 100.0f, 1000.0f, "%.0f units");
 			if (auto _ttShelterMax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shelter_max_height_tooltip"), "Snow under a roof, bridge or archway thins out, because the structure keeps the snowfall off. A structure whose underside is higher above the ground than this no longer counts: a wide archway with plenty of air under it is as open as the sky, and the snow beneath it keeps its full depth. Fades out over the next 100 units. 70 units is about a metre."));
@@ -304,7 +304,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("object_meet_band"), "Object Meeting Blend"), &settings.ObjectMeetBand, 0.0f, 64.0f, "%.0f units");
 			if (auto _ttMeet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_meet_band_tooltip"), "Where the ground snow meets a snow-covered object, the two blend toward each other so they read as one surface instead of meeting at a lit line. This is the width of that meeting, split in half: at 32, the ground snow's shading eases toward the object's slope over its last 16 units, and the object's snow eases toward the ground's over the first 16 units up from it, meeting in the middle. Higher = a wider, softer meeting; 0 = off, the two meet as they are. Shading only - no geometry moves. 70 units is about a metre. Default 32."));
+				ImGui::Text("%s", T(TKEY("object_meet_band_tooltip"), "Where the ground snow meets a snow-covered object, the two blend toward each other so they read as one surface instead of meeting at a lit line. This is the width of that meeting, split in half: at the default 12, the ground snow's shading eases toward the object's slope over its last 6 units, and the object's snow eases toward the ground's over the first 6 units up from it, meeting in the middle. Higher = a wider, softer meeting; 0 = off, the two meet as they are. Shading only - no geometry moves. 70 units is about a metre."));
 
 			ImGui::TreePop();
 		}
@@ -321,7 +321,7 @@ void SnowDeformation::DrawSettings()
 		// drape the skin lays over it; nothing of ours stands above a mesh.
 		ImGui::Checkbox(T(TKEY("object_snow_near_detail"), "Object Snow Near Detail"), &settings.ObjectSnowNearDetail);
 		if (auto _ttNearDetail = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_snow_near_detail_tooltip"), "Within about 15 m of the camera, object snow reads its shape from a map four times finer, so snow on rocks, steps and ledges keeps its small edges and rims. Off, the coarser map is used everywhere: slightly softer shapes up close, a little less GPU time. The Medium and Low presets turn it off."));
+			ImGui::Text("%s", T(TKEY("object_snow_near_detail_tooltip"), "Near you - over a quarter of the Object Height Map Range, 25 m at its default - road snow and the trenches in it read their shape from a map four times finer: about 1.7 world units a texel instead of 6.8 at the default range. Off, roads use the coarser map everywhere: slightly softer road edges and trenches up close, a little less GPU time. The Medium and Low presets turn it off."));
 
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
@@ -333,7 +333,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("proj_snow_normals"), "Recolor Projected Snow Normals"), &settings.ProjSnowNormals);
 		if (auto _ttProjNormals = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it. Applies at the full snow verdict, so snow handed back to the game by Vertex Alpha Fades Snow keeps the relief too."));
+			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it, including where Vertex Alpha Fades Snow has thinned the drape away."));
 
 		ImGui::Checkbox(T(TKEY("proj_alpha_density"), "Vertex Alpha Fades Snow"), &settings.ProjAlphaDensity);
 		if (auto _ttAlphaDensity = Util::HoverTooltipWrapper())
@@ -377,10 +377,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSsb = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_slope_depth_bias_tooltip"), "The part of the depth bias that grows with how steeply a face is seen. Faces at a grazing angle cover a large depth range per pixel and fight hardest; this scales the nudge with that slope. Capped internally so no angle can push the layer far in front of its object."));
 
-		ImGui::SliderFloat(T(TKEY("slope_drape"), "Slope Drape"), &settings.SlopeDrape, 0.0f, 1.0f, "%.2f");
-		if (auto _ttDrape = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("slope_drape_tooltip"), "How the snow layer stands off steep ground. At 0 it is always lifted straight up, so on a near-vertical face the cover thins to almost nothing and the rock shows through in diagonal gaps. At 1 the lift turns toward the surface as the ground steepens (from 30 degrees, fully by 60), so the layer keeps its full depth in front of the face - the way snow plasters a mountainside rather than only sitting on top of it. Landscape shell only."));
-
 		ImGui::SliderFloat(T(TKEY("skin_tess_cap_px"), "Object Snow Tessellation Cap"), &settings.SkinTessCapPx, 0.0f, 32.0f, "%.0f px");
 		if (auto _ttStc = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "The object snow layer is subdivided so that its rounded rims get enough vertices; at a distance those vertices end up smaller than a pixel and cost GPU time for nothing visible. This is the smallest on-screen size a subdivision segment may have, in pixels. 0 turns the cap off. Up to about 20 it only trims the rims at range; above that it coarsens the whole layer. Read the Object snow line under Pipeline Statistics to see the DS count fall."));
@@ -389,12 +385,12 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("volume_snow"), "Volume Snow"), &settings.VolumeSnow);
 		if (auto _ttVol = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "VOLUME-SNOW-PLAN: rasterises the captured objects into nested cubes of 256 x 256 x 256 voxels around the camera (Volume Levels), grows a snow field on every surface that faces up, and draws that field as snow - marched per pixel, shaded with the object shell's own material, so it matches the 3D shell and the coat beneath it, which keep drawing under it. Snow whose shape is not inherited from the object's mesh: it can overhang an edge, bridge two rocks, cap a post. Remembered between frames and fading where nothing redraws, like the height maps. Cost is the VoxelVolume, VoxelField and VolumeSnow passes, once per level."));
+			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "Rasterises the captured objects into nested windows of voxels around the camera (Ring Shape, Levels), grows a snow field on every surface that faces up, and draws that field as snow - marched per pixel and shaded with the object snow's own material, so it matches the snow on the objects beneath it, which keeps drawing under it. Snow whose shape is not inherited from the object's mesh: it can overhang an edge, bridge two rocks, cap a post. Remembered between frames and fading where nothing redraws. Cost is the Volume - Bake and Volume - Draw rows."));
 		if (settings.VolumeSnow) {
 			// Says so when the pass is not running: a slice that never
 			// updates is indistinguishable from a broken volume otherwise.
 			if (voxelShadersFailed)
-				WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("voxel_status_failed"), "NOT RUNNING: a voxel shader failed to compile - see CommunityShaders.log. The picture below is stale."));
+				WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("voxel_status_failed"), "NOT RUNNING: a voxel shader failed to compile, or this GPU cannot run the volume - see CommunityShaders.log."));
 			else if (!voxelLevels[0].valid)
 				WrapTextDisabledF("%s", T(TKEY("voxel_status_waiting"), "Waiting for the first frame."));
 #if !SNOW_ALPHA_BUILD
@@ -415,49 +411,53 @@ void SnowDeformation::DrawSettings()
 				const char* shapes[] = { "Cubic (256 x 256 x 256)", "Wide (512 x 512 x 256)", "Wide, flat (512 x 512 x 128)" };
 				ImGui::Combo(T(TKEY("volume_ring_shape"), "Ring Shape"), &settings.VolumeRingShape, shapes, 3);
 				if (auto _ttVoxShape = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("volume_ring_shape_tooltip"), "The window every ring is cut from. Wide doubles the reach sideways and ahead for twice the memory; wide and flat keeps cubic's memory by halving the height, so eaves above you go to the next ring out. Every ring shares the shape, each still twice the one inside it in every axis."));
+					ImGui::Text("%s", T(TKEY("volume_ring_shape_tooltip"), "The window every ring is cut from. Wide doubles the reach sideways and ahead for four times the memory; wide and flat halves the height for about half of Wide's memory, so eaves above you go to the next ring out. Every ring shares the shape, each still twice the one inside it in every axis."));
 			}
 			ImGui::SliderInt(T(TKEY("volume_levels"), "Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
 			if (auto _ttVoxLevels = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_levels_tooltip"), "Nested grids around the camera - the clipmap. Each level is 256 voxels a side at twice the voxel of the one inside it, and draws only the ring the finer level does not reach, so the reach doubles per level while the near detail stays the base voxel. 64 MB per level, and each level runs its own capture and field passes."));
+				ImGui::Text("%s", T(TKEY("volume_levels_tooltip"), "Nested grids around the camera - the clipmap. Each level is a Ring Shape window at twice the voxel of the one inside it, and draws only the ring the finer level does not reach, so the reach doubles per level while the near detail stays the base voxel. A full level takes about 226 MB at the default Wide shape (56 MB Cubic, 129 MB Wide, flat), and each level runs its own capture and field passes."));
 			ImGui::SliderInt(T(TKEY("volume_fine_levels"), "Fine Levels"), &settings.VolumeFineLevels, 1, (int)kVoxelMaxLevels);
 			if (auto _ttVoxFine = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_fine_levels_tooltip"), "How many levels, counting out from the camera, keep the full 256-cube grid. The rest use 128 cubes a side at twice the voxel: the same reach for an eighth of the work and memory, and one step less detail out where it is too far to see. Changing this rebuilds those levels."));
+				ImGui::Text("%s", T(TKEY("volume_fine_levels_tooltip"), "How many levels, counting out from the camera, keep the Ring Shape's full grid. The rest use half as many voxels a side at twice the voxel: the same reach for an eighth of the voxels and a fraction of the memory, and one step less detail out where it is too far to see. Changing this rebuilds those levels."));
 			{
 				const float voxel = std::clamp(settings.VolumeVoxelSize, 1.0f, 24.0f);
 				const int levels = std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
-				const int fine = std::clamp(settings.VolumeFineLevels, 1, levels);
 				const auto dims = VoxelDimsMax();
 				const float nearAcross = dims.x * voxel / kUnitsPerMeter;
 				const float nearTall = dims.z * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				// Per ring: four R8 volumes plus the R32 heightmap at four a side; the far rings an eighth and a quarter of those.
-				const double fineMB = (4.0 * dims.x * dims.y * dims.z + 4.0 * 16.0 * dims.x * dims.x) / 1048576.0;
-				const double farMB = (4.0 * dims.x * dims.y * dims.z / 8.0 + 4.0 * 16.0 * dims.x * dims.x / 4.0) / 1048576.0;
-				const double supportMB = double(dims.x) * dims.y * dims.z / 1048576.0;
-				WrapTextF("Finest level %.0f m across, %.0f m tall; outermost %.0f m across (%.0f m around you); %.0f MB", nearAcross, nearTall, farAcross, farAcross * 0.5f, fine * fineMB + (levels - fine) * farMB + supportMB);
+				// EnsureVoxelResources' allocations. Per ring: the two occupancy volumes and the field (R8), the R32 top
+				// heightmap at four texels a voxel side and its under-layers at two, three uints a brick (list, dirty,
+				// flags), the dispatch lists and the draw args. Once: the R8 support volume at the largest dims and the slice image.
+				double bytes = double(dims.x) * dims.y * dims.z + double(kVoxelDimWide) * kVoxelDimWide;
+				for (uint i = 0; i < (uint)levels; i++) {
+					const auto d = VoxelDimsForLevel(i);
+					const double voxels = double(d.x) * d.y * d.z;
+					bytes += 3.0 * voxels + 4.0 * (16.0 + 4.0 * kVoxelUnderLayers) * d.x * d.x + 12.0 * voxels / 512.0 + kVoxelListBytes + 16.0;
+				}
+				WrapTextF("Finest level %.0f m across, %.0f m tall; outermost %.0f m across (%.0f m around you); %.0f MB", nearAcross, nearTall, farAcross, farAcross * 0.5f, bytes / 1048576.0);
 			}
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_march_step_tooltip"), "How far apart the draw samples the snow field along each pixel's ray, in voxels. The hit is refined afterwards, so this only has to find the crossing - but a lip thinner than a step can be stepped over. Halving it doubles the draw's cost."));
 			ImGui::SliderFloat(T(TKEY("volume_detail_distance"), "Detail Distance"), &settings.VolumeDetailDistance, 100.0f, 8000.0f, "%.0f u");
 			if (auto _ttVoxDetail = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_detail_distance_tooltip"), "Inside this distance the volume snow shades with the object shell's full material. Over the next half of it the parts you cannot see at range fade out: the parallax relief marches, the berm ridges, and the five-tap horizon shadow march. The object shell itself is not affected. Raise it if far volume snow looks flatter than the shell beside it; lower it for a cheaper draw."));
+				ImGui::Text("%s", T(TKEY("volume_detail_distance_tooltip"), "Inside this distance the volume snow shades with the object snow's full material. Over the next half of it the parts you cannot see at range fade out: the parallax relief marches, the berm ridges, and the five-tap horizon shadow march. Object snow itself is not affected. Raise it if far volume snow looks flatter than the object snow beside it; lower it for a cheaper draw."));
 			ImGui::Checkbox(T(TKEY("volume_skip_empty"), "Skip Empty Cells"), &settings.VolumeSkipEmptyCells);
 			if (auto _ttVoxSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_skip_empty_tooltip"), "The ray jumps over the eighths of a brick that hold no snow surface instead of sampling through them. No visible change; off for comparing cost."));
 			ImGui::SliderFloat(T(TKEY("volume_forward_bias"), "Forward Bias"), &settings.VolumeForwardBias, 0.0f, 0.45f, "%.2f");
 			if (auto _ttVoxFwd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_forward_bias_tooltip"), "How far ahead of you each ring's window sits, as a fraction of its width. 0 centres it on you; higher puts more of it in front, where you look, and less behind. At 0.35 the nearest ring reaches about 9 m ahead and 1 m behind. Turning around refreshes the near ring the same frame; the far rings take a few."));
+				ImGui::Text("%s", T(TKEY("volume_forward_bias_tooltip"), "How far ahead of you each ring's window sits, as a fraction of its width. 0 centres it on you; higher puts more of it in front, where you look, and less behind. At 0.35 each ring reaches about 85% of its width ahead of you and 15% behind. Turning around refreshes the near ring the same frame; the far rings take a few."));
 			ImGui::SliderFloat(T(TKEY("volume_vertical_bias"), "Vertical Bias"), &settings.VolumeVerticalBias, -0.3f, 0.3f, "%.2f");
 			if (auto _ttVoxVert = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_vertical_bias_tooltip"), "How far below the eye each ring's window sits, as a fraction of its height. The third-person camera climbs when you look down, and a window centred on it then loses the ground beside you to the next ring out - the ring colours changing with pitch. Positive puts more of the nearest ring below you, where the fences and steps are, and less above, where the eaves are."));
 			ImGui::SliderFloat(T(TKEY("volume_max_distance"), "Max Distance"), &settings.VolumeMaxDistance, 500.0f, 8000.0f, "%.0f u");
 			if (auto _ttVoxMaxDist = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_max_distance_tooltip"), "Past this the volume snow dithers out and the object shell carries the object alone. The outermost rings sample a rock at 32 units a column, and there is a range at which the shell's own smooth cover simply looks better than that. 8000 = never."));
+				ImGui::Text("%s", T(TKEY("volume_max_distance_tooltip"), "Past this the volume snow dithers out and the object snow carries the object alone. The outermost rings sample objects at their coarsest voxel, and there is a range at which the object snow's own smooth cover simply looks better than that. 8000 = never."));
 			ImGui::Checkbox(T(TKEY("volume_staggered_capture"), "Staggered Capture"), &settings.VolumeStaggeredCapture);
 			if (auto _ttVoxStagger = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_staggered_capture_tooltip"), "An object already in a ring's volume is re-drawn into it only every 8th rebuild on the nearest ring (4th and 2nd on the next two); its memory keeps it there between. Everything you have not seen yet still draws within that many rebuilds - a few frames near you. Off draws every object into every ring every rebuild, for comparing the VoxelRaster row."));
+				ImGui::Text("%s", T(TKEY("volume_staggered_capture_tooltip"), "An object already in a ring's volume is re-drawn into it only every 8th rebuild on the nearest ring (4th and 2nd on the next two); its memory keeps it there between. Everything you have not seen yet still draws within that many rebuilds - a few frames near you. Off draws every object into every ring every rebuild, for comparing the Volume - Bake row."));
 			ImGui::Checkbox(T(TKEY("volume_dirty_bricks"), "Dirty Bricks"), &settings.VolumeDirtyBricks);
 			if (auto _ttVoxDirty = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_dirty_bricks_tooltip"), "A rebuild recomputes the snow only in the columns of bricks whose captured shape changed since the last one - something newly seen, faded, or scrolled in - plus the blur's reach around them; everywhere else keeps last time's snow, which is world-anchored and does not move. Standing still, almost nothing is rebuilt. Every 120th rebuild is whole. Off rebuilds everything every time, for comparing."));
@@ -469,7 +469,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("volume_snow_rounding_tooltip"), "How the snow rounds toward an edge: where half the neighbourhood is air the snow is this much lower, and it keeps falling smoothly past the edge into the lip. Separate from Overhang, which is where the lip is cut. On a ring whose voxels are larger than this the rounding cannot show, and there the far snow keeps its full slab instead."));
 			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
 			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the object's own surface normal, captured into the volume with it - the same facing the 3D shell's Max Slope uses - so a wall is a wall whatever its stones do, and an underside never grows snow at any setting."));
+				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the object's own surface normal, captured into the volume with it, so a wall is a wall whatever its stones do, and an underside never grows snow at any setting."));
 			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
 			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));
@@ -516,7 +516,7 @@ void SnowDeformation::DrawSettings()
 					ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
 				// Long-form: the whole point of V0 is that this image can be
 				// read without the plan open beside it.
-				WrapText(T(TKEY("voxel_slice_hint"), "The square is about 30 m across, the cross is you, and red = an object surface: bright when drawn this frame, dim as it fades. Each red block is one voxel, 8 units.\n\nStart with X-ray ON and a Side plane. A house should read as a box with a pitched roof, a rock as a blob. Uniform speckle with no shapes means the volume is wrong, and the number above will say so.\n\nThen X-ray OFF for the real test: slide the Offset until the plane cuts through a porch or covered walkway, and look for the roof as a line with EMPTY space beneath it and the floor as a second line below. A thin plane prints a drifting surface as dots rather than a line - that is normal."));
+				WrapText(T(TKEY("voxel_slice_hint"), "The square is the chosen level's window - the Finest level line further up gives the finest one's size - and the cross is its centre, which sits ahead of you by Forward Bias. Red = an object surface: bright when drawn this frame, dim as it fades. Each red block is one voxel of that level.\n\nStart with X-ray ON and a Side plane. A house should read as a box with a pitched roof, a rock as a blob. Uniform speckle with no shapes means the volume is wrong, and the number above will say so.\n\nThen X-ray OFF for the real test: slide the Offset until the plane cuts through a porch or covered walkway, and look for the roof as a line with EMPTY space beneath it and the floor as a second line below. A thin plane prints a drifting surface as dots rather than a line - that is normal."));
 				const ImVec2 voxelImageTopLeft = ImGui::GetCursorScreenPos();
 				if (voxelSliceTexture && voxelSliceTexture->srv) {
 					ImGui::Image(voxelSliceTexture->srv.get(), { 512.0f, 512.0f });
@@ -563,9 +563,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRk = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Loaded cells bound the real reach (~200 m at uGridsToLoad 5), so values above that only matter with a larger uGridsToLoad. Applies live."));
 
-		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Snow Shape Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
+		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Height Map Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
 		if (auto _ttOrr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far out object snow is SHAPED. Inside this radius the layer has rims, cornice rolls and shelter, all read from a top-down height map of the objects around you; outside it there is no map, so the layer is a uniform coat over the whole mesh - the same snow, but with none of its edges - and the switch is a circle at this distance that moves with you. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: 58 m puts a texel at 4 world units, 117 m at 8. The near detail level keeps one unit a texel close to you whatever this says. Costs nothing extra to raise; it coarsens the shape near you instead."));
+			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far around you the top-down height map of the objects reaches. Inside it, snow thins under roofs, bridges and archways, road snow takes its shape and its trenches, footprints can be laid on objects, and Volume Snow finds what shelters it. Past it there is no shelter under cover and no footprints on objects, and road snow goes on only through Road Snow To The Loaded Grid. Keep it at or above the reach of Snow Trenches on Objects, or footprints on objects stop at this range. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: a texel is about 7 world units at the default 100 m, 4 at 58 m. Costs nothing extra to raise; it coarsens the map near you instead."));
 
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
@@ -636,7 +636,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("accumulation_melt_hours"), "Melt Time"), &settings.AccumulationMeltHours, 1.0f, 10.0f, "%.0f game hours");
 		if (auto _ttAccumMelt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("accumulation_melt_hours_tooltip"), "How long clear weather takes to settle the layer back down from the peak. Deliberately longer than the build-up: snow that took a day to fall should not be gone by lunchtime, and the imbalance is what lets a snowy stretch stay deep between storms."));
+			ImGui::Text("%s", T(TKEY("accumulation_melt_hours_tooltip"), "How long clear weather takes to settle the layer back down from the peak. By default the same as Accumulation Time; set it longer and a snowy stretch stays deep between storms."));
 
 		ImGui::SliderFloat(T(TKEY("accumulation_fade"), "Accumulated Snow Fade"), &settings.AccumulationFadeDays, 0.0f, 14.0f, "%.0f days");
 		if (auto _ttAccumFade = Util::HoverTooltipWrapper())
@@ -691,6 +691,9 @@ void SnowDeformation::DrawSettings()
 			RefreshLandTextureDepths();
 			shellDataDirty.store(true, std::memory_order_release);
 		}
+		ImGui::SliderFloat(T(TKEY("slope_drape"), "Slope Drape"), &settings.SlopeDrape, 0.0f, 1.0f, "%.2f");
+		if (auto _ttDrape = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("slope_drape_tooltip"), "How the ground snow stands off steep ground. At 0 it is always lifted straight up, so on a near-vertical face the cover thins to almost nothing and the rock shows through in diagonal gaps. At 1 the lift turns toward the surface as the ground steepens (from 30 degrees, fully by 60), so the layer keeps its full depth in front of the face - the way snow plasters a mountainside rather than only sitting on top of it. Snow on objects is not affected."));
 		ImGui::TreePop();
 	}
 
@@ -853,7 +856,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("rim_teeth"), "Rim Teeth"), &settings.RimTeeth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttTeeth = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
+			ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, from a ragged noise fixed to the ground. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
 		ImGui::SeparatorText(T(TKEY("snow_condition_group"), "Snow Condition"));
 
@@ -917,11 +920,11 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
 			if (auto _ttFloat = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Far field only. Inside the contact window (22 m) an actor carves by its render mesh, and anything that hovers reaches no snow by construction; this gate covers the bone path beyond it. Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));
+				ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Far field only. Inside the contact window (about 44 m) an actor carves by its render mesh, and anything that hovers reaches no snow by construction; this gate covers the bone path beyond it. Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));
 
 			ImGui::SliderFloat(T(TKEY("floating_band"), "Floating Actor Clearance"), &settings.FloatingActorBand, 4.0f, 80.0f, "%.0f units");
 			if (auto _ttFloatBand = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "Far field only (the bone path beyond the 22 m contact window). How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride."));
+				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "Far field only (the bone path beyond the contact window, about 44 m). How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride."));
 
 			{
 				std::string incorporealModes;
@@ -966,7 +969,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("spell_cat_force_tooltip"), "Force is the one school that moves snow without changing it. Everything else removes it, burns it or freezes it; a shove throws it forward and aside, deepest at the mouth and breaking up into streaks that thin out with distance, and piles what it moved along the rim. That is what makes Unrelenting Force read as pushed rather than deleted."));
 		ImGui::Checkbox(T(TKEY("shout_cones"), "Shouts Plough The Snow"), &settings.EnableShoutCones);
 		if (auto _ttShout = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shout_cones_tooltip"), "Lets a shout work the whole oval of ground in front of the shouter rather than only the spot its projectile happens to strike. Each shout takes its reach from its own record, so a dragon's breath carries ten times a Greybeard's without anything being named. Off, shouts still mark through whatever they throw."));
+			ImGui::Text("%s", T(TKEY("shout_cones_tooltip"), "Lets a shout work the whole oval of ground in front of the shouter rather than only the spot its projectile happens to strike. Each shout takes its reach from its own record, so a dragon's breath carries ten times a Greybeard's without anything being named. Off, shouts mark only through whatever they throw, and Whirlwind Sprint ploughs no furrow."));
 
 		ImGui::SliderFloat(T(TKEY("shout_reach"), "Shout Mark Reach"), &settings.ShoutMarkReach, 0.1f, 2.0f, "%.2fx");
 		if (auto _ttReach = Util::HoverTooltipWrapper())
@@ -986,7 +989,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("shout_churn"), "Shout Churn"), &settings.ShoutChurn, 0.0f, 1.0f, "%.2f");
 		if (auto _ttChurn = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shout_churn_tooltip"), "How broken up a shove's mark is. 0 is a smooth scoop. At 1 the snow near the mouth is thrown in uneven streaks, and further out only the strongest streaks land, so the mark thins into dashes before it ends. Shoves only - a breath's mark stays smooth."));
+			ImGui::Text("%s", T(TKEY("shout_churn_tooltip"), "How broken up a shout's mark is. 0 is a smooth scoop with a clean edge. At 1 a shove throws the snow near the mouth in uneven streaks, and further out only the strongest streaks land, so the mark thins into dashes before it ends. A breath's melt or frost stays solid; only its outline turns ragged. A shout that lays this mark leaves no other - the projectile it throws does not dig."));
 
 		ImGui::PushID("spell_cat_force");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
@@ -1039,7 +1042,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("blast_radius_scale"), "Fire Blast Radius"), &settings.BlastRadiusScale, 0.1f, 2.0f, "%.2fx");
 		if (auto _ttBlast = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blast_radius_scale_tooltip"), "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar."));
+			ImGui::Text("%s", T(TKEY("blast_radius_scale_tooltip"), "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar. Frost blasts and a frost atronach's death glaze are sized by it too."));
 
 		ImGui::PushID("spell_cat_fire");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
@@ -1049,11 +1052,11 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Fire Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
 			if (auto _ttBowl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted."));
+				ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted. Every frost glaze takes the same profile: higher holds the full glaze further out before it fades."));
 
 			ImGui::SliderFloat(T(TKEY("melt_edge_irregularity"), "Fire Melt Edge Irregularity"), &settings.MeltEdgeIrregularity, 0.0f, 0.6f, "%.2f");
 			if (auto _ttMeltEdge = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards."));
+				ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards. The edge of every frost glaze wanders by the same amount."));
 
 			ImGui::SliderFloat(T(TKEY("atronach_fire_reach"), "Fire Atronach Reach"), &settings.AtronachFireReach, 0.25f, 4.0f, "%.2fx");
 			if (auto _ttAtroFire = Util::HoverTooltipWrapper())
@@ -1076,7 +1079,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("spell_cat_lightning_tooltip"), "Lightning does not melt snow, it throws it aside and burns what is left. A discharge pocks a small core with arc legs forking off it, and unlike a melt the displaced snow still piles into a rim."));
 		ImGui::SliderFloat(T(TKEY("pit_depth"), "Lightning Pit Depth"), &settings.PitDepth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttPitDepth = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("pit_depth_tooltip"), "How deep a discharge pocks the snow, as a fraction of the layer. Lightning scatters snow rather than boring into it, so this sits below a footprint - and unlike a melt it does not deepen with time, however long a cloak crackles over one spot."));
+			ImGui::Text("%s", T(TKEY("pit_depth_tooltip"), "How deep a discharge pocks the snow, as a fraction of the layer: at 1 a full strike throws its deepest pocks clear to the ground, and the pocking leaves shallower snow between them. Unlike a melt it does not deepen with time, however long a cloak crackles over one spot."));
 
 		ImGui::SliderFloat(T(TKEY("pit_radius"), "Lightning Pit Radius"), &settings.PitRadius, 20.0f, 200.0f, "%.0f");
 		if (auto _ttPitRadius = Util::HoverTooltipWrapper())
@@ -1149,7 +1152,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("crust_radius"), "Frost Crust Radius"), &settings.CrustRadius, 20.0f, 300.0f, "%.0f");
 		if (auto _ttCrustRadius = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("crust_radius_tooltip"), "Reach of a frost source that states none of its own - a cloak, or a held stream. A spell that authors its own area, like Blizzard, uses that instead and ignores this."));
+			ImGui::Text("%s", T(TKEY("crust_radius_tooltip"), "Reach of a frost source that states none of its own: a frost cloak, a frost atronach's aura (scaled by Frost Atronach Reach) and a body frozen where it fell (scaled by its size). A spell that authors its own area, like Blizzard, uses that instead and ignores this; a held stream keeps its own small reach."));
 
 		ImGui::InputText(T(TKEY("frost_texture_path"), "Frost Texture"), &settings.FrostTexturePath);
 		if (auto _ttFrostTex = Util::HoverTooltipWrapper())
@@ -1163,7 +1166,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("frost_pattern"), "Frost Crystal Detail"), &settings.FrostPatternStrength, 0.0f, 2.0f, "%.2f");
 		if (auto _ttFrostPat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("frost_pattern_tooltip"), "Rime crystal picked out on crusted snow, using the game's own frost impact art so it matches the spells landing on it. This is the surface STRUCTURE only - the polish, colour and sheen that make crusted snow read as ice are separate knobs and are untouched. It is sampled without tiling, so a sheet laid by Blizzard or a breath will not show a grid across it however wide it gets."));
+			ImGui::Text("%s", T(TKEY("frost_pattern_tooltip"), "Rime crystal picked out on crusted snow, drawn from the Frost Texture above (frozen marsh ice by default). This is the surface STRUCTURE only - the polish, colour and sheen that make crusted snow read as ice are separate knobs and are untouched. It is sampled without tiling, so a sheet laid by Blizzard or a breath will not show a grid across it however wide it gets."));
 
 		ImGui::PushID("spell_cat_frost");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
@@ -1371,7 +1374,7 @@ void SnowDeformation::DrawSettings()
 						else if (skeletonProbe.shellDepth <= 0.0f)
 							surface = "NO SHELL HERE: ground class carries no snow - nothing can display a trench";
 						else if (skeletonProbe.gapToLand > 10.0f)
-							surface = "standing on a mesh ABOVE the landscape - snow there is object skin (trenches only on roads / Object Trenches)";
+							surface = "standing on a mesh ABOVE the landscape - snow there is object snow (trenches on roads, prints elsewhere from Snow Trenches on Objects)";
 						else
 							surface = "landscape shell underfoot - trenches should show";
 						WrapTextF("  ground: shell depth %.0f | %s", skeletonProbe.shellDepth, surface);
@@ -1483,15 +1486,10 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &showDebugTexture);
 			if (showDebugTexture) {
-				// The honest caption. ImGui blends by the texture's alpha, and this
-				// map's .w was claimed by the retired bow wave's deposit field, so the view
-				// is drawn through deposit: transparent wherever nothing has been
-				// pushed, whatever the depth channel holds. Right after a load it is
-				// blank BY CONSTRUCTION, because deposit is not stored. Two rounds
-				// were read backwards from this image before anyone noticed.
-				// The map's own depth, copied to a single channel so ImGui cannot
-				// draw it through that deposit alpha. This is the image
-				// that answers "did the trench reach the map".
+				// The map's own depth (TrenchDebugCS), copied to a single channel:
+				// ImGui blends by the texture's alpha, and the map's .w is the Force
+				// shove mark, so the map drawn directly shows only where a shove has
+				// been. This is the image that answers "did the trench reach the map".
 				WrapTextF("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
 				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
 				if (trenchDebugSRV)
@@ -1529,7 +1527,7 @@ void SnowDeformation::DrawSettings()
 			// verdict, so it lags the dispatch by the readback ring.
 			ImGui::Checkbox(T(TKEY("debug_activity_view"), "Update Activity View"), &debugActivityView);
 			if (debugActivityView) {
-				WrapTextF("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
+				WrapTextF("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or shove mark. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
 				const ImVec2 activityTopLeft = ImGui::GetCursorScreenPos();
 				if (activityViewSRV)
 					ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
@@ -1552,7 +1550,7 @@ void SnowDeformation::DrawSettings()
 				// SlumpRate x 0.5 x dt (~0.0008 at defaults) and scales with the
 				// Snow Slumping slider; storage-precision creep is an order
 				// smaller and scales with nothing.
-				WrapTextF("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/deposit %u), mean delta %.5f",
+				WrapTextF("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/shove %u), mean delta %.5f",
 					deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep,
 					deformChangedTexels > 0 ? (double)deformChangedDeltaSum * 1e-6 / (double)deformChangedTexels : 0.0);
 				if (bboxValid) {
@@ -1737,7 +1735,7 @@ void SnowDeformation::DrawSettings()
 						entry.radius, entry.topZ, entry.distXY, entry.road ? " [road]" : "", entry.model.c_str());
 			}
 
-			WrapTextF("Snow mask cache: %zu entries, %llu hits, %llu misses (counted while Terrain Overlay is on)",
+			WrapTextF("Snow mask cache: %zu entries, %llu hits, %llu misses",
 				snowMasksSizeForUI(),
 				(unsigned long long)landMaskHits.load(std::memory_order_relaxed),
 				(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));
@@ -1790,8 +1788,7 @@ void SnowDeformation::DrawSettings()
 				if (ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugIndex, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes)))
 					staticsDebugView = kStaticsDebugModeValues[staticsDebugIndex];
 				if (auto _ttDbgView = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nSkin identity: every snow skin in its own colour, striped where the skin is drawn in the game's decal depth mode (the overlay meshes on rocks and trims). The object's own material showing through where snow should be means NO skin won that pixel's depth test - the skin is either drawn and losing, or not drawn at all (see the culling census).\n\nDepth fight: the same test, scored. Green = a skin won the pixel, red = this skin lost it; brightness = by how many depth ULPs (dim = a hair, bright = a lot), striped as above. Needs the depth prepass on. Green here must coincide with colour in Skin identity; a pixel coloured there but bare here means the view's bias formula is off - report it.\n\nVolume seed (needs Volume Snow on): why the volume does or does not grow on this surface, judged the way the seed pass judges it at the nearest level. GREEN = the volume holds snow here. RED = something captured sits within the headroom above it (a beam, an eave, the member's own inside). BLUE = the surface faces too steeply for Volume Max Slope. YELLOW = seeded but weak - a door, a sheltering roof, or a closed sky; brightness is the weight. MAGENTA = seeded fine, yet no field here - the sweep, rounding or coverage threshold removed it, or a coarser ring owns this spot. Light GREY = this surface is not in the volume's occupancy at all (never captured, or thinner than a voxel). Dark grey = outside the volume's window."));
-#if !SNOW_ALPHA_BUILD
+					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nSkin identity: every snow skin in its own colour, striped where the skin is drawn in the game's decal depth mode (the overlay meshes on rocks and trims). The object's own material showing through where snow should be means NO skin won that pixel's depth test - the skin is either drawn and losing, or not drawn at all (see the culling census).\n\nDepth fight: the same test, scored. Green = a skin won the pixel, red = this skin lost it; brightness = by how many depth ULPs (dim = a hair, bright = a lot), striped as above. Green here must coincide with colour in Skin identity; a pixel coloured there but bare here means the view's bias formula is off - report it.\n\nVolume seed (needs Volume Snow on): why the volume does or does not grow on this surface, judged the way the seed pass judges it at the nearest level. GREEN = the volume holds snow here. RED = something captured sits within the headroom above it (a beam, an eave, the member's own inside). BLUE = the surface faces too steeply for Volume Max Slope. YELLOW = seeded but weak - a door, a sheltering roof, or a closed sky; brightness is the weight. MAGENTA = seeded fine, yet no field here - the sweep, rounding or coverage threshold removed it, or a coarser ring owns this spot. Light GREY = this surface is not in the volume's occupancy at all (never captured, or thinner than a voxel). Dark grey = outside the volume's window."));
 				ImGui::Checkbox(T(TKEY("debug_proj_albedo"), "Recolor Sampled Albedo"), &debugProjAlbedoView);
 				if (auto _ttProjAlbedo = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_albedo_tooltip"), "Paints classified projected snow with the snow texture the recolor JUST SAMPLED, raw and unshaded, in place of blending it in. The magenta view cannot answer this: it replaces the sample with a constant, so it proves the block runs and its weight, and nothing about the texture. Snow here means the sample is good and the recolor is failing further on; the object's own rock or black means the shell snow texture is not reaching the draw."));
@@ -1802,7 +1799,6 @@ void SnowDeformation::DrawSettings()
 				ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Projected Snow Match Tint"), &debugProjSnowView);
 				if (auto _ttProjDbg = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));
-#endif
 				// Height-field probe: the seven object maps under the player's
 				// feet, one frame old. The numbers behind every layer/height
 				// question - tops per peeled layer, the depth cones, and the
@@ -1837,7 +1833,7 @@ void SnowDeformation::DrawSettings()
 					WrapText(probeLine4);
 				}
 				if (auto _ttSdv = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("statics_debug_modes_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires."));
+					ImGui::Text("%s", T(TKEY("statics_debug_modes_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road bit (bright green, above half, means the road owns this column). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Recolor Weight Tint with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires."));
 			}
 
 
@@ -1857,7 +1853,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("debug_log_all_journeys"), "Log All Capture Verdicts"), &debugLogAllJourneys);
 			if (auto _ttJourneys = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_log_all_journeys_tooltip"), "Writes every object's capture verdict to CommunityShaders.log as 'ice journey' lines - mesh name, flags, texture path and which gate accepted or rejected it - once per object and outcome, for every object rather than only the ice and drift families. Tick, look at the object in question, untick; then search the log for its mesh name. An object with no line at all never reached the capture."));
+				ImGui::Text("%s", T(TKEY("debug_log_all_journeys_tooltip"), "Writes every object's capture verdict to CommunityShaders.log as 'ice journey' lines - mesh name, flags, texture path and which gate accepted or rejected it - once per object and outcome while ticked. Swaying trees and distant LOD are left out. Tick, look at the object in question, untick; then search the log for its mesh name. An object with no line at all never reached the capture."));
 
 			{
 				const uint32_t total = skinCullDrawnLast + skinCullCulledLast;

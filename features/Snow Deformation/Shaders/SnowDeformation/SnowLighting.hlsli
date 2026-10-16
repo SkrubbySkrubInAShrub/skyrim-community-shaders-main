@@ -409,9 +409,7 @@ namespace SnowLighting
 			// shader so no angle is missed. The old cut at the last trace of
 			// paint turned a faint dusting into full snow (interior floors,
 			// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
-			// The snow verdict itself: what the pixel would take before any
-			// hand-over. The RELIEF rides this, so a handed-over pixel keeps
-			// the snow's grain even where the albedo went back to the game.
+			// The snow verdict: the RELIEF and the albedo below both ride it.
 			float snowVerdict = smoothstep(-0.01, 0.01, projWeight);
 			projectedMaterialWeight = snowVerdict;
 			// Vertex Alpha Fades Snow: a vertex alpha below 1 is a deliberate

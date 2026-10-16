@@ -393,7 +393,7 @@ groupshared uint gDeltaSum;
 groupshared uint gNonZero;
 
 // Debug: per-texel activity, painted only while the menu view is open.
-// R = depth, G = melt/scorch, B = crust; brightness = how far past
+// R = depth, G = melt/scorch, B = crust or shove mark; brightness = how far past
 // stored precision the change is. Max-composed: the CPU clears it once per
 // frame and each executed pass folds its own delta in.
 RWTexture2D<float4> ActivityView : register(u2);

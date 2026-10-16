@@ -20,8 +20,8 @@
 #include "TerrainVariation/TerrainVariation.hlsli"
 
 #ifdef PSHADER
-// Shadows: terrain/cloud via GetWorldShadow, actors via the raw cascade atlas
-// copies (SnowShadow.hlsli), falling back to the shared VSM. The screen-space
+// Shadows: terrain/cloud via GetWorldShadow, actors via the game's raw cascade
+// atlas read in place (SnowShadow.hlsli), falling back to the shared VSM. The screen-space
 // mask applies near only when it was marched on the snow (ScreenSpaceShadowsActive
 // 2); otherwise it holds the terrain behind the shell along the view ray.
 #	define TERRAIN_SHADOWS
@@ -144,8 +144,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float2 ObjectHeightCenter;
 
 	float ObjectHeightHalfExtent;
-	// The raw cascade-atlas copy is bound at t22 this frame (else the
-	// shader falls back to the blurred VSM path).
+	// The game's cascade atlas is bound at t22 this frame, read in place
+	// (else the shader falls back to the blurred VSM path).
 	float CrispShadows;
 	// Screen-Space Shadows output is bound at t45: the long-range
 	// depth-marched shadows that carry distant LOD tree shadows beyond the
@@ -338,7 +338,7 @@ Texture2D<float2> ObjectBottoms : register(t5);
 // Raw object tops (persistence-scrolled) and this frame's skin-depth raster,
 // shared with the trench patch: the road reads and the buried-caster test.
 Texture2D<float> ObjectTopsRaw : register(t11);
-// x = layer depth (all this shell reads), y = the patch's road-heightfield bit.
+// x = layer depth, y = the highest road top (kNoRoadTop where no road drew).
 Texture2D<float2> ObjectSkinDepthMap : register(t12);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
 // of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
@@ -368,7 +368,8 @@ Texture2D<float2> BloodClock : register(t31);
 // the SHELTER term, which needs geometry and so cannot travel this far.
 Texture2D<float2> ExclusionFieldMap : register(t15);
 
-// The game's own frost impact art, painted onto crusted snow.
+// The frost pattern (the Frost Texture setting: a tileable ice texture and
+// its _n), painted onto crusted snow.
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
 
@@ -398,7 +399,7 @@ SamplerState SnowSampler : register(s0);
 
 
 // The game's own landscape tiling: 24 texture repeats per 4096-unit cell,
-// measured in-game with the tiling ruler. Same texture at the same world
+// measured in game. Same texture at the same world
 // rate as the ground beside us; see CODE-NOTES.md. Mirrored in
 // SnowStaticsShell.hlsl, SnowDeformation.hlsli and Shell.cpp.
 static const float kSnowUVTile = 4096.0 / 24.0;

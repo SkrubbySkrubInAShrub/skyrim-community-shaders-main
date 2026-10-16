@@ -198,7 +198,6 @@ public:
 		{ "frozenmarshice", 20.0f },
 	};
 
-	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus per-class coverage weights (0-255). Depths are applied at window-rebuild time so class sliders retune without a game re-bake. */
 	/** @brief Texture layers kept per vertex: the heaviest of the quad's base texture plus its 6 painted layers. */
 	static constexpr uint kShellVertexLayers = 4;
 	/** @brief Layer slot with no texture (unpainted weight, or an LTEX with no texture set). */
@@ -206,6 +205,7 @@ public:
 	/** @brief Registry cap. Beyond it new textures fall back to their class depth. */
 	static constexpr size_t kMaxLandTextures = 512;
 
+	/** @brief Baked per-cell terrain data: 33x33 vertex heights (absolute Z) plus each vertex's land-texture layers and their weights (0-255). Depths are applied at window-rebuild time so the depth sliders retune without a game re-bake. */
 	struct ShellCellData
 	{
 		std::array<float, 33 * 33> height;
@@ -340,7 +340,7 @@ public:
 		float FootPrintScale = 1.0f;
 		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
 		float TrenchWallSharpness = 66.0f;
-		/** @brief Unsupported-snow settle speed, 0-1. Strips left standing between separate trails sink toward whichever side is shallower once BOTH sides are dug away; walls and open snow never move. Default OFF until A/B'd - it changes the map every subsystem reads (TRENCH-REALISM-PLAN.md Stage 3b). */
+		/** @brief Unsupported-snow settle speed, 0-1. Strips left standing between separate trails sink about halfway toward the shallower side's floor once BOTH sides are dug away; walls and open snow never move. 0 disables the pass. */
 		float SlumpRate = 0.1f;
 		/** @brief Multiplier on the snowfall-driven refill rate. 0 disables refilling. */
 		float RefillRateMultiplier = 1.0f;
@@ -372,7 +372,7 @@ public:
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
 		float MeltBowlFloor = 0.11f;
-		/** @brief Depth a shock discharge pocks the snow to, as a fraction of the layer. Lightning throws snow aside rather than boring into it, so this stays well under a footprint's carve. */
+		/** @brief Depth a shock discharge pocks the snow to, as a fraction of the layer, times the strike's strength; the pock mask keeps 45-100% of it per texel. Max-blended like a carve, so a cloak standing over one spot never bores a shaft. */
 		float PitDepth = 1.00f;
 		/** @brief Reach of a single discharge mark, in world units, before its arc legs. */
 		float PitRadius = 50.0f;
@@ -392,7 +392,7 @@ public:
 		float ScorchStrength = 0.85f;
 		/** @brief How fast frost sets a crust, for a spell of Frostbite's strength. */
 		float CrustRate = 0.6f;
-		/** @brief Reach of a frost mark on the ground, in world units. */
+		/** @brief Base reach, in world units, of a frost source that names none: frost cloaks, frost atronach auras (x AtronachFrostReach) and frozen corpses (x body size). Area spells take their own area; streams kSpellContactRadius. */
 		float CrustRadius = 90.0f;
 		/** @brief Depth a boot still prints on fully crusted snow, as a fraction of loose snow. NOT zero: actors stand on terrain while the shell floats above them, so a crust that takes no print at all buries feet inside apparent ice. */
 		float CrustPrintDepth = 0.20f;
@@ -444,7 +444,7 @@ public:
 		float ShoutMarkFadeStart = 0.25f;
 		/** @brief Depth at the far end, as a fraction of the depth at the mouth. */
 		float ShoutMarkFarDepth = 0.25f;
-		/** @brief How broken up a shove's mark is: 0 a smooth scoop, 1 uneven streaks near the mouth thinning to dashes with distance. Shoves only; a breath's mark stays smooth. */
+		/** @brief Shout churn, 0-1. On a shove, uneven streaks near the mouth thinning to dashes with distance (coneCarve, the carve branch only); on every cone, a wobble of the outline (edgeCoord), so a breath's melt or glaze stays solid with a ragged edge. 0 = a smooth scoop, clean edge. */
 		float ShoutChurn = 1.0f;
 		/** @brief Width of a churn streak, world units. */
 		float ShoutStreakSize = 8.0f;
@@ -551,7 +551,6 @@ public:
 		bool Tessellation = true;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
-		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
 		/** @brief Parallax occlusion depth on the landscape shell, as a multiplier on the PBR config's displacementScale. 1 = exactly the slab depth PBR ground gets, since kSnowUVTile matches the landscape tiling. 0 skips the march. */
 		float ParallaxDepth = 1.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
@@ -560,7 +559,7 @@ public:
 		float BermSteepness = 0.75f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
 		float RimLip = 0.05f;
-		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
+		/** @brief Rim teeth strength: the carve contour breaks into irregular teeth on two octaves of SnowDetailNoise (37 and 8 units). 0 = off. */
 		float RimTeeth = 0.50f;
 		/** @brief Snow Resistance, percent: how much of a body's push the snow holds back. A body carves (100 - this)% of its reach into the layer, so a boot on the ground leaves half the layer at 50. Loose props, spells, melt and resting items keep their own depths. 0 = every reach carves in full. */
 		float SnowResistance = 33.0f;
@@ -580,7 +579,7 @@ public:
 		float TrenchDetailCoverage = 1.75f;
 		/** @brief Trench detail set: 0 by the snow condition, 1 powder, 3 wet. 2 was the retired firm set; LoadSettings reads it as 0. */
 		int TrenchDetailSet = 0;
-		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades and the SSS mask shade the snow. A/B for dark blotches on open snow at a low sun. */
+		/** @brief "Snow Self-Shadowing": heightfield self-shadow (the 5-tap horizon march over the cached heights) on the ground snow and object snow, faded out toward a grazing sun. Off = only the cascades and the SSS mask shade the snow. A quality-preset lever (Low turns it off). */
 		bool ShellHorizonMarch = true;
 		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */
 		bool SnowGlints = true;
@@ -588,7 +587,7 @@ public:
 		bool SnowScreenSpaceShadows = true;
 		/** @brief "Snow Casts Shadows": the landscape shell and the trench patch are drawn into the sun's shadow cascades. Off = the snow still receives shadows but casts none. A quality-preset lever. */
 		bool SnowCastsShadows = true;
-		/** @brief "Object Snow Near Detail": the object height raster's near level (1 unit a texel over FineRasterHalfExtent) and its cone chain. Off = the skin reads the coarse level everywhere. A quality-preset lever. */
+		/** @brief "Object Snow Near Detail": the object height raster's near level, a quarter of the coarse window (FineRasterHalfExtent) at a quarter of its texel. Built only with the road maps and read by PatchTop, so it serves the road patch and road skins. Off = they read the coarse level everywhere. A quality-preset lever. */
 		bool ObjectSnowNearDetail = true;
 		/** @brief The third-person camera is pulled in along its own line when the game places it under the landscape shell (Havok has no snow to collide with). */
 		bool CameraAboveSnow = true;
@@ -613,7 +612,7 @@ public:
 		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
 		float RangeActorTrenchesM = 200.0f;
 		float RangeSkinsM = 750.0f;
-		/** @brief Reach (m) of the object height window - the radius inside which the skin has rim, cornice and shelter data at all. Outside it ObjectConeDepth and PatchTop return their sentinels and the skin is a uniform coat over the whole mesh, which is the coarse look. The window is a fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near clipmap stays a quarter of it, so the near field coarsens by the same factor. */
+		/** @brief "Object Height Map Range" (m): half-width of the top-down object height window (ObjectRasterHalfExtent). Read by the ground snow's shelter under cover (the near mask), the road patch and road skins (PatchTop, ObjectConeDepth; past it only the far road level), road stamps (ContactAbove), the object-print top gate (PrintTopGap: below the print map's reach it clips the prints) and the volume seed's shelter and sky maps. Fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near level stays a quarter of it. */
 		float ObjectRasterReachM = 100.0f;
 		/** @brief Rasterizer depth bias for the object skins, in depth-buffer ULPs toward the camera (D3D11 DepthBias, negated). Replaces the decal viewport cap's accidental ~500-ULP push, which let a skin beat its own mesh at range but stood a peak 2000 units in front of its mist. */
 		float SkinDepthBias = 64.0f;
@@ -621,7 +620,7 @@ public:
 		float SkinSlopeDepthBias = 0.0f;
 		/** @brief Object-skin tessellation cap: no generated edge segment shorter than this many screen pixels. 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole skin. Not bit-identical: it changes the surface. 16 measured -0.32 ms on StaticsShell with no visible change (PERF-RESEARCH 9.6); 32 is the tier value. */
 		float SkinTessCapPx = 16.0f;
-		/** @brief Landscape shell slope drape, 0-1: how far the layer's stand-off turns from straight up toward the ground normal as the slope steepens (30 to 60 degrees). A vertical-only offset thins to depth*cos(slope) and steep faces show through. */
+		/** @brief Ground snow slope drape, 0-1: how far the layer's stand-off turns from straight up toward the ground normal as the slope steepens (30 to 60 degrees). A vertical-only offset thins to depth*cos(slope) and steep faces show through. Read through SHELL_DRAPE by the ground snow's vertices and its sun caster only. */
 		float SlopeDrape = 1.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
@@ -629,7 +628,7 @@ public:
 		bool HorizonSnow = true;
 		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. All or nothing: every pixel the game paints at all takes full shell-snow weight (Snow Fill retired 2026-09-10).The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
-		/** @brief "Seasons Snow Max Angle" (degrees): runtime-applied projections (Seasons of Skyrim) carry the record default of 90 and no vertex-alpha mask; this is the max slope such snow rests on, applied in Lighting to those draws only. 90 = Seasons' own coverage, which matches rocks exactly (Josef's default). */
+		/** @brief "Seasons Snow Max Angle" (degrees): runtime-applied projections (Seasons of Skyrim) carry the record default of 90 and no vertex-alpha mask; this is the max slope such snow rests on, applied in Lighting to those draws only. 90 = Seasons' own coverage; the default 87 cuts only near-vertical faces. */
 		float SeasonsSnowMaxAngle = 87.0f;
 		/** @brief "Multipass Snow Follows Paint": objects whose snow material is multipass (vanilla glaciers and ice, Simplicity of Snow, Stretched Snow Begone) get their base pass marked "known, unpainted" for the skin's read-back, so the drape follows only the snow the game's own snow pass paints. Off = the skin reconstructs a coat over every face of them (Alpha Test 2 behaviour). */
 		bool MultipassSnowFollowsPaint = true;
@@ -637,7 +636,7 @@ public:
 		bool SnowTexturedRecolor = false;
 		/** @brief "Vertex Alpha Fades Snow" (A/B, 2026-09-22): where a mesh's vertex alpha is below 1 (an authored mask, or XPMF's roof-shelter ramp) the snow loses THICKNESS, not its material: the recolor keeps the pixel and the drape dissolves off it over alpha 1 -> 0.75, so a sheltered spot reads as this mod's snow lying flat. Round 1 (follow the game's blend weight) was invisible; round 2 handed the pixel back to the game's own PD, which covered right but wore the wrong material (Josef, 2026-09-22). */
 		bool ProjAlphaDensity = false;
-		/** @brief "Recolor Projected Snow Normals" (2026-09-22): recolored projected snow also wears the shell snow's NORMAL, perturbed the way the drape's coat does. Vanilla's own projected normal never reaches the G-buffer (Lighting builds worldNormal before the projected block; the block's normal write is dead, upstream included), so without this every projected-snow pixel the coat does not cover wears the object's bump and reads as snow painted on. Rides the snow verdict, not the blend, so a pixel handed back by ProjAlphaDensity keeps the grain. */
+		/** @brief "Recolor Projected Snow Normals" (2026-09-22): recolored projected snow also wears the shell snow's NORMAL, perturbed the way the drape's coat does. Vanilla's own projected normal never reaches the G-buffer (Lighting builds worldNormal before the projected block; the block's normal write is dead, upstream included), so without this every projected-snow pixel the coat does not cover wears the object's bump and reads as snow painted on. Rides the snow verdict, so it holds where ProjAlphaDensity dissolves the coat too. */
 		bool ProjSnowNormals = true;
 		/** @brief "Unpainted Shapes Stay Bare" (2026-09-22): a shape of a snow-MATO object that the game draws without projection writes the drape's read-back mask as "known, unpainted", instead of leaving 0 there and having the drape read "unknown" as licence to coat. Found with XPMF, which strips the projected flag from one shape of a building; the shape then overdraws its projected siblings' verdict. Positive snow MATOs only, so mesh replacers and drifts keep the reconstruct path. */
 		bool UnprojectedShapesBare = true;
@@ -659,9 +658,9 @@ public:
 		float VolumeSnowOverhang = 5.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
 		float VolumeSnowRounding = 5.0f;
-		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
+		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it (a full Wide level allocates ~226 MB, see the menu's readout). Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
 		int VolumeLevels = 4;
-		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
+		/** @brief "Fine Levels": how many levels, from the camera out, keep the Ring Shape's full grid; the rest are halved per axis at twice the voxel - the same reach at an eighth of the voxels, one octave less detail where it is too far to see. */
 		int VolumeFineLevels = 6;
 		/** @brief "March Step", voxels: the draw's sample spacing along each ray. The hit is refined on the cubic afterwards, so the march only has to find the crossing interval; features thinner than a step can be stepped over. */
 		float VolumeMarchStep = 0.25f;
@@ -671,11 +670,11 @@ public:
 		bool VolumeSkipEmptyCells = true;
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
 		float VolumeForwardBias = 0.45f;
-		/** @brief "Ring Shape": 0 = cubic (256 voxels a side), 1 = wide (512 x 512 x 256: twice the reach sideways and ahead for twice the memory), 2 = wide and flat (512 x 512 x 128: the reach of wide at the memory of cubic, half the height). Every ring shares the shape, so each still doubles the one inside it in every axis. */
+		/** @brief "Ring Shape": 0 = cubic (256 voxels a side), 1 = wide (512 x 512 x 256: twice the reach sideways and ahead for four times the voxels), 2 = wide and flat (512 x 512 x 128: the reach of wide at half its voxels and height). Every ring shares the shape, so each still doubles the one inside it in every axis. */
 		int VolumeRingShape = 1;
 		/** @brief "Volume Vertical Bias": how far BELOW the eye each window's centre sits, as a fraction of its extent. The third-person camera rises when it looks down, and a cube centred on it then puts the ground beside the player outside the nearest ring - which is why the ring colours changed with pitch (Josef, 2026-09-07). */
 		float VolumeVerticalBias = 0.0f;
-		/** @brief "Volume Max Distance", world units: past it the volume snow dithers out over a quarter of that distance and the object shell carries the object alone. The outermost rings sample a rock at 32 u a column; there is a range at which the shell simply looks better. */
+		/** @brief "Volume Max Distance", world units: past it the volume snow dithers out over a quarter of that distance and the object snow carries the object alone. The outermost rings sample at their coarsest voxel; there is a range at which the object snow simply looks better. */
 		float VolumeMaxDistance = 8000.0f;
 		/** @brief "Staggered Capture": a record already in a level's volume is re-rasterised only every 8th rebuild on the finest ring (4th, 2nd on the next two), the memory nibble keeping it alive between; a level starting from nothing captures everything. New records wait at most that long. Off captures every record every rebuild, for comparing. */
 		bool VolumeStaggeredCapture = true;
@@ -1418,7 +1417,7 @@ public:
 	ID3D11ComputeShader* deformationScanBermCS = nullptr;
 	ID3D11ComputeShader* bermFieldTiledCS = nullptr;
 
-	/** @brief Per-tile "the map changed here" - the berm bake's dirty set, marked by every map writer and ACCUMULATED until a berm rebuild consumes it (each rebuilt tile clears its own mark), so the A/B toggle re-enabling rebuilds exactly what it missed. Recreated with the map; seeded all-1. */
+	/** @brief Per-tile "the map changed here" - the berm bake's dirty set, marked by every map writer and ACCUMULATED until a berm rebuild consumes it (each rebuilt tile clears its own mark), so a rebuild covers every change since the last one. Recreated with the map; seeded all-1. */
 	winrt::com_ptr<ID3D11Texture2D> bermDirtyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermDirtyUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bermDirtySRV;
@@ -1466,7 +1465,7 @@ public:
 
 	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, spare). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
 	Texture2D* shellTerrainTexture = nullptr;
-	/** @brief shellTerrainTexture with WaterBareTexel applied per texel (TerrainCutCS), bound at t21 for SampleTerrain while the water cut is on. Rebuilt when the terrain window, the bound water window or its version changes. */
+	/** @brief shellTerrainTexture with WaterBareTexel applied per texel (TerrainCutCS), bound at t21 for SampleTerrain (TerrainWetSRV: the raw window until the cut has run, or if TerrainCutCS is unavailable). Rebuilt when the terrain window, the bound water window or its version changes. */
 	Texture2D* shellTerrainWet = nullptr;
 	/** @brief R8_UNORM beside the terrain window: 1 - the land's snow-texture weight (texture depth > 0) per texel, 0 where unbaked. Read by the land-blended edges. */
 	Texture2D* shellTerrainBare = nullptr;
@@ -2291,7 +2290,7 @@ public:
 	/** @brief Re-derives the camera-anchored placement fields of a ShellCB (the fields' frame) from THIS frame's camera. Shared by DrawShell, S1 and the shadow passes, so no pass reads the fields through a frame-old placement (a stale one slides a crisp shadow during camera motion). Implemented in SnowDeformation/Shell.cpp. */
 	void RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust = nullptr);
 
-	/** @brief Shadow-source diagnostics for the settings UI (kept permanently; they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
+	/** @brief Shadow-source diagnostics for the settings UI (kept permanently; they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the live atlas's slice count. */
 	uint32_t dbgLodDescriptorCount = 0;
 	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
 	uint32_t dbgLodAtlasSlices = 0;
@@ -2352,7 +2351,6 @@ public:
 		float LegacySkin;
 		/** @brief was MoundSteepness (Mound Steepness, retired 2026-09-25); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float padMoundSteepness;
-		/** @brief was ObjectTrenches (Trenches on Objects, retired 2026-09-10; roads carve through LegacySkin); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		/** @brief >0.5: the mesh alpha-tests (a thatch fringe, a plank end); the skin keeps only pixels coincident with the scene surface, so it never spans the texels the game discarded. Took the retired ObjectTrenches row. */
 		float AlphaTested;
 		/** @brief Drift meshes (geometry name): the whole mesh is the snow, so the skin coats every facing and never collapses, dissolves or drops out of range. */
@@ -2644,11 +2642,9 @@ public:
 
 	// ---- Top-down object height windows ----
 
-	// 4096 units at 4-unit texels, following the camera. Halving the texel
-	// (512 -> 1024) shrank the visible raster squares on the patch top
-	// sheet; kHeightTexel in SnowStaticsShell.hlsl must match.
-	// Dim and half-extent move together: the 4-unit texel is baked into
-	// kHeightTexel in SnowStaticsShell.hlsl.
+	// Texels a side of the top-down object height windows. A window spans
+	// 2 x ObjectRasterHalfExtent() around the camera, so its texel follows
+	// the Object Height Map Range: 6.8 world units at the 100 m default.
 	static constexpr uint kHeightMapDim = 2048;
 	/** @brief Repose slope of the object snow cone (rise per world unit); sets the road verge bank down to a shallower landscape class. The retired Mound Steepness at its last default. */
 	static constexpr float kObjectConeSlope = 3.0f;
@@ -2673,16 +2669,16 @@ public:
 
 	/**
 	 * @brief Near clipmap level: the same 2048 grid over a QUARTER of the
-	 * reach, so its texel is 1 world unit where the coarse level's is 4.
+	 * reach, so its texel is a quarter of the coarse level's.
 	 *
 	 * Single-buffered on purpose - it is rebuilt from this frame's captures
 	 * every frame and carries no ghost. The coarse level keeps the history,
 	 * and every reader falls back to it outside the fine window, which is
 	 * also what makes the fine level free of the scroll/decay machinery.
-	 * Its centre IS the coarse window's: 4 is a multiple of 1, so one snap
-	 * serves both grids and only the half-extent has to reach the shaders.
+	 * Its centre IS the coarse window's: a coarse texel is four fine ones, so
+	 * one snap serves both grids and only the half-extent has to reach the shaders.
 	 */
-	/** @brief A QUARTER of the coarse reach, always: the two levels then sit a fixed factor of four apart however far the coarse one is asked to reach, so raising the reach coarsens the near field by the same factor it coarsens the far one instead of stranding it. At the 58 m default that is 14.6 m at one world unit a texel. */
+	/** @brief A QUARTER of the coarse reach, always: the two levels then sit a fixed factor of four apart however far the coarse one is asked to reach, so raising the reach coarsens the near field by the same factor it coarsens the far one instead of stranding it. At the 100 m default that is 25 m at 1.7 world units a texel. */
 	float FineRasterHalfExtent() const { return ObjectRasterHalfExtent() * 0.25f; }
 	/** @brief Height sentinels for texels no object covers. */
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
@@ -3733,7 +3729,6 @@ public:
 	bool debugProjWeightView = false;
 	/** @brief DebugTerrainOverlay bit 64: the recolor paints the SNOW TEXTURE IT JUST SAMPLED, raw and unshaded, instead of blending it. Answers the one question the magenta view cannot - whether HorizonSnowAlbedo is reaching the draw at all - since the magenta path bypasses the sample. Not serialized, like every debug view. */
 	bool debugProjAlbedoView = false;
-	/** @brief Tints classified baked-snow (glacier) pixels cyan (DebugTerrainOverlay bit 8), same verification pattern as the projected view. */
 
 protected:
 	/** @brief Fills perFrameData.Stamps from the player and nearby loaded actors. Implemented in SnowDeformation/Stamping.cpp. */
@@ -3913,7 +3908,7 @@ protected:
 	/** @brief Stamp-set changes over the same window, split by mechanism: count changed (a stamp appeared or vanished - the plant-band flicker signature) vs drift (a matched stamp moved past tolerance). Published with the rate. */
 	uint32_t stampSetCountChanges = 0, stampSetDriftChanges = 0;
 	uint32_t stampSetTallyCount = 0, stampSetTallyDrift = 0;
-	/** @brief Changed-texel counts from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. Per channel, the counts name the term (depth / melt-scorch / crust-deposit). */
+	/** @brief Changed-texel counts from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. Per channel, the counts name the term (depth / melt-scorch / crust-shove). */
 	uint32_t deformChangedTexels = 0;
 	uint32_t deformChangedDepth = 0;
 	uint32_t deformChangedMelt = 0;
@@ -3923,7 +3918,7 @@ protected:
 	/** @brief Bounding box of the changed texels (map coords), from the same verdict. Valid while count > 0. A few hundred churning texels are sub-pixel in the 512 view; the box is what makes them findable. */
 	uint32_t deformChangedMinX = 0, deformChangedMinY = 0;
 	uint32_t deformChangedMaxX = 0, deformChangedMaxY = 0;
-	/** @brief Runtime-only: the update CS paints result-vs-carried per texel (R depth, G melt/scorch, B crust|deposit) into a map-sized RGBA8 shown in the menu. Answers WHERE the map claims to be evolving. */
+	/** @brief Runtime-only: the update CS paints result-vs-carried per texel (R depth, G melt/scorch, B crust|shove mark) into a map-sized RGBA8 shown in the menu. Answers WHERE the map claims to be evolving. */
 	bool debugActivityView = false;
 	winrt::com_ptr<ID3D11Texture2D> activityViewTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> activityViewSRV;
@@ -4039,7 +4034,7 @@ protected:
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
 	std::vector<uint8_t> trenchInjectScratch;
 
-	/** @brief Single-channel copy of the map's displaced depth, for the menu. The map itself cannot be shown honestly: ImGui blends by alpha and the map's .w is the bow wave's deposit, so drawing it directly renders depth through deposit and reads blank right after a load. R8_UNORM samples as (depth,0,0,1), so this one cannot lie. */
+	/** @brief Single-channel copy of the map's displaced depth, for the menu. The map itself cannot be shown honestly: ImGui blends by alpha and the map's .w is the Force shove mark, so drawing it directly renders depth through that mark and reads blank right after a load (the mark is never stored). R8_UNORM samples as (depth,0,0,1), so this one cannot lie. */
 	winrt::com_ptr<ID3D11Texture2D> trenchDebugTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDebugSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> trenchDebugUAV;
@@ -4595,7 +4590,6 @@ protected:
 
 	std::unordered_map<uint32_t, StampBones> stampBoneCache;
 
-	/** @brief Per-frame stamp diagnostics for the menu (rebuilt in GatherStamps). */
 	/** @brief Which behaviour table a spell effect falls under, read off the effect's resist variable. No spell is ever named. */
 	enum class SpellElement
 	{
@@ -4831,11 +4825,11 @@ protected:
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
 
-	/** @brief The game's own frost impact pattern, painted onto crusted snow. Its normal map carries the crystal detail; the albedo is a faint whitening on top of it. */
+	/** @brief The frost pattern (Settings::FrostTexturePath, a tileable ice texture and its _n), painted onto crusted snow. Its normal map carries the crystal detail; the albedo is a faint whitening on top of it. */
 	winrt::com_ptr<ID3D11ShaderResourceView> frostPatternNormalSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> frostPatternDiffuseSRV;
 	bool frostPatternAttempted = false;
-	/** @brief Loads the frost pattern once, from the game's own impact decal art. */
+	/** @brief Loads the frost pattern once, from Settings::FrostTexturePath; without its _n the crust keeps a smooth glaze. */
 	void EnsureFrostPatternTextures();
 
 	/**
@@ -5258,6 +5252,7 @@ protected:
 	};
 	SpellStats spellStats;
 
+	/** @brief Per-frame stamp diagnostics for the menu (rebuilt in GatherStamps). */
 	struct StampStats
 	{
 		uint feet = 0;

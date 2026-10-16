@@ -9,10 +9,11 @@
 // shows crisp cascades. This samples the game's raw shadow atlas instead:
 // cascade = array slice, per-slice [0,1] UVs matching the ShadowProj matrices
 // from DirectionalShadowLights (t98), hardware comparison PCF at full
-// resolution. Source is a copy taken during the shadow-mask pass (see
-// SnowDeformation::CaptureShadowAtlas). Cascade selection, blend and distance
-// fade mirror VolumetricShadows::GetVSMShadow2D so the crisp and fallback
-// paths agree about where shadows exist.
+// resolution. Source is the game's own atlas, read in place through the view
+// taken at the shadow-mask pass (SnowDeformation::CaptureShadowAtlas).
+// Cascade selection, blend and distance fade mirror
+// VolumetricShadows::GetVSMShadow2D so the crisp and fallback paths agree
+// about where shadows exist.
 //
 // Include after Common/ShadowSampling.hlsli; needs DirectionalShadowLights,
 // SharedData and FrameBuffer from it.
@@ -21,11 +22,12 @@ Texture2DArray<float> SnowShadowAtlas : register(t22);
 SamplerComparisonState SnowShadowCmpSampler : register(s2);
 
 // Shadow-casting local lights (fires, lanterns, torches). Their maps live
-// in their own atlas, copied at the local lights' mask passes (NOT the
-// sun cascade atlas: local slice indices collide with the cascades');
-// this table carries each light's descriptor transform and slice, indexed
-// by the light's shadow-mask channel. LightType 0 marks an empty slot
-// (also used when the local atlas copy is unavailable this frame).
+// in the engine's own local map array, read in place (NOT the sun cascade
+// atlas: local slice indices collide with the cascades'); this table
+// carries each light's descriptor transform and slice, snapshot at the
+// local lights' mask passes, indexed by the light's shadow-mask channel.
+// LightType 0 marks an empty slot (the whole table is empty when the local
+// map array is unavailable this frame).
 struct PointShadowLight
 {
 	column_major float4x4 LightTransform;

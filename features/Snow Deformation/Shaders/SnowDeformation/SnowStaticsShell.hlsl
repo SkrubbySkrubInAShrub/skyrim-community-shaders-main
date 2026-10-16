@@ -111,8 +111,8 @@ cbuffer ShellCB : register(b0)
 	float2 ObjectHeightCenter;
 
 	float ObjectHeightHalfExtent;
-	// The raw cascade-atlas copy is bound at t22 this frame (else the
-	// shader falls back to the blurred VSM path).
+	// The game's cascade atlas is bound at t22 this frame, read in place
+	// (else the shader falls back to the blurred VSM path).
 	float CrispShadows;
 	// Screen-Space Shadows output is bound at t45: the long-range
 	// depth-marched shadows that carry distant LOD tree shadows beyond the
@@ -204,7 +204,7 @@ cbuffer ShellCB : register(b0)
 	float4 BloodLook3;  // landscape shell only (SnowShell.hlsl)
 	// Trampled ground (see SnowShell.hlsl); consumed inside TrampleDetailScale.
 	float4 TrampleStyle;
-	// x = Tessellation Target px, yz = render viewport half size.
+	// x = the tessellation target in render px, yz = render viewport half size.
 	float4 TessScreen;
 	float4 FieldDims;  // landscape shell only (SnowShell.hlsl)
 	// Snow Climate (see SnowShell.hlsl): the road's wet print and the
@@ -244,8 +244,6 @@ cbuffer StaticCB : register(b1)
 	// was MoundSteepness (Mound Steepness, retired). Slot kept for layout.
 	float padMoundSteepness;
 
-	// was ObjectTrenches (Trenches on Objects, retired); roads carve through
-	// LegacySkin. Slot kept for layout.
 	// >0.5: the mesh alpha-tests; only pixels on the scene surface survive.
 	float AlphaTested;
 
@@ -825,8 +823,8 @@ Texture2D<float> ObjectTopRaw : register(t11);
 // Cone-transformed snow surface over the same window: the angle of repose
 // already applied, so the edge taper is one read instead of a ring walk.
 Texture2D<float> ObjectSnowCone : register(t13);
-// Near clipmap level 0: the same top raster over a quarter-width window, one
-// world unit per texel. Shares HeightWindowCenter; the reach is
+// Near clipmap level 0: the same top raster over a quarter-width window, at a
+// quarter of the coarse texel. Shares HeightWindowCenter; the reach is
 // FineHalfExtent (0 = the level is off and every read below stays coarse).
 Texture2D<float> ObjectTopFine : register(t34);
 // Far road level: the road captures alone, rasterized over the loaded-cell
@@ -853,8 +851,8 @@ static const float kRoadOwnsTop = 8.0;
 
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER) || defined(SNOW_ROAD_MARCH_CS)
 
-// One texel of the object height raster in world units: 8192 units over
-// kHeightMapDim (SnowDeformation.h).
+// Lattice step, world units, of the dense patch's bilinear top and skin-depth
+// taps. Fixed: the raster's own texel follows HeightHalfExtent.
 static const float kHeightTexel = 4.0;
 
 // Max-of-4 texel sample: bilinear would poison against sentinel texels at
@@ -1681,7 +1679,7 @@ bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
 	return outside;
 }
 
-// Road-edge subdivision's share of the Tessellation Target: vertices live or
+// Road-edge subdivision's share of the tessellation target: vertices live or
 // die per raster texel, so a coarse far segment steps the road's silhouette.
 static const float kPatchEdgeTargetScale = 0.25;
 
@@ -3848,9 +3846,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
 	float pdCoverage = 0.0;
-	// Vertex Alpha Fades Snow: the coat hands sheltered pixels (vertex alpha
-	// thinned) to the game's own PD; rides the distance dither (the one
-	// fade allowed to dither), 1 = untouched.
+	// Vertex Alpha Fades Snow: the coat dissolves off sheltered pixels (vertex
+	// alpha thinned), leaving the recolored projected snow lying flat; rides
+	// the distance dither (the one fade allowed to dither), 1 = untouched.
 	float densityFade = 1.0;
 	// The normal z the slope cut reads, the reconstructed projected weight
 	// and its fill gate: the edge breakup and the coat key off the same
@@ -3914,8 +3912,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
 		}
 		// Vertex Alpha Fades Snow: on a thinned alpha the coat dissolves and
-		// the game's own PD, which the recolor hands over the same way, shows
-		// through.
+		// the recolored projected snow beneath it shows through, flat.
 		[flatten] if (SharedData::snowDeformationSettings.ProjAlphaDensity > 0.5)
 			densityFade = 1.0 - saturate((1.0 - input.ProjFactor) * 4.0);
 		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
@@ -4791,7 +4788,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// snow we do not place.
 			// R since round 10 = the RECONSTRUCTED game blend at this pixel
 			// (smoothstep(0,1,5w), solid floor included) - hold it against
-			// the Lighting recolor's own weight view (Debug Recolor Weight,
+			// the Lighting recolor's own weight view (Recolor Weight Tint,
 			// object snow off) to find where the two disagree.
 			bool noProjData = ProjThreshold < -0.5;
 			preLit = float3(noProjData ? 0.0 : smoothstep(0.0, 1.0, 5.0 * edgeW), noProjData ? 0.0 : saturate(input.Flat), noProjData ? 1.0 : 0.0);

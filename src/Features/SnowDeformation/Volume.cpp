@@ -142,8 +142,8 @@ bool SnowDeformation::EnsureVoxelResources()
 			context->ClearUnorderedAccessViewUint(lv.heightMap->uav.get(), zeros);
 		}
 		if (!lv.heightMapUnder) {
-			// The three layers under the top: two sub-pixels a voxel side, a
-			// quarter of the top map's memory each (the capture PS).
+			// The kVoxelUnderLayers layers under the top: two sub-pixels a voxel
+			// side, a quarter of the top map's memory each (the capture PS).
 			const uint hdim = dim.x * 2;
 			D3D11_TEXTURE2D_DESC desc{
 				.Width = hdim,
@@ -574,7 +574,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	}
 
 	// ---- Which levels rebuild this frame ----
-	// Lazy rings: level L rebuilds every 2^L frames, phased at 2^(L-1) so
+	// Cadence: level L rebuilds every 2^L frames, phased at 2^(L-1) so
 	// no frame carries more than two levels; a level with nothing built
 	// yet rebuilds now. Between rebuilds it keeps its origin, its field
 	// and its bricks, and draws off them.

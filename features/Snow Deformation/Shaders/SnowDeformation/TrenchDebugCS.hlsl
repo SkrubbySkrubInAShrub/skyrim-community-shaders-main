@@ -5,11 +5,10 @@
 // Copies the deformation map's DEPTH channel into a single-channel texture so
 // the menu can show it honestly.
 //
-// The map is RGBA16F and its .w was claimed by the bow wave's deposit field.
-// ImGui blends by the texture's alpha, so drawing the map directly renders it
-// through deposit: transparent wherever nothing has been pushed, and blank
-// entirely right after a load, whatever the depth channel holds. Three rounds
-// of a bug hunt were read backwards from that image.
+// The map is RGBA16F and its .w is the Force shove mark. ImGui blends by the
+// texture's alpha, so drawing the map directly renders it through that mark:
+// transparent wherever no shove has been, and blank entirely right after a
+// load (the mark is never stored), whatever the depth channel holds.
 //
 // R8_UNORM samples as (depth, 0, 0, 1) - alpha is 1 by construction - so the
 // copy cannot lie about what is there.

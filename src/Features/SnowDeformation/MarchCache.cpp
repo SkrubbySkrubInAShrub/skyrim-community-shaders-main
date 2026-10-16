@@ -23,8 +23,7 @@
 // changed there; the scroll's arriving strips are on it too). Every cache
 // also refreshes a band of rows a frame for the slow inputs (snowfall,
 // objects, water, clearings), faster after a terrain or land-layer rebuild,
-// and rebuilds whole when created, re-set, after a berm bake it missed, or
-// while the berm bake is off (no tile list to follow).
+// and rebuilds whole when created, re-set, or after a berm bake it missed.
 
 namespace
 {
