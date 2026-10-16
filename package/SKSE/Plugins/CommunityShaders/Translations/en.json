@@ -643,7 +643,7 @@
     "cs_editor.thunder_lightning_end_fade_out": "Thunder Lightning End Fade Out",
     "cs_editor.thunder_lightning_frequency": "Thunder Lightning Frequency",
     "cs_editor.time_of_day": "Time of day",
-    "cs_editor.time_scale_tooltip": "Adjust how fast time passes (vanilla: %.1fx)",
+    "cs_editor.time_scale_tooltip": "Adjust how fast time passes (vanilla: %.1fx). Right-click to reset.",
     "cs_editor.time_slider_paused": "Time: %.2f (paused)",
     "cs_editor.tod_dawn": "Dawn",
     "cs_editor.tod_day": "Day",

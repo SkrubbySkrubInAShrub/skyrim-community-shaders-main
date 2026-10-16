@@ -2453,7 +2453,11 @@ void EditorWindow::DrawTimeScaleSlider(const char* id, RE::Calendar* calendar)
 	if (ImGui::SliderFloat(id, &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
 			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
 		calendar->timeScale->value = timeScaleSlider;
+	if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+		ResetTimeScale();
 	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx). Right-click to reset."), kVanillaTimeScale);
 }
 
 void EditorWindow::DrawTimeControls()
@@ -2484,8 +2488,6 @@ void EditorWindow::DrawTimeControls()
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(sliderWidth);
 	DrawTimeScaleSlider("##TimeScale", calendar);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
 
 	ImGui::SameLine();
 	{
