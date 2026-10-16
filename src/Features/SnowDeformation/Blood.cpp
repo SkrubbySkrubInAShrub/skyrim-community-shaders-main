@@ -127,6 +127,13 @@ void SnowDeformation::ReleaseBloodShaders()
 	if (runePS)
 		runePS->Release();
 	runePS = nullptr;
+	if (frostPlaneGS)
+		frostPlaneGS->Release();
+	frostPlaneGS = nullptr;
+	if (frostPlanePS)
+		frostPlanePS->Release();
+	frostPlanePS = nullptr;
+	frostPlanesFailed = false;
 	if (decalMaskVS)
 		decalMaskVS->Release();
 	decalMaskVS = nullptr;
@@ -779,45 +786,98 @@ bool SnowDeformation::EnsureRuneResources()
 	return true;
 }
 
-bool SnowDeformation::EnsureFrostField()
+bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 {
-	if (frostFieldFailed)
+	if (frostPlanesFailed)
 		return false;
-	if (frostFieldTexture && frostDepthDSV)
-		return true;
 	auto* device = globals::d3d::device;
+	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
+	if (!frostPlaneGS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "gs_5_0", "GSHADER", "FROSTPLANE"));
+		if (blob && SUCCEEDED(device->CreateGeometryShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &frostPlaneGS)))
+			Util::SetResourceName(frostPlaneGS, "SnowDeformation::FrostPlaneGS");
+	}
+	if (!frostPlanePS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "FROSTPLANE"));
+		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &frostPlanePS)))
+			Util::SetResourceName(frostPlanePS, "SnowDeformation::FrostPlanePS");
+	}
+	if (!frostPlaneGS || !frostPlanePS) {
+		logger::warn("[SNOW DEFORMATION] frost plane shaders failed to compile - frost marks stay off the landscape snow");
+		frostPlanesFailed = true;
+		return false;
+	}
 	try {
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = kFrostFieldDim;
-		desc.Height = kFrostFieldDim;
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		frostFieldTexture = new Texture2D(desc, "SnowDeformation::FrostField");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srv{
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_RENDER_TARGET_VIEW_DESC rtv{
-			.Format = desc.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		frostFieldTexture->CreateSRV(srv);
-		frostFieldTexture->CreateRTV(rtv);
-		desc.Format = DXGI_FORMAT_D16_UNORM;
-		desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-		DX::ThrowIfFailed(device->CreateTexture2D(&desc, nullptr, frostDepthTexture.put()));
-		Util::SetResourceName(frostDepthTexture.get(), "SnowDeformation::FrostFieldDepth");
-		DX::ThrowIfFailed(device->CreateDepthStencilView(frostDepthTexture.get(), nullptr, frostDepthDSV.put()));
-		Util::SetResourceName(frostDepthDSV.get(), "SnowDeformation::FrostFieldDepth DSV");
+		if (a_marks > frostPlaneCapacity) {
+			const uint32_t capacity = std::max(a_marks + a_marks / 2u, 256u);
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = capacity * 2u * sizeof(float4);
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.StructureByteStride = sizeof(float4);
+			frostPlaneBuffer = nullptr;
+			frostPlaneSRV = nullptr;
+			frostPlaneUAV = nullptr;
+			DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, frostPlaneBuffer.put()));
+			Util::SetResourceName(frostPlaneBuffer.get(), "SnowDeformation::FrostPlanes");
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			srv.Format = DXGI_FORMAT_UNKNOWN;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+			srv.Buffer.NumElements = capacity * 2u;
+			DX::ThrowIfFailed(device->CreateShaderResourceView(frostPlaneBuffer.get(), &srv, frostPlaneSRV.put()));
+			Util::SetResourceName(frostPlaneSRV.get(), "SnowDeformation::FrostPlanes SRV");
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+			uav.Format = DXGI_FORMAT_UNKNOWN;
+			uav.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+			uav.Buffer.NumElements = capacity * 2u;
+			DX::ThrowIfFailed(device->CreateUnorderedAccessView(frostPlaneBuffer.get(), &uav, frostPlaneUAV.put()));
+			Util::SetResourceName(frostPlaneUAV.get(), "SnowDeformation::FrostPlanes UAV");
+			frostPlaneCapacity = capacity;
+		}
+		if (!frostCellBuffer) {
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = kFrostCells * kFrostCells * 2u * sizeof(uint32_t);
+			desc.Usage = D3D11_USAGE_DYNAMIC;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.StructureByteStride = 2u * sizeof(uint32_t);
+			DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, frostCellBuffer.put()));
+			Util::SetResourceName(frostCellBuffer.get(), "SnowDeformation::FrostCells");
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			srv.Format = DXGI_FORMAT_UNKNOWN;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+			srv.Buffer.NumElements = kFrostCells * kFrostCells;
+			DX::ThrowIfFailed(device->CreateShaderResourceView(frostCellBuffer.get(), &srv, frostCellSRV.put()));
+			Util::SetResourceName(frostCellSRV.get(), "SnowDeformation::FrostCells SRV");
+		}
+		if (a_entries > frostListCapacity) {
+			const uint32_t capacity = std::max(a_entries + a_entries / 2u, 1024u);
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = capacity * sizeof(uint32_t);
+			desc.Usage = D3D11_USAGE_DYNAMIC;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.StructureByteStride = sizeof(uint32_t);
+			frostListBuffer = nullptr;
+			frostListSRV = nullptr;
+			DX::ThrowIfFailed(device->CreateBuffer(&desc, nullptr, frostListBuffer.put()));
+			Util::SetResourceName(frostListBuffer.get(), "SnowDeformation::FrostCellList");
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			srv.Format = DXGI_FORMAT_UNKNOWN;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+			srv.Buffer.NumElements = capacity;
+			DX::ThrowIfFailed(device->CreateShaderResourceView(frostListBuffer.get(), &srv, frostListSRV.put()));
+			Util::SetResourceName(frostListSRV.get(), "SnowDeformation::FrostCellList SRV");
+			frostListCapacity = capacity;
+		}
 	} catch (const std::exception& e) {
-		logger::error("[SNOW DEFORMATION] frost field creation failed: {} - frost marks stay off the landscape snow", e.what());
-		frostFieldFailed = true;
+		logger::error("[SNOW DEFORMATION] frost plane buffers failed: {} - frost marks stay off the landscape snow", e.what());
+		frostPlanesFailed = true;
 		return false;
 	}
 	return true;
@@ -825,15 +885,17 @@ bool SnowDeformation::EnsureFrostField()
 
 void SnowDeformation::BindFrostField(ID3D11DeviceContext* a_context, bool a_bind)
 {
-	ID3D11ShaderResourceView* srvs[1 + 2 * kFrostTextures] = {};
+	ID3D11ShaderResourceView* srvs[11] = {};
 	if (a_bind) {
-		srvs[0] = frostFieldTexture ? frostFieldTexture->srv.get() : nullptr;
+		srvs[0] = frostPlaneSRV.get();
 		for (uint32_t i = 0; i < kFrostTextures; ++i) {
 			srvs[1 + i] = frostDiffuse[i].get();
 			srvs[1 + kFrostTextures + i] = frostNormal[i].get();
 		}
+		srvs[9] = frostCellSRV.get();
+		srvs[10] = frostListSRV.get();
 	}
-	a_context->PSSetShaderResources(117, 1 + 2 * kFrostTextures, srvs);
+	a_context->PSSetShaderResources(117, 11, srvs);
 }
 
 void SnowDeformation::RenderRuneCapture()
@@ -871,16 +933,12 @@ void SnowDeformation::RenderRuneCapture()
 
 	auto context = globals::d3d::context;
 	const bool runes = settings.RuneDecalsOnSnow && !sites.empty() && !runeCaptures.empty() && EnsureBloodResources() && EnsureRuneResources();
-	const bool frosted = !frost.empty() && EnsureBloodResources() && EnsureRuneResources() && EnsureFrostField();
+	const bool frosted = !frost.empty() && EnsureBloodResources() && EnsureRuneResources();
 	RuneCB cbRune{};
 	const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	if (!runes && runeAtlasDirty && runeAtlasTexture) {
 		context->ClearRenderTargetView(runeAtlasTexture->rtv.get(), zero);
 		runeAtlasDirty = false;
-	}
-	if (!frosted && frostFieldDirty && frostFieldTexture) {
-		context->ClearRenderTargetView(frostFieldTexture->rtv.get(), zero);
-		frostFieldDirty = false;
 	}
 	if (!runes) {
 		for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
@@ -985,33 +1043,29 @@ void SnowDeformation::RenderRuneCapture()
 		}
 	}
 
-	// Every frost mark into one window round the player, each with its
-	// texture's slot in the id's top bits: the shell samples a mark's own
-	// texture through its own uv plane, however many there are.
+	// Every frost mark as a uv plane over the ground: the plane pass draws each
+	// mark top-down and its triangles solve uv against the window's texels; the
+	// cells list the marks whose bounds reach them. The shells lay every mark
+	// over a point through its own plane, however many there are.
 	uint32_t frostDrawn = 0;
 	if (frosted) {
-		context->ClearRenderTargetView(frostFieldTexture->rtv.get(), zero);
-		context->ClearDepthStencilView(frostDepthDSV.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
-		ID3D11RenderTargetView* rtvs[1] = { frostFieldTexture->rtv.get() };
-		context->OMSetRenderTargets(1, rtvs, frostDepthDSV.get());
-		D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kFrostFieldDim), float(kFrostFieldDim), 0.0f, 1.0f };
-		context->RSSetViewports(1, &viewport);
 		RE::NiPoint3 centre = frost.front()->centre;
 		if (auto* player = globals::game::player)
 			centre = player->GetPosition();
 		const float half = 0.5f * kFrostFieldTexel * float(kFrostFieldDim);
 		BloodCB cb{};
-		cb.WindowOrigin = { std::floor((centre.x - half) / kFrostFieldTexel) * kFrostFieldTexel, std::floor((centre.y - half) / kFrostFieldTexel) * kFrostFieldTexel };
+		cb.WindowOrigin = { std::floor((centre.x - half) / kFrostCellSize) * kFrostCellSize, std::floor((centre.y - half) / kFrostCellSize) * kFrostCellSize };
 		cb.TexelSize = kFrostFieldTexel;
 		cb.MapDim = float(kFrostFieldDim);
 		cb.MapOrigin = { 0, 0 };
 		cb.Intensity = 1.0f;
 		cb.NormalZMin = 0.3f;
 		uint32_t slots = 0;
-		uint32_t perSlot[kFrostTextures] = {};
 		float hasNormal[kFrostTextures] = {};
 		std::vector<BloodCapture> list;
 		list.reserve(frost.size());
+		std::vector<const RuneCapture*> listed;
+		listed.reserve(frost.size());
 		for (const RuneCapture* mark : frost) {
 			uint32_t slot = 0;
 			while (slot < slots && frostDiffuse[slot].get() != mark->draw.diffuse.get())
@@ -1025,20 +1079,78 @@ void SnowDeformation::RenderRuneCapture()
 				slots++;
 			}
 			list.push_back(mark->draw);
-			list.back().decalId = float((slot << 12) | (perSlot[slot]++ % 4095u + 1u));
+			list.back().decalId = float(uint32_t(listed.size()) * 4u + slot);
+			listed.push_back(mark);
 		}
 		for (uint32_t i = slots; i < kFrostTextures; ++i) {
 			frostDiffuse[i] = nullptr;
 			frostNormal[i] = nullptr;
 		}
-		frostDrawn = DrawBloodList(context, list, cb, nullptr, 1u);
-		cbRune.FrostNormals = { hasNormal[0], hasNormal[1], hasNormal[2], hasNormal[3] };
-		cbRune.FrostRect = { cb.WindowOrigin.x, cb.WindowOrigin.y, 1.0f / kFrostFieldTexel, frostDrawn ? 1.0f : 0.0f };
-		frostFieldDirty = true;
-		if (frostDrawn && !frostPaintLogged) {
-			frostPaintLogged = true;
-			logger::info("[SNOW DEFORMATION] frost field: first frame painted {} of {} frost decal draw(s) on the landscape snow, {} texture(s)",
-				frostDrawn, frostCaptures.size(), slots);
+		// Each mark into every cell its bound reaches.
+		const float inv = 1.0f / kFrostCellSize;
+		auto cellRange = [&](const RuneCapture* a_mark, int32_t& a_x0, int32_t& a_y0, int32_t& a_x1, int32_t& a_y1) {
+			a_x0 = std::max(int32_t(std::floor((a_mark->centre.x - a_mark->radius - cb.WindowOrigin.x) * inv)), 0);
+			a_y0 = std::max(int32_t(std::floor((a_mark->centre.y - a_mark->radius - cb.WindowOrigin.y) * inv)), 0);
+			a_x1 = std::min(int32_t(std::floor((a_mark->centre.x + a_mark->radius - cb.WindowOrigin.x) * inv)), int32_t(kFrostCells) - 1);
+			a_y1 = std::min(int32_t(std::floor((a_mark->centre.y + a_mark->radius - cb.WindowOrigin.y) * inv)), int32_t(kFrostCells) - 1);
+		};
+		frostCellCounts.assign(kFrostCells * kFrostCells, 0u);
+		uint32_t entries = 0;
+		for (const RuneCapture* mark : listed) {
+			int32_t x0, y0, x1, y1;
+			cellRange(mark, x0, y0, x1, y1);
+			for (int32_t y = y0; y <= y1; ++y)
+				for (int32_t x = x0; x <= x1; ++x, ++entries)
+					frostCellCounts[y * kFrostCells + x]++;
+		}
+		if (!list.empty() && EnsureFrostPlanes(uint32_t(list.size()), std::max(entries, 1u))) {
+			std::vector<uint32_t> cells(kFrostCells * kFrostCells * 2u);
+			uint32_t offset = 0;
+			for (uint32_t c = 0; c < kFrostCells * kFrostCells; ++c) {
+				cells[c * 2u] = offset;
+				cells[c * 2u + 1u] = 0u;
+				offset += frostCellCounts[c];
+			}
+			frostListScratch.assign(std::max(entries, 1u), 0u);
+			for (uint32_t i = 0; i < listed.size(); ++i) {
+				int32_t x0, y0, x1, y1;
+				cellRange(listed[i], x0, y0, x1, y1);
+				for (int32_t y = y0; y <= y1; ++y)
+					for (int32_t x = x0; x <= x1; ++x) {
+						const uint32_t c = uint32_t(y) * kFrostCells + uint32_t(x);
+						frostListScratch[cells[c * 2u] + cells[c * 2u + 1u]++] = i;
+					}
+			}
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (SUCCEEDED(context->Map(frostCellBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+				std::memcpy(mapped.pData, cells.data(), cells.size() * sizeof(uint32_t));
+				context->Unmap(frostCellBuffer.get(), 0);
+			}
+			if (SUCCEEDED(context->Map(frostListBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+				std::memcpy(mapped.pData, frostListScratch.data(), frostListScratch.size() * sizeof(uint32_t));
+				context->Unmap(frostListBuffer.get(), 0);
+			}
+			// The plane pass writes only its UAV: no target, the window's viewport.
+			const UINT clear[4] = {};
+			context->ClearUnorderedAccessViewUint(frostPlaneUAV.get(), clear);
+			ID3D11UnorderedAccessView* planeUAV = frostPlaneUAV.get();
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 1, &planeUAV, nullptr);
+			context->OMSetDepthStencilState(nullptr, 0);
+			D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kFrostFieldDim), float(kFrostFieldDim), 0.0f, 1.0f };
+			context->RSSetViewports(1, &viewport);
+			context->GSSetShader(frostPlaneGS, nullptr, 0);
+			context->GSSetConstantBuffers(1, 1, &cb1);
+			context->PSSetShader(frostPlanePS, nullptr, 0);
+			frostDrawn = DrawBloodList(context, list, cb, nullptr, 1u);
+			context->GSSetShader(nullptr, nullptr, 0);
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 0, nullptr, nullptr);
+			cbRune.FrostRect = { cb.WindowOrigin.x, cb.WindowOrigin.y, inv, frostDrawn ? 1.0f : 0.0f };
+			cbRune.FrostNormals = { hasNormal[0], hasNormal[1], hasNormal[2], hasNormal[3] };
+			if (frostDrawn && !frostPaintLogged) {
+				frostPaintLogged = true;
+				logger::info("[SNOW DEFORMATION] frost marks: first frame found {} plane(s) from {} frost decal draw(s), {} texture(s), {} cell entries",
+					frostDrawn, frostCaptures.size(), slots, entries);
+			}
 		}
 	}
 	cbRune.RuneParams = { float(tiles), 0.0f, 0.0f, 0.0f };
