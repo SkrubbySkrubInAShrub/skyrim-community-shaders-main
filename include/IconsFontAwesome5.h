@@ -39,6 +39,8 @@
 #define ICON_FA_LIGHTBULB "\xef\x83\xab"	// U+f0eb
 #define ICON_FA_ANGLE_LEFT "\xef\x84\x84"	// U+f104
 #define ICON_FA_ANGLE_RIGHT "\xef\x84\x85"	// U+f105
+#define ICON_FA_ANGLE_UP "\xef\x84\x86"	// U+f106
+#define ICON_FA_ANGLE_DOWN "\xef\x84\x87"	// U+f107
 #define ICON_FA_UNIVERSITY "\xef\x86\x9c"	// U+f19c
 #define ICON_FA_PAW "\xef\x86\xb0"	// U+f1b0
 #define ICON_FA_TREE "\xef\x86\xbb"	// U+f1bb
@@ -108,6 +110,8 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf0eb, 0xf0eb,
 	0xf104, 0xf104,
 	0xf105, 0xf105,
+	0xf106, 0xf106,
+	0xf107, 0xf107,
 	0xf19c, 0xf19c,
 	0xf1b0, 0xf1b0,
 	0xf1bb, 0xf1bb,

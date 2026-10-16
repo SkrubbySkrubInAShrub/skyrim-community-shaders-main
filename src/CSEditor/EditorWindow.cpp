@@ -55,6 +55,36 @@ namespace
 	constexpr float kHelpNoteWrapFontScale = 30.0f;
 	/// Slack when matching dock node edges, which are sums of split sizes and drift by float error.
 	constexpr float kDockEdgeTolerance = 1.0f;
+	/// Time for the hide/show widgets fade to run end to end.
+	constexpr float kWidgetsFadeSeconds = 0.15f;
+
+	/** @brief Scales ImGui alpha by fade while alive; below 1 it also hides the mouse from windows drawn in scope. */
+	class WidgetFadeScope
+	{
+	public:
+		explicit WidgetFadeScope(float fade) :
+			context(*ImGui::GetCurrentContext()),
+			hoveredWindow(context.HoveredWindow),
+			hoveredWindowUnderMoving(context.HoveredWindowUnderMovingWindow)
+		{
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * fade);
+			if (fade < 1.0f)
+				context.HoveredWindow = context.HoveredWindowUnderMovingWindow = nullptr;
+		}
+		~WidgetFadeScope()
+		{
+			context.HoveredWindow = hoveredWindow;
+			context.HoveredWindowUnderMovingWindow = hoveredWindowUnderMoving;
+			ImGui::PopStyleVar();
+		}
+		WidgetFadeScope(const WidgetFadeScope&) = delete;
+		WidgetFadeScope& operator=(const WidgetFadeScope&) = delete;
+
+	private:
+		ImGuiContext& context;
+		ImGuiWindow* hoveredWindow;
+		ImGuiWindow* hoveredWindowUnderMoving;
+	};
 
 	Util::ConfirmationPopup deleteSceneChangesConfirmation;
 
@@ -795,6 +825,68 @@ void EditorWindow::ShowWidgetWindow()
 	}
 }
 
+void EditorWindow::DrawEditorWindows(float scale, float actionBarBottom)
+{
+	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+	auto width = ImGui::GetIO().DisplaySize.x;
+	auto height = ImGui::GetIO().DisplaySize.y;
+	const float availableWidth = width - pad * 3.0f;  // left pad + gap + right pad
+	const float availableHeight = (height - actionBarBottom - pad * 2.0f) * 0.85f;
+	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
+	// Browser gets up to half the available width, capped so ultrawide gives extra to viewport
+	const float maxBrowserWidth = 960.0f * scale;
+	const float browserWidth = std::min(availableWidth * 0.5f, maxBrowserWidth);
+	const float viewportWidth = availableWidth - browserWidth;
+	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
+	ImGui::SetNextWindowPos(ImVec2(pad, actionBarBottom + pad), layoutCond);
+	ShowObjectsWindow();
+
+	if (IsViewportActive()) {
+		// Size viewport height to match game aspect ratio so the preview fits snugly
+		const float aspectRatio = width / height;
+		const ImVec2 borderInsets = GetViewportBorderInsets();
+		const float imageHeight = (viewportWidth - borderInsets.x * 2.0f) / aspectRatio;
+		const float chromeHeight = ImGui::GetFrameHeight() + borderInsets.x + borderInsets.y;
+		const float viewportHeight = imageHeight + chromeHeight;
+		ImGui::SetNextWindowSize(ImVec2(viewportWidth, viewportHeight), layoutCond);
+		ImGui::SetNextWindowPos(ImVec2(pad + browserWidth + pad, actionBarBottom + pad), layoutCond);
+		viewportBottomY = actionBarBottom + pad + viewportHeight;
+		ShowViewportWindow();
+	} else {
+		viewportBottomY = actionBarBottom + pad;
+	}
+
+	auto settingsWindowHeight = height * 0.25f;
+	auto settingsWindowWidth = width * 0.25f;
+	if (showSettingsWindow) {
+		ImGui::SetNextWindowSize(ImVec2(settingsWindowWidth, settingsWindowHeight), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowPos({ (width / 2.0f) - (settingsWindowWidth / 2.0f), (height / 2.0f) - (settingsWindowHeight / 2.0f) }, ImGuiCond_Appearing);
+		ShowSettingsWindow();
+	}
+
+	ShowWidgetWindow();
+
+	// Locations are not form widgets, so their windows are drawn alongside the widget pass.
+	SceneSettingsUI::DrawLocationWindows();
+
+	// Show palette window
+	PaletteWindow::GetSingleton()->Draw();
+
+	// Show weather picker window
+	WeatherPickerWindow::GetSingleton()->Draw();
+
+	// Optional weather debug window
+	CSEditor::DrawWeatherDebugWindow(&showWeatherDebug);
+
+	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
+	Effects11Editor::GetSingleton().Draw();
+
+	const bool featuresWasOpen = settings.showFeaturesWindow;
+	FeatureSettingsWindow::Draw(settings.showFeaturesWindow);
+	if (featuresWasOpen != settings.showFeaturesWindow)
+		Save();
+}
+
 void EditorWindow::RenderUI()
 {
 	// Apply editor UI scale
@@ -803,12 +895,17 @@ void EditorWindow::RenderUI()
 	ImGui::GetStyle().FontScaleMain = settings.editorUIScale;
 	const EditorChromeScope chrome;
 
-	if (IsViewportActive()) {
+	const float fadeStep = io.DeltaTime / kWidgetsFadeSeconds;
+	widgetsFade = std::clamp(widgetsFade + (widgetsHidden ? -fadeStep : fadeStep), 0.0f, 1.0f);
+
+	if (IsViewportActive() && widgetsFade > 0.0f) {
+		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * widgetsFade);
 		auto* backgroundDrawList = ImGui::GetBackgroundDrawList();
 		backgroundDrawList->AddRectFilled({ 0, 0 }, io.DisplaySize, ImGui::GetColorU32(ImGuiCol_ModalWindowDimBg));
 		backgroundDrawList->AddRectFilled(
 			{ 0, 0 }, io.DisplaySize,
 			ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, ThemeManager::Constants::EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA)));
+		ImGui::PopStyleVar();
 	}
 
 	// Global shortcuts yield to a focused text field so typing isn't hijacked.
@@ -1288,6 +1385,12 @@ void EditorWindow::RenderUI()
 				return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
 			};
 
+			// Sits right of the centered cluster so toggling never shifts the status text.
+			if (PlaceToggleIconButton("##ToggleWidgets", Icons::FA(widgetsHidden ? ICON_FA_ANGLE_DOWN : ICON_FA_ANGLE_UP), false,
+					centerClusterX + centerClusterW + itemSpacing, enabledColor))
+				widgetsHidden = !widgetsHidden;
+			Util::AddTooltip(widgetsHidden ? T(TKEY("show_widgets"), "Show Widgets") : T(TKEY("hide_widgets"), "Hide Widgets"));
+
 			{
 				bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
 				if (PlaceToggleIconButton("##FreeCamera", Icons::LC(ICON_LC_SCAN_EYE), isActive, freeCameraX, enabledColor)) {
@@ -1368,66 +1471,12 @@ void EditorWindow::RenderUI()
 	// Establish a viewport-wide DockSpace so all editor windows are snappable and dockable
 	dockSpaceId = ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
 
-	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	auto width = ImGui::GetIO().DisplaySize.x;
-	auto height = ImGui::GetIO().DisplaySize.y;
-	const float availableWidth = width - pad * 3.0f;  // left pad + gap + right pad
-	const float availableHeight = (height - actionBarBottom - pad * 2.0f) * 0.85f;
-	const auto layoutCond = resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
-	// Browser gets up to half the available width, capped so ultrawide gives extra to viewport
-	const float maxBrowserWidth = 960.0f * scale;
-	const float browserWidth = std::min(availableWidth * 0.5f, maxBrowserWidth);
-	const float viewportWidth = availableWidth - browserWidth;
-	ImGui::SetNextWindowSize(ImVec2(browserWidth, availableHeight), layoutCond);
-	ImGui::SetNextWindowPos(ImVec2(pad, actionBarBottom + pad), layoutCond);
-	ShowObjectsWindow();
-
-	if (IsViewportActive()) {
-		// Size viewport height to match game aspect ratio so the preview fits snugly
-		const float aspectRatio = width / height;
-		const ImVec2 borderInsets = GetViewportBorderInsets();
-		const float imageHeight = (viewportWidth - borderInsets.x * 2.0f) / aspectRatio;
-		const float chromeHeight = ImGui::GetFrameHeight() + borderInsets.x + borderInsets.y;
-		const float viewportHeight = imageHeight + chromeHeight;
-		ImGui::SetNextWindowSize(ImVec2(viewportWidth, viewportHeight), layoutCond);
-		ImGui::SetNextWindowPos(ImVec2(pad + browserWidth + pad, actionBarBottom + pad), layoutCond);
-		viewportBottomY = actionBarBottom + pad + viewportHeight;
-		ShowViewportWindow();
-	} else {
-		viewportBottomY = actionBarBottom + pad;
+	if (widgetsFade > 0.0f) {
+		const WidgetFadeScope fadeScope(widgetsFade);
+		DrawEditorWindows(scale, actionBarBottom);
 	}
-
-	auto settingsWindowHeight = height * 0.25f;
-	auto settingsWindowWidth = width * 0.25f;
-	if (showSettingsWindow) {
-		ImGui::SetNextWindowSize(ImVec2(settingsWindowWidth, settingsWindowHeight), ImGuiCond_FirstUseEver);
-		ImGui::SetNextWindowPos({ (width / 2.0f) - (settingsWindowWidth / 2.0f), (height / 2.0f) - (settingsWindowHeight / 2.0f) }, ImGuiCond_Appearing);
-		ShowSettingsWindow();
-	}
-
-	ShowWidgetWindow();
-
-	// Locations are not form widgets, so their windows are drawn alongside the widget pass.
-	SceneSettingsUI::DrawLocationWindows();
-
-	// Show palette window
-	PaletteWindow::GetSingleton()->Draw();
-
-	// Show weather picker window
-	WeatherPickerWindow::GetSingleton()->Draw();
-
-	// Optional weather debug window
-	CSEditor::DrawWeatherDebugWindow(&showWeatherDebug);
 
 	ScenePresetExport::Draw();
-
-	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
-	Effects11Editor::GetSingleton().Draw();
-
-	const bool featuresWasOpen = settings.showFeaturesWindow;
-	FeatureSettingsWindow::Draw(settings.showFeaturesWindow);
-	if (featuresWasOpen != settings.showFeaturesWindow)
-		Save();
 
 	DrawToolPrompt();
 
@@ -1530,6 +1579,8 @@ void EditorWindow::UpdateOpenState()
 	}
 
 	if (open && !wasOpen) {
+		widgetsHidden = false;
+		widgetsFade = 1.0f;
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
 		overlayWeatherLockPending = true;

@@ -40,6 +40,8 @@ public:
 
 	bool open = false;
 	bool showWeatherDebug = false;  // optional Weather Debug window, off by default (not persisted)
+	bool widgetsHidden = false;     // action bar toggle: hides every window except the bar (not persisted)
+	float widgetsFade = 1.0f;       // 1 = widgets shown, 0 = hidden; eased toward widgetsHidden each frame
 	PreviewMode previewMode = PreviewMode::None;
 	const static int maxRecordMarkers = 10;
 
@@ -195,6 +197,9 @@ public:
 
 	/** @brief Draw all currently open widget editing windows. */
 	void ShowWidgetWindow();
+
+	/** @brief Lays out and draws every editor window below the action bar; skipped once the hide fade finishes. */
+	void DrawEditorWindows(float scale, float actionBarBottom);
 
 	/** @brief Render the full editor UI including menu bar, windows, and overlays. */
 	void RenderUI();
