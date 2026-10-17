@@ -1445,6 +1445,14 @@ public:
 	/** @brief Indirect dispatch args for the evolve pass (bytes 0-11), then the scan's append and finished-group counters (zero between scans). */
 	winrt::com_ptr<ID3D11Buffer> evolveArgsBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> evolveArgsUAV;
+	/** @brief The tiles evolve's snapshot needs (occupancy dilated by twice the evolve halo) + their indirect args; GPU-only like the evolve pair. */
+	winrt::com_ptr<ID3D11Buffer> snapshotTileBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> snapshotTileUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> snapshotTileSRV;
+	winrt::com_ptr<ID3D11Buffer> snapshotArgsBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> snapshotArgsUAV;
+	/** @brief A/B, runtime-only: evolve's snapshot copies the whole map. */
+	bool evolveSnapshotOff = false;
 	/** @brief Set when the map (and with it the occupancy grid) was (re)created; the next Prepass seeds occupancy all-1. */
 	bool tileGridsNeedInit = true;
 	/** @brief Last consumed evolve-tile census (from the activity readback; lags by the ring like the verdict). */
@@ -1457,6 +1465,12 @@ public:
 	/** @brief Returns the tiled berm bake (indirect over the berm tile list), compiling it on first use. */
 	ID3D11ComputeShader* GetBermFieldTiledCS();
 	ID3D11ComputeShader* deformationScanEvolveCS = nullptr;
+	/** @brief Returns the snapshot scan (occupancy + twice the evolve halo -> tile list), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationScanSnapshotCS();
+	/** @brief Returns the snapshot copy (indirect over the snapshot list, map -> evolve's scratch), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationSnapshotCS();
+	ID3D11ComputeShader* deformationScanSnapshotCS = nullptr;
+	ID3D11ComputeShader* deformationSnapshotCS = nullptr;
 	ID3D11ComputeShader* deformationScanBermCS = nullptr;
 	ID3D11ComputeShader* bermFieldTiledCS = nullptr;
 

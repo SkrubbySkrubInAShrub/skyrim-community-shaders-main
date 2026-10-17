@@ -798,6 +798,72 @@ bool ScanFinish(uint GIdx, uint2 dims, out uint count)
 		EvolveTiles[0] = count;
 }
 
+// Lists the tiles of the snapshot evolve reads: within twice the evolve halo
+// of an occupied tile, as a listed tile's taps reach at most one halo past it.
+// Same wrapped-space dilation as the evolve scan, separable in groupshared;
+// past SNAPSHOT_MAX_APRON every tile is listed.
+#define SNAPSHOT_MAX_APRON 16
+#define SNAPSHOT_SIDE (8 + 2 * SNAPSHOT_MAX_APRON)
+groupshared uint gSnapOcc[SNAPSHOT_SIDE * SNAPSHOT_SIDE];
+groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
+
+[numthreads(8, 8, 1)] void ScanSnapshotCS(uint3 DTid
+										  : SV_DispatchThreadID, uint3 Gid
+										  : SV_GroupID, uint3 GTid
+										  : SV_GroupThreadID, uint GIdx
+										  : SV_GroupIndex) {
+	uint2 dims;
+	OccupancyIn.GetDimensions(dims.x, dims.y);
+	const uint apron = 2u * (uint)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
+	const bool everything = ForceAllDirty != 0 || apron > SNAPSHOT_MAX_APRON;
+	const uint side = 8u + 2u * apron;
+	[branch] if (!everything)
+	{
+		const int2 base = int2(Gid.xy * 8u) - (int)apron;
+		for (uint i = GIdx; i < side * side; i += 64u)
+			gSnapOcc[i] = OccupancyIn[uint2(base + int2(i % side, i / side) + int2(dims)) & (dims - 1u)];
+	}
+	GroupMemoryBarrierWithGroupSync();
+	[branch] if (!everything)
+	{
+		for (uint i = GIdx; i < side * 8u; i += 64u) {
+			uint occupied = 0;
+			for (uint dx = 0; dx <= 2u * apron; dx++)
+				occupied |= gSnapOcc[(i >> 3) * side + (i & 7u) + dx];
+			gSnapRows[i] = occupied;
+		}
+	}
+	GroupMemoryBarrierWithGroupSync();
+	bool need = everything;
+	[branch] if (!everything)
+	{
+		for (uint dy = 0; dy <= 2u * apron && !need; dy++)
+			need = gSnapRows[(GTid.y + dy) * 8u + GTid.x] != 0;
+	}
+	[branch] if (need && all(DTid.xy < dims))
+	{
+		uint idx;
+		TileArgs.InterlockedAdd(12, 1u, idx);
+		EvolveTiles[1 + idx] = DTid.x | (DTid.y << 16);
+	}
+	uint count;
+	if (ScanFinish(GIdx, dims, count))
+		EvolveTiles[0] = count;
+}
+
+// Indirect over ScanSnapshotCS's list: those tiles of the map, bound at t0,
+// into evolve's snapshot, bound at u0.
+[numthreads(8, 8, 1)] void SnapshotCS(uint3 GTid
+									  : SV_GroupThreadID, uint3 Gid
+									  : SV_GroupID) {
+	const uint listIndex = Gid.y * 1024u + Gid.x;
+	if (listIndex >= EvolveTilesIn[0])
+		return;
+	const uint packed = EvolveTilesIn[1 + listIndex];
+	const uint2 texel = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
+	CurrentDeformation[texel] = PreviousDeformation[texel];
+}
+
 // Lists the tiles the berm bake must rebuild: the map changed within the
 // tap reach (40 units x BermReach). Same wrapped-space dilation as the evolve scan.
 [numthreads(8, 8, 1)] void ScanBermCS(uint3 DTid

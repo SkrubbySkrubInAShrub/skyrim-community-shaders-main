@@ -321,6 +321,16 @@ void SnowDeformation::CreateDeformationTextures()
 		DX::ThrowIfFailed(device->CreateShaderResourceView(evolveTileBuffer.get(), nullptr, evolveTileSRV.put()));
 		Util::SetResourceName(evolveTileSRV.get(), "SnowDeformation::EvolveTiles SRV");
 
+		snapshotTileBuffer = nullptr;
+		snapshotTileUAV = nullptr;
+		snapshotTileSRV = nullptr;
+		DX::ThrowIfFailed(device->CreateBuffer(&listDesc, nullptr, snapshotTileBuffer.put()));
+		Util::SetResourceName(snapshotTileBuffer.get(), "SnowDeformation::SnapshotTiles");
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(snapshotTileBuffer.get(), nullptr, snapshotTileUAV.put()));
+		Util::SetResourceName(snapshotTileUAV.get(), "SnowDeformation::SnapshotTiles UAV");
+		DX::ThrowIfFailed(device->CreateShaderResourceView(snapshotTileBuffer.get(), nullptr, snapshotTileSRV.put()));
+		Util::SetResourceName(snapshotTileSRV.get(), "SnowDeformation::SnapshotTiles SRV");
+
 		bermDirtyTexture = nullptr;
 		bermDirtyUAV = nullptr;
 		bermDirtySRV = nullptr;
@@ -458,6 +468,10 @@ void SnowDeformation::SetupResources()
 		Util::SetResourceName(bermArgsBuffer.get(), "SnowDeformation::BermArgs");
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(bermArgsBuffer.get(), &argsUavDesc, bermArgsUAV.put()));
 		Util::SetResourceName(bermArgsUAV.get(), "SnowDeformation::BermArgs UAV");
+		DX::ThrowIfFailed(device->CreateBuffer(&argsDesc, &argsInit, snapshotArgsBuffer.put()));
+		Util::SetResourceName(snapshotArgsBuffer.get(), "SnowDeformation::SnapshotArgs");
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(snapshotArgsBuffer.get(), &argsUavDesc, snapshotArgsUAV.put()));
+		Util::SetResourceName(snapshotArgsUAV.get(), "SnowDeformation::SnapshotArgs UAV");
 	}
 
 	{
@@ -1524,20 +1538,44 @@ void SnowDeformation::PrepassSimulation()
 			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
-				context->CopyResource(scratch->resource.get(), map->resource.get());
-				globals::profiler->EndPass();
-
-				// Scan: occupancy (SRV, so drop its UAV bind) + halo -> list
-				// (u4) and indirect args (u5).
+				// Both scans read occupancy as an SRV, so drop its UAV bind.
 				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);
 				ID3D11ShaderResourceView* occSRV = occupancySRV.get();
 				context->CSSetShaderResources(4, 1, &occSRV);
+				const uint tilesPerAxis = deformMapDim / 8;
+				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
+				// The snapshot holds only the tiles evolve's taps can reach:
+				// listed (u4, args u5) by their own scan, copied indirectly.
+				auto* scanSnapshotCS = GetDeformationScanSnapshotCS();
+				auto* snapshotCS = GetDeformationSnapshotCS();
+				if (!evolveSnapshotOff && scanSnapshotCS && snapshotCS && snapshotTileUAV && snapshotTileSRV && snapshotArgsUAV) {
+					ID3D11UnorderedAccessView* snapUAVs[2] = { snapshotTileUAV.get(), snapshotArgsUAV.get() };
+					context->CSSetUnorderedAccessViews(4, 2, snapUAVs, nullptr);
+					context->CSSetShader(scanSnapshotCS, nullptr, 0);
+					context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
+					ID3D11UnorderedAccessView* nullSnapUAVs[2] = { nullptr, nullptr };
+					context->CSSetUnorderedAccessViews(4, 2, nullSnapUAVs, nullptr);
+					ID3D11ShaderResourceView* mapSRV = map->srv.get();
+					ID3D11ShaderResourceView* snapListSRV = snapshotTileSRV.get();
+					context->CSSetShaderResources(0, 1, &mapSRV);
+					context->CSSetShaderResources(3, 1, &snapListSRV);
+					ID3D11UnorderedAccessView* scratchUAV = scratch->uav.get();
+					context->CSSetUnorderedAccessViews(0, 1, &scratchUAV, nullptr);
+					context->CSSetShader(snapshotCS, nullptr, 0);
+					context->DispatchIndirect(snapshotArgsBuffer.get(), 0);
+					context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+					ID3D11ShaderResourceView* nullSRV = nullptr;
+					context->CSSetShaderResources(0, 1, &nullSRV);
+				} else {
+					context->CopyResource(scratch->resource.get(), map->resource.get());
+				}
+				globals::profiler->EndPass();
+
+				// Scan: occupancy + halo -> list (u4) and indirect args (u5).
 				ID3D11UnorderedAccessView* scanUAVs[2] = { evolveTileUAV.get(), evolveArgsUAV.get() };
 				context->CSSetUnorderedAccessViews(4, 2, scanUAVs, nullptr);
 				context->CSSetShader(GetDeformationScanEvolveCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
-				const uint tilesPerAxis = deformMapDim / 8;
 				context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
 				globals::profiler->EndPass();
 				ID3D11UnorderedAccessView* nullScanUAVs[2] = { nullptr, nullptr };
@@ -1860,6 +1898,24 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationScanEvolveCS()
 	return deformationScanEvolveCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetDeformationScanSnapshotCS()
+{
+	if (!deformationScanSnapshotCS) {
+		logger::debug("Compiling DeformationUpdateCS:ScanSnapshotCS");
+		deformationScanSnapshotCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanSnapshotCS"));
+	}
+	return deformationScanSnapshotCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetDeformationSnapshotCS()
+{
+	if (!deformationSnapshotCS) {
+		logger::debug("Compiling DeformationUpdateCS:SnapshotCS");
+		deformationSnapshotCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "SnapshotCS"));
+	}
+	return deformationSnapshotCS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetDeformationScanBermCS()
 {
 	if (!deformationScanBermCS) {
@@ -2105,6 +2161,12 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationScanEvolveCS)
 		deformationScanEvolveCS->Release();
 	deformationScanEvolveCS = nullptr;
+	if (deformationScanSnapshotCS)
+		deformationScanSnapshotCS->Release();
+	deformationScanSnapshotCS = nullptr;
+	if (deformationSnapshotCS)
+		deformationSnapshotCS->Release();
+	deformationSnapshotCS = nullptr;
 	if (deformationScanBermCS)
 		deformationScanBermCS->Release();
 	deformationScanBermCS = nullptr;
