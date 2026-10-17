@@ -1222,58 +1222,61 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy, float base
 	// The frost marks first; a rune's glyph takes the point where it is stronger.
 	RuneGlyph g = SampleFrostMarks(worldXY, worldDx, worldDy, base);
 	const uint count = min((uint)RuneParams.x, 4u);
-	[unroll] for (uint i = 0; i < 4; i++)
+	[branch] if (count != 0u)
 	{
-		float2 tileUV = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
-		[branch] if (i < count && all(tileUV > 0.0) && all(tileUV < 1.0) && MarkReaches(base, RuneReach[i].xy))
+		[unroll] for (uint i = 0; i < 4; i++)
 		{
-			// The decal's uv at the nearest texel, carried to this point along
-			// its own plane from a neighbour of the same decal: never filtered
-			// across two decals, nor across a decal's edge. In from the tile's
-			// edge: the neighbour tile is another site.
-			const float2 f = tileUV * 512.0;
-			const int2 k = clamp(int2(f), 1, 510);
-			const int2 at = int2(i & 1u, i >> 1u) * 512 + k;
-			const float4 c = RuneAtlas.Load(int3(at, 0));
-			[branch] if (c.b > 0.0)
+			float2 tileUV = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
+			[branch] if (i < count && all(tileUV > 0.0) && all(tileUV < 1.0) && MarkReaches(base, RuneReach[i].xy))
 			{
-				const float4 px = RuneAtlas.Load(int3(at + int2(1, 0), 0));
-				const float4 nx = RuneAtlas.Load(int3(at - int2(1, 0), 0));
-				const float4 py = RuneAtlas.Load(int3(at + int2(0, 1), 0));
-				const float4 ny = RuneAtlas.Load(int3(at - int2(0, 1), 0));
-				const float2 stepX = px.b == c.b ? px.rg - c.rg : (nx.b == c.b ? c.rg - nx.rg : 0.0);
-				const float2 stepY = py.b == c.b ? py.rg - c.rg : (ny.b == c.b ? c.rg - ny.rg : 0.0);
-				const float2 uv = c.rg + stepX * (f.x - float(k.x) - 0.5) + stepY * (f.y - float(k.y) - 0.5);
-				// The uv field is planar, so its world derivative is one
-				// texel's difference, and the screen gradient follows from it.
-				float texelWorld = 1.0 / (RuneRects[i].z * 512.0);
-				float2 uvDx = stepX / texelWorld;
-				float2 uvDy = stepY / texelWorld;
-				float2 gradX = uvDx * worldDx.x + uvDy * worldDx.y;
-				float2 gradY = uvDx * worldDy.x + uvDy * worldDy.y;
-				float4 d = RuneDiffuse[i].SampleGrad(SnowSampler, uv, gradX, gradY);
-				float a = d.a * c.a;
-				[branch] if (a > g.colour.a)
+				// The decal's uv at the nearest texel, carried to this point along
+				// its own plane from a neighbour of the same decal: never filtered
+				// across two decals, nor across a decal's edge. In from the tile's
+				// edge: the neighbour tile is another site.
+				const float2 f = tileUV * 512.0;
+				const int2 k = clamp(int2(f), 1, 510);
+				const int2 at = int2(i & 1u, i >> 1u) * 512 + k;
+				const float4 c = RuneAtlas.Load(int3(at, 0));
+				[branch] if (c.b > 0.0)
 				{
-					const float3 albedo = Color::Diffuse(d.rgb);
-					g.colour = float4(albedo / Color::PBRLightingScale, a);
-					float3 emit = Color::EmitColor(RuneTints[i].rgb, RuneReach[i].z);
-					[branch] if (RuneRects[i].w > 0.5)
-						emit = MarkGlow(emit, SampleRuneGlow(i, uv, gradX, gradY));
-					g.emission = emit * albedo * a;
-					g.normalTS = float3(0.0, 0.0, 1.0);
-					g.specular = float4(0.0, 0.0, 0.0, RuneSpecular[i].w);
-					g.tangent = float3(1.0, 0.0, 0.0);
-					g.bitangent = float3(0.0, 1.0, 0.0);
-					float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
-					[branch] if (RuneTints[i].w > 0.5 && abs(det) > 1e-12)
+					const float4 px = RuneAtlas.Load(int3(at + int2(1, 0), 0));
+					const float4 nx = RuneAtlas.Load(int3(at - int2(1, 0), 0));
+					const float4 py = RuneAtlas.Load(int3(at + int2(0, 1), 0));
+					const float4 ny = RuneAtlas.Load(int3(at - int2(0, 1), 0));
+					const float2 stepX = px.b == c.b ? px.rg - c.rg : (nx.b == c.b ? c.rg - nx.rg : 0.0);
+					const float2 stepY = py.b == c.b ? py.rg - c.rg : (ny.b == c.b ? c.rg - ny.rg : 0.0);
+					const float2 uv = c.rg + stepX * (f.x - float(k.x) - 0.5) + stepY * (f.y - float(k.y) - 0.5);
+					// The uv field is planar, so its world derivative is one
+					// texel's difference, and the screen gradient follows from it.
+					float texelWorld = 1.0 / (RuneRects[i].z * 512.0);
+					float2 uvDx = stepX / texelWorld;
+					float2 uvDy = stepY / texelWorld;
+					float2 gradX = uvDx * worldDx.x + uvDy * worldDx.y;
+					float2 gradY = uvDx * worldDy.x + uvDy * worldDy.y;
+					float4 d = RuneDiffuse[i].SampleGrad(SnowSampler, uv, gradX, gradY);
+					float a = d.a * c.a;
+					[branch] if (a > g.colour.a)
 					{
-						float4 n = RuneNormal[i].SampleGrad(SnowSampler, uv, gradX, gradY);
-						g.normalTS = normalize(n.xyz * 2.0 - 1.0);
-						g.specular.rgb = RuneSpecular[i].rgb * n.a;
-						// Inverse of [uvDx uvDy]: world xy per unit u, per unit v.
-						g.tangent = normalize(float3(uvDy.y, -uvDx.y, 0.0) / det);
-						g.bitangent = normalize(float3(-uvDy.x, uvDx.x, 0.0) / det);
+						const float3 albedo = Color::Diffuse(d.rgb);
+						g.colour = float4(albedo / Color::PBRLightingScale, a);
+						float3 emit = Color::EmitColor(RuneTints[i].rgb, RuneReach[i].z);
+						[branch] if (RuneRects[i].w > 0.5)
+							emit = MarkGlow(emit, SampleRuneGlow(i, uv, gradX, gradY));
+						g.emission = emit * albedo * a;
+						g.normalTS = float3(0.0, 0.0, 1.0);
+						g.specular = float4(0.0, 0.0, 0.0, RuneSpecular[i].w);
+						g.tangent = float3(1.0, 0.0, 0.0);
+						g.bitangent = float3(0.0, 1.0, 0.0);
+						float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
+						[branch] if (RuneTints[i].w > 0.5 && abs(det) > 1e-12)
+						{
+							float4 n = RuneNormal[i].SampleGrad(SnowSampler, uv, gradX, gradY);
+							g.normalTS = normalize(n.xyz * 2.0 - 1.0);
+							g.specular.rgb = RuneSpecular[i].rgb * n.a;
+							// Inverse of [uvDx uvDy]: world xy per unit u, per unit v.
+							g.tangent = normalize(float3(uvDy.y, -uvDx.y, 0.0) / det);
+							g.bitangent = normalize(float3(-uvDy.x, uvDx.x, 0.0) / det);
+						}
 					}
 				}
 			}
