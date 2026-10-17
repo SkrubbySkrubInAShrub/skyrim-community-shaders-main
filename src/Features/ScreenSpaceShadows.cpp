@@ -82,6 +82,16 @@ uint ScreenSpaceShadows::GetScaledSampleCount()
 	return scaledSampleCount;
 }
 
+std::vector<std::pair<const char*, const char*>> ScreenSpaceShadows::GetRaymarchDefines(const std::string& a_sampleCount) const
+{
+	std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", a_sampleCount.c_str() } };
+	// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
+	// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
+	if (globals::features::terrainBlending.loaded)
+		defines.push_back({ "TERRAIN_BLENDING", "" });
+	return defines;
+}
+
 ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 {
 	uint scaledSampleCount = GetScaledSampleCount();
@@ -93,22 +103,19 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 
 	if (!raymarchCS) {
 		auto sampleCount = std::format("{}", scaledSampleCount);
-		std::vector<std::pair<const char*, const char*>> defines{ { "SAMPLE_COUNT", sampleCount.c_str() } };
-		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
-		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
-		if (globals::features::terrainBlending.loaded)
-			defines.push_back({ "TERRAIN_BLENDING", "" });
-		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
+		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", GetRaymarchDefines(sampleCount), "cs_5_0");
 	}
 	return raymarchCS;
 }
 
-void ScreenSpaceShadows::DrawShadows()
+bool ScreenSpaceShadows::DrawShadows(ID3D11ShaderResourceView* a_changedTiles, ID3D11ComputeShader* a_changedCS)
 {
 	ZoneScopedS(8);
 	TracyD3D11Zone(globals::state->tracyCtx, "Screen Space Shadows");
 
 	auto context = globals::d3d::context;
+	if (!a_changedCS)
+		a_changedTiles = nullptr;
 
 	auto accumulator = *globals::game::currentAccumulator.get();
 	auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(accumulator->GetRuntimeData().activeShadowSceneNode->GetRuntimeData().sunLight->light.get());
@@ -153,6 +160,13 @@ void ScreenSpaceShadows::DrawShadows()
 	auto viewport = globals::game::graphicsState;
 
 	float2 dynamicRes = { viewport->GetRuntimeData().dynamicResolutionWidthRatio, viewport->GetRuntimeData().dynamicResolutionHeightRatio };
+
+	const MarchInputs inputs{ lightProjectionF, { viewportSize[0], viewportSize[1] }, { dynamicRes.x, dynamicRes.y },
+		{ bendSettings.SurfaceThickness, bendSettings.BilinearThreshold, bendSettings.ShadowContrast }, GetScaledSampleCount() };
+	if (a_changedTiles && (marchFrame != globals::state->frameCount || marchDepthSRV != depthSRV || !(marchInputs == inputs)))
+		a_changedTiles = nullptr;
+	if (a_changedTiles)
+		context->CSSetShaderResources(1, 1, &a_changedTiles);
 
 	// Shared dispatch logic
 	auto Dispatch = [&](ID3D11ComputeShader* shader, const float* lightProj,
@@ -211,10 +225,15 @@ void ScreenSpaceShadows::DrawShadows()
 	float InvTexSizeX = 1.0f / (float)viewportSize[0];
 	float InvTexSizeY = 1.0f / (float)viewportSize[1];
 
-	Dispatch(GetComputeRaymarch(), lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+	Dispatch(a_changedTiles ? a_changedCS : GetComputeRaymarch(), lightProjectionF.data(), InvTexSizeX, InvTexSizeY);
+	if (!a_changedTiles) {
+		marchFrame = globals::state->frameCount;
+		marchDepthSRV = depthSRV;
+		marchInputs = inputs;
+	}
 
-	ID3D11ShaderResourceView* views[1]{ nullptr };
-	context->CSSetShaderResources(0, 1, views);
+	ID3D11ShaderResourceView* views[2]{ nullptr, nullptr };
+	context->CSSetShaderResources(0, a_changedTiles ? 2 : 1, views);
 
 	ID3D11UnorderedAccessView* uavs[1]{ nullptr };
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
@@ -226,6 +245,8 @@ void ScreenSpaceShadows::DrawShadows()
 
 	buffer = nullptr;
 	context->CSSetConstantBuffers(1, 1, &buffer);
+
+	return a_changedTiles != nullptr;
 }
 
 void ScreenSpaceShadows::PostPrepass()
