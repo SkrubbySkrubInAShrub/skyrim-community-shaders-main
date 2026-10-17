@@ -65,6 +65,14 @@ static const float kLsBorderTolerance = 1.0;
 // The class-depth term can change by at most the spread of depth (and of the
 // bare blend) over every texel a tap from the box reaches: its own and the
 // bilinear's next.
+void LsPlainTap(int2 t, inout float2 lowest, inout float2 highest)
+{
+	float2 depthCoverage = TerrainWindowWet.Load(int3(t, 0)).yz;
+	depthCoverage.x = max(depthCoverage.x, 0.0) * RimStyle.w + min(depthCoverage.x, 0.0);
+	lowest = min(lowest, depthCoverage);
+	highest = max(highest, depthCoverage);
+}
+
 bool LsBoxPlain(float2 lo, float2 hi)
 {
 	float maxT = (float)(TerrainDim - 1);
@@ -73,14 +81,21 @@ bool LsBoxPlain(float2 lo, float2 hi)
 	bool plain = all(t1 - t0 <= 5);
 	float2 lowest = 1e9;
 	float2 highest = -1e9;
-	[unroll] for (int y = 0; y < 6; y++)
+	// Land edges reach at most 3x3 texels; past t1 the 6x6 walk repeats its clamped edge.
+	[branch] if (all(t1 - t0 <= 2))
 	{
-		[unroll] for (int x = 0; x < 6; x++)
+		[unroll] for (int y = 0; y < 3; y++)
 		{
-			float2 depthCoverage = TerrainWindowWet.Load(int3(min(t0 + int2(x, y), t1), 0)).yz;
-			depthCoverage.x = max(depthCoverage.x, 0.0) * RimStyle.w + min(depthCoverage.x, 0.0);
-			lowest = min(lowest, depthCoverage);
-			highest = max(highest, depthCoverage);
+			[unroll] for (int x = 0; x < 3; x++)
+				LsPlainTap(min(t0 + int2(x, y), t1), lowest, highest);
+		}
+	}
+	else
+	{
+		[unroll] for (int y = 0; y < 6; y++)
+		{
+			[unroll] for (int x = 0; x < 6; x++)
+				LsPlainTap(min(t0 + int2(x, y), t1), lowest, highest);
 		}
 	}
 	float spread = (highest.x - lowest.x) + 8.0 * (saturate(highest.y) - saturate(lowest.y));
@@ -88,18 +103,32 @@ bool LsBoxPlain(float2 lo, float2 hi)
 }
 
 // No drawn water over the box's texels: the shore cap shapes the edge there.
+bool LsDryTap(int2 t0, int2 t1, int x, int y)
+{
+	int2 t = min(t0 + int2(x, y), t1);
+	return WaterRawWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) < -50000.0;
+}
+
 bool LsBoxDry(float2 lo, float2 hi)
 {
 	float maxT = (float)(TerrainDim - 1) - 0.001;
 	int2 t0 = (int2)clamp((GridToTerrainOffset + lo) / TerrainTexelSize, 0.0, maxT);
 	int2 t1 = min((int2)clamp((GridToTerrainOffset + hi) / TerrainTexelSize, 0.0, maxT) + 1, int2(TerrainDim - 1, TerrainDim - 1));
 	bool dry = all(t1 - t0 <= 3);
-	[unroll] for (int y = 0; y < 4; y++)
+	[branch] if (all(t1 - t0 <= 2))
 	{
-		[unroll] for (int x = 0; x < 4; x++)
+		[unroll] for (int y = 0; y < 3; y++)
 		{
-			int2 t = min(t0 + int2(x, y), t1);
-			dry = dry && WaterRawWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) < -50000.0;
+			[unroll] for (int x = 0; x < 3; x++)
+				dry = dry && LsDryTap(t0, t1, x, y);
+		}
+	}
+	else
+	{
+		[unroll] for (int y = 0; y < 4; y++)
+		{
+			[unroll] for (int x = 0; x < 4; x++)
+				dry = dry && LsDryTap(t0, t1, x, y);
 		}
 	}
 	return dry;
