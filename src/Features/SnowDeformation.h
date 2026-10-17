@@ -1947,6 +1947,26 @@ public:
 	ID3D11ComputeShader* GetSkinSssSyncCS();
 	/** @brief DepthSyncCS's SkinSssRestoreCS entry, compiled on first use. */
 	ID3D11ComputeShader* GetSkinSssRestoreCS();
+	/** @brief The blended depth ScreenSpaceShadows::PostPrepass marched, copied before RestoreSssDepth (sssFirstMarchFrame the frame). */
+	Texture2D* sssFirstMarchDepth = nullptr;
+	uint32_t sssFirstMarchFrame = UINT32_MAX;
+	/** @brief One texel per 8x8 depth texels, set where MarchSkinSss's depth differs from sssFirstMarchDepth (each with its neighbours). */
+	Texture2D* sssChangedTiles = nullptr;
+	ID3D11ComputeShader* skinSssSyncMarkCS = nullptr;
+	/** @brief DepthSyncCS's SkinSssSyncMarkCS entry (SKIN_SSS_MARK), compiled on first use. */
+	ID3D11ComputeShader* GetSkinSssSyncMarkCS();
+	/** @brief Screen-Space Shadows' raymarch with SSS_CHANGED_TILES, for its current scaled sample count (sssChangedRaymarchSamples); null without that feature. */
+	ID3D11ComputeShader* GetSssChangedRaymarchCS();
+	ID3D11ComputeShader* sssChangedRaymarchCS = nullptr;
+	uint32_t sssChangedRaymarchSamples = 0;
+	/** @brief A/B, runtime-only: the skins' march redoes every wavefront. */
+	bool sssChangedMarchOff = false;
+	/** @brief Last frame the skins' march skipped the wavefronts reading only unchanged depth. */
+	uint32_t sssChangedMarchFrame = UINT32_MAX;
+	/** @brief Copies the blended depth the first march read, on frames after one the skins marched in. */
+	void CopyFirstMarchDepth();
+	/** @brief (Re)creates sssChangedTiles for a depth of this size; true when it is usable. */
+	bool EnsureSssChangedTiles(UINT a_width, UINT a_height);
 	ID3D11PixelShader* shellFillPSClaim = nullptr;
 	ID3D11PixelShader* GetShellFillPSClaim();
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);

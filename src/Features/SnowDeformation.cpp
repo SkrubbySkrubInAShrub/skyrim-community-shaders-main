@@ -2178,6 +2178,12 @@ void SnowDeformation::ClearShaderCache()
 	if (skinSssRestoreCS)
 		skinSssRestoreCS->Release();
 	skinSssRestoreCS = nullptr;
+	if (skinSssSyncMarkCS)
+		skinSssSyncMarkCS->Release();
+	skinSssSyncMarkCS = nullptr;
+	if (sssChangedRaymarchCS)
+		sssChangedRaymarchCS->Release();
+	sssChangedRaymarchCS = nullptr;
 	if (preSnowCopyCS)
 		preSnowCopyCS->Release();
 	preSnowCopyCS = nullptr;

@@ -971,6 +971,36 @@ ID3D11ComputeShader* SnowDeformation::GetSkinSssRestoreCS()
 	return skinSssRestoreCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetSkinSssSyncMarkCS()
+{
+	if (!skinSssSyncMarkCS) {
+		logger::debug("Compiling DepthSyncCS SkinSssSyncMarkCS");
+		skinSssSyncMarkCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "SKIN_SSS_MARK", "" } }, "cs_5_0", "SkinSssSyncMarkCS"));
+	}
+	return skinSssSyncMarkCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetSssChangedRaymarchCS()
+{
+	auto& ss = globals::features::screenSpaceShadows;
+	if (!ss.loaded)
+		return nullptr;
+	const uint32_t samples = ss.GetScaledSampleCount();
+	if (sssChangedRaymarchCS && sssChangedRaymarchSamples != samples) {
+		sssChangedRaymarchCS->Release();
+		sssChangedRaymarchCS = nullptr;
+	}
+	if (!sssChangedRaymarchCS) {
+		logger::debug("Compiling RaymarchCS SSS_CHANGED_TILES SAMPLE_COUNT={}", samples);
+		const auto count = std::format("{}", samples);
+		auto defines = ss.GetRaymarchDefines(count);
+		defines.push_back({ "SSS_CHANGED_TILES", "" });
+		sssChangedRaymarchCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0"));
+		sssChangedRaymarchSamples = samples;
+	}
+	return sssChangedRaymarchCS;
+}
+
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
 {
 	// Grid placement re-derived from THIS frame's camera; shared by
@@ -1426,8 +1456,78 @@ void SnowDeformation::SyncSssDepth()
 
 void SnowDeformation::RestoreSssDepth()
 {
+	CopyFirstMarchDepth();
 	if (shellSssSyncFrame == globals::state->frameCount)
 		DispatchSssDepth(GetSssRestoreCS(), "SnowDeformation::Shadows - Snow Depth Sync");
+}
+
+void SnowDeformation::CopyFirstMarchDepth()
+{
+	auto& ss = globals::features::screenSpaceShadows;
+	auto& tb = globals::features::terrainBlending;
+	auto* blended = tb.blendedDepthTexture;
+	const uint32_t frame = globals::state->frameCount;
+	// Only while the skins marched last frame: the copy pays only where a second march follows.
+	if (!settings.EnableSnowDeformation || !globals::state->inWorld || skinSssMarchFrame + 1 != frame || ss.marchFrame != frame || !blended ||
+		!blended->resource || !blended->srv || ss.marchDepthSRV != blended->srv.get())
+		return;
+	if (sssFirstMarchDepth && (sssFirstMarchDepth->desc.Width != blended->desc.Width || sssFirstMarchDepth->desc.Height != blended->desc.Height ||
+								  sssFirstMarchDepth->desc.Format != blended->desc.Format)) {
+		delete sssFirstMarchDepth;
+		sssFirstMarchDepth = nullptr;
+	}
+	if (!sssFirstMarchDepth) {
+		D3D11_TEXTURE2D_DESC desc = blended->desc;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.CPUAccessFlags = 0;
+		desc.MiscFlags = 0;
+		sssFirstMarchDepth = new Texture2D(desc, "SnowDeformation::SssFirstMarchDepth");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = DXGI_FORMAT_R32_FLOAT,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		sssFirstMarchDepth->CreateSRV(srvDesc);
+		if (!sssFirstMarchDepth->srv)
+			return;
+	}
+	globals::d3d::context->CopyResource(sssFirstMarchDepth->resource.get(), blended->resource.get());
+	sssFirstMarchFrame = frame;
+}
+
+bool SnowDeformation::EnsureSssChangedTiles(UINT a_width, UINT a_height)
+{
+	const UINT w = (a_width + 7) / 8;
+	const UINT h = (a_height + 7) / 8;
+	if (sssChangedTiles && (sssChangedTiles->desc.Width != w || sssChangedTiles->desc.Height != h)) {
+		delete sssChangedTiles;
+		sssChangedTiles = nullptr;
+	}
+	if (!sssChangedTiles) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = w;
+		desc.Height = h;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R8_UINT;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		sssChangedTiles = new Texture2D(desc, "SnowDeformation::SssChangedTiles");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		sssChangedTiles->CreateSRV(srvDesc);
+		sssChangedTiles->CreateUAV(uavDesc);
+	}
+	return sssChangedTiles->srv && sssChangedTiles->uav;
 }
 
 void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_pass)
@@ -1511,28 +1611,44 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
 	depthSyncRectCB->Update(rectData);
 	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
-	ID3D11ShaderResourceView* srvs[3] = { a_skinDepthSRV, shellGroundMarksSRV, preSnowDepthSRV.get() };
-	ID3D11UnorderedAccessView* uavs[2] = { tb.blendedDepthTexture->uav.get(), skinSssSaved->uav.get() };
+	// The first march's depth, when it was copied this frame from the texture this march reads:
+	// the sync then marks where the two differ and the march redoes only those wavefronts. The
+	// marks cover this rect, so the shell's restore since the copy has to lie inside it.
+	const bool restoreInside = shellSssSyncFrame != globals::state->frameCount ||
+	                           (shellSssRect.left >= rect.left && shellSssRect.top >= rect.top && shellSssRect.right <= rect.right && shellSssRect.bottom <= rect.bottom);
+	const bool mark = !sssChangedMarchOff && restoreInside && sssFirstMarchFrame == globals::state->frameCount && sssFirstMarchDepth && sssFirstMarchDepth->srv &&
+	                  ss.marchFrame == globals::state->frameCount && ss.marchDepthSRV == tb.blendedDepthTexture->srv.get() &&
+	                  Util::GetCurrentSceneDepthSRV(false) == ss.marchDepthSRV && GetSkinSssSyncMarkCS() && GetSssChangedRaymarchCS() &&
+	                  EnsureSssChangedTiles(blendedDesc.Width, blendedDesc.Height);
+	ID3D11ShaderResourceView* srvs[4] = { a_skinDepthSRV, shellGroundMarksSRV, preSnowDepthSRV.get(), mark ? sssFirstMarchDepth->srv.get() : nullptr };
+	ID3D11UnorderedAccessView* uavs[3] = { tb.blendedDepthTexture->uav.get(), skinSssSaved->uav.get(), mark ? sssChangedTiles->uav.get() : nullptr };
+	const UINT srvCount = mark ? 4 : 3;
+	const UINT uavCount = mark ? 3 : 2;
 	const auto dispatch = [&](ID3D11ComputeShader* a_cs) {
 		context->CSSetConstantBuffers(2, 1, &rectCB);
-		context->CSSetShaderResources(0, 3, srvs);
-		context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+		context->CSSetShaderResources(0, srvCount, srvs);
+		context->CSSetUnorderedAccessViews(0, uavCount, uavs, nullptr);
 		context->CSSetShader(a_cs, nullptr, 0);
 		context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
-		ID3D11ShaderResourceView* nullSRVs[3] = {};
-		ID3D11UnorderedAccessView* nullUAVs[2] = {};
+		ID3D11ShaderResourceView* nullSRVs[4] = {};
+		ID3D11UnorderedAccessView* nullUAVs[3] = {};
 		ID3D11Buffer* nullCB = nullptr;
-		context->CSSetShaderResources(0, 3, nullSRVs);
-		context->CSSetUnorderedAccessViews(0, 2, nullUAVs, nullptr);
+		context->CSSetShaderResources(0, srvCount, nullSRVs);
+		context->CSSetUnorderedAccessViews(0, uavCount, nullUAVs, nullptr);
 		context->CSSetConstantBuffers(2, 1, &nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	};
 	// The skins' private depth is the bound DSV; its SRV is read here.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
-	dispatch(GetSkinSssSyncCS());
+	if (mark) {
+		const UINT zero[4] = {};
+		context->ClearUnorderedAccessViewUint(sssChangedTiles->uav.get(), zero);
+	}
+	dispatch(mark ? GetSkinSssSyncMarkCS() : GetSkinSssSyncCS());
 	// The march times its own row; profiler passes do not nest.
 	globals::profiler->EndPass();
-	ss.DrawShadows();
+	if (ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS : nullptr))
+		sssChangedMarchFrame = globals::state->frameCount;
 	globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Depth Sync");
 	dispatch(GetSkinSssRestoreCS());
 	// The UAV writes unbound the blended depth (PS t3) and the mask (PS t45).

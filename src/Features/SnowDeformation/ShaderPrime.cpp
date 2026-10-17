@@ -236,6 +236,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetSssRestoreCS(); },
 		[&] { GetSkinSssSyncCS(); },
 		[&] { GetSkinSssRestoreCS(); },
+		[&] { GetSkinSssSyncMarkCS(); },
 		[&] { GetHiZBuildCS(); },
 		[&] { GetSkinCullCS(); },
 		[&] { GetClusterCullCS(); },
@@ -259,6 +260,7 @@ void SnowDeformation::RunShaderPrime()
 	const std::function<void()> objectSteps[] = {
 		[&] { EnsureStaticsShaders(); },
 		[&] { PrimePatchDeferred(); },
+		[&] { GetSssChangedRaymarchCS(); },
 		[&] { GetPatchShadowVS(); },
 		[&] { EnsureSmoothNormalsCS(); },
 	};

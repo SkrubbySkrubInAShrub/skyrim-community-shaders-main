@@ -116,6 +116,48 @@ bool SkinSssPixel(uint2 p, out float a_depth)
 	BlendedDepth[p] = min(blended, depth);
 }
 
+#ifdef SKIN_SSS_MARK
+// SkinSssSyncCS that also marks the 8x8 tiles (and their neighbours) where the
+// second march's depth differs from the first march's (FirstMarchDepth, the
+// blended depth copied before SssRestoreCS): Screen-Space Shadows re-marches
+// only the wavefronts that read a marked tile.
+Texture2D<float> FirstMarchDepth : register(t3);
+RWTexture2D<uint> ChangedTiles : register(u2);
+groupshared uint gDepthChanged;
+
+[numthreads(8, 8, 1)] void SkinSssSyncMarkCS(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+	if (gi == 0)
+		gDepthChanged = 0;
+	GroupMemoryBarrierWithGroupSync();
+	uint2 dims;
+	MainDepth.GetDimensions(dims.x, dims.y);
+	const uint2 p = dtid.xy + SyncOrigin;
+	[branch] if (all(dtid.xy < SyncExtent) && all(p < dims))
+	{
+		float blended = BlendedDepth[p];
+		float depth;
+		[branch] if (SkinSssPixel(p, depth))
+		{
+			SavedDepth[p] = blended;
+			blended = min(blended, depth);
+			BlendedDepth[p] = blended;
+		}
+		if (blended != FirstMarchDepth[p])
+			InterlockedOr(gDepthChanged, 1u);
+	}
+	GroupMemoryBarrierWithGroupSync();
+	[branch] if (gDepthChanged != 0 && gi < 16)
+	{
+		uint2 tiles;
+		ChangedTiles.GetDimensions(tiles.x, tiles.y);
+		const int2 t = int2((gid.xy * 8 + SyncOrigin) >> 3) - 1 + int2(gi & 3, gi >> 2);
+		if (all(t >= 0) && all(t < int2(tiles)))
+			ChangedTiles[uint2(t)] = 1u;
+	}
+}
+#endif
+
 [numthreads(8, 8, 1)] void SkinSssRestoreCS(uint3 dtid : SV_DispatchThreadID)
 {
 	uint2 dims;
