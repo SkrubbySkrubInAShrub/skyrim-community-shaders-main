@@ -1931,13 +1931,16 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		detailMask = TrenchDetailMask(pixelCarve, BermFieldPair(gridLocal), TrenchDetailCoverage) * detailFade * (1.0 - objectMeet.x);
-		const float2 marks = SampleDetailMarks(gridLocal);
-		const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
-		detailWet = max(meltWet, marks.y);
-		detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
-		               (1.0 + kImpactReliefBoost * marks.y);
-		detailTaps = TrenchDetailTapsAt(worldXYPS);
-		detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
+		[branch] if (detailMask > 0.0)
+		{
+			const float2 marks = SampleDetailMarks(gridLocal);
+			const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
+			detailWet = max(meltWet, marks.y);
+			detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
+			               (1.0 + kImpactReliefBoost * marks.y);
+			detailTaps = TrenchDetailTapsAt(worldXYPS);
+			detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
+		}
 	}
 	[branch] if (detailRelief > 0.05)
 	{
