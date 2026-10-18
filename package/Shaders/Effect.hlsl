@@ -611,6 +611,72 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 }
 #	endif
 
+#	if defined(EFFECTS11)
+namespace EnbEffectClass
+{
+	static const uint None = 0;
+	static const uint Fire = 1;
+	static const uint LightSprite = 2;
+	static const uint Particle = 3;
+}
+
+uint GetEnbEffectClass()
+{
+	const bool grayscaleToColor = Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor;
+	const bool grayscaleToAlpha = Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha;
+
+	if (Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) {
+#		if defined(ADDBLEND)
+#			if defined(SOFT)
+		return grayscaleToColor && grayscaleToAlpha ? EnbEffectClass::Fire : EnbEffectClass::LightSprite;
+#			elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
+		return EnbEffectClass::Fire;
+#			else
+		return EnbEffectClass::LightSprite;
+#			endif
+#		else
+		return EnbEffectClass::None;
+#		endif
+	}
+
+#		if defined(MULTBLEND) || defined(MULTBLEND_DECAL) || defined(MEMBRANE) || defined(BLOOD) || defined(PROJECTED_UV)
+	return EnbEffectClass::None;
+#		else
+#			if defined(TEXTURE)
+	const bool plainTexture = !grayscaleToColor && !grayscaleToAlpha && !(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha);
+#			else
+	const bool plainTexture = false;
+#			endif
+
+#			if defined(LIGHTING)
+#				if defined(ADDBLEND) && !defined(SOFT)
+	return EnbEffectClass::None;
+#				else
+	return plainTexture ? EnbEffectClass::Particle : EnbEffectClass::None;
+#				endif
+#			else
+	if (grayscaleToColor && grayscaleToAlpha)
+		return EnbEffectClass::Fire;
+#				if defined(ADDBLEND)
+#					if defined(SOFT)
+	return plainTexture ? EnbEffectClass::LightSprite : EnbEffectClass::None;
+#					else
+	return plainTexture ? EnbEffectClass::Fire : EnbEffectClass::None;
+#					endif
+#				elif defined(SOFT)
+#					if !defined(IS_VOLUMETRIC_FOG)
+	if (grayscaleToAlpha && !grayscaleToColor)
+		return EnbEffectClass::Fire;
+#					endif
+	return plainTexture ? EnbEffectClass::Particle : EnbEffectClass::None;
+#				else
+	return EnbEffectClass::None;
+#				endif
+#			endif
+#		endif
+}
+#	endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
@@ -664,20 +730,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float shadowVariance = 1.0;
 
 #	if defined(EFFECTS11)
-	bool isFire = false;
-#		if defined(ADDBLEND)
-#			if defined(SOFT)
-	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor && Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
-		isFire = true;
-#			elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
-	isFire = true;
-#			endif
-#		endif
-
-#		if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
+	const uint enbEffectClass = GetEnbEffectClass();
+	if (SharedData::enbSettings.Enable && enbEffectClass == EnbEffectClass::Particle)
 		propertyColor *= SharedData::enbSettings.ParticleIntensity;
-#		endif
 #	endif
 
 #	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
@@ -830,6 +885,15 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
+#	if defined(EFFECTS11)
+	if (SharedData::enbSettings.Enable) {
+		if (enbEffectClass == EnbEffectClass::Fire)
+			baseColor.xyz = pow(max(baseColor.xyz, 0.0), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
+		else if (enbEffectClass == EnbEffectClass::LightSprite)
+			baseColor.xyz = pow(max(baseColor.xyz, 0.0), SharedData::enbSettings.LightSpriteCurve) * SharedData::enbSettings.LightSpriteIntensity;
+	}
+#	endif
+
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
 
 #	if !defined(MOTIONVECTORS_NORMALS)
@@ -884,14 +948,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
 #			else
 	float3 blendedColor = lightColor * (1 - fogFactor);
-#			endif
-#			if defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable) {
-		if (isFire)
-			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
-		else
-			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.LightSpriteCurve) * SharedData::enbSettings.LightSpriteIntensity;
-	}
 #			endif
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 #			if defined(EXP_HEIGHT_FOG)
