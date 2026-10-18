@@ -2891,6 +2891,36 @@ public:
 	ID3D11ComputeShader* heightScrollTopCS = nullptr;
 	/** @brief ScrollCS with SCROLL_RASTER_RG: layer 1's merge, its raster read from heightRaster (t6). */
 	ID3D11ComputeShader* heightScrollRasterCS = nullptr;
+	/** @brief Per raster level (0 = layer 1 with the skin depth, 1 = fine, 2 = far): what its targets were last drawn from (every draw's binds and record bytes, the inherited state, shaders and terrain window). A run whose key matches keeps the targets; the ghost merge still runs. */
+	std::vector<uint8_t> heightRasterKey[3];
+	/** @brief A/B, runtime-only: every level redraws every run. */
+	bool heightRasterCacheOff = false;
+	/** @brief Debug, runtime-only: a kept level (and with heightRasterVerifyMiss a redrawn one) is drawn again into scratch targets and compared bit for bit; totals read back without stalling. */
+	bool heightRasterVerify = false;
+	bool heightRasterVerifyMiss = false;
+	uint32_t heightRasterKeptBits = 0;
+	uint32_t heightRasterRuns = 0;
+	uint32_t heightRasterKept[3] = {};
+	uint32_t heightRasterVerified[3] = {};
+	/** @brief Mismatching texels per compared target: layer-1 raster, skin depth, fine, far. */
+	uint64_t heightRasterMismatch[4] = {};
+	Texture2D* heightRasterVerifyTex[4] = {};
+	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyCount;
+	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifyAllUAV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifySlotUAV[4];
+	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyStaging[3];
+	uint32_t heightRasterVerifyStagingLevels[3] = {};
+	uint32_t heightRasterVerifyRing = 0;
+	ID3D11ComputeShader* heightRasterCompareCS = nullptr;
+	struct HeightRasterSample
+	{
+		uint32_t target, x, y;
+		float keptX, keptY, freshX, freshY;
+	};
+	/** @brief The last readback's first differing texels; guarded by heightRasterDebugLock (DevBench reads it on its own thread). */
+	std::vector<HeightRasterSample> heightRasterSamples;
+	std::mutex heightRasterDebugLock;
+	bool EnsureHeightRasterVerify();
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	/** @brief WaterCoverCS: the raw water window minus its lone wet texels into waterVisibleTexture, and the near field into waterNearTexture. */
 	ID3D11ComputeShader* heightWaterCoverCS = nullptr;

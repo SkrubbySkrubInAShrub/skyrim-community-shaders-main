@@ -2400,6 +2400,12 @@ void SnowDeformation::ClearShaderCache()
 	if (heightScrollRasterCS)
 		heightScrollRasterCS->Release();
 	heightScrollRasterCS = nullptr;
+	if (heightRasterCompareCS)
+		heightRasterCompareCS->Release();
+	heightRasterCompareCS = nullptr;
+	// The kept rasters' keys name the shaders just released.
+	for (auto& key : heightRasterKey)
+		key.clear();
 	if (heightCombineCS)
 		heightCombineCS->Release();
 	heightCombineCS = nullptr;

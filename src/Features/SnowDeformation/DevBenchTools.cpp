@@ -149,6 +149,29 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 		evolveSnapshotOff = !a_args["evolveSnapshot"].get<bool>();
 	if (a_args.contains("forceDeformationUpdate") && a_args["forceDeformationUpdate"].is_boolean())
 		debugForceDeformationUpdate = a_args["forceDeformationUpdate"].get<bool>();
+	if (a_args.contains("heightRasterCache") && a_args["heightRasterCache"].is_boolean())
+		heightRasterCacheOff = !a_args["heightRasterCache"].get<bool>();
+	if (a_args.contains("heightRasterVerify") && a_args["heightRasterVerify"].is_boolean())
+		heightRasterVerify = a_args["heightRasterVerify"].get<bool>();
+	if (a_args.contains("heightRasterVerifyMiss") && a_args["heightRasterVerifyMiss"].is_boolean())
+		heightRasterVerifyMiss = a_args["heightRasterVerifyMiss"].get<bool>();
+	if (a_args.contains("heightRasterReset") && a_args["heightRasterReset"].is_boolean() && a_args["heightRasterReset"].get<bool>()) {
+		heightRasterRuns = 0;
+		for (int i = 0; i < 3; i++) {
+			heightRasterKept[i] = 0;
+			heightRasterVerified[i] = 0;
+		}
+		std::fill_n(heightRasterMismatch, 4, 0ull);
+		const std::scoped_lock debugLock(heightRasterDebugLock);
+		heightRasterSamples.clear();
+	}
+	json rasterSamples = json::array();
+	{
+		const std::scoped_lock debugLock(heightRasterDebugLock);
+		for (const auto& sample : heightRasterSamples)
+			rasterSamples.push_back({ { "target", sample.target }, { "x", sample.x }, { "y", sample.y }, { "keptX", sample.keptX }, { "keptY", sample.keptY },
+				{ "freshX", sample.freshX }, { "freshY", sample.freshY } });
+	}
 	static constexpr const char* kPresetNames[kQualityPresetCount] = { "low", "medium", "high" };
 	static constexpr const char* kGateNames[3] = { "snowy", "unknown", "bare" };
 	if (a_args.contains("qualityPreset") && a_args["qualityPreset"].is_string()) {
@@ -238,6 +261,12 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 		{ "skinSssMarchActive", skinSssMarchFrame != UINT32_MAX && globals::state->frameCountAtomic.load(std::memory_order_relaxed) - skinSssMarchFrame <= 1u },
 		{ "sssChangedMarch", !sssChangedMarchOff }, { "sssChangedMarchActive", sssChangedMarchFrame != UINT32_MAX && globals::state->frameCountAtomic.load(std::memory_order_relaxed) - sssChangedMarchFrame <= 1u },
 		{ "evolveSnapshot", !evolveSnapshotOff }, { "forceDeformationUpdate", debugForceDeformationUpdate },
+		{ "heightRaster", { { "cache", !heightRasterCacheOff }, { "verify", heightRasterVerify }, { "verifyMiss", heightRasterVerifyMiss },
+							  { "keptLastRun", heightRasterKeptBits }, { "runs", heightRasterRuns },
+							  { "kept", { heightRasterKept[0], heightRasterKept[1], heightRasterKept[2] } },
+							  { "verified", { heightRasterVerified[0], heightRasterVerified[1], heightRasterVerified[2] } },
+							  { "mismatchTexels", { heightRasterMismatch[0], heightRasterMismatch[1], heightRasterMismatch[2], heightRasterMismatch[3] } },
+							  { "samples", rasterSamples } } },
 		{ "hiZSize", { skinCullHiZ ? skinCullHiZ->desc.Width : 0u, skinCullHiZ ? skinCullHiZ->desc.Height : 0u } },
 		{ "gates", { { "shell", kGateNames[std::min(shellSnowVerdict, 2u)] }, { "shellBareFrames", shellGateBareFrames }, { "deform", kGateNames[std::min(deformSnowVerdict, 2u)] }, { "deformBareFrames", deformGateBareFrames }, { "groundSuspended", GroundShellsSuspended() }, { "captured", capturedStatics.size() }, { "capturesCulled", captureViewCulled }, { "captureCullBail", captureCullBail }, { "squareFloorZ", squareFloorValid ? json(squareFloorZ) : json(nullptr) }, { "heightMapValid", heightMapValid } } },
 		{ "gateCells", gateCells }, { "capturedList", capturedList }, { "viewGate", !shellViewGateOff }, { "captureViewCull", !captureViewCullOff },

@@ -15,6 +15,8 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+#include <bit>
+
 // The engine's projected-noise map, when reachable - the S4 shell's hard
 // dependency (its per-pixel footprint cut reconstructs vanilla's weight).
 // Checked identically at capture-raster and skin time so both passes pick
@@ -2004,6 +2006,81 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
 }
 
+// Per compared target: the count, then the first differing texels as texel,
+// kept .xy, fresh .xy (RasterCompareCS).
+static constexpr UINT kHeightVerifySamples = 8;
+static constexpr UINT kHeightVerifySlotWords = 4 + kHeightVerifySamples * 8;
+static_assert(kHeightVerifySlotWords * sizeof(uint32_t) % D3D11_RAW_UAV_SRV_BYTE_ALIGNMENT == 0);
+// Layer-1 raster, skin depth, fine, far.
+static constexpr UINT kHeightVerifySlots = 4;
+
+bool SnowDeformation::EnsureHeightRasterVerify()
+{
+	if (heightRasterVerifyStaging[2] && heightRasterCompareCS)
+		return true;
+	auto device = globals::d3d::device;
+	if (!heightRasterCompareCS)
+		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
+	if (!heightRasterCompareCS || !heightRaster || !heightSkinDepth || !heightTopRawFine || !heightTopRawFar)
+		return false;
+	Texture2D* const twins[kHeightVerifySlots] = { heightRaster, heightSkinDepth, heightTopRawFine, heightTopRawFar };
+	static constexpr const char* kNames[kHeightVerifySlots] = { "SnowDeformation::HeightVerifyRaster", "SnowDeformation::HeightVerifySkinDepth",
+		"SnowDeformation::HeightVerifyFine", "SnowDeformation::HeightVerifyFar" };
+	for (UINT i = 0; i < kHeightVerifySlots; i++) {
+		if (heightRasterVerifyTex[i])
+			continue;
+		D3D11_TEXTURE2D_DESC desc = twins[i]->desc;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = { .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } };
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = { .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } };
+		heightRasterVerifyTex[i] = new Texture2D(desc, kNames[i]);
+		heightRasterVerifyTex[i]->CreateSRV(srvDesc);
+		heightRasterVerifyTex[i]->CreateRTV(rtvDesc);
+	}
+	if (!heightRasterVerifyCount) {
+		// A raw view starts on a 16-byte boundary; each slot is a multiple of 16 bytes.
+		D3D11_BUFFER_DESC countDesc{};
+		countDesc.ByteWidth = kHeightVerifySlots * kHeightVerifySlotWords * sizeof(uint32_t);
+		countDesc.Usage = D3D11_USAGE_DEFAULT;
+		countDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		countDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		winrt::com_ptr<ID3D11Buffer> count;
+		winrt::com_ptr<ID3D11UnorderedAccessView> allUAV, slotUAVs[kHeightVerifySlots];
+		if (FAILED(device->CreateBuffer(&countDesc, nullptr, count.put())))
+			return false;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		uavDesc.Buffer.NumElements = kHeightVerifySlots * kHeightVerifySlotWords;
+		if (FAILED(device->CreateUnorderedAccessView(count.get(), &uavDesc, allUAV.put())))
+			return false;
+		uavDesc.Buffer.NumElements = kHeightVerifySlotWords;
+		for (UINT slot = 0; slot < kHeightVerifySlots; slot++) {
+			uavDesc.Buffer.FirstElement = slot * kHeightVerifySlotWords;
+			if (FAILED(device->CreateUnorderedAccessView(count.get(), &uavDesc, slotUAVs[slot].put())))
+				return false;
+		}
+		Util::SetResourceName(count.get(), "SnowDeformation::HeightVerifyCount");
+		heightRasterVerifyCount = count;
+		heightRasterVerifyAllUAV = allUAV;
+		for (UINT slot = 0; slot < kHeightVerifySlots; slot++)
+			heightRasterVerifySlotUAV[slot] = slotUAVs[slot];
+	}
+	for (int i = 0; i < 3; i++) {
+		if (heightRasterVerifyStaging[i])
+			continue;
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = kHeightVerifySlots * kHeightVerifySlotWords * sizeof(uint32_t);
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, heightRasterVerifyStaging[i].put())))
+			return false;
+		Util::SetResourceName(heightRasterVerifyStaging[i].get(), "SnowDeformation::HeightVerifyStaging");
+	}
+	return true;
+}
+
 bool SnowDeformation::EnsureStaticsRecordCB()
 {
 	if (staticsRecordChecked)
@@ -2256,22 +2333,18 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Every raster starts empty, including the peeled layers: the sentinel
 	// is what tells the merge which texels this frame's capture owns. The
 	// layer-1 merge writes every texel of heightTopRaw/heightBottomRaw.
+	// Levels kept from an earlier run (heightRasterKey) skip their clears.
 	const float topClear[4] = { kHeightMapEmptyTop, 0.0f, 0.0f, 0.0f };
 	const float rasterClear[4] = { kHeightMapEmptyTop, -kHeightMapEmptyBottom, 0.0f, 0.0f };
-	context->ClearRenderTargetView(heightRaster->rtv.get(), rasterClear);
 	if (heightTop2Raw[heightCurrent])
 		context->ClearRenderTargetView(heightTop2Raw[heightCurrent]->rtv.get(), topClear);
 
-	// Rasterize this frame's captures into the cleared maps.
 	// G = road top, so it clears to the no-road sentinel, not to zero: zero is
 	// a legal world Z and would read as a road at sea level.
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
-	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
 	// Only road records write the skin depth anything but its clear
 	// (SnowHeightCapture), so its pass draws the roads alone.
 	const bool roadRaster = capturedRoads > 0;
-	ID3D11RenderTargetView* rasterRTV = heightRaster->rtv.get();
-	context->OMSetRenderTargets(1, &rasterRTV, nullptr);
 	context->OMSetBlendState(heightRasterBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
@@ -2448,72 +2521,202 @@ void SnowDeformation::RenderObjectHeightMap()
 		BindStaticsRecord(a_index, false, false, captureParity);
 	};
 
-	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
-	SD_DrawBinds binds;
-	// Every capture into heightRaster, then the roads alone into the skin
-	// depth; each pass binds RT0 only, and MAX does not depend on draw order.
-	for (uint32_t rasterPass = 0; rasterPass < 2; rasterPass++) {
-		const bool skinPass = rasterPass == 1;
-		if (skinPass) {
-			if (!roadRaster)
-				break;
-			ID3D11RenderTargetView* skinRTV = heightSkinDepth->rtv.get();
-			context->OMSetRenderTargets(1, &skinRTV, nullptr);
-			context->PSSetShader(heightPSSkinDepth, nullptr, 0);
+	// Each raster level's draws in draw order. A level whose key (every draw's
+	// binds and record bytes, the inherited state and the level's extras)
+	// matches the one its targets were last drawn with keeps them: the same
+	// draws, records, state and clears give the same raster under MAX.
+	struct HeightRasterDraw
+	{
+		ID3D11InputLayout* layout;
+		ID3D11Buffer* vb;
+		ID3D11Buffer* ib;
+		UINT stride;
+		uint32_t indexCount;
+		uint32_t capture;
+		uint32_t record;
+	};
+	auto collectDraw = [&](uint32_t a_ci, uint32_t a_record, std::vector<HeightRasterDraw>& a_out) {
+		auto* geometry = capturedStatics[a_ci].geometry.get();
+		auto triShape = geometry ? geometry->AsTriShape() : nullptr;
+		if (!triShape)
+			return;
+		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+			return;
+		const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		if (indexCount == 0)
+			return;
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+			return;
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto layoutIt = staticsILCache.find(descKey);
+		if (layoutIt == staticsILCache.end() || !layoutIt->second)
+			return;  // layouts are created by the skin pass; reuse only
+		const UINT stride = uint32_t(descKey & 0xF) * 4;
+		if (stride == 0)
+			return;
+		a_out.push_back({ layoutIt->second.get(), reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
+			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), stride, indexCount, a_ci, a_record });
+	};
+	// The rasters inherit the pass's rasterizer state, topology and HS/DS/GS.
+	std::vector<uint8_t> inheritedState;
+	{
+		auto put = [&](const void* a_p, size_t a_n) {
+			const auto* bytes = static_cast<const uint8_t*>(a_p);
+			inheritedState.insert(inheritedState.end(), bytes, bytes + a_n);
+		};
+		winrt::com_ptr<ID3D11RasterizerState> rasterState;
+		context->RSGetState(rasterState.put());
+		D3D11_RASTERIZER_DESC rasterDesc{};
+		const uint32_t hasRasterState = rasterState ? 1u : 0u;
+		if (rasterState)
+			rasterState->GetDesc(&rasterDesc);
+		put(&hasRasterState, sizeof(hasRasterState));
+		put(&rasterDesc, sizeof(rasterDesc));
+		if (rasterState && rasterDesc.ScissorEnable) {
+			D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+			UINT scissorCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+			context->RSGetScissorRects(&scissorCount, scissors);
+			put(&scissorCount, sizeof(scissorCount));
+			put(scissors, sizeof(D3D11_RECT) * scissorCount);
 		}
-		for (uint32_t ci = 0; ci < captureCount; ci++) {
-			const auto& cap = capturedStatics[ci];
-			if (skinPass && !cap.road)
-				continue;
-			auto* geometry = cap.geometry.get();
-			if (!geometry)
-				continue;
-			if (cap.lodBatch)
-				continue;
-			if (outsideWindow(geometry, halfExtent))
-				continue;
-			auto triShape = geometry->AsTriShape();
-			if (!triShape)
-				continue;
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				continue;
-			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0)
-				continue;
-
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-				continue;
-
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto layoutIt = staticsILCache.find(descKey);
-			if (layoutIt == staticsILCache.end() || !layoutIt->second)
-				continue;  // layouts are created by the skin pass; reuse only
-			binds.Layout(context, layoutIt->second.get());
-
-			UINT stride = uint32_t(descKey & 0xF) * 4;
-			if (stride == 0)
-				continue;
-			binds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
-			binds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
-
-			binds.Smooth(context, captureSmoothSRVs[ci].get());
-			if (captureRecordsLive)
-				bindRasterRecord(ci);
-			else
-				staticsCB->Update(captureRecords[ci]);
-
-			context->DrawIndexed(indexCount, 0, 0);
-		}
+		D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+		context->IAGetPrimitiveTopology(&topology);
+		put(&topology, sizeof(topology));
+		winrt::com_ptr<ID3D11HullShader> hs;
+		winrt::com_ptr<ID3D11DomainShader> ds;
+		winrt::com_ptr<ID3D11GeometryShader> gs;
+		context->HSGetShader(hs.put(), nullptr, nullptr);
+		context->DSGetShader(ds.put(), nullptr, nullptr);
+		context->GSGetShader(gs.put(), nullptr, nullptr);
+		const uint64_t stages[3] = { reinterpret_cast<uint64_t>(hs.get()), reinterpret_cast<uint64_t>(ds.get()), reinterpret_cast<uint64_t>(gs.get()) };
+		put(stages, sizeof(stages));
 	}
+	auto rasterKey = [&](const std::vector<HeightRasterDraw>& a_draws, std::initializer_list<uint64_t> a_extras) {
+		std::vector<uint8_t> key;
+		key.reserve(inheritedState.size() + a_extras.size() * 8 + a_draws.size() * (56 + sizeof(StaticsCB)));
+		auto put = [&](const void* a_p, size_t a_n) {
+			const auto* bytes = static_cast<const uint8_t*>(a_p);
+			key.insert(key.end(), bytes, bytes + a_n);
+		};
+		put(inheritedState.data(), inheritedState.size());
+		for (uint64_t extra : a_extras)
+			put(&extra, sizeof(extra));
+		for (const auto& d : a_draws) {
+			const auto& cap = capturedStatics[d.capture];
+			const uint64_t drawBinds[6] = { reinterpret_cast<uint64_t>(d.layout), reinterpret_cast<uint64_t>(d.vb), reinterpret_cast<uint64_t>(d.ib),
+				reinterpret_cast<uint64_t>(captureSmoothSRVs[d.capture].get()), reinterpret_cast<uint64_t>(cap.geometry.get()), cap.road ? 1u : 0u };
+			const uint32_t counts[2] = { d.stride, d.indexCount };
+			put(drawBinds, sizeof(drawBinds));
+			put(counts, sizeof(counts));
+			put(&captureRecords[d.record], sizeof(StaticsCB));
+		}
+		return key;
+	};
+	auto levelKept = [&](uint32_t a_level, std::vector<uint8_t> a_key) {
+		const bool kept = !heightRasterCacheOff && a_key == heightRasterKey[a_level];
+		if (kept) {
+			heightRasterKeptBits |= 1u << a_level;
+			heightRasterKept[a_level]++;
+		} else {
+			heightRasterKey[a_level] = std::move(a_key);
+		}
+		return kept;
+	};
+	auto drawList = [&](const std::vector<HeightRasterDraw>& a_draws, bool a_roadsOnly) {
+		SD_DrawBinds binds;
+		for (const auto& d : a_draws) {
+			if (a_roadsOnly && !capturedStatics[d.capture].road)
+				continue;
+			binds.Layout(context, d.layout);
+			binds.Vertex(context, d.vb, d.stride);
+			binds.Index(context, d.ib, DXGI_FORMAT_R16_UINT);
+			binds.Smooth(context, captureSmoothSRVs[d.capture].get());
+			if (captureRecordsLive)
+				bindRasterRecord(d.record);
+			else
+				staticsCB->Update(captureRecords[d.record]);
+			context->DrawIndexed(d.indexCount, 0, 0);
+		}
+	};
+	// A kept level binds nothing; the PS still takes the record it would have.
+	auto noteLastRecord = [&](const std::vector<HeightRasterDraw>& a_draws) {
+		if (!a_draws.empty() && captureRecordsLive) {
+			lastRasterRecord = a_draws.back().record;
+			lastRasterParity = captureParity;
+		}
+	};
+	heightRasterKeptBits = 0;
+	heightRasterRuns++;
+	const bool verifyOn = heightRasterVerify && EnsureHeightRasterVerify();
+	uint32_t verifiedLevels = 0;
+	if (verifyOn) {
+		const UINT zero4[4] = {};
+		context->ClearUnorderedAccessViewUint(heightRasterVerifyAllUAV.get(), zero4);
+	}
+	ID3D11Buffer* compareCB = heightProcessCB->CB();
+	auto compareKept = [&](Texture2D* a_kept, Texture2D* a_fresh, uint32_t a_slot) {
+		ID3D11ShaderResourceView* compareSRVs[2] = { a_kept->srv.get(), a_fresh->srv.get() };
+		ID3D11ShaderResourceView* nullCompareSRVs[2] = {};
+		ID3D11UnorderedAccessView* countUAV = heightRasterVerifySlotUAV[a_slot].get();
+		ID3D11Buffer* nullCompareCB = nullptr;
+		context->CSSetConstantBuffers(0, 1, &compareCB);
+		context->CSSetShaderResources(8, 2, compareSRVs);
+		context->CSSetUnorderedAccessViews(4, 1, &countUAV, nullptr);
+		context->CSSetShader(heightRasterCompareCS, nullptr, 0);
+		context->Dispatch((a_kept->desc.Width + 7) / 8, (a_kept->desc.Height + 7) / 8, 1);
+		context->CSSetShaderResources(8, 2, nullCompareSRVs);
+		context->CSSetUnorderedAccessViews(4, 1, nullCsUAVs, nullptr);
+		context->CSSetConstantBuffers(0, 1, &nullCompareCB);
+		context->CSSetShader(nullptr, nullptr, 0);
+	};
+
+	// Layer 1: every capture into heightRaster, then the roads alone into the
+	// skin depth; each pass binds RT0 only, and MAX does not depend on order.
+	std::vector<HeightRasterDraw> layer1Draws;
+	for (uint32_t ci = 0; ci < captureCount; ci++) {
+		const auto& cap = capturedStatics[ci];
+		if (!cap.geometry || cap.lodBatch || outsideWindow(cap.geometry.get(), halfExtent))
+			continue;
+		collectDraw(ci, ci, layer1Draws);
+	}
+	auto drawLayer1 = [&](ID3D11RenderTargetView* a_raster, ID3D11RenderTargetView* a_skin) {
+		context->ClearRenderTargetView(a_raster, rasterClear);
+		context->ClearRenderTargetView(a_skin, skinDepthClear);
+		context->OMSetRenderTargets(1, &a_raster, nullptr);
+		context->PSSetShader(heightPS, nullptr, 0);
+		drawList(layer1Draws, false);
+		if (roadRaster) {
+			context->OMSetRenderTargets(1, &a_skin, nullptr);
+			context->PSSetShader(heightPSSkinDepth, nullptr, 0);
+			drawList(layer1Draws, true);
+		}
+	};
+	const bool layer1Kept = levelKept(0, rasterKey(layer1Draws, { reinterpret_cast<uint64_t>(heightVS), reinterpret_cast<uint64_t>(heightPS),
+															 reinterpret_cast<uint64_t>(heightPSSkinDepth), reinterpret_cast<uint64_t>(captureTerrainSRV), shellTerrainVersion,
+															 std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.x), std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.y),
+															 std::bit_cast<uint32_t>(processData.TerrainTexelSize), processData.TerrainDim, roadRaster ? 1u : 0u }));
+	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
+	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+	if (!layer1Kept)
+		drawLayer1(heightRaster->rtv.get(), heightSkinDepth->rtv.get());
+	else
+		noteLastRecord(layer1Draws);
+	const bool verifyLayer1 = verifyOn && (layer1Kept || heightRasterVerifyMiss);
+	if (verifyLayer1)
+		drawLayer1(heightRasterVerifyTex[0]->rtv.get(), heightRasterVerifyTex[1]->rtv.get());
 	globals::profiler->EndPass();
 
-	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 	context->PSSetShader(heightPS, nullptr, 0);
+	if (verifyLayer1) {
+		compareKept(heightRaster, heightRasterVerifyTex[0], 0);
+		compareKept(heightSkinDepth, heightRasterVerifyTex[1], 1);
+		verifiedLevels |= 1u;
+	}
 
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
@@ -2521,60 +2724,46 @@ void SnowDeformation::RenderObjectHeightMap()
 	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
 
+	// The top-only levels: 1 near clipmap, 2 far roads. RT0 alone, no ghost.
+	// Verify draws a kept level into its scratch twin (a_level + 1).
+	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly : heightPS;
+	auto drawTopOnly = [&](uint32_t a_level, Texture2D* a_target, const std::vector<HeightRasterDraw>& a_draws) {
+		const bool kept = levelKept(a_level, rasterKey(a_draws, { reinterpret_cast<uint64_t>(heightVS), reinterpret_cast<uint64_t>(topOnlyPS) }));
+		const bool verify = verifyOn && (kept || heightRasterVerifyMiss);
+		context->PSSetShader(topOnlyPS, nullptr, 0);
+		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+		auto draw = [&](Texture2D* a_into) {
+			context->ClearRenderTargetView(a_into->rtv.get(), topClear);
+			ID3D11RenderTargetView* levelRTVs[1] = { a_into->rtv.get() };
+			context->OMSetRenderTargets(1, levelRTVs, nullptr);
+			drawList(a_draws, false);
+		};
+		if (!kept)
+			draw(a_target);
+		else
+			noteLastRecord(a_draws);
+		if (verify)
+			draw(heightRasterVerifyTex[a_level + 1]);
+		globals::profiler->EndPass();
+		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+		if (verify) {
+			compareKept(a_target, heightRasterVerifyTex[a_level + 1], a_level + 1);
+			verifiedLevels |= 1u << a_level;
+		}
+	};
 	// Near clipmap level 0: the same captures against a quarter-width window,
 	// so the layer-1 top lands at one world unit per texel. No ghost and no
 	// bottoms - readers fall back to the coarse level outside the window, and
-	// the shelter mask is the coarse level's business. RT1/RT2 stay unbound,
-	// so the top-only PS writes the same RT0.
-	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly : heightPS;
+	// the shelter mask is the coarse level's business.
 	if (fineLevel) {
-		context->ClearRenderTargetView(heightTopRawFine->rtv.get(), topClear);
-		ID3D11RenderTargetView* fineRTVs[1] = { heightTopRawFine->rtv.get() };
-		context->OMSetRenderTargets(1, fineRTVs, nullptr);
-		context->PSSetShader(topOnlyPS, nullptr, 0);
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
-		SD_DrawBinds fineBinds;
+		std::vector<HeightRasterDraw> fineDraws;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
-			auto* geometry = cap.geometry.get();
-			if (!geometry)
+			if (!cap.geometry || cap.lodBatch || outsideWindow(cap.geometry.get(), FineRasterHalfExtent()))
 				continue;
-			if (cap.lodBatch)
-				continue;
-			if (outsideWindow(geometry, FineRasterHalfExtent()))
-				continue;
-			auto triShape = geometry->AsTriShape();
-			if (!triShape)
-				continue;
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				continue;
-			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0)
-				continue;
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-				continue;
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto layoutIt = staticsILCache.find(descKey);
-			if (layoutIt == staticsILCache.end() || !layoutIt->second)
-				continue;
-			UINT stride = uint32_t(descKey & 0xF) * 4;
-			if (stride == 0)
-				continue;
-			fineBinds.Layout(context, layoutIt->second.get());
-			fineBinds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
-			fineBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
-			fineBinds.Smooth(context, captureSmoothSRVs[ci].get());
-			if (captureRecordsLive)
-				bindRasterRecord(captureCount * 2 + ci);
-			else
-				staticsCB->Update(captureRecords[size_t(captureCount) * 2 + ci]);
-			context->DrawIndexed(indexCount, 0, 0);
+			collectDraw(ci, captureCount * 2 + ci, fineDraws);
 		}
-		globals::profiler->EndPass();
-		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+		drawTopOnly(1, heightTopRawFine, fineDraws);
 	} else {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 	}
@@ -2582,55 +2771,58 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Far road level: the road captures alone, MAX-rasterized over the
 	// loaded-cell square into one top map. Rebuilt from this frame's list -
 	// roads never move, and an off-screen road needs no patch - so no ghost
-	// and no scroll. RT0 alone, like the fine level.
+	// and no scroll.
 	if (farLevel) {
-		context->ClearRenderTargetView(heightTopRawFar->rtv.get(), topClear);
-		ID3D11RenderTargetView* farRTVs[1] = { heightTopRawFar->rtv.get() };
-		context->OMSetRenderTargets(1, farRTVs, nullptr);
-		context->PSSetShader(topOnlyPS, nullptr, 0);
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
-		SD_DrawBinds farBinds;
-		for (uint32_t ci = 0; ci < captureCount; ci++) {
-			if (farRecordIndex[ci] == ~0u)
-				continue;
-			const auto& cap = capturedStatics[ci];
-			auto* geometry = cap.geometry.get();
-			if (!geometry)
-				continue;
-			auto triShape = geometry->AsTriShape();
-			if (!triShape)
-				continue;
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				continue;
-			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0)
-				continue;
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-				continue;
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto layoutIt = staticsILCache.find(descKey);
-			if (layoutIt == staticsILCache.end() || !layoutIt->second)
-				continue;
-			UINT stride = uint32_t(descKey & 0xF) * 4;
-			if (stride == 0)
-				continue;
-			farBinds.Layout(context, layoutIt->second.get());
-			farBinds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
-			farBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
-			farBinds.Smooth(context, captureSmoothSRVs[ci].get());
-			if (captureRecordsLive)
-				bindRasterRecord(farRecordBase + farRecordIndex[ci]);
-			else
-				staticsCB->Update(captureRecords[size_t(farRecordBase) + farRecordIndex[ci]]);
-			context->DrawIndexed(indexCount, 0, 0);
-		}
-		globals::profiler->EndPass();
-		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+		std::vector<HeightRasterDraw> farDraws;
+		for (uint32_t ci = 0; ci < captureCount; ci++)
+			if (farRecordIndex[ci] != ~0u && capturedStatics[ci].geometry)
+				collectDraw(ci, farRecordBase + farRecordIndex[ci], farDraws);
+		drawTopOnly(2, heightTopRawFar, farDraws);
 	} else {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
+	}
+	if (verifyOn && verifiedLevels) {
+		auto& ring = heightRasterVerifyRing;
+		if (!heightRasterVerifyStagingLevels[ring % 3]) {
+			context->CopyResource(heightRasterVerifyStaging[ring % 3].get(), heightRasterVerifyCount.get());
+			heightRasterVerifyStagingLevels[ring % 3] = verifiedLevels;
+			ring++;
+		}
+	}
+	if (heightRasterVerifyStaging[0]) {
+		// Copies in flight, DO_NOT_WAIT: a busy one is read on a later run.
+		for (uint32_t slot = 0; slot < 3; slot++) {
+			const uint32_t levels = heightRasterVerifyStagingLevels[slot];
+			if (!levels)
+				continue;
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (FAILED(context->Map(heightRasterVerifyStaging[slot].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
+				continue;
+			const auto* words = static_cast<const uint32_t*>(mapped.pData);
+			for (uint32_t level = 0; level < 3; level++)
+				if (levels & (1u << level))
+					heightRasterVerified[level]++;
+			bool sampled = false;
+			for (uint32_t target = 0; target < 4; target++) {
+				const uint32_t level = target < 2 ? 0 : target - 1;
+				const uint32_t count = words[target * kHeightVerifySlotWords];
+				if (!(levels & (1u << level)) || !count)
+					continue;
+				heightRasterMismatch[target] += count;
+				const std::scoped_lock debugLock(heightRasterDebugLock);
+				if (!sampled) {
+					heightRasterSamples.clear();
+					sampled = true;
+				}
+				for (uint32_t i = 0; i < std::min(count, kHeightVerifySamples); i++) {
+					const uint32_t* s = words + target * kHeightVerifySlotWords + 4 + i * 8;
+					heightRasterSamples.push_back({ target, s[0] & 0xFFFF, s[0] >> 16, std::bit_cast<float>(s[1]), std::bit_cast<float>(s[2]),
+						std::bit_cast<float>(s[3]), std::bit_cast<float>(s[4]) });
+				}
+			}
+			context->Unmap(heightRasterVerifyStaging[slot].get(), 0);
+			heightRasterVerifyStagingLevels[slot] = 0;
+		}
 	}
 	if (lastRasterRecord != ~0u) {
 		// Unbind first: the runtime filters a rebind of the same buffer at a new offset.
