@@ -1970,6 +1970,21 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx("Snow Events")) {
+			ImGui::Checkbox("Count Snow Events", &debugSnowEventCensus);
+			if (auto _ttSnowEvents = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Collects what a particle feature would read (MD plans/SSPP-SNOW-PLAN.md, stage E0): feet kicking snow and prints crumbling, landings, knockdowns, dodges, bodies dropping, and shouts, blasts and lightning that move snow. Off, nothing is collected.");
+			for (const auto& line : SnowEventCensusLines())
+				WrapTextF("%s", line.c_str());
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Snow Coat Aging")) {
+			for (const auto& line : CoatAgingLines())
+				WrapTextF("%s", line.c_str());
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
 			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
 				// Diagnostics use plain text by existing convention (no i18n).

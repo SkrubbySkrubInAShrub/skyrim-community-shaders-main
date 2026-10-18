@@ -3378,6 +3378,9 @@ public:
 	uint32_t doorRefreshCounter = 0;
 	/** @brief Cadence-gathered exclusions (doors, campfires, heat sources, dropped burning torches). */
 	std::vector<std::pair<float4, float4>> staticExclusions;
+	/** @brief The heat among them as position + melt-bowl radius, kept apart from the GPU list: flames a station owns stay here though its clearing replaces their bowl, and the overflow cut does not apply. Read by the coat aging inputs. */
+	std::vector<float4> heatSources;
+	std::vector<float4> exclusionPendingHeat;
 	/** @brief The walk in progress: its accumulators, the loaded-cell slot it resumes at (0 = idle), and the origin it was started from. Swapped into staticExclusions whole when the last slot is done. */
 	std::vector<std::pair<float4, float4>> exclusionPending;
 	std::vector<size_t> exclusionPendingFlames;
@@ -4372,6 +4375,133 @@ protected:
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	/** @brief Reads it back, refusing a version this build does not know. */
 	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
+
+	// ---- Snow events: moments the snow is thrown, for a particle feature ----
+	// MD plans/SSPP-SNOW-PLAN.md stage E0. Collected only while a consumer asks
+	// (RequestSnowEvents) or the debug census counts; render thread throughout.
+	// Implemented in SnowDeformation/SnowEvents.cpp.
+
+	enum class SnowEventKind : uint8_t
+	{
+		KickUp,
+		Crumble,
+		Landing,
+		Knockdown,
+		Rush,
+		BodyDrop,
+		Shout,
+		Blast,
+		Lightning,
+		Count
+	};
+	struct SnowEvent
+	{
+		RE::NiPoint3 position;
+		/** @brief Units per second: the foot or the body; a shout's heading times its front speed; zero for blasts. */
+		RE::NiPoint3 velocity;
+		/** @brief 0-1. Kick-up: share of the layer the foot moved through. Crumble: wall height over the layer, times looseness. Landing, knockdown, rush: that impact energy term. Body drop: peak fall over free fall from the body's own bound radius. Shout, blast, lightning: the mark's strength. */
+		float strength = 0.0f;
+		/** @brief Kick-up: snow face pushed, units squared. Crumble: wall height. Landing: fall speed. Rush: ground speed. Body drop: peak fall speed. Shout: reach. Blast, lightning: radius. */
+		float amount = 0.0f;
+		/** @brief Untrampled snow surface and layer depth at the position. */
+		float surfaceZ = 0.0f;
+		float snowDepth = 0.0f;
+		/** @brief Snow Climate stickiness at the player. */
+		float stickiness = 0.0f;
+		/** @brief The actor, 0 for spell marks. */
+		uint32_t formID = 0;
+		uint32_t seed = 0;
+		SnowEventKind kind = SnowEventKind::KickUp;
+	};
+	static constexpr uint32_t kMaxSnowEventsPerFrame = 256;
+	/** @brief A consumer calls this every frame it wants events; collection stops two frames after the last call. */
+	void RequestSnowEvents();
+	bool SnowEventsWanted() const;
+	/** @brief Last frame's events, valid until the next TickSnowEvents. */
+	const std::vector<SnowEvent>& PublishedSnowEvents() const { return snowEventsPublished; }
+	void PushSnowEvent(const SnowEvent& a_event);
+	/** @brief Per actor from GatherStamps, after the floating and incorporeal gates. */
+	void CollectActorSnowEvents(RE::Actor* a_actor, bool a_dead, const RE::NiPoint3& a_position, float a_groundZ,
+		const StampBones* a_bones, const RE::NiAVObject* a_root);
+	/** @brief After GatherStamps: spell marks opened this frame, then publish and count. */
+	void TickSnowEvents();
+	std::vector<std::string> SnowEventCensusLines() const;
+	/** @brief Debug only, not saved: the census is the consumer while no particle feature reads the events. */
+	bool debugSnowEventCensus = false;
+	std::vector<SnowEvent> snowEventsBuilding;
+	std::vector<SnowEvent> snowEventsPublished;
+	uint32_t snowEventRequestFrame = UINT32_MAX;
+	uint32_t snowEventsDroppedFrame = 0;
+	struct SnowEventFoot
+	{
+		RE::NiPoint3 prev;
+		double time = 0.0;
+		float travel = 0.0f;
+		float pushed = 0.0f;
+		float wallHeight = 0.0f;
+		uint32_t frame = 0;
+		bool inSnow = false;
+	};
+	std::unordered_map<uint64_t, SnowEventFoot> snowEventFeet;
+	struct SnowEventBody
+	{
+		double trackTime = -1.0;
+		double time = 0.0;
+		RE::NiPoint3 prev;
+		float centreZ = 0.0f;
+		float peakFall = 0.0f;
+		float descent = 0.0f;
+		uint32_t frame = 0;
+		bool valid = false;
+		bool knocked = false;
+		bool rushing = false;
+	};
+	std::unordered_map<uint32_t, SnowEventBody> snowEventBodies;
+	/** @brief Spell marks already turned into events, by position, element and kind; value = last frame seen. */
+	std::unordered_map<uint64_t, uint32_t> snowEventMarksSeen;
+	struct SnowEventCensus
+	{
+		std::array<uint32_t, size_t(SnowEventKind::Count)> window{};
+		std::array<uint32_t, size_t(SnowEventKind::Count)> perSecond{};
+		std::array<uint64_t, size_t(SnowEventKind::Count)> total{};
+		std::array<SnowEvent, size_t(SnowEventKind::Count)> last{};
+		std::array<float, size_t(SnowEventKind::Count)> lastDistance{};
+		uint32_t droppedWindow = 0;
+		uint32_t droppedPerSecond = 0;
+		uint32_t logLines = 0;
+		double windowStart = -1.0;
+	};
+	SnowEventCensus snowEventCensus;
+
+	// ---- Snow coat aging inputs (MD plans/SSPP-SNOW-PLAN.md stage A0) ----
+	// The snow terms a coating update pass would read for one character, as a
+	// readout. Rates are 0-1 shares of a full rate; stage A1 sets their speed
+	// against the coat's own units. Implemented in SnowDeformation/Accumulation.cpp.
+
+	struct CoatAging
+	{
+		/** @brief The melt-bowl profile of the governing heat source at the character, 0-1. */
+		float heat = 0.0f;
+		float heatDistance = -1.0f;
+		float heatRadius = 0.0f;
+		bool interior = false;
+		/** @brief Interiors only: snow-projected objects were drawn here last frame, so the place is cold. */
+		bool interiorSnow = false;
+		float rain = 0.0f;
+		float snowfall = 0.0f;
+		float temperature = 0.0f;
+		/** @brief The ageing clock's warm term, from the temperature. */
+		float warm = 0.0f;
+		float wetness = 0.0f;
+		float stickiness = 0.0f;
+		/** @brief Smoothed ground speed from the impact track, units per second. */
+		float speed = 0.0f;
+		float melt = 0.0f;
+		float shake = 0.0f;
+		float growth = 0.0f;
+	};
+	CoatAging ComputeCoatAging(RE::Actor* a_actor) const;
+	std::vector<std::string> CoatAgingLines() const;
 
 	// ---- Load trace: what a save load spends its time on ----
 	// Begins at the first co-save read, aggregates instrumented phases and
@@ -5576,6 +5706,11 @@ protected:
 		double time = 0.0;
 		float speed = 0.0f;
 		float fall = 0.0f;
+		/** @brief The last update's energy terms, and the fall speed a landing came in at: read by the snow events and the coat aging inputs. */
+		float speedEnergy = 0.0f;
+		float landingEnergy = 0.0f;
+		float knockEnergy = 0.0f;
+		float landingSpeed = 0.0f;
 		bool seen = false;
 		bool wasInAir = false;
 	};

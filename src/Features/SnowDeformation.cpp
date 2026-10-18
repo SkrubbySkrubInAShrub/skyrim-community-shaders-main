@@ -1249,6 +1249,7 @@ void SnowDeformation::PrepassSimulation()
 	// Timed inside as two sequential passes (actors+bones, then the reference
 	// scan for props), so the bone walk's share can be read on its own.
 	GatherStamps(perFrameData);
+	TickSnowEvents();
 	spanClock.Lap(CpuCensus::kSpanGather);
 	// Moving props inside the contact window carve by their render mesh:
 	// drawn now, read by the stamp pass below. Dim 0 tells the pass there

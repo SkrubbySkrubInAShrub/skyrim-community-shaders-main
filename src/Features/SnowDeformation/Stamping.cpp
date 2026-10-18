@@ -865,15 +865,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					track.wasInAir = inAir;
 				}
 				float landing = 0.0f;
+				track.landingSpeed = 0.0f;
 				if (track.wasInAir && !inAir) {
 					landing = std::clamp((track.fall - kImpactFallFloor) / kImpactFallSpan, 0.0f, 1.0f);
+					track.landingSpeed = track.fall;
 					track.fall = 0.0f;
 				}
 				const auto knock = actor->AsActorState()->GetKnockState();
 				const bool down = knock == RE::KNOCK_STATE_ENUM::kDown || knock == RE::KNOCK_STATE_ENUM::kGetUp;
+				track.speedEnergy = inAir ? 0.0f : std::clamp((track.speed - kImpactSpeedFloor) / kImpactSpeedSpan, 0.0f, kImpactSpeedMax);
+				track.landingEnergy = inAir ? 0.0f : landing;
+				track.knockEnergy = !inAir && down ? kImpactKnockedDown : 0.0f;
 				if (!inAir)
-					impact = std::max({ std::clamp((track.speed - kImpactSpeedFloor) / kImpactSpeedSpan, 0.0f, kImpactSpeedMax), landing,
-						down ? kImpactKnockedDown : 0.0f });
+					impact = std::max({ track.speedEnergy, track.landingEnergy, track.knockEnergy });
 				track.prev = position;
 				track.time = passClockSeconds;
 				track.seen = true;
@@ -1186,6 +1190,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				skeletonProbe.verdict = "gated: alpha settling (newly seen actor)";
 			return;
 		}
+
+		if (SnowEventsWanted())
+			CollectActorSnowEvents(actor.get(), isDead, position, groundZ, bones, root);
 
 		// The impact as a stamp that carves nothing: its energy rides the mode
 		// over the actor's path this frame, out past its feet.

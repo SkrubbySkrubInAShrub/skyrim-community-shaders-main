@@ -6033,6 +6033,7 @@ void SnowDeformation::StartExclusionGather()
 	exclusionPending.clear();
 	exclusionPendingFlames.clear();
 	exclusionPendingGuards.clear();
+	exclusionPendingHeat.clear();
 	exclusionPendingTrample = 0;
 	exclusionPendingSealed = 0;
 	exclusionGatherOrigin = player->GetPosition();
@@ -6116,6 +6117,7 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		if (HasActiveLight(a_ref->Get3D())) {
 			auto pos = a_ref->GetPosition();
 			exclusionPending.push_back({ { pos.x, pos.y, pos.z, kTorchClearRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
+			exclusionPendingHeat.push_back({ pos.x, pos.y, pos.z, kTorchClearRadius });
 		}
 		return RE::BSContainer::ForEachResult::kContinue;
 	}
@@ -6169,6 +6171,7 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		if (genericFlame)
 			exclusionPendingFlames.push_back(exclusionPending.size());
 		exclusionPending.push_back({ { pos.x, pos.y, pos.z, heatRadius }, { 0.0f, 0.0f, 1.0f, 1.0f } });
+		exclusionPendingHeat.push_back({ pos.x, pos.y, pos.z, heatRadius });
 		return RE::BSContainer::ForEachResult::kContinue;
 	}
 
@@ -6265,6 +6268,7 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		float radius = pos.z - landZ < kGroundFireBand ? kUnknownHeatClearRadius :
 	                                                     std::clamp(halfExtent * 1.5f, kHeatClearRadiusMin, kHeatClearRadiusMax);
 		exclusionPending.push_back({ { pos.x, pos.y, pos.z, radius * a_ref->GetScale() }, { 0.0f, 0.0f, 1.0f, 1.0f } });
+		exclusionPendingHeat.push_back({ pos.x, pos.y, pos.z, radius * a_ref->GetScale() });
 	}
 	return RE::BSContainer::ForEachResult::kContinue;
 }
@@ -6304,4 +6308,6 @@ void SnowDeformation::FinishExclusionGather()
 	exclusionPending.clear();
 	exclusionPendingFlames.clear();
 	exclusionPendingGuards.clear();
+	heatSources.swap(exclusionPendingHeat);
+	exclusionPendingHeat.clear();
 }
