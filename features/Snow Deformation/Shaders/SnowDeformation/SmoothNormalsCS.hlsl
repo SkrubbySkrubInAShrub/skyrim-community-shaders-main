@@ -45,6 +45,9 @@ cbuffer SmoothCB : register(b0)
 	uint IndexCount;
 	uint ClusterOffset;  // first cluster slot for this mesh
 	uint ClusterStrideIndices;  // indices per cluster (64 triangles, or more on a mesh too big to cut that fine)
+
+	uint OutBase;  // this mesh's first element in OutNormals (a pooled buffer)
+	uint3 SmoothPad;
 }
 
 static const uint kMaxProbe = 16;
@@ -144,7 +147,7 @@ groupshared float3 gsNormalSum[64];
 	uint total = 0;
 	float3 normalSum = float3(0.0, 0.0, 0.0);
 	for (uint v = gtid.x; v < VertexCount; v += 64) {
-		float4 smoothN = OutNormals[v];
+		float4 smoothN = OutNormals[OutBase + v];
 		[branch] if (smoothN.w > 0.5)
 		{
 			total++;
@@ -178,7 +181,7 @@ groupshared float3 gsNormalSum[64];
 		float sumLen = length(sumNormal);
 		float alignRatio = sumTotal > 0 ? sumLen / float(sumTotal) : 0.0;
 		float meanNz = sumLen > 1e-3 ? sumNormal.z / sumLen : 0.0;
-		OutNormals[VertexCount] = float4(flatFraction, meanNz, alignRatio, 1.0);
+		OutNormals[OutBase + VertexCount] = float4(flatFraction, meanNz, alignRatio, 1.0);
 	}
 }
 #endif
@@ -206,7 +209,7 @@ groupshared float3 gsNormalSum[64];
 		if (len > 0.001)
 			result = float4(n / len, 1.0 + LoadColorAlpha(v));
 	}
-	OutNormals[v] = result;
+	OutNormals[OutBase + v] = result;
 }
 #endif
 

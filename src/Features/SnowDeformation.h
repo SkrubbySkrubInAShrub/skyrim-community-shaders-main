@@ -9,6 +9,7 @@
 #include <d3d11_1.h>
 #include <deque>
 #include <future>
+#include <list>
 #include <intrin.h>
 
 // Statics.cpp: runtime shader compile returning the bytecode (input layouts
@@ -2500,13 +2501,26 @@ public:
 		uint32_t IndexCount;
 		uint32_t ClusterOffset;
 		uint32_t ClusterStrideIndices;
+		/** @brief First element of the mesh's range in its smoothedNormalsChunks buffer. */
+		uint32_t OutBase;
+		uint32_t SmoothPad[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
+
+	/** @brief First-fit allocator over [0, capacity): free ranges keyed by offset, merged on release. Implemented in SnowDeformation/Statics.cpp. */
+	struct RangeAllocator
+	{
+		std::map<uint32_t, uint32_t> free;
+		void Reset(uint32_t a_capacity);
+		/** @brief UINT32_MAX when no free range holds a_count at a_align. */
+		uint32_t Allocate(uint32_t a_count, uint32_t a_align = 1);
+		void Release(uint32_t a_offset, uint32_t a_count);
+	};
 
 	/** @brief Per unique geometry (keyed by vertex buffer pointer): position-averaged normals, built once by SmoothNormalsCS. Split-normal flat meshes (planks, roofs, pole caps) inflate along these so their snow drapes as a sealed pillow instead of a hovering parallel sheet. */
 	struct SmoothedNormalsEntry
 	{
-		winrt::com_ptr<ID3D11Buffer> buffer;
+		/** @brief The mesh's range in its smoothedNormalsChunks buffer (FirstElement = chunkOffset, vertexCount + 1 elements). */
 		winrt::com_ptr<ID3D11ShaderResourceView> srv;
 		bool ready = false;
 		/** @brief Slot in meshBounds holding this mesh's local box (MESHBOUNDS pass), UINT32_MAX when none. */
@@ -2516,11 +2530,47 @@ public:
 		uint32_t clusterCount = 0;
 		uint32_t indexPoolOffset = 0;
 		uint32_t indexCount = 0;
+		uint32_t chunk = UINT32_MAX;
+		uint32_t chunkOffset = 0;
+		uint32_t chunkCount = 0;
+		/** @brief The geometry the key's vertex buffer belonged to at the build; a recycled pointer that disagrees rebuilds. */
+		uint64_t descKey = 0;
+		void* gameIB = nullptr;
+		uint32_t vertexCount = 0;
+		uint32_t triangleCount = 0;
+		uint32_t lastUsedFrame = 0;
+		std::list<void*>::iterator lru;
 	};
+	/** @brief Least recently used entries past this many are evicted at the next build; entries used this frame never are. */
+	static constexpr uint32_t kSmoothedNormalsCap = 1024;
+	/** @brief Elements (float4) per smoothed-normal pool buffer; a larger mesh gets a buffer of its own size. */
+	static constexpr uint32_t kSmoothedNormalsChunkElements = 1u << 20;
+	struct SmoothedNormalsChunk
+	{
+		winrt::com_ptr<ID3D11Buffer> buffer;
+		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+		RangeAllocator ranges;
+		uint32_t capacity = 0;
+	};
+	std::vector<SmoothedNormalsChunk> smoothedNormalsChunks;
+	std::list<void*> smoothedNormalsLru;
+	/** @brief Build scratch reused by every build: the copied vertex stream (one raw SRV) and the hash table (one raw UAV per power-of-two table size). */
+	winrt::com_ptr<ID3D11Buffer> smoothSource;
+	winrt::com_ptr<ID3D11ShaderResourceView> smoothSourceSRV;
+	uint32_t smoothSourceBytes = 0;
+	winrt::com_ptr<ID3D11Buffer> smoothTable;
+	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> smoothTableUAVs;
+	uint32_t smoothTableSlots = 0;
+	bool smoothAllocatorsLive = false;
+	bool EnsureSmoothBuildScratch(uint32_t a_sourceBytes, uint32_t a_tableSlots);
+	bool AllocateSmoothedNormals(uint32_t a_count, uint32_t& a_chunk, uint32_t& a_offset);
+	void EvictSmoothedNormals(std::unordered_map<void*, SmoothedNormalsEntry>::iterator a_it);
+	/** @brief Drops every entry and frees every pool range; the buffers stay unless a_release. */
+	void ResetSmoothedNormals(bool a_release);
 	/** @brief Local boxes of the unique meshes, two float4 per slot (min, max), built beside the smoothed normals; the skin cull projects them. */
 	static constexpr uint32_t kMeshBoundsSlots = 1024;
 	Buffer* meshBounds = nullptr;
-	uint32_t meshBoundsNext = 0;
+	RangeAllocator meshBoundsFree;
 	ID3D11ComputeShader* smoothBoundsCS = nullptr;
 
 	/** @brief Cluster cull: a precombined cell chunk's box contains the camera, so the whole-skin test can never reject it. Each unique mesh is cut into at most one thread group's worth of clusters (64 triangles each until that would exceed the cap, proportionally larger after), each with its own local box; ClusterCullCS tests them against the same depth pyramid and compacts the survivors' indices, in order, into clusterScratchIB, which both skin loops draw through the same indirect arguments. Implemented in SnowDeformation/Statics.cpp. */
@@ -2539,8 +2589,8 @@ public:
 	Buffer* clusterBounds = nullptr;
 	Buffer* clusterIndexPool = nullptr;
 	Buffer* clusterScratchIB = nullptr;
-	uint32_t clusterNext = 0;
-	uint32_t clusterIndexPoolNext = 0;
+	RangeAllocator clusterFree;
+	RangeAllocator clusterIndexPoolFree;
 
 	/** @brief CPU census (PERF-RESEARCH §11.1): QPC ticks and counts accumulated across one frame, rolled into cpuShown by RollCpuCensus at the next Prepass. Static so the free helpers in Stamping.cpp can reach it. The capture hook has no profiler row of its own: it runs inside the game's lighting draws. */
 	struct CpuCensus

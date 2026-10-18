@@ -2418,9 +2418,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// The largest depth the skin-depth raster can hold this frame: only road
 	// records write one (SnowHeightCapture), MAX-blended from a zero clear.
 	float maxSeedDepth = 0.0f;
-	// Owning references: the cache clears itself past 1,024 entries, and a
-	// raw pointer taken before that clear is a freed view by the time the
-	// loops bind it (Josef's driver-thread CTD, 2026-09-06).
+	// Owning references for the loops below.
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> captureSmoothSRVs(captureCount);
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
@@ -3315,6 +3313,196 @@ bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
 	return clusterBounds->srv && clusterBounds->uav && clusterIndexPool->srv && clusterScratchIB->uav;
 }
 
+void SnowDeformation::RangeAllocator::Reset(uint32_t a_capacity)
+{
+	free.clear();
+	if (a_capacity)
+		free.emplace(0u, a_capacity);
+}
+
+uint32_t SnowDeformation::RangeAllocator::Allocate(uint32_t a_count, uint32_t a_align)
+{
+	if (a_count == 0 || a_align == 0)
+		return UINT32_MAX;
+	for (auto it = free.begin(); it != free.end(); ++it) {
+		const uint64_t rangeStart = it->first;
+		const uint64_t rangeEnd = rangeStart + it->second;
+		const uint64_t start = (rangeStart + a_align - 1) / a_align * a_align;
+		if (start + a_count > rangeEnd)
+			continue;
+		free.erase(it);
+		if (start > rangeStart)
+			free.emplace(uint32_t(rangeStart), uint32_t(start - rangeStart));
+		if (rangeEnd > start + a_count)
+			free.emplace(uint32_t(start + a_count), uint32_t(rangeEnd - start - a_count));
+		return uint32_t(start);
+	}
+	return UINT32_MAX;
+}
+
+void SnowDeformation::RangeAllocator::Release(uint32_t a_offset, uint32_t a_count)
+{
+	if (a_count == 0)
+		return;
+	uint32_t start = a_offset;
+	uint32_t end = a_offset + a_count;
+	auto next = free.lower_bound(start);
+	if (next != free.begin()) {
+		auto prev = std::prev(next);
+		if (prev->first + prev->second == start) {
+			start = prev->first;
+			free.erase(prev);
+		}
+	}
+	if (next != free.end() && next->first == end) {
+		end += next->second;
+		free.erase(next);
+	}
+	free.emplace(start, end - start);
+}
+
+void SnowDeformation::ResetSmoothedNormals(bool a_release)
+{
+	smoothedNormalsCache.clear();
+	smoothedNormalsLru.clear();
+	meshBoundsFree.Reset(kMeshBoundsSlots);
+	clusterFree.Reset(kClusterSlots);
+	clusterIndexPoolFree.Reset(kClusterIndexPoolIndices);
+	if (a_release) {
+		smoothedNormalsChunks.clear();
+		smoothSource = nullptr;
+		smoothSourceSRV = nullptr;
+		smoothSourceBytes = 0;
+		smoothTable = nullptr;
+		smoothTableUAVs.clear();
+		smoothTableSlots = 0;
+	} else {
+		for (auto& chunk : smoothedNormalsChunks)
+			chunk.ranges.Reset(chunk.capacity);
+	}
+	smoothAllocatorsLive = true;
+}
+
+void SnowDeformation::EvictSmoothedNormals(std::unordered_map<void*, SmoothedNormalsEntry>::iterator a_it)
+{
+	auto& e = a_it->second;
+	if (e.chunk < smoothedNormalsChunks.size())
+		smoothedNormalsChunks[e.chunk].ranges.Release(e.chunkOffset, e.chunkCount);
+	if (e.boundsSlot != UINT32_MAX)
+		meshBoundsFree.Release(e.boundsSlot, 1);
+	if (e.clusterCount != 0) {
+		clusterFree.Release(e.clusterOffset, e.clusterCount);
+		clusterIndexPoolFree.Release(e.indexPoolOffset, e.indexCount);
+	}
+	smoothedNormalsLru.erase(e.lru);
+	smoothedNormalsCache.erase(a_it);
+}
+
+bool SnowDeformation::EnsureSmoothBuildScratch(uint32_t a_sourceBytes, uint32_t a_tableSlots)
+{
+	auto device = globals::d3d::device;
+	if (a_sourceBytes > smoothSourceBytes) {
+		if (a_sourceBytes > (1u << 30))
+			return false;
+		uint32_t bytes = std::max(smoothSourceBytes, 1u << 20);
+		while (bytes < a_sourceBytes)
+			bytes <<= 1;
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = bytes;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		winrt::com_ptr<ID3D11Buffer> buffer;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, buffer.put())))
+			return false;
+		Util::SetResourceName(buffer.get(), "SnowDeformation::SmoothSource");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+		srvDesc.BufferEx.NumElements = bytes / 4;
+		srvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		if (FAILED(device->CreateShaderResourceView(buffer.get(), &srvDesc, srv.put())))
+			return false;
+		Util::SetResourceName(srv.get(), "SnowDeformation::SmoothSource SRV");
+		smoothSource = buffer;
+		smoothSourceSRV = srv;
+		smoothSourceBytes = bytes;
+	}
+	if (a_tableSlots > smoothTableSlots) {
+		if (a_tableSlots > (1u << 24))
+			return false;
+		uint32_t slots = std::max(smoothTableSlots, 1u << 15);
+		while (slots < a_tableSlots)
+			slots <<= 1;
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = slots * 16;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		winrt::com_ptr<ID3D11Buffer> buffer;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, buffer.put())))
+			return false;
+		Util::SetResourceName(buffer.get(), "SnowDeformation::SmoothTable");
+		smoothTable = buffer;
+		smoothTableUAVs.clear();
+		smoothTableSlots = slots;
+	}
+	// Every table view starts at 0: TableMask addresses the first a_tableSlots slots.
+	const uint32_t level = uint32_t(std::countr_zero(a_tableSlots));
+	if (smoothTableUAVs.size() <= level)
+		smoothTableUAVs.resize(level + 1);
+	if (!smoothTableUAVs[level]) {
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = a_tableSlots * 4;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		if (FAILED(device->CreateUnorderedAccessView(smoothTable.get(), &uavDesc, smoothTableUAVs[level].put())))
+			return false;
+		Util::SetResourceName(smoothTableUAVs[level].get(), "SnowDeformation::SmoothTable UAV");
+	}
+	return true;
+}
+
+bool SnowDeformation::AllocateSmoothedNormals(uint32_t a_count, uint32_t& a_chunk, uint32_t& a_offset)
+{
+	for (uint32_t i = 0; i < smoothedNormalsChunks.size(); i++) {
+		const uint32_t offset = smoothedNormalsChunks[i].ranges.Allocate(a_count);
+		if (offset != UINT32_MAX) {
+			a_chunk = i;
+			a_offset = offset;
+			return true;
+		}
+	}
+	const uint32_t capacity = std::max(kSmoothedNormalsChunkElements, a_count);
+	D3D11_BUFFER_DESC desc{};
+	desc.ByteWidth = capacity * 16;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+	desc.StructureByteStride = 16;
+	SmoothedNormalsChunk chunk;
+	auto device = globals::d3d::device;
+	if (FAILED(device->CreateBuffer(&desc, nullptr, chunk.buffer.put())))
+		return false;
+	Util::SetResourceName(chunk.buffer.get(), "SnowDeformation::SmoothedNormals");
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+	uavDesc.Buffer.NumElements = capacity;
+	if (FAILED(device->CreateUnorderedAccessView(chunk.buffer.get(), &uavDesc, chunk.uav.put())))
+		return false;
+	Util::SetResourceName(chunk.uav.get(), "SnowDeformation::SmoothedNormals UAV");
+	chunk.capacity = capacity;
+	chunk.ranges.Reset(capacity);
+	a_offset = chunk.ranges.Allocate(a_count);
+	a_chunk = uint32_t(smoothedNormalsChunks.size());
+	smoothedNormalsChunks.push_back(std::move(chunk));
+	logger::info("[SNOW DEFORMATION] Smoothed-normal pool: buffer {} created ({} elements) at {} entries", a_chunk, capacity, smoothedNormalsCache.size());
+	return a_offset != UINT32_MAX;
+}
+
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
 {
 	LoadTraceScope _loadTrace(this, "Statics: EnsureSmoothedNormals");
@@ -3324,34 +3512,58 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
 	if (!rendererData || !rendererData->vertexBuffer)
 		return nullptr;
+	if (!smoothAllocatorsLive)
+		ResetSmoothedNormals(false);
 
-	// Pointer reuse after cell unloads could serve stale normals to a new
-	// mesh; the cap flushes the cache before that becomes likely.
-	if (smoothedNormalsCache.size() > 1024) {
-		smoothedNormalsCache.clear();
-		meshBoundsNext = 0;
-		clusterNext = 0;
-		clusterIndexPoolNext = 0;
+	auto desc = rendererData->vertexDesc;
+	uint64_t descKey;
+	memcpy(&descKey, &desc, sizeof(descKey));
+	const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
+	const uint32_t triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
+	const uint32_t frame = globals::state->frameCount;
+
+	// A vertex buffer pointer the game recycled for another mesh fails the
+	// check and rebuilds; within one frame the entry stands, as its range is
+	// bound by this frame's draws.
+	if (auto found = smoothedNormalsCache.find(rendererData->vertexBuffer); found != smoothedNormalsCache.end()) {
+		auto& hit = found->second;
+		if (hit.lastUsedFrame == frame ||
+			(hit.descKey == descKey && hit.gameIB == rendererData->indexBuffer && hit.vertexCount == vertexCount && hit.triangleCount == triangleCount)) {
+			hit.lastUsedFrame = frame;
+			smoothedNormalsLru.splice(smoothedNormalsLru.end(), smoothedNormalsLru, hit.lru);
+			return hit.ready ? hit.srv.get() : nullptr;
+		}
+		EvictSmoothedNormals(found);
 	}
+	// Past the cap the least recently used entries make room; nothing used
+	// this frame is evicted.
+	while (smoothedNormalsCache.size() >= kSmoothedNormalsCap && !smoothedNormalsLru.empty()) {
+		auto oldest = smoothedNormalsCache.find(smoothedNormalsLru.front());
+		if (oldest == smoothedNormalsCache.end()) {
+			smoothedNormalsLru.pop_front();
+			continue;
+		}
+		if (oldest->second.lastUsedFrame == frame)
+			break;
+		EvictSmoothedNormals(oldest);
+	}
+	auto& entry = smoothedNormalsCache[rendererData->vertexBuffer];
+	entry.descKey = descKey;
+	entry.gameIB = rendererData->indexBuffer;
+	entry.vertexCount = vertexCount;
+	entry.triangleCount = triangleCount;
+	entry.lastUsedFrame = frame;
+	entry.lru = smoothedNormalsLru.insert(smoothedNormalsLru.end(), rendererData->vertexBuffer);
 
-	auto [it, inserted] = smoothedNormalsCache.try_emplace(rendererData->vertexBuffer);
-	auto& entry = it->second;
-	if (!inserted)
-		return entry.ready ? entry.srv.get() : nullptr;
-
-	// First sight of this geometry: build now (a buffer copy + two small
-	// dispatches, once per unique mesh). Failures leave the permanent null
-	// entry; no per-frame retries; the VS falls back to raw normals.
+	// First sight of this geometry: build now into the pooled buffers (a
+	// buffer copy and a few small dispatches, once per unique mesh). Failures
+	// leave the null entry until it is evicted; the VS falls back to raw normals.
 	if (!EnsureSmoothNormalsCS() || !smoothCB)
 		return nullptr;
 
-	auto desc = rendererData->vertexDesc;
 	if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
 		return nullptr;
-	uint64_t descKey;
-	memcpy(&descKey, &desc, sizeof(descKey));
 	const uint32_t stride = uint32_t(descKey & 0xF) * 4;
-	const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
 	if (stride == 0 || vertexCount == 0)
 		return nullptr;
 
@@ -3390,80 +3602,42 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
 	auto* gameIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
 
-	// SRV-capable copy of the game's vertex buffer (raw view); the game's
-	// own buffers carry no shader-resource bind flag.
+	// The game's own buffers carry no shader-resource bind flag: the vertex
+	// stream is copied into the shared source buffer (raw view). The shader
+	// reads vertexCount * stride bytes of it, all inside the copy.
 	D3D11_BUFFER_DESC srcDesc{};
 	gameVB->GetDesc(&srcDesc);
-	D3D11_BUFFER_DESC copyDesc{};
-	copyDesc.ByteWidth = srcDesc.ByteWidth;
-	copyDesc.Usage = D3D11_USAGE_DEFAULT;
-	copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-	copyDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-	winrt::com_ptr<ID3D11Buffer> vbCopy;
-	if (FAILED(device->CreateBuffer(&copyDesc, nullptr, vbCopy.put())))
+	if (uint64_t(vertexCount) * stride > srcDesc.ByteWidth)
 		return nullptr;
-	context->CopyResource(vbCopy.get(), gameVB);
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC rawSrvDesc{};
-	rawSrvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-	rawSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-	rawSrvDesc.BufferEx.NumElements = copyDesc.ByteWidth / 4;
-	rawSrvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-	winrt::com_ptr<ID3D11ShaderResourceView> vbCopySRV;
-	if (FAILED(device->CreateShaderResourceView(vbCopy.get(), &rawSrvDesc, vbCopySRV.put())))
-		return nullptr;
-
-	// Hash table (transient) and the persistent output buffer.
 	uint32_t tableSlots = 64;
 	while (tableSlots < vertexCount * 2)
 		tableSlots <<= 1;
-	D3D11_BUFFER_DESC tableDesc{};
-	tableDesc.ByteWidth = tableSlots * 16;
-	tableDesc.Usage = D3D11_USAGE_DEFAULT;
-	tableDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-	tableDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-	winrt::com_ptr<ID3D11Buffer> tableBuffer;
-	if (FAILED(device->CreateBuffer(&tableDesc, nullptr, tableBuffer.put())))
+	if (!EnsureSmoothBuildScratch(srcDesc.ByteWidth, tableSlots))
 		return nullptr;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC rawUavDesc{};
-	rawUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-	rawUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-	rawUavDesc.Buffer.NumElements = tableSlots * 4;
-	rawUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-	winrt::com_ptr<ID3D11UnorderedAccessView> tableUAV;
-	if (FAILED(device->CreateUnorderedAccessView(tableBuffer.get(), &rawUavDesc, tableUAV.put())))
-		return nullptr;
-
 	// One extra element past the vertices: the mesh's flatness stats, read by
 	// the VS to pick the flat or rounded snow behavior without any CPU
 	// readback.
-	D3D11_BUFFER_DESC outDesc{};
-	outDesc.ByteWidth = (vertexCount + 1) * 16;
-	outDesc.Usage = D3D11_USAGE_DEFAULT;
-	outDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	outDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-	outDesc.StructureByteStride = 16;
-	winrt::com_ptr<ID3D11Buffer> outBuffer;
-	if (FAILED(device->CreateBuffer(&outDesc, nullptr, outBuffer.put())))
+	uint32_t chunk = UINT32_MAX;
+	uint32_t chunkOffset = 0;
+	if (!AllocateSmoothedNormals(vertexCount + 1, chunk, chunkOffset))
 		return nullptr;
-	Util::SetResourceName(outBuffer.get(), "SnowDeformation::SmoothedNormals");
+	entry.chunk = chunk;
+	entry.chunkOffset = chunkOffset;
+	entry.chunkCount = vertexCount + 1;
 	D3D11_SHADER_RESOURCE_VIEW_DESC outSrvDesc{};
 	outSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
 	outSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+	outSrvDesc.Buffer.FirstElement = chunkOffset;
 	outSrvDesc.Buffer.NumElements = vertexCount + 1;
 	winrt::com_ptr<ID3D11ShaderResourceView> outSRV;
-	if (FAILED(device->CreateShaderResourceView(outBuffer.get(), &outSrvDesc, outSRV.put())))
-		return nullptr;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC outUavDesc{};
-	outUavDesc.Format = DXGI_FORMAT_UNKNOWN;
-	outUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-	outUavDesc.Buffer.NumElements = vertexCount + 1;
-	winrt::com_ptr<ID3D11UnorderedAccessView> outUAV;
-	if (FAILED(device->CreateUnorderedAccessView(outBuffer.get(), &outUavDesc, outUAV.put())))
+	if (FAILED(device->CreateShaderResourceView(smoothedNormalsChunks[chunk].buffer.get(), &outSrvDesc, outSRV.put())))
 		return nullptr;
 
+	const D3D11_BOX sourceBox{ 0, 0, 0, srcDesc.ByteWidth, 1, 1 };
+	context->CopySubresourceRegion(smoothSource.get(), 0, 0, 0, 0, gameVB, 0, &sourceBox);
+	ID3D11UnorderedAccessView* tableUAV = smoothTableUAVs[std::countr_zero(tableSlots)].get();
 	const UINT clearZero[4] = { 0, 0, 0, 0 };
-	context->ClearUnorderedAccessViewUint(tableUAV.get(), clearZero);
+	context->ClearUnorderedAccessViewUint(tableUAV, clearZero);
 
 	SmoothCB cb{};
 	cb.VertexCount = vertexCount;
@@ -3473,28 +3647,38 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	cb.TableMask = tableSlots - 1;
 	cb.ColorOffsetBytes = colorOffset;
 	cb.HasColor = hasColor ? 1u : 0u;
-	const bool wantBounds = smoothBoundsCS && meshBounds && meshBounds->uav && meshBoundsNext < kMeshBoundsSlots;
-	cb.BoundsSlot = wantBounds ? meshBoundsNext : 0u;
+	cb.OutBase = chunkOffset;
+	const uint32_t boundsSlot = (smoothBoundsCS && meshBounds && meshBounds->uav) ? meshBoundsFree.Allocate(1) : UINT32_MAX;
+	const bool wantBounds = boundsSlot != UINT32_MAX;
+	cb.BoundsSlot = wantBounds ? boundsSlot : 0u;
 
 	// Clusters: at most one thread group's worth per mesh, so the cull pass is
 	// a single chunk (a barrier under a buffer-driven trip count is
 	// non-uniform flow control and will not compile). 64 triangles each until
 	// that would exceed the cap, proportionally larger after.
-	const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-	const uint32_t poolOffset = (clusterIndexPoolNext + 7u) & ~7u;
+	const uint32_t indexCount = triangleCount * 3;
 	uint32_t clusterTris = kClusterTrisBase;
 	uint32_t clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
 	if (clusterCount > kClusterGroup) {
 		clusterTris = (indexCount / 3 + kClusterGroup - 1) / kClusterGroup;
 		clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
 	}
-	const bool wantClusters = smoothClusterCS && gameIB && indexCount >= 3 &&
-	                          clusterNext + clusterCount <= kClusterSlots &&
-	                          poolOffset + indexCount <= kClusterIndexPoolIndices &&
-	                          EnsureClusterResources(clusterScratchNeeded);
+	bool wantClusters = smoothClusterCS && gameIB && indexCount >= 3 && EnsureClusterResources(clusterScratchNeeded);
+	uint32_t clusterSlot = UINT32_MAX;
+	uint32_t poolOffset = UINT32_MAX;
+	if (wantClusters) {
+		clusterSlot = clusterFree.Allocate(clusterCount);
+		if (clusterSlot != UINT32_MAX)
+			poolOffset = clusterIndexPoolFree.Allocate(indexCount, 8);
+		if (poolOffset == UINT32_MAX) {
+			if (clusterSlot != UINT32_MAX)
+				clusterFree.Release(clusterSlot, clusterCount);
+			wantClusters = false;
+		}
+	}
 	cb.IndexPoolOffset = wantClusters ? poolOffset : 0u;
 	cb.IndexCount = wantClusters ? indexCount : 0u;
-	cb.ClusterOffset = wantClusters ? clusterNext : 0u;
+	cb.ClusterOffset = wantClusters ? clusterSlot : 0u;
 	cb.ClusterStrideIndices = clusterTris * 3;
 	smoothCB->Update(cb);
 
@@ -3511,9 +3695,9 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	// Compute-only state: does not disturb the surrounding draw pipeline.
 	ID3D11Buffer* cscb = smoothCB->CB();
 	context->CSSetConstantBuffers(0, 1, &cscb);
-	ID3D11ShaderResourceView* csSRV = vbCopySRV.get();
+	ID3D11ShaderResourceView* csSRV = smoothSourceSRV.get();
 	context->CSSetShaderResources(0, 1, &csSRV);
-	ID3D11UnorderedAccessView* csUAVs[2] = { tableUAV.get(), outUAV.get() };
+	ID3D11UnorderedAccessView* csUAVs[2] = { tableUAV, smoothedNormalsChunks[chunk].uav.get() };
 	context->CSSetUnorderedAccessViews(0, 2, csUAVs, nullptr);
 	const uint32_t groups = (vertexCount + 63) / 64;
 	context->CSSetShader(smoothAccumulateCS, nullptr, 0);
@@ -3530,7 +3714,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 		context->Dispatch(1, 1, 1);
 		ID3D11UnorderedAccessView* nullBoundsUAV = nullptr;
 		context->CSSetUnorderedAccessViews(2, 1, &nullBoundsUAV, nullptr);
-		entry.boundsSlot = meshBoundsNext++;
+		entry.boundsSlot = boundsSlot;
 	}
 	if (wantClusters) {
 		ID3D11ShaderResourceView* poolSRV = clusterIndexPool->srv.get();
@@ -3543,12 +3727,10 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 		context->CSSetShaderResources(1, 1, &nullPoolSRV);
 		ID3D11UnorderedAccessView* nullClusterUAV = nullptr;
 		context->CSSetUnorderedAccessViews(3, 1, &nullClusterUAV, nullptr);
-		entry.clusterOffset = clusterNext;
+		entry.clusterOffset = clusterSlot;
 		entry.clusterCount = clusterCount;
 		entry.indexPoolOffset = poolOffset;
 		entry.indexCount = indexCount;
-		clusterNext += clusterCount;
-		clusterIndexPoolNext = poolOffset + indexCount;
 	}
 
 	ID3D11ShaderResourceView* nullCsSRV = nullptr;
@@ -3557,7 +3739,6 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	entry.buffer = outBuffer;
 	entry.srv = outSRV;
 	entry.ready = true;
 	return entry.srv.get();

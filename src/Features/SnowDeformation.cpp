@@ -2369,11 +2369,10 @@ void SnowDeformation::ClearShaderCache()
 	clusterIndexPool = nullptr;
 	delete clusterScratchIB;
 	clusterScratchIB = nullptr;
-	clusterNext = 0;
-	clusterIndexPoolNext = 0;
 	delete meshBounds;
 	meshBounds = nullptr;
-	meshBoundsNext = 0;
+	// The entries' bound and cluster slots lived in the buffers just freed.
+	ResetSmoothedNormals(true);
 	if (smoothResolveCS)
 		smoothResolveCS->Release();
 	smoothResolveCS = nullptr;
