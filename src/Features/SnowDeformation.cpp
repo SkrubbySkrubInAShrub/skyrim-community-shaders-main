@@ -620,6 +620,12 @@ void SnowDeformation::SetupResources()
 		}
 		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&minmaxBlendDesc, heightMaxBlendState.put()));
 		Util::SetResourceName(heightMaxBlendState.get(), "SnowDeformation::HeightMinMaxBlend");
+
+		D3D11_BLEND_DESC rasterBlendDesc{};
+		rasterBlendDesc.RenderTarget[0] = minmaxBlendDesc.RenderTarget[0];
+		rasterBlendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN;
+		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&rasterBlendDesc, heightRasterBlendState.put()));
+		Util::SetResourceName(heightRasterBlendState.get(), "SnowDeformation::HeightRasterBlend");
 	}
 
 	auto device = globals::d3d::device;
@@ -2382,12 +2388,18 @@ void SnowDeformation::ClearShaderCache()
 	if (heightPSTopOnly)
 		heightPSTopOnly->Release();
 	heightPSTopOnly = nullptr;
+	if (heightPSSkinDepth)
+		heightPSSkinDepth->Release();
+	heightPSSkinDepth = nullptr;
 	if (heightScrollCS)
 		heightScrollCS->Release();
 	heightScrollCS = nullptr;
 	if (heightScrollTopCS)
 		heightScrollTopCS->Release();
 	heightScrollTopCS = nullptr;
+	if (heightScrollRasterCS)
+		heightScrollRasterCS->Release();
+	heightScrollRasterCS = nullptr;
 	if (heightCombineCS)
 		heightCombineCS->Release();
 	heightCombineCS = nullptr;

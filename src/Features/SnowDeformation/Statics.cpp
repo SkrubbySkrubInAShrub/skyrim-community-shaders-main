@@ -1817,6 +1817,14 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPSTopOnly, "SnowDeformation::HeightCapturePS TopOnly");
 		}
 	}
+	if (!heightPSSkinDepth) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "SKIN_DEPTH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPSSkinDepth)))
+				Util::SetResourceName(heightPSSkinDepth, "SnowDeformation::HeightCapturePS SkinDepth");
+		}
+	}
 	// Volume snow (VOXEL): brick VS + marching PS. Optional; the draw guards
 	// on the pointers.
 	if (!voxelShellVS) {
@@ -1840,6 +1848,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
 	if (!heightScrollTopCS)
 		heightScrollTopCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS"));
+	if (!heightScrollRasterCS)
+		heightScrollRasterCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, { { "SCROLL_RASTER_RG", "" } }, "cs_5_0", "ScrollCS"));
 	if (!heightCombineCS)
 		heightCombineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightWaterCoverCS)
@@ -1853,7 +1863,7 @@ bool SnowDeformation::EnsureStaticsShaders()
 	if (!objectConeDiffuseCS)
 		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
 
-	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS) {
+	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightPSSkinDepth || !heightScrollCS || !heightScrollRasterCS || !heightCombineCS) {
 		staticsShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
 		return false;
@@ -1901,6 +1911,18 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTopRaw[1] = makeHeightTexture("SnowDeformation::HeightTopRaw1");
 	heightBottomRaw[0] = makeHeightTexture("SnowDeformation::HeightBottomRaw0");
 	heightBottomRaw[1] = makeHeightTexture("SnowDeformation::HeightBottomRaw1");
+	{
+		D3D11_TEXTURE2D_DESC rasterDesc = heightDesc;
+		rasterDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+		rasterDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		D3D11_SHADER_RESOURCE_VIEW_DESC rasterSrvDesc = heightSrvDesc;
+		rasterSrvDesc.Format = rasterDesc.Format;
+		D3D11_RENDER_TARGET_VIEW_DESC rasterRtvDesc = heightRtvDesc;
+		rasterRtvDesc.Format = rasterDesc.Format;
+		heightRaster = new Texture2D(rasterDesc, "SnowDeformation::HeightRaster");
+		heightRaster->CreateSRV(rasterSrvDesc);
+		heightRaster->CreateRTV(rasterRtvDesc);
+	}
 	// The mask carries TWO independent channels (R = door suppression,
 	// G = melt fraction). A single winner-takes-all channel discarded melt
 	// wherever a door's faint influence tail reached - a ring of full-depth
@@ -2195,23 +2217,33 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 	ID3D11Buffer* ghostCB = heightGhostCB->CB();
 	// Null bottoms = the top-only variant. a_tiles (bottoms only) takes the
-	// shelter mask's per-tile flags.
-	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom, Texture2D* a_tiles) {
+	// shelter mask's per-tile flags. With a_raster (bottoms only) the raster
+	// is read there (t6, heightRaster) and the current maps take the merge alone;
+	// without, it is merged in place.
+	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom, Texture2D* a_tiles,
+						  Texture2D* a_raster = nullptr) {
 		if (!a_prevTop || !a_curTop)
 			return;
 		const bool bottoms = a_prevBottom && a_curBottom;
 		if (!bottoms && !heightScrollTopCS)
 			return;
+		const bool fromRaster = bottoms && a_raster;
 		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), bottoms ? a_prevBottom->srv.get() : nullptr };
 		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), bottoms ? a_curBottom->uav.get() : nullptr };
 		ID3D11UnorderedAccessView* tileUAV = bottoms && a_tiles ? a_tiles->uav.get() : nullptr;
 		context->CSSetConstantBuffers(0, 1, &processCB);
 		context->CSSetConstantBuffers(2, 1, &ghostCB);
 		context->CSSetShaderResources(0, 2, mergeSRVs);
+		if (fromRaster) {
+			ID3D11ShaderResourceView* rasterSRV = a_raster->srv.get();
+			context->CSSetShaderResources(6, 1, &rasterSRV);
+		}
 		context->CSSetUnorderedAccessViews(0, 2, mergeUAVs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 1, &tileUAV, nullptr);
-		context->CSSetShader(bottoms ? heightScrollCS : heightScrollTopCS, nullptr, 0);
+		context->CSSetShader(fromRaster ? heightScrollRasterCS : (bottoms ? heightScrollCS : heightScrollTopCS), nullptr, 0);
 		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
+		if (fromRaster)
+			context->CSSetShaderResources(6, 1, nullCsSRVs);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 1, nullCsUAVs, nullptr);
@@ -2221,12 +2253,12 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetConstantBuffers(2, 1, &nullMergeCB);
 	};
 
-	// Every raw map starts empty, including the peeled layers: the sentinel
-	// is what tells the merge which texels this frame's capture owns.
+	// Every raster starts empty, including the peeled layers: the sentinel
+	// is what tells the merge which texels this frame's capture owns. The
+	// layer-1 merge writes every texel of heightTopRaw/heightBottomRaw.
 	const float topClear[4] = { kHeightMapEmptyTop, 0.0f, 0.0f, 0.0f };
-	const float bottomClear[4] = { kHeightMapEmptyBottom, 0.0f, 0.0f, 0.0f };
-	context->ClearRenderTargetView(heightTopRaw[heightCurrent]->rtv.get(), topClear);
-	context->ClearRenderTargetView(heightBottomRaw[heightCurrent]->rtv.get(), bottomClear);
+	const float rasterClear[4] = { kHeightMapEmptyTop, -kHeightMapEmptyBottom, 0.0f, 0.0f };
+	context->ClearRenderTargetView(heightRaster->rtv.get(), rasterClear);
 	if (heightTop2Raw[heightCurrent])
 		context->ClearRenderTargetView(heightTop2Raw[heightCurrent]->rtv.get(), topClear);
 
@@ -2235,12 +2267,12 @@ void SnowDeformation::RenderObjectHeightMap()
 	// a legal world Z and would read as a road at sea level.
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
 	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
-	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
-	// Only road records write RT2 anything but its clear (SnowHeightCapture),
-	// so it is bound for the road draws alone (see the raster loop).
+	// Only road records write the skin depth anything but its clear
+	// (SnowHeightCapture), so its pass draws the roads alone.
 	const bool roadRaster = capturedRoads > 0;
-	context->OMSetRenderTargets(2, heightRTVs, nullptr);
-	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
+	ID3D11RenderTargetView* rasterRTV = heightRaster->rtv.get();
+	context->OMSetRenderTargets(1, &rasterRTV, nullptr);
+	context->OMSetBlendState(heightRasterBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
 	context->RSSetViewports(1, &heightViewport);
@@ -2418,15 +2450,20 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
 	SD_DrawBinds binds;
-	// Non-road captures first, without RT2: they write its clear value, a
-	// no-op under MAX, and the MAX/MIN blends do not depend on draw order.
+	// Every capture into heightRaster, then the roads alone into the skin
+	// depth; each pass binds RT0 only, and MAX does not depend on draw order.
 	for (uint32_t rasterPass = 0; rasterPass < 2; rasterPass++) {
-		const bool roadPass = rasterPass == 1;
-		if (roadPass && roadRaster)
-			context->OMSetRenderTargets(3, heightRTVs, nullptr);
+		const bool skinPass = rasterPass == 1;
+		if (skinPass) {
+			if (!roadRaster)
+				break;
+			ID3D11RenderTargetView* skinRTV = heightSkinDepth->rtv.get();
+			context->OMSetRenderTargets(1, &skinRTV, nullptr);
+			context->PSSetShader(heightPSSkinDepth, nullptr, 0);
+		}
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
-			if (cap.road != roadPass)
+			if (skinPass && !cap.road)
 				continue;
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
@@ -2475,11 +2512,13 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
+	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
+	context->PSSetShader(heightPS, nullptr, 0);
 
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
 	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
-	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty);
+	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
 
 	// Near clipmap level 0: the same captures against a quarter-width window,

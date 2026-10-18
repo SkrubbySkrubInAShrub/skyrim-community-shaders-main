@@ -105,6 +105,10 @@ RWTexture2D<float2> OutMask : register(u2);
 // (unbound reads 0, which never skips).
 RWTexture2D<uint> TileEmptyOut : register(u3);
 Texture2D<uint> TileEmpty : register(t4);
+#ifdef SCROLL_RASTER_RG
+// Layer 1's raster (SnowHeightCapture): x = top, y = the negated bottom.
+Texture2D<float2> RasterIn : register(t6);
+#endif
 
 // World XY of a height-map texel (v axis mirrors world +Y).
 float2 TexelWorldXY(uint2 p, uint2 dims)
@@ -194,8 +198,14 @@ groupshared uint scrollElevated;
 uint ScrollTexel(uint2 texel, uint2 dims)
 {
 	uint3 dtid = uint3(texel, 0);
+#ifdef SCROLL_RASTER_RG
+	float2 raster = RasterIn[dtid.xy];
+	float rasterTop = raster.x;
+	float rasterBottom = -raster.y;
+#else
 	float rasterTop = OutA[dtid.xy];
 	float rasterBottom = kScrollBottoms ? OutB[dtid.xy] : 100000.0;
+#endif
 	bool haveTop = rasterTop > -50000.0;
 	bool haveBottom = kScrollBottoms && rasterBottom < 50000.0;
 

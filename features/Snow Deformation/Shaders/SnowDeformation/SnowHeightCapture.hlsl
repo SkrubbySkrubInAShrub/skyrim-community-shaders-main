@@ -11,6 +11,11 @@
 // depth the texel's model class wears; the surface description later snow
 // systems (the trench patch, sheltering, burial mounds) build on.
 //
+// Every target is written through SV_Target0 alone: layer 1's top and
+// negated bottom share one R32G32 target (both MAX), the roads' skin depth is
+// its own pass. Writes to SV_Target1+ were lost nondeterministically on the
+// MRT layout (CODE-NOTES "Height raster on RT0 only").
+//
 // StaticCB layout must match StaticsCB in SnowDeformation.h and StaticCB in
 // SnowStaticsShell.hlsl.
 
@@ -218,6 +223,18 @@ float main(VS_OUTPUT input) : SV_Target0
 {
 	return input.WorldZ;
 }
+#elif defined(PSHADER) && defined(SKIN_DEPTH)
+// Mirror of SnowDeformation.h kNoRoadTop.
+static const float kNoRoadTop = -1000000.0;
+
+// The roads' skin depth, MAX on both channels: x = the snow-layer depth this
+// texel's class wears, y = the highest ROAD surface in the column (kNoRoadTop
+// where no road drew). The patch compares y against the layer-1 top to decide
+// whether the road actually owns the column, rather than merely reaching it.
+float2 main(VS_OUTPUT input) : SV_Target0
+{
+	return float2(input.SkinDepth.x, input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
+}
 #elif defined(PSHADER)
 // Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
 // window addressing is read here; names carry an H so they cannot clash
@@ -251,35 +268,18 @@ float CaptureTerrainHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-struct PS_OUTPUT
+// Layer 1, MAX on both channels: x = the object top surface, y = the NEGATED
+// object bottom (max(-z) = -min(z)); the merge negates it back.
+float2 main(VS_OUTPUT input) : SV_Target0
 {
-	// RT0 blends MAX (object top surface), RT1 blends MIN (object bottom),
-	// RT2 blends MAX on BOTH channels: x = the snow-layer depth this texel's
-	// class wears, y = the highest ROAD surface in the column (kNoRoadTop
-	// where no road drew). The patch compares y against RT0 to decide whether
-	// the road actually owns the column, rather than merely reaching it.
-	float Top : SV_Target0;
-	float Bottom : SV_Target1;
-	float2 SkinDepth : SV_Target2;
-};
-
-// Mirror of SnowDeformation.h kNoRoadTop.
-static const float kNoRoadTop = -1000000.0;
-
-PS_OUTPUT main(VS_OUTPUT input)
-{
-	PS_OUTPUT psout;
-	psout.Top = input.WorldZ;
 	// Bottoms accept only genuinely ELEVATED undersides: grounded geometry
 	// (support posts, rocks, low clutter) min-blending into the channel
 	// vetoed the floating-structure shelter test under walkways and roofs,
 	// leaving unmelted snow plateaus beneath them. Grounded fragments write
-	// the bottom-empty sentinel, a no-op under MIN blending.
+	// the bottom-empty sentinel, a no-op once negated under MAX.
 	float terrain = CaptureTerrainHeight(input.WorldXY);
-	psout.Bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
-	psout.SkinDepth = float2(input.SkinDepth.x,
-		input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
-	return psout;
+	float bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
+	return float2(input.WorldZ, -bottom);
 }
 #endif
 #endif  // !WATER

@@ -2774,6 +2774,8 @@ public:
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
+	/** @brief Layer 1's raster this frame (R32G32, RT0 MAX on both channels): x = top, y = the negated bottom. The merge (heightScrollRasterCS, t6) reads it into heightTopRaw/heightBottomRaw. */
+	Texture2D* heightRaster = nullptr;
 	/** @brief Processed maps: the smooth shelter/suppression mask the shell samples (t5; its size sets CombineCS's dispatch and FieldDims.z), and the object cone chains' ping-pong scratch. */
 	Texture2D* heightBottomFiltered = nullptr;
 	Texture2D* heightScratch = nullptr;
@@ -2828,8 +2830,10 @@ public:
 	float mainViewportMaxDepth = 1.0f;
 	uint32_t mainViewportFrame = UINT32_MAX;
 
-	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
+	/** @brief RT0 MAX (tops): the highest surface wins per texel in any draw order; no depth buffer needed. The fine, far, peeled and water rasters. */
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
+	/** @brief RT0 MAX on R and G: layer 1's heightRaster and the roads' skin depth, each bound alone. */
+	winrt::com_ptr<ID3D11BlendState> heightRasterBlendState;
 	/** @brief Drawn water's height per terrain-window texel (kShellWindowDim^2, R32F, the terrain window's own frame): MAX of the bodies touching the texel, kShellMissingHeight where none. Rebuilt every frame from last frame's planes (a kept plane poisoned the area until the next cell crossing). Bound at t27 for the landscape shell. */
 	Texture2D* waterHeightTexture = nullptr;
 	/** @brief The same planes at object-raster resolution (kWaterFineDim over ObjectRasterHalfExtent) for Lighting's underwater veto (t104); rebuilt whenever the list or the height window moves. */
@@ -2874,14 +2878,19 @@ public:
 	bool waterFirstLogged = false;
 	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
+	/** @brief Layer 1's capture PS: top and negated bottom into heightRaster through RT0. */
 	ID3D11PixelShader* heightPS = nullptr;
 	/** @brief Capture PS writing the top alone (TOP_ONLY): the fine and far rasters bind RT0 only. */
 	ID3D11PixelShader* heightPSTopOnly = nullptr;
+	/** @brief Capture PS writing the roads' skin depth alone (SKIN_DEPTH) into heightSkinDepth through RT0. */
+	ID3D11PixelShader* heightPSSkinDepth = nullptr;
 	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	/** @brief ScrollCS with SCROLL_TOP_ONLY, for the peeled layers. */
 	ID3D11ComputeShader* heightScrollTopCS = nullptr;
+	/** @brief ScrollCS with SCROLL_RASTER_RG: layer 1's merge, its raster read from heightRaster (t6). */
+	ID3D11ComputeShader* heightScrollRasterCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	/** @brief WaterCoverCS: the raw water window minus its lone wet texels into waterVisibleTexture, and the near field into waterNearTexture. */
 	ID3D11ComputeShader* heightWaterCoverCS = nullptr;
