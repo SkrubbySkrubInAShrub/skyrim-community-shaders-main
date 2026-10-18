@@ -5568,7 +5568,6 @@ protected:
 		bool hasPrevZ = false;
 	};
 	std::unordered_map<uint32_t, CorpseRest> corpseRestStates;
-};
 
 	/** @brief Impact energy per living actor (formID): where its root was and when, its smoothed ground speed, and the fastest fall since it left the ground. */
 	struct ImpactTrack
@@ -5581,3 +5580,4 @@ protected:
 		bool wasInAir = false;
 	};
 	std::unordered_map<uint32_t, ImpactTrack> impactTracks;
+};
