@@ -685,6 +685,7 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	cb.ObjectHeightCenter = heightWindowCenter;
 	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
+	cb.TrackAge = TrackAgeConstants();
 	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y, 1.0f / kUndulationFieldHalfExtent,
 		undulationFieldValid ? 1.0f : 0.0f };
 	cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y, 1.0f / kExclusionFieldHalfExtent,

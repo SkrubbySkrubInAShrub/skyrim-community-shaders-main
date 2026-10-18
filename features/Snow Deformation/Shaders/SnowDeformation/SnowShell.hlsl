@@ -209,8 +209,10 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	// x = scorch darkening strength; yzw spare (the retired crust look).
 	float4 SpellShading;
-	// Spare: the retired crust look's rows, kept for the layout.
-	float4 padCrustLook;
+	// Track age (TrackAgeOf): x = the ageing clock now, y = age per clock
+	// unit (0 = tracks never age); zw spare. Was the retired crust look's row.
+	float4 TrackAge;
+	// Spare: the retired crust look's second row, kept for the layout.
 	float4 padCrustLook2;
 	// xy layout keepers; zw = sun cascades' REAL atlas slices (the shared
 	// atlas moves them with the active-light set).
@@ -345,9 +347,10 @@ Texture2D<float4> SnowHeightMap : register(t8);
 // behind), the land's side of the contest.
 Texture2D<float3> LandMasksCopy : register(t10);
 // Baked berm field (BermFieldCS): x = the 17-tap disc average of the
-// deformation map, y = the carve's short blur, at the map's own resolution
-// and addressing.
-Texture2D<float2> BermFieldMap : register(t14);
+// deformation map, y = the carve's short blur, zw = the carve's and the
+// berm's dates on the ageing clock, at the map's own resolution and
+// addressing.
+Texture2D<float4> BermFieldMap : register(t14);
 // 1 per 8x8 physical map tile where the map and the berm field read zero
 // within one tile (BermFieldCS UntouchedCS). Unbound reads 0 = touched.
 Texture2D<uint> UntouchedTiles : register(t57);
@@ -795,9 +798,9 @@ float3 RoadRasterBilinear(float2 worldXY)
 // The road trench patch's drawn surface over a road column (RoadRasterAt), as
 // BuildPatchVertex lays it: the road's top, the carve through the road layer,
 // the dunes.
-float RoadPatchZ(float2 road, float deform, float blur, float und, float2 worldXY)
+float RoadPatchZ(float2 road, float deform, float blur, float und, float2 worldXY, float3 look)
 {
-	const float carved = CarveProfile(deform, blur, road.x, worldXY);
+	const float carved = CarveProfile(deform, blur, road.x, worldXY, look);
 	return road.y + carved + und * saturate(carved / 8.0) - 0.4;
 }
 
@@ -892,22 +895,23 @@ float3 ShellObjectMeet(float2 worldXY, float sheetZ)
 // BermShape and the tap ring are in SnowFields.hlsli.
 
 // The A/B path: the carve itself stands in for its short blur, so the
-// walls do not soften without the bake.
-float2 BermFieldTapped(float2 gridLocal)
+// walls do not soften without the bake, and tracks are dated now: they do
+// not age either.
+float4 BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDisplacedFast(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += SampleDisplacedFast(gridLocal + kBermTaps[i] * BermReach);
-	return float2(saturate(b / 17.0), SampleDeformationFast(gridLocal));
+	return float4(saturate(b / 17.0), SampleDeformationFast(gridLocal), TrackAge.x, TrackAge.x);
 }
 
 // The berm field dominated the shell's pixel cost at 68 loads a call, and the
 // normal alone needs four. BermBakeActive routes to the bake; the tapped path
 // stays compiled so the two can be A/B'd from the debug menu. x = berm,
-// y = the carve's short blur.
-float2 BermFieldPair(float2 gridLocal)
+// y = the carve's short blur, zw = the carve's and the berm's dates.
+float4 BermFieldPair(float2 gridLocal)
 {
-	float2 field = 0.0;
+	float4 field = 0.0;
 	[branch] if (BermBakeActive > 0.5)
 		field = BermFieldBaked(gridLocal);
 	else
@@ -1158,15 +1162,15 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		[flatten] if (depth > 0.0)
 		{
 			float deformation = saturate(SampleDeformation(gridLocal));
-			float2 bermPair = BermFieldPair(gridLocal);
+			float4 bermPair = BermFieldPair(gridLocal);
 			float bermD = bermPair.x;
 			float uncarved = depth;
 			// The berm is spoil piled on snow that was NOT dug. Unmasked, the
 			// blurred field also lifted the trench floor and walls - a narrow
 			// trail's disc average is well above zero at its own centre, so
 			// raising Berm Height raised the whole trench with it.
-			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal) +
-			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
+			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal, TrackCarveLook(TrackAgeOf(bermPair.z))) +
+			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved) * TrackBermScale(TrackAgeOf(bermPair.w));
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 		}
 
@@ -1705,10 +1709,10 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #ifndef SNOW_SHELL_DEFERRED
 	[branch] if (coverageAlpha > 0.001)
 	{
-		landRemaining = CarveProfile(pixelCarve, pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
+		landRemaining = CarveProfile(pixelCarve, pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal, TrackCarveLook(0.0));
 		landFilm = landRemaining < kLandFilmDepth;
 		landMelt = min(SampleMelted(gridLocal), pixelCarve);
-		landBurial = landMelt > 0.0 ? CarveProfile(landMelt, landMelt, max(pixelEffDepth, 0.0), GridOrigin + gridLocal) : max(pixelEffDepth, 0.0);
+		landBurial = landMelt > 0.0 ? CarveProfile(landMelt, landMelt, max(pixelEffDepth, 0.0), GridOrigin + gridLocal, TrackCarveLook(0.0)) : max(pixelEffDepth, 0.0);
 	}
 #endif
 	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(0.1, 0.4, pixelMelt)));
@@ -1828,8 +1832,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		{
 			const float3 roadB = RoadRasterBilinear(roadXY);
 			const float2 roadDT = roadB.x > 0.0 ? roadB.zy : road;
-			const float centreBlur = (CompactLook.w > 0.0 && !pixelUntouched) ? BermFieldPair(gridLocal).y : pixelCarve;
-			const float roadZ = RoadPatchZ(roadDT, pixelCarve, centreBlur, UndulationSampled(roadXY), roadXY);
+			const float2 centreBlur = ((CompactLook.w > 0.0 || TrackAge.y > 0.0) && !pixelUntouched) ? BermFieldPair(gridLocal).yz : float2(pixelCarve, TrackAge.x);
+			const float roadZ = RoadPatchZ(roadDT, pixelCarve, centreBlur.x, UndulationSampled(roadXY), roadXY, TrackCarveLook(TrackAgeOf(centreBlur.y)));
 			roadMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, abs(input.WorldPos.z + ShellCameraPosAdjust.z - roadZ))) *
 			           (1.0 - smoothstep(1024.0, 2048.0, shellZ)) * smoothstep(0.0, 1.0, roadB.x);
 			roadMeetDepth = roadDT.x;
@@ -1848,24 +1852,35 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float2 profileGrad = 0.0;
 	float2 bermGrad = 0.0;
 	float bermCenter = 0.0;
+	// Track age at the pixel, the carve's (TrackAgeOf); 0 while tracks never
+	// age, so nothing is read for it. The berm's ages the berm here and is done.
+	float pixelAge = 0.0;
 	[branch] if (!pixelUntouched)
 	{
+		float bermAge = 0.0;
+		[branch] if (TrackAge.y > 0.0)
+		{
+			const float2 dates = BermFieldPair(gridLocal).zw;
+			pixelAge = TrackAgeOf(dates.x);
+			bermAge = TrackAgeOf(dates.y);
+		}
 		const float step = 4.0;
 		float dXP = SampleDeformation(gridLocal + float2(step, 0.0));
 		float dXN = SampleDeformation(gridLocal - float2(step, 0.0));
 		float dYP = SampleDeformation(gridLocal + float2(0.0, step));
 		float dYN = SampleDeformation(gridLocal - float2(0.0, step));
-		// Snow Climate's slough lays the walls back toward the carve's short
-		// blur, read only while the snow is loose.
+		// Snow Climate's slough and age lay the walls back toward the carve's
+		// short blur, read only while the snow is loose or the track old.
+		const float3 carveLook = TrackCarveLook(pixelAge);
 		float4 blur = saturate(float4(dXP, dXN, dYP, dYN));
-		[branch] if (CompactLook.w > 0.0)
+		[branch] if (CompactLook.w > 0.0 || carveLook.x > 0.0)
 		{
 			blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
 				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
 		}
 		profileGrad = float2(
-						  CarveProfile(saturate(dXP), blur.x, meetDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), blur.y, meetDepth, GridOrigin + gridLocal - float2(step, 0.0)),
-						  CarveProfile(saturate(dYP), blur.z, meetDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), blur.w, meetDepth, GridOrigin + gridLocal - float2(0.0, step))) /
+						  CarveProfile(saturate(dXP), blur.x, meetDepth, GridOrigin + gridLocal + float2(step, 0.0), carveLook) - CarveProfile(saturate(dXN), blur.y, meetDepth, GridOrigin + gridLocal - float2(step, 0.0), carveLook),
+						  CarveProfile(saturate(dYP), blur.z, meetDepth, GridOrigin + gridLocal + float2(0.0, step), carveLook) - CarveProfile(saturate(dYN), blur.w, meetDepth, GridOrigin + gridLocal - float2(0.0, step), carveLook)) /
 		              (2.0 * step);
 		// Berm shading: numerical gradient of the SAME blurred hill the
 		// geometry displaces by, so the light/shadow break sits on the hill's
@@ -1890,7 +1905,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		// here shades a hill the geometry no longer has.
 		bermGrad = float2(
 			BermShape(bermXP) * saturate(1.0 - mXP) - BermShape(bermXN) * saturate(1.0 - mXN),
-			BermShape(bermYP) * saturate(1.0 - mYP) - BermShape(bermYN) * saturate(1.0 - mYN)) / (2.0 * bStep);
+			BermShape(bermYP) * saturate(1.0 - mYP) - BermShape(bermYN) * saturate(1.0 - mYN)) / (2.0 * bStep) * TrackBermScale(bermAge);
 		bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	}
 	// Meeting a captured object: the sheet's MACRO slope goes halfway to the
@@ -1930,14 +1945,19 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #if defined(SNOW_NOISE_TABLE)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
-		detailMask = TrenchDetailMask(pixelCarve, BermFieldPair(gridLocal), TrenchDetailCoverage) * detailFade * (1.0 - objectMeet.x);
+		const float4 detailField = BermFieldPair(gridLocal);
+		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, TrenchDetailCoverage) * detailFade * (1.0 - objectMeet.x);
 		[branch] if (detailMask > 0.0)
 		{
 			const float2 marks = SampleDetailMarks(gridLocal);
 			const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
-			detailWet = max(meltWet, marks.y);
+			// An old track's clods are under new snow; fire's melt is not. The
+			// carve's age in the trench, the berm's on its apron.
+			const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
+			const float impact = marks.y * TrackDetailWetScale(detailAge);
+			detailWet = max(meltWet, impact);
 			detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
-			               (1.0 + kImpactReliefBoost * marks.y);
+			               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
 			detailTaps = TrenchDetailTapsAt(worldXYPS);
 			detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 		}
@@ -2094,7 +2114,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
 	}
 	// Thin-snow and wet print (SnowWetPrint); wetRough is the roughness cut.
-	const float wetRough = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z);
+	const float wetRough = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -2415,7 +2435,9 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
 #if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_CONDITION_VIEW)
 	{
-		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z);
+		const float4 trackField = BermFieldPair(gridLocal);
+		const float2 track = float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter)));
+		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z, track);
 		psout.Diffuse.rgb = conditionColor * 2.0;
 		psout.Albedo.rgb = 0.0;
 		psout.Specular.rgb = 0.0;
@@ -2521,8 +2543,9 @@ float MarchTapHeight(float2 gridLocal)
 	float depth = max(st.y, 0.0);
 	depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionMask(GridOrigin + gridLocal).y));
 	const float deform = SampleDeformationMarch(gridLocal);
-	const float2 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float2(0.0, deform);
-	depth = CarveProfileNoTeeth(deform, berm.y, depth) + BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+	const float4 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float4(0.0, deform, TrackAge.x, TrackAge.x);
+	depth = CarveProfileNoTeeth(deform, berm.y, depth, TrackCarveLook(TrackAgeOf(berm.z))) +
+	        BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth) * TrackBermScale(TrackAgeOf(berm.w));
 	return st.x + depth + Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 }
 

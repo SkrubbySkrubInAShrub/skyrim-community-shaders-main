@@ -59,6 +59,9 @@
 //       landing, a strike, a shove). The trench detail wears its wet (clod)
 //       set by it and its relief rises. Max-blended; fades with the refill;
 //       never stored (RingCS zeroes it).
+// Beside the map, TrackClock: the ageing clock when the texel was last cut
+// (0 = never), StampCS where a cut reaches the floor, RingCS from the store.
+// The berm bake turns it into the clocks the shells age tracks by.
 
 #include "SnowDeformation/SnowNoise.hlsli"
 
@@ -238,7 +241,9 @@ cbuffer PerFrame : register(b0)
 	float GameDeltaTime;
 	// 1 = paint the per-texel activity view (u2).
 	uint DebugActivityView;
-	uint InjectPad;
+	// The ageing clock (track age), kept in [1024, 2048) where half floats
+	// hold whole units.
+	float AgeingClock;
 
 	// Ring of texels whose world assignment changed this frame, in LOGICAL
 	// texel space (x0, y0, w, h). Two rects at most: the leading band per
@@ -250,7 +255,8 @@ cbuffer PerFrame : register(b0)
 	// 1 = the tile scans list every tile (the "my trenches froze" one-click
 	// cross-check). Claimed a RingPad slot, layout unchanged.
 	uint ForceAllDirty;
-	uint RingPad;
+	// Clock units the ageing clock fell back by this frame (TrackRebaseCS).
+	float TrackRebase;
 
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
@@ -308,9 +314,20 @@ Texture2D<float4> PreviousDeformation : register(t0);
 // GrassCollision's CollisionUpdateCS already relies on for the same RGBA16F
 // format).
 RWTexture2D<float4> CurrentDeformation : register(u0);
-// Tile-store depth for the arriving ring, resampled on the CPU. LOGICAL
+// Tile-store memory for the arriving ring, resampled on the CPU: x = depth,
+// y = freshness (1 just cut, 0 at TRACK_AGE_HORIZON or never). LOGICAL
 // layout - RingCS translates when it writes the map.
-Texture2D<float> InjectDepth : register(t1);
+Texture2D<float2> InjectStore : register(t1);
+// Ageing-clock units the store's freshness spans. Mirrored by
+// kTrackAgeHorizon in SnowDeformation.h.
+#define TRACK_AGE_HORIZON 128.0
+// When each texel was last cut, on the ageing clock; 0 = never. Physical
+// layout, like the map. RingCS and StampCS only.
+RWTexture2D<float> TrackClock : register(u4);
+// A cut dates a texel from this deep, and when it reaches within this of the
+// depth already there (fractions of the layer).
+static const float kTrackCutMin = 0.02;
+static const float kTrackFloorMargin = 0.1;
 // PHYSICAL tiles (x | y << 16, 8x8 texels each) the stamp pass must visit -
 // built on the CPU from the stamp capsules' and waves' bounding boxes, so
 // the dispatch covers actors' surroundings and nothing else.
@@ -401,6 +418,9 @@ groupshared uint gDeltaSum;
 // Any texel of this group's tile non-zero after the pass - the occupancy
 // truth an aligned 8x8 group can write absolutely.
 groupshared uint gNonZero;
+// StampCS: a texel of this tile was re-dated (TrackClock), so its berm bake
+// is stale even where the map did not move.
+groupshared uint gClockMoved;
 
 // Debug: per-texel activity, painted only while the menu view is open.
 // R = depth, G = melt/scorch, B = crust or impact energy; brightness = how far past
@@ -430,6 +450,7 @@ void ActivityReset(uint GIdx)
 		gMaxY = 0;
 		gDeltaSum = 0;
 		gNonZero = 0;
+		gClockMoved = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
 }
@@ -535,13 +556,15 @@ float SlumpTap(int2 p, int2 dims)
 	const int2 logical = int2(rect.x + (int)(id % (uint)rect.z), rect.y + (int)(id / (uint)rect.z));
 
 	// Arriving ground is not pristine: the tile store remembers what was dug
-	// there. Everything else - melt, crust - is not stored, exactly
+	// there, and when. Everything else - melt, crust - is not stored, exactly
 	// as the old scroll path's out-of-window seed behaved.
-	float depth = 0.0;
+	float2 stored = 0.0;
 	[branch] if (InjectValid)
-		depth = InjectDepth[logical];
+		stored = InjectStore[logical];
+	const float depth = stored.x;
 	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
 	CurrentDeformation[phys] = float4(depth, 0.0, 0.0, 0.0);
+	TrackClock[phys] = stored.y > 0.0 ? AgeingClock - (1.0 - stored.y) * TRACK_AGE_HORIZON : 0.0;
 	// Injected ground occupies its tile; zeroed ground leaves any stale mark
 	// for the next evolve visit to heal (writes here are unordered across the
 	// band, so an absolute 0 could clobber a neighbour texel's 1).
@@ -575,6 +598,31 @@ RWTexture2D<float2> BloodClockRing : register(u1);
 	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
 	BloodMapRing[phys] = float4(0.0, 0.0, 0.0, 0.0);
 	BloodClockRing[phys] = float2(0.0, 0.0);
+}
+
+// The ageing clock fell back by TrackRebase to stay where half floats hold
+// whole units, so every date falls with it: the cut clocks and the berm
+// bake's (BermFieldCS .zw). Zero stays zero, never cut; a date older than
+// the clock's range stays a date, at 1. Own entry point and binding, like
+// BloodRingCS.
+RWTexture2D<float> TrackClockRebase : register(u0);
+RWTexture2D<float4> BermFieldRebase : register(u1);
+
+[numthreads(8, 8, 1)] void TrackRebaseCS(uint3 DTid
+										 : SV_DispatchThreadID) {
+	uint2 dims;
+	TrackClockRebase.GetDimensions(dims.x, dims.y);
+	if (any(DTid.xy >= dims))
+		return;
+	const float cut = TrackClockRebase[DTid.xy];
+	[branch] if (cut > 0.0)
+		TrackClockRebase[DTid.xy] = max(cut - TrackRebase, 1.0);
+	float4 berm = BermFieldRebase[DTid.xy];
+	[branch] if (max(berm.z, berm.w) > 0.0)
+	{
+		berm.zw = berm.zw > 0.0 ? max(berm.zw - TrackRebase, 1.0) : 0.0;
+		BermFieldRebase[DTid.xy] = berm;
+	}
 }
 
 // The world acting on the map: refill, decay, slump. The neighbour reads
@@ -1029,6 +1077,9 @@ bool StampTexel(uint2 phys)
 	// what a repeat pass deepens by.
 	float bodyReach = 0.0;
 	float bodyReachWide = 0.0;
+	// The deepest this frame's cuts reach here, bodies by their reach: where
+	// it meets the floor the track is fresh again (TrackClock).
+	float cutNow = 0.0;
 
 	// Carve, melt and scorch accumulate separately so the result cannot depend
 	// on the order stamps happen to sit in the buffer.
@@ -1129,6 +1180,7 @@ bool StampTexel(uint2 phys)
 				else
 				{
 					carve = max(carve, printed);
+					cutNow = max(cutNow, printed);
 				}
 
 				// Anything that CUTS a crust has broken the skin over it, not
@@ -1201,6 +1253,7 @@ bool StampTexel(uint2 phys)
 				// would let a standing lightning cloak bore a shaft.
 				float pitDepth = Stamps[i].z * shape * coneSoft;
 				carve = max(carve, pitDepth);
+				cutNow = max(cutNow, pitDepth);
 				scorch = max(scorch, pitDepth);
 			}
 			else
@@ -1294,6 +1347,7 @@ bool StampTexel(uint2 phys)
 				bodyReachWide = max(bodyReachWide, tent / 16.0);
 			}
 			carve = max(carve, propPrinted);
+			cutNow = max(cutNow, propPrinted);
 			crustBreak = max(crustBreak, saturate(max(bodyContact * BodyPrint, propPrinted) * CrustBreakOnCarve));
 		}
 	}
@@ -1312,6 +1366,7 @@ bool StampTexel(uint2 phys)
 		carve = max(carve, passStart + BodyPrint * max(passReach - passStart, 0.0));
 		PassState[phys] = ((PassClock & 1023u) << 6) | uint(passStart * 63.0 + 0.5);
 	}
+	cutNow = max(cutNow, max(bodyReach, meltTarget));
 
 	float total = carve;
 	[flatten] if (meltTarget > total)
@@ -1343,6 +1398,18 @@ bool StampTexel(uint2 phys)
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, saturate(impact));
 	CurrentDeformation[phys] = result;
 
+	// A cut that reaches the floor dates the texel: a walk along a packed path
+	// refreshes it, a print's soft edge over an older trench does not. Written
+	// only when the stored whole unit moves, so the berm bake re-dates only then.
+	[branch] if (cutNow > kTrackCutMin && cutNow >= deformation - kTrackFloorMargin)
+	{
+		[branch] if (abs(TrackClock[phys] - AgeingClock) > 0.5)
+		{
+			TrackClock[phys] = AgeingClock;
+			InterlockedOr(gClockMoved, 1u);
+		}
+	}
+
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
 	return any(result != 0.0);
 }
@@ -1361,7 +1428,7 @@ bool StampTexel(uint2 phys)
 	ActivityPublish(GIdx);
 	if (GIdx == 0) {
 		Occupancy[tile] = gNonZero;
-		if (gActivity != 0)
+		if (gActivity != 0 || gClockMoved != 0)
 			BermDirty[tile] = 1u;
 	}
 }
@@ -1378,7 +1445,7 @@ bool StampTexel(uint2 phys)
 	ActivityPublish(GIdx);
 	if (GIdx == 0) {
 		Occupancy[Gid.xy] = gNonZero;
-		if (gActivity != 0)
+		if (gActivity != 0 || gClockMoved != 0)
 			BermDirty[Gid.xy] = 1u;
 	}
 }

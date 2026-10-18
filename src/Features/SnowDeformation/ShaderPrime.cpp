@@ -246,6 +246,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetUntouchedTilesCS(); },
 		[&] { GetDeformationRingCS(); },
 		[&] { GetBloodRingCS(); },
+		[&] { GetTrackRebaseCS(); },
 		[&] { GetDeformationEvolveCS(); },
 		[&] { GetDeformationStampCS(); },
 		[&] { GetDeformationStampAllCS(); },

@@ -113,6 +113,7 @@
 	X(SnowResistance) \
 	X(FreshSnowSoftness) \
 	X(SnowClimateStrength) \
+	X(TrackAgeing) \
 	X(FreshSnowSettleHours) \
 	X(TrampledFlattening) \
 	X(RimLip) \
@@ -247,13 +248,13 @@ void SnowDeformation::CreateDeformationTextures()
 	}
 
 	// Berm field: a bake of the 17-tap disc average the shells used to run per
-	// pixel, and beside it the carve's short blur the walls lay back toward
-	// (Snow Climate's slough). Same dimensions as the map it is derived from,
-	// two half-float channels, and no ping-pong - it is rebuilt from the
-	// current map where the map changed.
+	// pixel, beside it the carve's short blur the walls lay back toward
+	// (Snow Climate's slough), and the dates of both (track age). Same
+	// dimensions as the map it is derived from, four half-float channels, and
+	// no ping-pong - it is rebuilt from the current map where the map changed.
 	{
 		D3D11_TEXTURE2D_DESC bermDesc = texDesc;
-		bermDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		bermDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		D3D11_SHADER_RESOURCE_VIEW_DESC bermSrvDesc = srvDesc;
 		bermSrvDesc.Format = bermDesc.Format;
 		D3D11_UNORDERED_ACCESS_VIEW_DESC bermUavDesc = uavDesc;
@@ -277,6 +278,24 @@ void SnowDeformation::CreateDeformationTextures()
 		passStateTexture->CreateUAV(passUavDesc);
 		const UINT zero[4] = { 0, 0, 0, 0 };
 		globals::d3d::context->ClearUnorderedAccessViewUint(passStateTexture->uav.get(), zero);
+	}
+
+	// Track dates: when each texel was last cut, on the ageing clock. Starts
+	// never-cut; the clear's full-map ring dates what the store brings back.
+	{
+		D3D11_TEXTURE2D_DESC clockDesc = texDesc;
+		clockDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC clockSrvDesc = srvDesc;
+		clockSrvDesc.Format = clockDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC clockUavDesc = uavDesc;
+		clockUavDesc.Format = clockDesc.Format;
+		delete trackClockTexture;
+		trackClockTexture = new Texture2D(clockDesc, "SnowDeformation::TrackClock");
+		trackClockTexture->CreateSRV(clockSrvDesc);
+		trackClockTexture->CreateUAV(clockUavDesc);
+		const FLOAT zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		globals::d3d::context->ClearUnorderedAccessViewFloat(trackClockTexture->uav.get(), zero);
+		snowClimate.ageingRebase = 0.0f;
 	}
 
 	CreateBloodTextures(texDesc);
@@ -1223,6 +1242,10 @@ void SnowDeformation::PrepassSimulation()
 	TickAccumulation();
 	TickSnowCondition();
 	TickSnowClimate();
+	TickTrenchAgeing();
+	// Track dates are on the ageing clock: they move when it falls back.
+	perFrameData.AgeingClock = snowClimate.ageingClock;
+	perFrameData.TrackRebase = trackClockTexture && bermFieldTexture ? snowClimate.ageingRebase : 0.0f;
 	spanClock.Lap(CpuCensus::kSpanTrenchTicks);
 	SweepTrenchStore();
 	spanClock.Lap(CpuCensus::kSpanTrenchSweep);
@@ -1395,7 +1418,9 @@ void SnowDeformation::PrepassSimulation()
 	// A new Berm Steepness needs one executed run to mark the whole bake dirty.
 	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
 	// The field view keeps the pass awake: a frozen picture is worse than no sleep.
-	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && !(debugForceDeformationUpdate || debugContactView);
+	// So does a rebase: the dates must follow the clock the shells read.
+	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && perFrameData.TrackRebase <= 0.0f &&
+	                    !(debugForceDeformationUpdate || debugContactView);
 
 	// The skip-rate window: "idle" that is really a flicker (a stamp crossing
 	// the hash quantum every few frames) reads identically in a single-frame
@@ -1502,12 +1527,29 @@ void SnowDeformation::PrepassSimulation()
 				bermReachBaked = perFrameData.BermReach;
 			}
 
+			// The ageing clock fell back: every date follows it before anything
+			// this frame reads or writes one.
+			if (perFrameData.TrackRebase > 0.0f) {
+				if (auto* rebaseCS = GetTrackRebaseCS()) {
+					ID3D11UnorderedAccessView* rebaseUavs[2] = { trackClockTexture->uav.get(), bermFieldTexture->uav.get() };
+					context->CSSetUnorderedAccessViews(0, 2, rebaseUavs, nullptr);
+					context->CSSetShader(rebaseCS, nullptr, 0);
+					context->Dispatch((deformMapDim + 7) / 8, (deformMapDim + 7) / 8, 1);
+					ID3D11UnorderedAccessView* nullRebase[2] = {};
+					context->CSSetUnorderedAccessViews(0, 2, nullRebase, nullptr);
+				}
+				snowClimate.ageingRebase = 0.0f;
+			}
+
 			ID3D11UnorderedAccessView* uavs[] = { map->uav.get(), deformActivityUAV.get(),
 				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr,
 				occupancyUAV.get() };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			ID3D11UnorderedAccessView* dirtyUAV = bermDirtyUAV.get();
 			context->CSSetUnorderedAccessViews(6, 1, &dirtyUAV, nullptr);
+			// The ring and the stamps date texels; the scans own u4 between them.
+			ID3D11UnorderedAccessView* clockUAV = trackClockTexture ? trackClockTexture->uav.get() : nullptr;
+			ID3D11UnorderedAccessView* nullClockUAV = nullptr;
 
 			// Ring: rewrite only the texels the scroll (or clear) reassigned.
 			// This is the whole scroll cost now - a walking-speed frame is a
@@ -1515,10 +1557,12 @@ void SnowDeformation::PrepassSimulation()
 			if (perFrameData.RingTotalTexels > 0) {
 				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
+				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
 				context->CSSetShader(GetDeformationRingCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
+				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
 				// The blood map shares the origin, so the same ring is cleared.
 				// Its targets take u0/u1 for this dispatch; the map table goes
 				// back afterwards for the passes that inherit it.
@@ -1619,6 +1663,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(7, 3, contactSRVs);
 				ID3D11UnorderedAccessView* passUAV = passStateTexture ? passStateTexture->uav.get() : nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &passUAV, nullptr);
+				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
 			}
 			if (stampRan) {
 				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
@@ -1673,6 +1718,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(7, 3, nullContact);
 				ID3D11UnorderedAccessView* nullPass = nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &nullPass, nullptr);
+				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
 			}
 		}
 
@@ -1709,8 +1755,12 @@ void SnowDeformation::PrepassSimulation()
 				// first. BermFieldCS's own binding space: t0 map, t1 list,
 				// u6 the dirty grid (each group clears its tile's mark).
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				ID3D11ShaderResourceView* bermSrvs[2] = { map->srv.get(), bermTileSRV.get() };
+				// t2 the track dates, gathered four texels a tap through the
+				// shells' wrapping sampler.
+				ID3D11ShaderResourceView* bermSrvs[3] = { map->srv.get(), bermTileSRV.get(), trackClockTexture ? trackClockTexture->srv.get() : nullptr };
 				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
+				ID3D11SamplerState* clockSampler = shellSnowSampler.get();
+				context->CSSetSamplers(0, 1, &clockSampler);
 				ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
 				ID3D11UnorderedAccessView* bermOccUAV = bermOccupancyUAV.get();
@@ -1722,6 +1772,8 @@ void SnowDeformation::PrepassSimulation()
 				bermBakeSeq++;
 				context->CSSetUnorderedAccessViews(2, 1, &nullUav, nullptr);
 				context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
+				ID3D11SamplerState* nullSampler = nullptr;
+				context->CSSetSamplers(0, 1, &nullSampler);
 			} else {
 				// Consumed all the same: the next frame's marks start clean.
 				const UINT zeroMarks[4] = { 0, 0, 0, 0 };
@@ -1835,6 +1887,15 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationRingCS()
 		deformationRingCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "RingCS"));
 	}
 	return deformationRingCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetTrackRebaseCS()
+{
+	if (!trackRebaseCS) {
+		logger::debug("Compiling DeformationUpdateCS:TrackRebaseCS");
+		trackRebaseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "TrackRebaseCS"));
+	}
+	return trackRebaseCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetDeformationEvolveCS()
@@ -2154,6 +2215,9 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationRingCS)
 		deformationRingCS->Release();
 	deformationRingCS = nullptr;
+	if (trackRebaseCS)
+		trackRebaseCS->Release();
+	trackRebaseCS = nullptr;
 	ReleaseBloodShaders();
 	ReleaseObjectPrintShaders();
 	if (deformationEvolveCS)

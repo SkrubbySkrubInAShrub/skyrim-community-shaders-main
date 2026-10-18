@@ -18,8 +18,14 @@
 // smooth at a far coarser scale than one texel.
 
 Texture2D<float4> DeformationMap : register(t0);
-// x = the berm field, y = the carve's short blur (CarveProfile's slough).
-RWTexture2D<float2> OutBermField : register(u0);
+// x = the berm field, y = the carve's short blur (CarveProfile's slough),
+// z = the date of the carve within the short blur, w = the date of the snow
+// the berm came from (TrackClock taps weighted by what they cut; 0 = none).
+RWTexture2D<float4> OutBermField : register(u0);
+// When each map texel was last cut (DeformationUpdateCS StampCS), on the
+// ageing clock; read with the wrapping sampler, four texels a tap.
+Texture2D<float> TrackClock : register(t2);
+SamplerState TrackClockSampler : register(s0);
 // Tiles (x | y<<16) whose berm output is stale, from ScanBermCS: the map
 // changed within the tap reach. Consumed by BermTiledCS via indirect args.
 StructuredBuffer<uint> BermTilesIn : register(t1);
@@ -61,7 +67,24 @@ cbuffer PerFrame : register(b0)
 	float MeltPersistence;
 	float MeltFloorStart;
 	float MeltEdgeNoise;
+
+	float CrustPrintDepth;
+	float CrustThaw;
+	float CrustBreakOnCarve;
+	float SlumpRate;
+
+	uint InjectValid;
+	float GameDeltaTime;
+	uint DebugActivityView;
+	// The ageing clock now: older dates count as this many units old.
+	float AgeingClock;
 }
+
+// Units a date can be older than the clock and still read as its own: past
+// it, any date reads this old, so beside a fresh cut it averages to half
+// aged, as the two would look, rather than to ancient. Past every Track
+// Ageing span. Mirrored by kTrackAgeHorizon in SnowDeformation.h.
+static const float kTrackAgeHorizon = 128.0;
 
 // Must match kWallBlurReach in SnowFields.hlsli.
 static const float kWallBlurReach = 12.0;
@@ -92,60 +115,46 @@ int3 DeformTexel(int2 t, int2 dims)
 }
 
 // Bilinear tap in texel coordinates, clamped to the edge - the Load-based
-// filtering SampleDeformationBilinear performs in the shells.
-float TapBilinear(float2 t, float2 dims)
+// filtering SampleDeformationBilinear performs in the shells - and the dates
+// of its four texels weighted by the same: x = the depth, y = depth x date.
+// a_displaced: DISPLACED depth only (total minus the melted portion). A berm
+// is snow that had to go somewhere; melted snow leaves no spoil, so it must
+// not reach the field at all. Subtracting here rather than scaling the berm
+// down afterwards also keeps a boot print through a melt basin throwing its
+// own proper ridge. Otherwise the carve as CarveProfile reads it (all of it,
+// melt included).
+float2 DatedBilinear(float2 t, float2 dims, bool a_displaced)
 {
 	t = clamp(t, 0.0, dims - 1.001);
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	// DISPLACED depth only (total minus the melted portion). A berm is snow
-	// that had to go somewhere; melted snow leaves no spoil, so it must not
-	// reach the field at all. Subtracting here rather than scaling the berm
-	// down afterwards also keeps a boot print through a melt basin throwing
-	// its own proper ridge.
-	float s00 = Displaced(DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))));
-	float s10 = Displaced(DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))));
-	float s01 = Displaced(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))));
-	float s11 = Displaced(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))));
+	float4 m00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 m10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 m01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 m11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+	float4 d = a_displaced ? float4(Displaced(m00), Displaced(m10), Displaced(m01), Displaced(m11)) :
+	                         saturate(float4(m00.x, m10.x, m01.x, m11.x));
 
-	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
-}
-
-// The carve as CarveProfile reads it (all of it, melt included), bilinear.
-float CarveBilinear(float2 t, float2 dims)
-{
-	t = clamp(t, 0.0, dims - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float s00 = saturate(DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x);
-	float s10 = saturate(DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x);
-	float s01 = saturate(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x);
-	float s11 = saturate(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x);
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Physical texels t0..t0+1 in one gather (the sampler wraps like
+	// DeformTexel), as s00 s10 s01 s11.
+	float4 date = TrackClock.GatherRed(TrackClockSampler, (float2(t0 + MapOrigin) + 1.0) / dims).wzxy;
+	date = max(date, AgeingClock - kTrackAgeHorizon);
+	float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+	float depth = lerp(lerp(d.x, d.y, f.x), lerp(d.z, d.w, f.x), f.y);
+	return float2(a_displaced ? saturate(depth) : depth, dot(w, d * date));
 }
 
 // A tap whose window UV leaves [0,1] contributes 0, matching
 // SampleDeformationFast: the field must decay to nothing at the window border
 // rather than smearing the edge texels inward.
-float Tap(float2 texel, float2 dims)
+float2 Tap(float2 texel, float2 dims, bool a_displaced)
 {
 	float2 uv = (texel + 0.5) / dims;
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
-	return TapBilinear(texel, dims);
-}
-
-float CarveTap(float2 texel, float2 dims)
-{
-	float2 uv = (texel + 0.5) / dims;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-	return CarveBilinear(texel, dims);
+	return DatedBilinear(texel, dims, a_displaced);
 }
 
 bool BermTexel(uint2 phys)
@@ -162,21 +171,25 @@ bool BermTexel(uint2 phys)
 	float invTexel = 1.0 / max(TexelSize, 1e-4);
 	float2 centre = float2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
-	float b = Tap(centre, dims);
+	float2 b = Tap(centre, dims, true);
 	[unroll] for (int i = 0; i < 16; i++)
-		b += Tap(centre + kBermTaps[i] * (BermReach * invTexel), dims);
+		b += Tap(centre + kBermTaps[i] * (BermReach * invTexel), dims, true);
 
 	// The short blur: the centre and the inner ring's eight directions at
 	// kWallBlurReach, never closer than a texel. Inside ScanBermCS's halo,
 	// whose reach is at least 20 units.
 	const float blurReach = max(kWallBlurReach * invTexel, 1.0) / 18.0;
-	float s = CarveTap(centre, dims);
+	float2 s = Tap(centre, dims, false);
 	[unroll] for (int j = 0; j < 8; j++)
-		s += CarveTap(centre + kBermTaps[j] * blurReach, dims);
+		s += Tap(centre + kBermTaps[j] * blurReach, dims, false);
 
-	const float berm = saturate(b / 17.0);
-	const float blur = s / 9.0;
-	OutBermField[phys] = float2(berm, blur);
+	const float berm = saturate(b.x / 17.0);
+	const float blur = s.x / 9.0;
+	// Each date weighted by the depth it dated, so the snow cut deepest
+	// speaks for the tap; nothing cut, no date.
+	const float carveDate = s.x > 1e-4 ? s.y / s.x : 0.0;
+	const float bermDate = b.x > 1e-4 ? b.y / b.x : 0.0;
+	OutBermField[phys] = float4(berm, blur, carveDate, bermDate);
 	return berm != 0.0 || blur != 0.0;
 }
 

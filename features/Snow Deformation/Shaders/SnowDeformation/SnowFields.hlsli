@@ -129,8 +129,9 @@ static const float kWallBlurReach = 12.0;
 // One bilinear tap of the baked field, addressed exactly like the deformation
 // map it was baked from (BermFieldCS writes texel-for-texel, same toroidal
 // layout and MapOrigin - so partial rebuilds survive scrolls). x = berm,
-// y = the carve's short blur.
-float2 BermFieldBaked(float2 gridLocal)
+// y = the carve's short blur, z = the carve's date, w = the berm's date
+// (TrackAgeOf).
+float4 BermFieldBaked(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
 	if (any(uv < 0.0) || any(uv > 1.0))
@@ -145,13 +146,55 @@ float2 BermFieldBaked(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float2 s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float2 s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float2 s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float2 s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+	float4 s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 #endif
+}
+
+// ---- Track age (TRACK-VARIATION-RESEARCH.md 3.4) ----
+// A baked date's age on the ageing clock (TrackAge.x now): 0 just cut, 1
+// aged (TrackAge.y per clock unit; 0 = tracks never age). No date (0) reads
+// new: nothing is cut there for an age to shape, and an aged reading would
+// fetch the walls' blur for nothing. Snowfall runs the clock fastest, so an
+// hour of it rounds a print the way a day of calm cold does.
+float TrackAgeOf(float a_date)
+{
+	return a_date > 0.0 ? saturate((TrackAge.x - a_date) * TrackAge.y) : 0.0;
+}
+
+// Age's say in a carve's shape (CarveProfile), worked out once per point:
+// x how far the walls round toward the carve's short blur, over the whole
+// age; y the rim teeth's strength (RimStyle.y), gone first; z the lip's
+// (RimStyle.x). Linear ramps: the age moves slowly, and the profile runs
+// several times a pixel. TrackCarveLook(0) is the fresh cut, the look before
+// ageing.
+float3 TrackCarveLook(float a_age)
+{
+	return float3(saturate(a_age * 1.1111 - 0.1111), RimStyle.y * saturate(1.0 - a_age * 2.857), RimStyle.x * saturate(1.1111 - a_age * 2.2222));
+}
+
+// What age leaves of a berm: snowfall buries it with everything else, and
+// settling rounds what stands proud first.
+float TrackBermScale(float a_age)
+{
+	return 1.0 - 0.6 * saturate(a_age * 1.25 - 0.25);
+}
+
+// What age leaves of the trench detail: new snow settles over the clods, so
+// an old track wears the powder set at a third of its relief. Never none:
+// disturbed snow reads crisp in every condition.
+float TrackDetailReliefScale(float a_age)
+{
+	return 1.0 - 0.65 * saturate(a_age * 1.6667);
+}
+
+float TrackDetailWetScale(float a_age)
+{
+	return saturate(1.0 - a_age * 2.5);
 }
 
 // The sun heightfield march's tap distances, both shells.
@@ -566,8 +609,11 @@ float4 SnowClimateRow(float worldZ)
 // fire ring went dark as a whole. Wet snow (Snow Climate) presses darker and
 // glossier at any depth; the warmest row says whether any snow in view is
 // wet. Under Snow Climate the thin print is the wet look too, so it follows
-// the wetness. Darkens a_albedo; returns the roughness cut.
-float SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_depth, float a_worldZ)
+// the wetness. An old print is under new snow and lighter: a_dated reads its
+// age at a_gridLocal (the baked carve date), inside the branch, so the date
+// is read only where a print darkens. Darkens a_albedo; returns the roughness
+// cut.
+float SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_depth, float a_worldZ, float2 a_gridLocal, bool a_dated)
 {
 	float wetRough = 0.0;
 	const float wetPress = smoothstep(0.1, 0.5, a_carve) * (1.0 - smoothstep(0.1, 0.4, a_melt));
@@ -575,7 +621,9 @@ float SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_d
 	{
 		const float climateWet = SnowClimateRow(a_worldZ).w;
 		const float thinPrint = (1.0 - smoothstep(1.5, 6.0, a_depth)) * saturate(SnowClimate2.w + climateWet);
-		const float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
+		float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
+		[branch] if (a_dated && TrackAge.y > 0.0 && BermBakeActive > 0.5)
+			wetPrint *= saturate(1.0 - 2.0 * TrackAgeOf(BermFieldBaked(a_gridLocal).z));
 		a_albedo = lerp(a_albedo, a_albedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint);
 		wetRough = wetPrint * (0.24 + 0.26 * climateWet);
 	}
@@ -605,8 +653,10 @@ float4 SnowConditionAt(float a_worldZ)
 }
 
 // 1 temperature (blue below freezing, white at it, orange above, a line
-// every 2 C), 2 wetness, 3 stickiness, 4 firmness, 5 all three as RGB.
-float3 SnowConditionColor(float4 a_condition, float a_view)
+// every 2 C), 2 wetness, 3 stickiness, 4 firmness, 5 all three as RGB, 6
+// track age (a_track: x the age, y how much trench is there; green just cut,
+// red aged, untouched snow white).
+float3 SnowConditionColor(float4 a_condition, float a_view, float2 a_track)
 {
 	const float t = a_condition.x;
 	const float band = t / 2.0;
@@ -625,8 +675,10 @@ float3 SnowConditionColor(float4 a_condition, float a_view)
 		color = lerp(float3(0.95, 0.95, 0.95), float3(1.0, 0.45, 0.05), a_condition.z);
 	else if (a_view < 4.5)
 		color = lerp(float3(0.95, 0.95, 0.95), float3(0.55, 0.1, 0.85), a_condition.w);
-	else
+	else if (a_view < 5.5)
 		color = a_condition.yzw;
+	else
+		color = lerp(float3(0.95, 0.95, 0.95), lerp(float3(0.15, 0.85, 0.2), float3(0.75, 0.2, 0.05), a_track.x), a_track.y);
 	return color;
 }
 #endif
@@ -801,15 +853,19 @@ float2 UndulationGradSampled(float2 worldXY)
 // the print, toward the carve's short blur (deformBlur, the berm field's .y)
 // but never past the print, so the hole keeps its outline and its floor
 // rounds and narrows.
-float CarveSlough(float deformation, float deformBlur)
+// Age (a_look, TrackCarveLook of the berm field's .z date) then rounds it
+// toward the blur itself, shallower and wider, as snowfall and settling round
+// a print, and takes the teeth and the lip off the rim first.
+float CarveSlough(float deformation, float deformBlur, float a_round)
 {
-	return saturate(lerp(deformation, min(deformation, deformBlur), CompactLook.w));
+	float d = saturate(lerp(deformation, min(deformation, deformBlur), CompactLook.w));
+	return lerp(d, deformBlur, a_round);
 }
 
-float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, float2 worldXY)
+float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, float2 worldXY, float3 a_look)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
-	float d = CarveSlough(deformation, deformBlur);
+	float d = CarveSlough(deformation, deformBlur, a_look.x);
 
 	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
 	// 8-unit raggedness, HEIGHT-BLEND-PLAN - reused, not reinvented),
@@ -825,7 +881,7 @@ float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, flo
 		{
 			float notch = (SnowDetailNoise(worldXY / 37.0) - 0.5) * 0.8 +
 			              (SnowDetailNoise(worldXY / 8.0) - 0.5) * 1.2;
-			d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
+			d = saturate(d + notch * a_look.y * 0.35 * rimBand * depthT);
 		}
 	}
 
@@ -843,24 +899,24 @@ float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, flo
 	[branch] if (RimStyle.x > 0.001)
 	{
 		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
-		profile += RimStyle.x * uncarvedDepth * hump * depthT;
+		profile += a_look.z * uncarvedDepth * hump * depthT;
 	}
 	return profile;
 }
 
 // CarveProfile without the rim teeth, for the sun march's occluders. The tail
 // mirrors CarveProfile's: keep the two in step.
-float CarveProfileNoTeeth(float deformation, float deformBlur, float uncarvedDepth)
+float CarveProfileNoTeeth(float deformation, float deformBlur, float uncarvedDepth, float3 a_look)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
-	float d = CarveSlough(deformation, deformBlur);
+	float d = CarveSlough(deformation, deformBlur, a_look.x);
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
 	float profile = uncarvedDepth * (1.0 - d);
 	[branch] if (RimStyle.x > 0.001)
 	{
 		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
-		profile += RimStyle.x * uncarvedDepth * hump * depthT;
+		profile += a_look.z * uncarvedDepth * hump * depthT;
 	}
 	return profile;
 }

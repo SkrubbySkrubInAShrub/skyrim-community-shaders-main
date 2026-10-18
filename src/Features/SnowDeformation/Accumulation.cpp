@@ -339,9 +339,18 @@ void SnowDeformation::TickSnowClimate()
 	                                                       1.0f + 20.0f * snowing + 8.0f * raining + 4.0f * climate.windPacking * (1.0f - snowing) + 6.0f * warm;
 	if (elapsed > 0.0f) {
 		climate.ageingClock += climate.ageingRate * elapsed;
-		while (climate.ageingClock >= 2.0f * kAgeingClockStart)
+		climate.ageingTotal += (double)climate.ageingRate * elapsed;
+		// Track dates follow the clock back (TrackRebaseCS).
+		while (climate.ageingClock >= 2.0f * kAgeingClockStart) {
 			climate.ageingClock -= kAgeingClockStart;
+			climate.ageingRebase += kAgeingClockStart;
+		}
 	}
+}
+
+float4 SnowDeformation::TrackAgeConstants() const
+{
+	return { snowClimate.ageingClock, std::clamp(settings.TrackAgeing, 0.0f, 2.0f) / kTrackAgeSpan, 0.0f, 0.0f };
 }
 
 SnowDeformation::SnowCondition SnowDeformation::GetSnowCondition() const

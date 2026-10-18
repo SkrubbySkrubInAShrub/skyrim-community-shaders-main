@@ -12,22 +12,26 @@
 // Persistent trenches, Stage C: the tile store on the SKSE co-save channel.
 // Design in PERSISTENT-TRENCHES-PLAN.md; the channel itself is CoSave.h.
 //
-// Layout, version 1. The per-tile header is exactly kTrenchTileHeaderBytes so
+// Layout, version 2. The per-tile header is exactly kTrenchTileHeaderBytes so
 // Stage D's budget counts what actually lands in the file:
 //
 //   chunk  { u32 tileCount, u16 tileDim, u16 pad, f32 tileWorldSize }
 //   tile   { u32 worldspace, i32 x, i32 y, f32 clockRel, f32 touchRel,
-//            u32 payloadBytes }  followed by payloadBytes of payload
+//            u32 payloadBytes }  followed by payloadBytes of depth payload,
+//          { f32 freshRel, u32 freshBytes } followed by freshBytes of
+//            freshness payload (0 bytes: the tile's tracks have aged out)
 //
-// Clock and touch are RELATIVE to this session's own (both <= 0, meaning "this
-// far behind now"), so nothing depends on two playthroughs sharing a calendar.
-// On load the decay clock restarts at zero and a tile's negative clock is the
-// decay it still owes. tileDim and tileWorldSize are written so a resolution
-// change is detected rather than misread at the wrong scale.
+// Version 1 is version 2 without the freshness pair; it loads with every
+// track aged. Clocks and touch are RELATIVE to this session's own (all <= 0,
+// meaning "this far behind now"), so nothing depends on two playthroughs
+// sharing a calendar. On load the decay clock restarts at zero and a tile's
+// negative clock is the decay it still owes; the freshness clock is put that
+// far behind the store's ageing clock. tileDim and tileWorldSize are written
+// so a resolution change is detected rather than misread at the wrong scale.
 
-void SnowDeformation::EncodeTrenchTile(const TrenchTile& a_tile, std::vector<uint8_t>& o_bytes) const
+void SnowDeformation::EncodeTrenchTile(const std::vector<uint8_t>& a_bytes, std::vector<uint8_t>& o_bytes) const
 {
-	const auto& depth = a_tile.depth;
+	const auto& depth = a_bytes;
 	o_bytes.clear();
 	o_bytes.reserve(depth.size() / 4);
 
@@ -107,12 +111,18 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 		return;
 
 	std::vector<uint8_t> payload;
+	std::vector<uint8_t> freshPayload;
 	size_t written = 0;
 	for (const auto& [key, tile] : trenchTiles) {
-		EncodeTrenchTile(tile, payload);
+		EncodeTrenchTile(tile.depth, payload);
 		const uint32_t payloadBytes = (uint32_t)payload.size();
 		const float clockRel = tile.clock - trenchDecayClock;
 		const float touchRel = tile.lastTouch - gameClockHours.load(std::memory_order_relaxed);
+		freshPayload.clear();
+		if (!tile.fresh.empty())
+			EncodeTrenchTile(tile.fresh, freshPayload);
+		const uint32_t freshBytes = (uint32_t)freshPayload.size();
+		const float freshRel = (float)std::min(tile.freshClock - trenchAgeingTotal, 0.0);
 
 		a_intfc->WriteRecordData(&key.worldspace, sizeof(key.worldspace));
 		a_intfc->WriteRecordData(&key.x, sizeof(key.x));
@@ -121,7 +131,11 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 		a_intfc->WriteRecordData(&touchRel, sizeof(touchRel));
 		a_intfc->WriteRecordData(&payloadBytes, sizeof(payloadBytes));
 		a_intfc->WriteRecordData(payload.data(), payloadBytes);
-		written += payloadBytes + kTrenchTileHeaderBytes;
+		a_intfc->WriteRecordData(&freshRel, sizeof(freshRel));
+		a_intfc->WriteRecordData(&freshBytes, sizeof(freshBytes));
+		if (freshBytes)
+			a_intfc->WriteRecordData(freshPayload.data(), freshBytes);
+		written += payloadBytes + freshBytes + kTrenchTileHeaderBytes;
 	}
 
 	// The budget slider is denominated in this number. A drift between what the
@@ -138,13 +152,15 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 {
 	LoadTraceBegin("co-save trench store");
 	LoadTraceScope _loadTrace(this, "CoSave: LoadTrenchStore");
-	if (a_version != kTrenchRecordVersion) {
+	if (a_version != kTrenchRecordVersion && a_version != 1) {
 		// Refused, not guessed at: a future layout read as this one is a
 		// corrupt store rather than a missing one.
-		logger::warn("[SNOW DEFORMATION] trench co-save is version {}, this build reads {}; stored trenches dropped",
+		logger::warn("[SNOW DEFORMATION] trench co-save is version {}, this build reads 1-{}; stored trenches dropped",
 			a_version, kTrenchRecordVersion);
 		return;
 	}
+	// Version 1 kept no dates: its tracks come back aged.
+	const bool dated = a_version >= 2;
 
 	uint32_t tileCount = 0;
 	uint16_t tileDim = 0;
@@ -210,11 +226,33 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 			logger::warn("[SNOW DEFORMATION] trench co-save tile {} would not decode; the rest is dropped", i);
 			break;
 		}
+		tile.freshClock = trenchAgeingTotal;
+		if (dated) {
+			float freshRel = 0.0f;
+			uint32_t freshBytes = 0;
+			if (a_intfc->ReadRecordData(&freshRel, sizeof(freshRel)) != sizeof(freshRel) ||
+				a_intfc->ReadRecordData(&freshBytes, sizeof(freshBytes)) != sizeof(freshBytes))
+				break;
+			if (freshBytes > (uint32_t)kTrenchTileDim * kTrenchTileDim) {
+				logger::warn("[SNOW DEFORMATION] trench co-save tile {} claims {} freshness bytes; the rest is dropped", i, freshBytes);
+				break;
+			}
+			if (freshBytes) {
+				payload.resize(freshBytes);
+				if (a_intfc->ReadRecordData(payload.data(), freshBytes) != freshBytes)
+					break;
+				if (!DecodeTrenchTile(payload.data(), freshBytes, tile.fresh)) {
+					logger::warn("[SNOW DEFORMATION] trench co-save tile {} freshness would not decode; the rest is dropped", i);
+					break;
+				}
+				tile.freshClock = trenchAgeingTotal + std::min((double)freshRel, 0.0);
+			}
+		}
 		// Both stay negative: relative readings order correctly against the
 		// positive ones this session will stamp, so the LRU needs no fixup.
 		tile.clock = std::min(clockRel, 0.0f);
 		tile.lastTouch = std::min(touchRel, 0.0f);
-		tile.encodedBytes = payloadBytes;
+		tile.encodedBytes = payloadBytes + (uint32_t)(tile.fresh.empty() ? 0 : payload.size());
 		trenchTiles.emplace(key, std::move(tile));
 		restored++;
 	}

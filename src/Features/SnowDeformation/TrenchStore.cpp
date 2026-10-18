@@ -89,15 +89,17 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	for (int ring = 0; ring < 2; ring++)
 		for (int axis = 0; axis < 2; axis++) {
 			trenchBandStaging[ring][axis] = nullptr;
+			trenchClockBandStaging[ring][axis] = nullptr;
 			trenchBandValid[ring][axis] = false;
 		}
 
+	// Depth and freshness: arriving ground comes back with its age.
 	D3D11_TEXTURE2D_DESC injectDesc{};
 	injectDesc.Width = deformMapDim;
 	injectDesc.Height = deformMapDim;
 	injectDesc.MipLevels = 1;
 	injectDesc.ArraySize = 1;
-	injectDesc.Format = DXGI_FORMAT_R8_UNORM;
+	injectDesc.Format = DXGI_FORMAT_R8G8_UNORM;
 	injectDesc.SampleDesc.Count = 1;
 	injectDesc.Usage = D3D11_USAGE_DEFAULT;
 	injectDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -110,6 +112,7 @@ bool SnowDeformation::CreateTrenchStoreResources()
 
 	// Staged bands are the map's own format: the copy is a straight region
 	// blit and the half-float unpack happens on the CPU, off the render path.
+	// The track dates beside them in theirs.
 	D3D11_TEXTURE2D_DESC bandDesc{};
 	bandDesc.MipLevels = 1;
 	bandDesc.ArraySize = 1;
@@ -117,25 +120,32 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	bandDesc.SampleDesc.Count = 1;
 	bandDesc.Usage = D3D11_USAGE_STAGING;
 	bandDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	D3D11_TEXTURE2D_DESC clockBandDesc = bandDesc;
+	clockBandDesc.Format = DXGI_FORMAT_R16_FLOAT;
 	for (int ring = 0; ring < 2; ring++) {
 		for (int axis = 0; axis < 2; axis++) {
-			bandDesc.Width = axis == 0 ? (UINT)kTrenchBandMax : deformMapDim;
-			bandDesc.Height = axis == 0 ? deformMapDim : (UINT)kTrenchBandMax;
-			if (FAILED(device->CreateTexture2D(&bandDesc, nullptr, trenchBandStaging[ring][axis].put())))
+			bandDesc.Width = clockBandDesc.Width = axis == 0 ? (UINT)kTrenchBandMax : deformMapDim;
+			bandDesc.Height = clockBandDesc.Height = axis == 0 ? deformMapDim : (UINT)kTrenchBandMax;
+			if (FAILED(device->CreateTexture2D(&bandDesc, nullptr, trenchBandStaging[ring][axis].put())) ||
+				FAILED(device->CreateTexture2D(&clockBandDesc, nullptr, trenchClockBandStaging[ring][axis].put())))
 				return false;
 			Util::SetResourceName(trenchBandStaging[ring][axis].get(), "SnowDeformation::TrenchBandStaging");
+			Util::SetResourceName(trenchClockBandStaging[ring][axis].get(), "SnowDeformation::TrenchClockBandStaging");
 		}
 	}
 
-	// Rolling window mirror: same format, a fixed slice of full-width rows.
-	bandDesc.Width = deformMapDim;
-	bandDesc.Height = (UINT)kTrenchRollRows;
+	// Rolling window mirror: same formats, a fixed slice of full-width rows.
+	bandDesc.Width = clockBandDesc.Width = deformMapDim;
+	bandDesc.Height = clockBandDesc.Height = (UINT)kTrenchRollRows;
 	for (int ring = 0; ring < 2; ring++) {
 		trenchRollStaging[ring] = nullptr;
+		trenchClockRollStaging[ring] = nullptr;
 		trenchRollValid[ring] = false;
-		if (FAILED(device->CreateTexture2D(&bandDesc, nullptr, trenchRollStaging[ring].put())))
+		if (FAILED(device->CreateTexture2D(&bandDesc, nullptr, trenchRollStaging[ring].put())) ||
+			FAILED(device->CreateTexture2D(&clockBandDesc, nullptr, trenchClockRollStaging[ring].put())))
 			return false;
 		Util::SetResourceName(trenchRollStaging[ring].get(), "SnowDeformation::TrenchRollStaging");
+		Util::SetResourceName(trenchClockRollStaging[ring].get(), "SnowDeformation::TrenchClockRollStaging");
 	}
 	trenchRollRow = 0;
 
@@ -145,6 +155,7 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	trenchDebugSRV = nullptr;
 	trenchDebugUAV = nullptr;
 	D3D11_TEXTURE2D_DESC debugDesc = injectDesc;
+	debugDesc.Format = DXGI_FORMAT_R8_UNORM;
 	debugDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	if (SUCCEEDED(device->CreateTexture2D(&debugDesc, nullptr, trenchDebugTexture.put()))) {
 		Util::SetResourceName(trenchDebugTexture.get(), "SnowDeformation::TrenchDebugDepth");
@@ -152,7 +163,7 @@ bool SnowDeformation::CreateTrenchStoreResources()
 		device->CreateUnorderedAccessView(trenchDebugTexture.get(), nullptr, trenchDebugUAV.put());
 	}
 
-	trenchInjectScratch.assign((size_t)deformMapDim * deformMapDim, 0);
+	trenchInjectScratch.assign((size_t)deformMapDim * deformMapDim * 2, 0);
 	trenchMapPrimed = false;
 	return true;
 }
@@ -341,9 +352,13 @@ void SnowDeformation::RollTrenchWindow()
 	// because losing a slice loses ground the store would then never relearn.
 	if (trenchRollValid[ring]) {
 		D3D11_MAPPED_SUBRESOURCE stale{};
+		D3D11_MAPPED_SUBRESOURCE staleClocks{};
 		if (SUCCEEDED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, 0, &stale))) {
+			const bool dated = SUCCEEDED(context->Map(trenchClockRollStaging[ring].get(), 0, D3D11_MAP_READ, 0, &staleClocks));
 			cpuCensus.trenchStorePath = CpuCensus::kStoreRollStale;
-			StoreTrenchBand(trenchRollMeta[ring], stale);
+			StoreTrenchBand(trenchRollMeta[ring], stale, dated ? &staleClocks : nullptr);
+			if (dated)
+				context->Unmap(trenchClockRollStaging[ring].get(), 0);
 			context->Unmap(trenchRollStaging[ring].get(), 0);
 		}
 		trenchRollValid[ring] = false;
@@ -374,10 +389,12 @@ void SnowDeformation::RollTrenchWindow()
 	// Logical rows out of the toroidal map; the staging slice stays laid out
 	// logically so the unpack below is untouched.
 	CopyLogicalBox(trenchRollStaging[ring].get(), live->resource.get(), 0, start, dim, rows, trenchMapPhysOrigin);
+	if (trackClockTexture)
+		CopyLogicalBox(trenchClockRollStaging[ring].get(), trackClockTexture->resource.get(), 0, start, dim, rows, trenchMapPhysOrigin);
 
 	// The window state the CONTENTS belong to, not the live values - the same
 	// rule the departing flush follows.
-	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, start, dim, rows };
+	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, start, dim, rows, TrackDateClock(), trenchAgeingTotal };
 	trenchRollValid[ring] = true;
 
 	// UNCONDITIONAL. Nothing may hold the cursor still, which is the whole
@@ -437,8 +454,22 @@ void SnowDeformation::TickTrenchClock()
 	trenchDecayClock += elapsed * (weather + floorRate);
 }
 
+void SnowDeformation::TickTrenchAgeing()
+{
+	std::scoped_lock lock(trenchStoreMutex);
+	trenchAgeingTotal = snowClimate.ageingTotal;
+}
+
 bool SnowDeformation::DecayTrenchTile(TrenchTile& a_tile)
 {
+	// Floored like the depth below, the clock advancing only by what was
+	// applied. A tile whose tracks have all aged out drops its bytes.
+	if (const int age = (int)std::floor((trenchAgeingTotal - a_tile.freshClock) * kTrackFreshPerUnit); age > 0) {
+		a_tile.freshClock += (double)age / kTrackFreshPerUnit;
+		if (!a_tile.fresh.empty() && !TrenchSimd::DecayBytes(a_tile.fresh.data(), a_tile.fresh.size(), std::min(age, 255)))
+			std::vector<uint8_t>().swap(a_tile.fresh);
+	}
+
 	const float pending = trenchDecayClock - a_tile.clock;
 	if (pending <= 0.0f)
 		return true;
@@ -538,6 +569,13 @@ void SnowDeformation::SweepTrenchStore()
 		// A tile the encoder would make bigger is kept raw, so a pathological
 		// pattern costs its raw size and never more.
 		it->second.encodedBytes = std::min(encoded, (uint32_t)bytes.size());
+		// Its freshness, by the same rule; an aged-out tile writes none.
+		if (const auto& fresh = it->second.fresh; !fresh.empty()) {
+			size_t freshNonZero = 0;
+			size_t freshPairs = 0;
+			TrenchSimd::CountRuns(fresh.data(), fresh.size(), freshNonZero, freshPairs);
+			it->second.encodedBytes += std::min((uint32_t)(freshPairs * kTrenchRLEPairBytes), (uint32_t)fresh.size());
+		}
 
 		trenchAccumNonZero += nonZero;
 		trenchAccumTiles++;
@@ -667,7 +705,7 @@ float SnowDeformation::ProbeTrenchStore(float a_worldX, float a_worldY)
 	return SampleTrenchStore(activeWorldspace.load(std::memory_order_acquire), a_worldX, a_worldY);
 }
 
-float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY)
+float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY, float* o_fresh)
 {
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 
@@ -681,6 +719,7 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 	const float ty = fy - (float)gy;
 
 	float corner[4] = {};
+	float cornerFresh[4] = {};
 	for (int i = 0; i < 4; i++) {
 		const int sx = gx + (i & 1);
 		const int sy = gy + (i >> 1);
@@ -700,16 +739,35 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 		corner[i] = std::max(0.0f,
 			trenchSampleTile->depth[(size_t)ly * kTrenchTileDim + lx] * (1.0f / 255.0f) -
 				(trenchDecayClock - trenchSampleTile->clock));
+		if (o_fresh && !trenchSampleTile->fresh.empty())
+			cornerFresh[i] = std::max(0.0f, (float)(trenchSampleTile->fresh[(size_t)ly * kTrenchTileDim + lx] -
+													  (trenchAgeingTotal - trenchSampleTile->freshClock) * kTrackFreshPerUnit) *
+												 (1.0f / 255.0f));
 	}
 
+	const float w[4] = { (1.0f - tx) * (1.0f - ty), tx * (1.0f - ty), (1.0f - tx) * ty, tx * ty };
+	if (o_fresh) {
+		// Weighted by depth as the berm bake weighs dates, so a trench's edge
+		// keeps its own age rather than averaging toward the untrodden.
+		float weight = 0.0f;
+		float fresh = 0.0f;
+		for (int i = 0; i < 4; i++) {
+			weight += w[i] * corner[i];
+			fresh += w[i] * corner[i] * cornerFresh[i];
+		}
+		*o_fresh = weight > 1e-6f ? fresh / weight : 0.0f;
+	}
 	return std::lerp(std::lerp(corner[0], corner[1], tx), std::lerp(corner[2], corner[3], tx), ty);
 }
 
-void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped)
+void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped, const D3D11_MAPPED_SUBRESOURCE* a_clocks)
 {
 	cpuCensus.storeCalls[cpuCensus.trenchStorePath]++;
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 	const float half = a_meta.texel * 0.5f;
+	// The band's dates are on the ageing clock it was copied under; the store
+	// has aged this much since.
+	const double sinceCopy = trenchAgeingTotal - a_meta.ageingTotal;
 
 	// Centre of the window these contents belong to, for the keep-radius gate.
 	const float centreX = a_meta.origin.x + a_meta.texel * (float)deformMapDim * 0.5f;
@@ -767,6 +825,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			TrenchTile fresh;
 			fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
 			fresh.clock = trenchDecayClock;
+			fresh.freshClock = trenchAgeingTotal;
 			fresh.lastTouch = gameClock.lastHours;
 			// Re-seated after the insert, which may have rehashed.
 			cachedTile = &trenchTiles.emplace(a_key, std::move(fresh)).first->second;
@@ -775,9 +834,21 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 		return cachedTile;
 	};
 
+	// A tile's freshness, allocated on its first dated texel, on the store's clock.
+	auto freshOf = [&](TrenchTile& a_tile) -> uint8_t* {
+		if (a_tile.fresh.empty()) {
+			a_tile.fresh.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
+			a_tile.freshClock = trenchAgeingTotal;
+		}
+		return a_tile.fresh.data();
+	};
+
 	for (int row = 0; row < a_meta.h; row++) {
 		const auto* src = reinterpret_cast<const DirectX::PackedVector::HALF*>(
 			static_cast<const uint8_t*>(a_mapped.pData) + (size_t)row * a_mapped.RowPitch);
+		const auto* dates = a_clocks ? reinterpret_cast<const DirectX::PackedVector::HALF*>(
+										   static_cast<const uint8_t*>(a_clocks->pData) + (size_t)row * a_clocks->RowPitch) :
+		                               nullptr;
 		const float worldY = a_meta.origin.y + ((float)(a_meta.y0 + row) + 0.5f) * a_meta.texel;
 		const int gy0 = (int)std::floor((worldY - half) / storeTexel);
 		const int gy1 = (int)std::floor((worldY + half - 0.001f) / storeTexel);
@@ -815,6 +886,11 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			// slice is untrodden: this was ~3 ms/frame at a 125 m window.
 			if (quantised == 0)
 				continue;
+			// How lately it was cut: 255 now, 0 at kTrackAgeHorizon or never.
+			const float date = dates ? DirectX::PackedVector::XMConvertHalfToFloat(dates[col]) : 0.0f;
+			const uint8_t freshByte = date > 0.0f ?
+			                              (uint8_t)std::clamp((int)std::lround(255.0 - ((double)a_meta.ageingClock - date + sinceCopy) * kTrackFreshPerUnit), 0, 255) :
+			                              (uint8_t)0;
 
 			const float worldX = a_meta.origin.x + ((float)(a_meta.x0 + col) + 0.5f) * a_meta.texel;
 			const int gx0 = (int)std::floor((worldX - half) / storeTexel);
@@ -834,12 +910,17 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 				const int lx0 = gx0 - key.x * kTrenchTileDim;
 				const int lx1 = gx1 - key.x * kTrenchTileDim;
 				uint64_t raised = 0;
+				uint8_t* freshBytes = freshByte ? freshOf(*tile) : nullptr;
 				for (int gy = gy0; gy <= gy1; gy++) {
-					uint8_t* line = tile->depth.data() + (size_t)(gy - key.y * kTrenchTileDim) * kTrenchTileDim;
+					const size_t lineStart = (size_t)(gy - key.y * kTrenchTileDim) * kTrenchTileDim;
+					uint8_t* line = tile->depth.data() + lineStart;
 					for (int lx = lx0; lx <= lx1; lx++) {
 						raised += quantised > line[lx];
 						line[lx] = std::max(line[lx], quantised);
 					}
+					if (freshBytes)
+						for (int lx = lx0; lx <= lx1; lx++)
+							freshBytes[lineStart + lx] = std::max(freshBytes[lineStart + lx], freshByte);
 				}
 				cpuCensus.storeRaises[cpuCensus.trenchStorePath] += raised;
 				continue;
@@ -865,6 +946,11 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					// its rate from RefillAmount, so ground behaves the same
 					// whether or not it is being looked at.
 					stored = std::max(stored, quantised);
+					// The latest cut dates it, raise-only like the depth.
+					if (freshByte) {
+						uint8_t& storedFresh = freshOf(*tile)[(size_t)ly * kTrenchTileDim + lx];
+						storedFresh = std::max(storedFresh, freshByte);
+					}
 				}
 			}
 		}
@@ -890,12 +976,18 @@ void SnowDeformation::DrainTrenchBands()
 			if (!trenchBandValid[ring][axis])
 				continue;
 			D3D11_MAPPED_SUBRESOURCE mapped{};
+			D3D11_MAPPED_SUBRESOURCE clocks{};
 			// DO_NOT_WAIT: a copy issued this frame is still in flight and
 			// simply waits another frame rather than stalling the render thread.
 			if (FAILED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 				continue;
+			if (FAILED(context->Map(trenchClockBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &clocks))) {
+				context->Unmap(trenchBandStaging[ring][axis].get(), 0);
+				continue;
+			}
 			cpuCensus.trenchStorePath = CpuCensus::kStoreBand;
-			StoreTrenchBand(trenchBandMeta[ring][axis], mapped);
+			StoreTrenchBand(trenchBandMeta[ring][axis], mapped, &clocks);
+			context->Unmap(trenchClockBandStaging[ring][axis].get(), 0);
 			context->Unmap(trenchBandStaging[ring][axis].get(), 0);
 			trenchBandValid[ring][axis] = false;
 		}
@@ -905,10 +997,16 @@ void SnowDeformation::DrainTrenchBands()
 		if (!trenchRollValid[ring])
 			continue;
 		D3D11_MAPPED_SUBRESOURCE mapped{};
+		D3D11_MAPPED_SUBRESOURCE clocks{};
 		if (FAILED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 			continue;
+		if (FAILED(context->Map(trenchClockRollStaging[ring].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &clocks))) {
+			context->Unmap(trenchRollStaging[ring].get(), 0);
+			continue;
+		}
 		cpuCensus.trenchStorePath = CpuCensus::kStoreRoll;
-		StoreTrenchBand(trenchRollMeta[ring], mapped);
+		StoreTrenchBand(trenchRollMeta[ring], mapped, &clocks);
+		context->Unmap(trenchClockRollStaging[ring].get(), 0);
 		context->Unmap(trenchRollStaging[ring].get(), 0);
 		trenchRollValid[ring] = false;
 	}
@@ -952,18 +1050,33 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		// Created and dropped around the copy: 32 MB is too much to hold for a
 		// path that runs at a loading screen.
 		winrt::com_ptr<ID3D11Texture2D> fullStaging;
+		winrt::com_ptr<ID3D11Texture2D> fullClockStaging;
+		D3D11_TEXTURE2D_DESC fullClockDesc = fullDesc;
+		fullClockDesc.Format = DXGI_FORMAT_R16_FLOAT;
 		if (FAILED(device->CreateTexture2D(&fullDesc, nullptr, fullStaging.put())))
 			return;
 		Util::SetResourceName(fullStaging.get(), "SnowDeformation::TrenchFullStaging");
+		// The dates ride along when they can; without them the trenches store aged.
+		if (!trackClockTexture || FAILED(device->CreateTexture2D(&fullClockDesc, nullptr, fullClockStaging.put())))
+			fullClockStaging = nullptr;
+		else
+			Util::SetResourceName(fullClockStaging.get(), "SnowDeformation::TrenchClockFullStaging");
 		// De-rotated during the copy, so the CPU unpack (and through it the
 		// co-save format) stays layout-independent: saves never encode the
 		// map origin.
 		CopyLogicalBox(fullStaging.get(), previous->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
+		if (fullClockStaging)
+			CopyLogicalBox(fullClockStaging.get(), trackClockTexture->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
 
 		D3D11_MAPPED_SUBRESOURCE mapped{};
+		D3D11_MAPPED_SUBRESOURCE clocks{};
 		if (SUCCEEDED(context->Map(fullStaging.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+			const bool dated = fullClockStaging && SUCCEEDED(context->Map(fullClockStaging.get(), 0, D3D11_MAP_READ, 0, &clocks));
 			cpuCensus.trenchStorePath = CpuCensus::kStoreJump;
-			StoreTrenchBand({ trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim }, mapped);
+			StoreTrenchBand({ trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim, TrackDateClock(), trenchAgeingTotal }, mapped,
+				dated ? &clocks : nullptr);
+			if (dated)
+				context->Unmap(fullClockStaging.get(), 0);
 			context->Unmap(fullStaging.get(), 0);
 		}
 		return;
@@ -982,7 +1095,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		if (delta == 0)
 			continue;
 
-		TrenchBandCopy meta{ trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim };
+		TrenchBandCopy meta{ trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim, TrackDateClock(), trenchAgeingTotal };
 		const int start = delta > 0 ? 0 : dim + delta;
 		if (axis == 0) {
 			meta.x0 = start;
@@ -996,9 +1109,13 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		// it. Losing a band loses trenches; a rare stall does not.
 		if (trenchBandValid[ring][axis]) {
 			D3D11_MAPPED_SUBRESOURCE stale{};
+			D3D11_MAPPED_SUBRESOURCE staleClocks{};
 			if (SUCCEEDED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, 0, &stale))) {
+				const bool dated = SUCCEEDED(context->Map(trenchClockBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, 0, &staleClocks));
 				cpuCensus.trenchStorePath = CpuCensus::kStoreBandStale;
-				StoreTrenchBand(trenchBandMeta[ring][axis], stale);
+				StoreTrenchBand(trenchBandMeta[ring][axis], stale, dated ? &staleClocks : nullptr);
+				if (dated)
+					context->Unmap(trenchClockBandStaging[ring][axis].get(), 0);
 				context->Unmap(trenchBandStaging[ring][axis].get(), 0);
 			}
 			trenchBandValid[ring][axis] = false;
@@ -1006,6 +1123,9 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 		CopyLogicalBox(trenchBandStaging[ring][axis].get(), previous->resource.get(),
 			meta.x0, meta.y0, meta.w, meta.h, trenchMapPhysOrigin);
+		if (trackClockTexture)
+			CopyLogicalBox(trenchClockBandStaging[ring][axis].get(), trackClockTexture->resource.get(),
+				meta.x0, meta.y0, meta.w, meta.h, trenchMapPhysOrigin);
 		trenchBandMeta[ring][axis] = meta;
 		trenchBandValid[ring][axis] = true;
 	}
@@ -1041,7 +1161,8 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 	bool any = false;
 	for (int i = 0; i < rectCount; i++) {
 		const ArrivalRect& rect = rects[i];
-		const size_t bytes = (size_t)rect.w * rect.h;
+		// Two bytes a texel: depth, freshness.
+		const size_t bytes = (size_t)rect.w * rect.h * 2;
 		std::fill_n(trenchInjectScratch.begin(), bytes, (uint8_t)0);
 
 		const float minX = windowOrigin.x + (float)rect.x0 * texel;
@@ -1079,15 +1200,17 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 
 			for (int py = py0; py <= py1; py++) {
 				const float worldY = windowOrigin.y + ((float)py + 0.5f) * texel;
-				uint8_t* row = trenchInjectScratch.data() + (size_t)(py - rect.y0) * rect.w;
+				uint8_t* row = trenchInjectScratch.data() + (size_t)(py - rect.y0) * rect.w * 2;
 				for (int px = px0; px <= px1; px++) {
 					const float worldX = windowOrigin.x + ((float)px + 0.5f) * texel;
 					// Bilinear, not nearest: the store is finer than the map at
 					// every range setting above 4 units per texel, and dropping
 					// texels thins a trail on the way back in.
-					const float depth = SampleTrenchStore(worldspace, worldX, worldY);
+					float fresh = 0.0f;
+					const float depth = SampleTrenchStore(worldspace, worldX, worldY, &fresh);
 					const uint8_t quantised = (uint8_t)std::lround(std::clamp(depth, 0.0f, 1.0f) * 255.0f);
-					row[px - rect.x0] = quantised;
+					row[(px - rect.x0) * 2] = quantised;
+					row[(px - rect.x0) * 2 + 1] = (uint8_t)std::lround(std::clamp(fresh, 0.0f, 1.0f) * 255.0f);
 					painted = painted || quantised != 0;
 				}
 			}
@@ -1106,7 +1229,7 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 		// unpainted rect would otherwise hand the CS whatever an older band
 		// left in the texture. Zeroes are the correct answer for bare ground.
 		const D3D11_BOX box{ (UINT)rect.x0, (UINT)rect.y0, 0, (UINT)(rect.x0 + rect.w), (UINT)(rect.y0 + rect.h), 1 };
-		context->UpdateSubresource(trenchInjectTexture.get(), 0, &box, trenchInjectScratch.data(), (UINT)rect.w, 0);
+		context->UpdateSubresource(trenchInjectTexture.get(), 0, &box, trenchInjectScratch.data(), (UINT)rect.w * 2, 0);
 	}
 
 	return any ? 1u : 0u;

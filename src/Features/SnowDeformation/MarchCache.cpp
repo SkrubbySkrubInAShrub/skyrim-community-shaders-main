@@ -148,7 +148,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	// while it snows and is left to the row bands. So do the berm and lip
 	// amplitudes and the wall slough: freshness and the climate ease them
 	// every tick, so the key holds their sliders and the climate's overrides,
-	// not their values.
+	// not their values. Track age the same: the clock runs, Track Ageing keys.
 	uint64_t key = 1469598103934665603ull;
 	auto mix = [&](const void* a_p, size_t a_n) {
 		const auto* b = static_cast<const uint8_t*>(a_p);
@@ -161,7 +161,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		a_cb.BermBakeActive, a_cb.ObjectLiftCap > 0.0f ? 1.0f : 0.0f, a_cb.ExclusionFieldWindow.w, a_cb.FineWindow.z,
 		a_cb.ObjectHeightHalfExtent, a_cb.FieldDims.x, a_cb.FieldDims.y, a_cb.FieldDims.z, a_cb.FieldDims.w,
 		settings.FreshSnowSoftness, debugFreshnessOverride, settings.SnowClimateStrength, debugClimateTemperatureOn ? debugClimateTemperature : -1000.0f,
-		debugClimateShareOverride, debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride };
+		debugClimateShareOverride, debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, settings.TrackAgeing };
 	mix(keyFloats, sizeof(keyFloats));
 	mix(&dim, sizeof(dim));
 	const bool keyChanged = key != marchCacheKey;
@@ -175,9 +175,12 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const bool tiles = !full && bermBakeSeq == marchCacheBermSeq + 1;
 	marchCacheBermSeq = bermBakeSeq;
 	const bool fineMoved = shellFineOriginX != marchCacheFineOrigin[0] || shellFineOriginY != marchCacheFineOrigin[1];
+	// Tracks age slowly enough for the row bands, except across a wait.
+	const bool tracksAged = std::abs(a_cb.TrackAge.x - marchCacheAgeingClock) > 2.0f;
+	marchCacheAgeingClock = a_cb.TrackAge.x;
 	if (full)
 		marchCacheFastRows = 0;
-	else if (terrainMoved || fineMoved)
+	else if (terrainMoved || fineMoved || tracksAged)
 		marchCacheFastRows = dim;
 	uint32_t nearStart = 0;
 	const uint32_t nearRows = MarchRows(full, dim, kMarchCacheRows, kMarchCacheFastRows, marchCacheFastRows, marchCacheRowCursor, nearStart);

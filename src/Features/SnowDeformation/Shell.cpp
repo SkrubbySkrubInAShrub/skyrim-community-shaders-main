@@ -1178,6 +1178,8 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	cb.ObjectHeightCenter = heightWindowCenter;
 	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
+	// This frame's clock: a rebase has already moved the dates under it.
+	cb.TrackAge = TrackAgeConstants();
 	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
 		1.0f / kUndulationFieldHalfExtent,
 		undulationFieldValid ? 1.0f : 0.0f };
@@ -1734,6 +1736,7 @@ void SnowDeformation::DrawShell()
 		0.0f
 	};
 	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f), 0.0f, 0.0f, 0.0f };
+	cbData.TrackAge = TrackAgeConstants();
 	// Fresh snow compacts instead of being thrown: little berm, no cut rim.
 	// Snow Climate moves each lever from that fixed look to the climate's.
 	const float snowSoftness = GetSnowSoftness();
@@ -1790,7 +1793,7 @@ void SnowDeformation::DrawShell()
 		const SnowCondition condition = GetSnowCondition();
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		cbData.SnowClimate = { condition.temperature, kClimateLapse, player ? player->GetPosition().z : 0.0f, condition.freshness };
-		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 5), 1.0f - look.strength };
+		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 6), 1.0f - look.strength };
 		cbData.SnowClimateOverride = { debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, 0.0f };
 		std::copy(look.lut.begin(), look.lut.end(), cbData.SnowClimateLUT);
 	}

@@ -861,6 +861,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttResist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Every new pass over the same snow carves the same share of what is left, so busy paths sink deeper the more they are walked. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
 
+		ImGui::SliderFloat(T(TKEY("track_ageing"), "Track Ageing"), &settings.TrackAgeing, 0.0f, 2.0f, "%.2f");
+		if (auto _ttTrackAge = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("track_ageing_tooltip"), "How fast tracks age. An old track's walls round off, shallower and wider, its rim loses its teeth and lip, its berm settles, and new snow covers the broken snow and the dark wet print. Snowfall ages tracks fastest: at 1.00 an hour of it does what a day of calm cold does. Walking an old track again makes it fresh where your feet reach the floor. Ages are kept in saves. 0 = tracks never age."));
+
 		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
 		if (auto _ttClimate = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge and loose snow fallen back into them; settled snow just below freezing keeps the full ridge, lip and teeth; wet snow leaves dark prints with crisp walls. Berm Height, Rim Lip and Rim Teeth are the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
@@ -1905,6 +1909,13 @@ void SnowDeformation::DrawSettings()
 				accumWeatherIntensity.load(std::memory_order_relaxed), climate.rainHeld);
 			WrapTextF("Ageing clock: %.2f, running at %.1f per game hour%s", climate.ageingClock, climate.ageingRate,
 				debugAgeingRateOverride >= 0.0f ? " (override)" : "");
+			if (const float ageing = std::clamp(settings.TrackAgeing, 0.0f, 2.0f); ageing <= 0.0f)
+				WrapTextF("Tracks: never age (Track Ageing 0)");
+			else if (climate.ageingRate <= 0.0f)
+				WrapTextF("Tracks: the clock is stopped, nothing ages");
+			else
+				WrapTextF("Tracks: fully aged after %.1f game hours at this rate (Track Ageing %.2f, %.0f clock units)",
+					kTrackAgeSpan / (ageing * climate.ageingRate), ageing, kTrackAgeSpan / ageing);
 			{
 				const SnowClimateLook look = ComputeSnowClimateLook();
 				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, wall slough %.2f", look.strength,
@@ -1930,13 +1941,13 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("climate_condition_override_tooltip"), "Not saved. Below 0 the value is derived; at 0 or above it replaces it at the player and in the view."));
 			ImGui::SliderFloat(T(TKEY("ageing_rate_override"), "Ageing Clock Rate Override"), &debugAgeingRateOverride, -1.0f, 60.0f, debugAgeingRateOverride < 0.0f ? "live" : "%.1f per hour");
 			if (auto _ttAge = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("ageing_rate_override_tooltip"), "Not saved. How fast tracks age, in clock units per game hour: about 1 in calm cold weather, over 20 while it snows."));
+				ImGui::Text("%s", T(TKEY("ageing_rate_override_tooltip"), "Not saved. How fast tracks age, in clock units per game hour: about 1 in calm cold weather, over 20 while it snows. At Track Ageing 1 a track is fully aged after 24 units."));
 
 			{
-				const char* views[] = { "Off", "Temperature", "Wetness", "Stickiness", "Firmness", "All (wet R, sticky G, firm B)" };
+				const char* views[] = { "Off", "Temperature", "Wetness", "Stickiness", "Firmness", "All (wet R, sticky G, firm B)", "Track age (green new, red old)" };
 				ImGui::Combo(T(TKEY("condition_view"), "Snow Condition View"), &debugConditionView, views, IM_ARRAYSIZE(views));
 				if (auto _ttView = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Roads and objects keep their look."));
+					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Track age paints trenches and their berms from green, just cut, to red, fully aged; untouched snow stays white. Roads and objects keep their look."));
 				if (debugConditionView > 0) {
 					static const char* kViewStates[] = { "starting", "compiling", "ready", "failed to compile" };
 					WrapTextF("View shader: %s", kViewStates[std::clamp(conditionViewShaderState.load(std::memory_order_acquire), 0, 3)]);

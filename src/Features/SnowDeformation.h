@@ -534,6 +534,8 @@ public:
 		float SnowResistance = 33.0f;
 		/** @brief Snow Climate, 0-1: how far the snow climate (temperature, wetness, stickiness, firmness) shapes trenches instead of the fixed look. 0 = the look the sliders and Fresh Snow Softness give; 1 = berm, lip, teeth and wall softness follow the snow, each with its slider (the walls: kTrenchWallSharpness) as the maximum. TRACK-VARIATION-RESEARCH.md 3.3. */
 		float SnowClimateStrength = 0.75f;
+		/** @brief Track Ageing, 0-2: how fast tracks age on the ageing clock (TRACK-VARIATION-RESEARCH.md 3.4). An old track rounds toward the carve's short blur, loses its rim teeth and lip first, lowers its berm, and wears new snow over its detail and wet print. 1 = fully aged after kTrackAgeSpan clock units (about a day of calm cold, an hour of snowfall); 0 = tracks never age. */
+		float TrackAgeing = 1.0f;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
@@ -755,13 +757,14 @@ public:
 		/** @brief Settings::SlumpRate, the unsupported-snow settle speed; 0 disables the pass. Claimed the old pad, so the layout is byte-identical. */
 		float SlumpRate;
 
-		/** @brief 1 = InjectDepth holds the tile store's memory of texels arriving from outside the window. Its own row: Stamps must start 16-byte aligned. */
+		/** @brief 1 = InjectStore holds the tile store's memory of texels arriving from outside the window. Its own row: Stamps must start 16-byte aligned. */
 		uint InjectValid;
 		/** @brief The frame's span in GAME time, expressed in the seconds DeltaTime is measured in. Equal to DeltaTime during ordinary play; a wait or a sleep passes hours without rendering them, and the world's own clocks (glaze thaw, slump) must not sit those hours out. Stamp application deliberately keeps DeltaTime - a fire must not carve its whole basin in the single frame after a wait. Claimed a pad slot, so the layout is byte-identical. */
 		float GameDeltaTime;
 		/** @brief 1 = the CS paints the per-texel activity view (u2): which texels changed at stored precision, and in which channel. Claimed a pad slot, layout unchanged. */
 		uint DebugActivityView;
-		uint InjectPad;
+		/** @brief The ageing clock (SnowClimateState::ageingClock): StampCS dates a cut texel with it, RingCS dates arriving ones from the store's freshness, and the berm bake reads ages against it. Claimed InjectPad, layout unchanged. Mirror in DeformationUpdateCS.hlsl AND BermFieldCS.hlsl. */
+		float AgeingClock;
 
 		/** @brief Arriving-band rects in LOGICAL texel space (x0, y0, w, h); RingCS covers their union by flat index. Two at most: one band per scrolled axis, or one full-map rect on a clear. */
 		DirectX::XMINT4 RingRects[2];
@@ -769,7 +772,8 @@ public:
 		uint RingTotalTexels;
 		/** @brief 1 = the tile scans list every tile (the force-all-dirty cross-check). Claimed a pad slot, layout unchanged. */
 		uint ForceAllDirty;
-		uint RingPad;
+		/** @brief Clock units the ageing clock fell back by since the last executed update: TrackRebaseCS moves every date with it. Claimed RingPad, layout unchanged. */
+		float TrackRebase;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -872,6 +876,20 @@ public:
 
 	/** @brief The body pass each map texel last took (R16_UINT, physical layout): the carve it started from and when bodies last touched it. StampCS u7 only. */
 	Texture2D* passStateTexture = nullptr;
+	/** @brief When each map texel was last cut, on the ageing clock (R16_FLOAT, physical layout; 0 = never). StampCS dates cuts that reach the floor and RingCS arriving ground from the store (u4); the berm bake turns it into the field's dates (t2); TrackRebaseCS moves it with the clock. */
+	Texture2D* trackClockTexture = nullptr;
+	ID3D11ComputeShader* trackRebaseCS = nullptr;
+	ID3D11ComputeShader* GetTrackRebaseCS();
+	/** @brief Ageing-clock units an old track takes to age fully at Track Ageing 1. */
+	static constexpr float kTrackAgeSpan = 24.0f;
+	/** @brief ShellCB::TrackAge: the ageing clock now and the age per clock unit (Track Ageing / kTrackAgeSpan; 0 = tracks never age). */
+	float4 TrackAgeConstants() const;
+	/** @brief The ageing clock in the frame the track dates stand in now: ahead of ageingClock by a rebase the next update has yet to apply. */
+	float TrackDateClock() const { return snowClimate.ageingClock + snowClimate.ageingRebase; }
+	/** @brief Mirrors the unwrapped ageing clock into the store, under its lock; after TickSnowClimate. */
+	void TickTrenchAgeing();
+	/** @brief Ageing-clock units a date stays its own before it reads as ancient: the store's freshness span and the berm bake's clamp. Mirrored by TRACK_AGE_HORIZON (DeformationUpdateCS.hlsl) and kTrackAgeHorizon (BermFieldCS.hlsl). */
+	static constexpr float kTrackAgeHorizon = 128.0f;
 	/** @brief Real seconds the body-pass clock has run; PerFrame::PassClock is it in half seconds, mod 1024. */
 	double passClockSeconds = 256.0;
 	/** @brief PS slot of the untouched-tile mask (BermFieldCS UntouchedCS), read by the shell PS's skip. */
@@ -1716,8 +1734,9 @@ public:
 
 		/** @brief x = how dark a shock discharge burns the snow it struck; yzw spare (the retired crust look), uploaded as 0. Mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
 		float4 SpellShading;
-		/** @brief Spare rows (the retired crust look), uploaded as 0 so BorderStyle keeps its offset. Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
-		float4 padCrustLook;
+		/** @brief Track age (TRACK-VARIATION-RESEARCH.md 3.4, SnowFields.hlsli TrackAgeOf): x = the ageing clock now, y = age per clock unit, Track Ageing / kTrackAgeSpan (0 = tracks never age); zw spare, 0. Was the retired crust look's first spare row. Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		float4 TrackAge;
+		/** @brief Spare row (the retired crust look), uploaded as 0 so BorderStyle keeps its offset. Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 padCrustLook2;
 		/** @brief xy layout keepers (the retired dust switch and trench floor), uploaded as 0; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
@@ -1871,6 +1890,8 @@ public:
 	bool marchFarValid = false;
 	uint64_t marchCacheKey = 0;
 	uint32_t marchCacheTerrainVersion = 0;
+	/** @brief The ageing clock at the last cache update: a jump (a wait in snowfall) ages every track at once and takes a fast sweep. */
+	float marchCacheAgeingClock = 0.0f;
 	float marchCacheFineOrigin[2] = {};
 	uint32_t marchCacheRowCursor = 0;
 	uint32_t marchFarRowCursor = 0;
@@ -4137,16 +4158,22 @@ protected:
 	struct TrenchTile
 	{
 		std::vector<uint8_t> depth;
+		/** @brief How lately each texel was cut, 255 just now down to 0 at kTrackAgeHorizon ageing-clock units old or never (kTrackFreshPerUnit). Empty = all 0: the tile's tracks have aged out. Decays on the ageing clock as depth does on the refill's. */
+		std::vector<uint8_t> fresh;
 		/** @brief Decay clock reading when these bytes were last brought up to date. Per tile, so the sweep can lag without ever being wrong. */
 		float clock = 0.0f;
+		/** @brief trenchAgeingTotal reading the fresh bytes were last brought up to. */
+		double freshClock = 0.0;
 		/** @brief Game hours when this tile was last written or last stood inside the window. The LRU key. */
 		float lastTouch = 0.0f;
 		/** @brief Exact encoded size under kTrenchRLE, measured by the sweep. What the budget is spent in - a raw byte count would bound the wrong number. */
 		uint32_t encodedBytes = 0;
 	};
 
-	/** @brief Per-tile co-save header: key, clock and last touch. The encoder's own bytes are counted separately. */
-	static constexpr uint32_t kTrenchTileHeaderBytes = 24;
+	/** @brief Per-tile co-save header: key, clock, last touch, the depth payload's length, the freshness clock and its payload's length. The encoder's own bytes are counted separately. */
+	static constexpr uint32_t kTrenchTileHeaderBytes = 32;
+	/** @brief Freshness bytes per ageing-clock unit of age: 255 over kTrackAgeHorizon. */
+	static constexpr double kTrackFreshPerUnit = 255.0 / kTrackAgeHorizon;
 	/** @brief Store encoding, fixed here because the budget accounting must agree with the writer byte for byte: byte-oriented RLE, pairs of (count 1-255, value), a run longer than 255 split across pairs, and a tile kept raw if that ever exceeds its raw size. */
 	static constexpr uint32_t kTrenchRLEPairBytes = 2;
 
@@ -4155,6 +4182,8 @@ protected:
 
 	/** @brief Monotonic "depth removed since the store began", in 0-1 depth units. A tile's decay is the difference between this and its own clock, which is what lets a tile sit out of the window for a week and come back correct. */
 	float trenchDecayClock = 0.0f;
+	/** @brief SnowClimateState::ageingTotal as of this frame's tick, under the store's lock: the clock the fresh bytes age by. */
+	double trenchAgeingTotal = 0.0;
 
 	/** @brief Keys still to visit this sweep cycle; refilled from the store when it empties. Amortised so no frame pays for the whole store. */
 	std::vector<TrenchTileKey> trenchSweepQueue;
@@ -4196,9 +4225,12 @@ protected:
 		float texel;
 		uint32_t worldspace;
 		int32_t x0, y0, w, h;
+		/** @brief The ageing clock the copied dates were written on, and the store's unwrapped one at the copy. */
+		float ageingClock = 0.0f;
+		double ageingTotal = 0.0;
 	};
 
-	/** @brief R8 depth the update CS reads for texels the scroll brings in from outside the window. Only the arriving band is uploaded; in-window texels overwrite it from the previous map, so the rest may be stale. */
+	/** @brief R8G8 depth and freshness the update CS reads for texels the scroll brings in from outside the window. Only the arriving band is uploaded; in-window texels overwrite it from the previous map, so the rest may be stale. */
 	winrt::com_ptr<ID3D11Texture2D> trenchInjectTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
 	std::vector<uint8_t> trenchInjectScratch;
@@ -4215,6 +4247,8 @@ protected:
 
 	/** @brief One departing band per axis, double buffered; mapped a frame later so the readback never stalls the render thread. */
 	winrt::com_ptr<ID3D11Texture2D> trenchBandStaging[2][2];
+	/** @brief The same bands of the track dates (R16_FLOAT), copied and mapped with the map's. */
+	winrt::com_ptr<ID3D11Texture2D> trenchClockBandStaging[2][2];
 	bool trenchBandValid[2][2] = {};
 	TrenchBandCopy trenchBandMeta[2][2] = {};
 	int trenchBandRing = 0;
@@ -4233,6 +4267,7 @@ protected:
 	 */
 	static constexpr int kTrenchRollRows = 128;
 	winrt::com_ptr<ID3D11Texture2D> trenchRollStaging[2];
+	winrt::com_ptr<ID3D11Texture2D> trenchClockRollStaging[2];
 	bool trenchRollValid[2] = {};
 	TrenchBandCopy trenchRollMeta[2] = {};
 	int trenchRollRing = 0;
@@ -4293,13 +4328,14 @@ protected:
 	void FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_clearing);
 	/** @brief Fills the inject texture for the texels arriving this frame. Returns 1 when the store had anything to put there. */
 	uint BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing);
-	/** @brief Reads one mapped band into the store, splatting each map texel across the store texels it covers. */
-	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped);
-	/** @brief Bilinear store depth at a world position, crossing tile edges through the one-entry cache. */
-	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY);
+	/** @brief Reads one mapped band and its dates (null: none, the band stores aged) into the store, splatting each map texel across the store texels it covers. */
+	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped, const D3D11_MAPPED_SUBRESOURCE* a_clocks);
+	/** @brief Bilinear store depth at a world position, crossing tile edges through the one-entry cache; o_fresh, when given, the freshness there weighted by the same depth (0-1). */
+	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY, float* o_fresh = nullptr);
 	/** @brief Co-save record for the trench tiles. '{@link kTrenchRecordVersion}' is written into every chunk; #33's accumulation claims its own type on the same channel. */
 	static constexpr uint32_t kTrenchRecord = 'SNTR';
-	static constexpr uint32_t kTrenchRecordVersion = 1;
+	/** @brief 2 adds each tile's freshness (track age); 1 still loads, its tracks aged. */
+	static constexpr uint32_t kTrenchRecordVersion = 2;
 
 	/** @brief Co-save record for the accumulated layer, on the same channel as the trench tiles. Version 2 carries the held weather beside the scalar. */
 	static constexpr uint32_t kAccumRecord = 'SNAC';
@@ -4368,6 +4404,10 @@ protected:
 		float ageingClock = kAgeingClockStart;
 		/** @brief Clock units per game hour, last tick. */
 		float ageingRate = 0.0f;
+		/** @brief The same clock unwrapped, never reset: the trench store's freshness decays by it. */
+		double ageingTotal = 0.0;
+		/** @brief Units ageingClock fell back by that the track dates have not followed yet (TrackRebaseCS). */
+		float ageingRebase = 0.0f;
 		float targetTemperature = 0.0f;
 		float termRegion = 0.0f;
 		float termWeather = 0.0f;
@@ -4670,8 +4710,8 @@ protected:
 	void SaveTrenchStore(const SKSE::SerializationInterface* a_intfc);
 	void LoadTrenchStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
-	/** @brief Packs one tile under the pinned RLE rule. Its length MUST equal the tile's measured encodedBytes, or Stage D's budget stops describing the save. */
-	void EncodeTrenchTile(const TrenchTile& a_tile, std::vector<uint8_t>& o_bytes) const;
+	/** @brief Packs one tile's bytes (depth or fresh) under the pinned RLE rule. Their lengths together MUST equal the tile's measured encodedBytes, or Stage D's budget stops describing the save. */
+	void EncodeTrenchTile(const std::vector<uint8_t>& a_bytes, std::vector<uint8_t>& o_bytes) const;
 	/** @brief Unpacks a payload written by EncodeTrenchTile; false if it is malformed or the wrong length. */
 	bool DecodeTrenchTile(const uint8_t* a_bytes, uint32_t a_length, std::vector<uint8_t>& o_depth) const;
 
@@ -4681,7 +4721,7 @@ protected:
 	void ClearTrenchStoreLocked(const char* a_reason);
 	/** @brief Advances the decay clock off game time, and drops the store on a backwards jump. */
 	void TickTrenchClock();
-	/** @brief Brings one tile's bytes up to the current clock. Returns false when nothing nonzero is left, i.e. the tile should be erased. */
+	/** @brief Brings one tile's bytes up to the current clocks, its freshness too. Returns false when no depth is left, i.e. the tile should be erased. */
 	bool DecayTrenchTile(TrenchTile& a_tile);
 	/** @brief Decays and prunes a slice of the store, and gathers the occupancy and encoded-size figures. Amortised: correctness never depends on it, only reclaimed memory does. */
 	void SweepTrenchStore();
