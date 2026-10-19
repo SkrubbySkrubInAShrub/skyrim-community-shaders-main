@@ -395,24 +395,6 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // Distance bands (WarpBand, InverseWarpAxis): ShellBandStep's spacing.
 #include "SnowDeformation/SnowGrid.hlsli"
 
-// Shell edge fade: the shell dissolves at the loaded-cell seam, where the
-// game swaps full terrain for LOD meshes and the horizon recolor takes over
-// in the same snow material. The warped-span fade stays as the fallback for
-// the grid's own physical edge (and for frames with no seam data).
-float ShellEdgeFade(float2 gridLocal)
-{
-	float2 delta = abs(gridLocal - WarpedHalfSpan);
-	float fade = saturate((WarpedHalfSpan - max(delta.x, delta.y)) / 2048.0);
-	[flatten] if (SeamRampInv > 0.0)
-	{
-		float2 worldXY = GridOrigin + gridLocal;
-		float inside = min(min(worldXY.x - SeamBounds.x, worldXY.y - SeamBounds.y),
-			min(SeamBounds.z - worldXY.x, SeamBounds.w - worldXY.y));
-		fade = min(fade, saturate(inside * SeamRampInv));
-	}
-	return fade;
-}
-
 #ifndef SNOW_SURFACE_ONLY
 struct VS_OUTPUT
 {
@@ -1142,11 +1124,11 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		coverage *= saturate(1.0 - shelterMask.x);
 
 		// Bare ground contributes negative depth so the shell submerges toward
-		// uncovered terrain as well; edgeFade (computed above) melts the shell
-		// into the ground across the seam ramp.
+		// uncovered terrain as well; edgeFade (computed above) lays the shell
+		// down onto the ground across the seam ramp.
 		float bare = saturate(1.0 - coverage);
 		float depth = rampDepth + (-8.0) * bare;
-		depth = lerp(-8.0, depth, edgeFade);
+		depth = lerp(-8.0, depth, ShellEdgeDepthFade(edgeFade));
 
 		// Deep trench floors pass unchanged; a floor set below ~9 (a low
 		// Trench Floor fraction) compresses with the toe.
@@ -1638,7 +1620,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float pixelClassDepth = pixelTerrain.y;
 	float pixelBare = saturate(1.0 - pixelCoverage);
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
-	pixelRampDepth = lerp(-8.0, pixelRampDepth, psEdgeFade);
+	pixelRampDepth = lerp(-8.0, pixelRampDepth, ShellEdgeDepthFade(psEdgeFade));
 #endif
 
 	// Mirror of the geometry's touch-down toe, so the cut reads the sheet's
@@ -1650,7 +1632,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Wherever the land has snow weight the pixel is a candidate; on mixed
 	// land the land's own verdict decides it below.
 	const float pixelSnowWeight = LandSnowWeight(gridLocal);
-	float coverageAlpha = pixelSnowWeight > 0.002 ? psEdgeFade : 0.0;
+	float coverageAlpha = pixelSnowWeight > 0.002 ? ShellEdgeAlpha(psEdgeFade) : 0.0;
 #endif
 	// Josef's border spec: the alpha may not cut geometry still standing
 	// above its ground - the sheet dives below the terrain (the descent's
@@ -1659,7 +1641,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// window-edge fade rides along; the overrides and the land contest below
 	// still multiply.
 	float sheetAboveGround = smoothstep(0.25, 1.5, input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x);
-	coverageAlpha = max(coverageAlpha, sheetAboveGround * psEdgeFade);
+	coverageAlpha = max(coverageAlpha, sheetAboveGround * ShellEdgeAlpha(psEdgeFade));
 
 	// Object blending (Terrain Blending-style depth proximity): the shell only
 	// knows terrain heights, so this is what makes it meet statics softly

@@ -849,13 +849,9 @@ bool SnowDeformation::EnsureEarlyPrepassResources()
 
 void SnowDeformation::SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY)
 {
-	// The fade band sits ~29 m OUTSIDE the true boundary, over the
-	// recolored LOD terrain: full-height shell up to the seam, melting
-	// into same-material ground beyond it. Ending the fade AT the seam
-	// left a visible unshelled strip of full terrain just inside it.
-	constexpr float kSeamOverlap = 2048.0f;
-	a_cb.SeamBounds = { a_minX * 4096.0f - kSeamOverlap, a_minY * 4096.0f - kSeamOverlap,
-		(a_maxX + 1) * 4096.0f + kSeamOverlap, (a_maxY + 1) * 4096.0f + kSeamOverlap };
+	// The fade band is the last half cell INSIDE the seam: the ground snow
+	// replays the loaded land only, so nothing draws beyond it.
+	a_cb.SeamBounds = { a_minX * 4096.0f, a_minY * 4096.0f, (a_maxX + 1) * 4096.0f, (a_maxY + 1) * 4096.0f };
 	a_cb.SeamRampInv = 1.0f / 2048.0f;
 }
 

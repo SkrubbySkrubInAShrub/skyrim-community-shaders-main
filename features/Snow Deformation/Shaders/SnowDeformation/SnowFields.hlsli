@@ -11,7 +11,7 @@
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
 // UndulationAmp/Scale, UndulationFieldWindow, TrampleStyle,
-// GridOrigin, DeformMapOrigin), DeformationMap
+// GridOrigin, DeformMapOrigin, WarpedHalfSpan, SeamBounds/SeamRampInv), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
 // (t14), UntouchedTiles (t57), ExclusionFieldMap (t15), the frost patterns (t16/t17),
 // UndulationFieldMap (t29), SnowSampler
@@ -82,6 +82,35 @@ float2 BorderJitter(float2 worldXY, float a_noise)
 			   ShapeNoise(worldXY / 8.0) - 0.5,
 			   ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
 	           (1.2 * a_noise);
+}
+
+// The ground snow's edge fade: 1 inside its span, 0 at the loaded-cell seam
+// (SeamBounds, where the game swaps full terrain for LOD meshes) across
+// SeamRampInv's band, and at the grid's own physical edge.
+float ShellEdgeFade(float2 gridLocal)
+{
+	float2 delta = abs(gridLocal - WarpedHalfSpan);
+	float fade = saturate((WarpedHalfSpan - max(delta.x, delta.y)) / 2048.0);
+	[flatten] if (SeamRampInv > 0.0)
+	{
+		float2 worldXY = GridOrigin + gridLocal;
+		float inside = min(min(worldXY.x - SeamBounds.x, worldXY.y - SeamBounds.y),
+			min(SeamBounds.z - worldXY.x, SeamBounds.w - worldXY.y));
+		fade = min(fade, saturate(inside * SeamRampInv));
+	}
+	return fade;
+}
+
+// The band's far half lays the snow's depth down onto its ground; the half at
+// the edge dissolves it (a coverage alpha the shell cuts at 0.2, solid from 0.5).
+float ShellEdgeDepthFade(float a_fade)
+{
+	return saturate(2.0 * a_fade - 1.0);
+}
+
+float ShellEdgeAlpha(float a_fade)
+{
+	return a_fade >= 0.5 ? 1.0 : 0.2 + 0.6 * a_fade;
 }
 
 // Saturates EARLY (full height once the disc is a third carved), and the old

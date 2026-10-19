@@ -1240,7 +1240,7 @@ float SheetSurfaceZ(float2 gridLocal, float zFloor, out float a_depth, uniform b
 {
 	float z = -100000.0;
 	float3 st = SampleTerrainStatics(gridLocal);
-	float depth = st.y - 8.0 * saturate(1.0 - st.z);
+	float depth = lerp(-8.0, st.y - 8.0 * saturate(1.0 - st.z), ShellEdgeDepthFade(ShellEdgeFade(gridLocal)));
 	a_depth = depth;
 	[branch] if (st.x > -50000.0 && depth > 4.0)
 	{
@@ -3736,15 +3736,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// lies within the coincidence band of its own model wins the depth
 		// test along every plane cut - a band the width of the LOD triangle
 		// across the model's coat (Josef's zigzag streaks, RenderDoc frame
-		// 3907). The seam square is where the game stops drawing full
-		// models; SeamBounds carries the fade overlap, one ramp width.
+		// 3907). The seam square (SeamBounds) is where the game stops
+		// drawing full models.
 		// Not every cell of the square draws its models (the outer ring can
 		// stand as LOD alone): the pixel's owner decides, x256 = a LOD draw.
 		[flatten] if (SeamRampInv > 0.0)
 		{
-			float band = 1.0 / SeamRampInv;
 			bool lodOwnsPixel = HasSkinMasksCopy > 0.5 && PreSkinMasks.Load(int3(input.Position.xy, 0)).y >= 256.0;
-			[flatten] if (!lodOwnsPixel && all(worldXY > SeamBounds.xy + band) && all(worldXY < SeamBounds.zw - band))
+			[flatten] if (!lodOwnsPixel && all(worldXY > SeamBounds.xy) && all(worldXY < SeamBounds.zw))
 				discard;
 		}
 		float lodZ = input.CurrentClip.w;
