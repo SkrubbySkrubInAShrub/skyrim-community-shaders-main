@@ -140,7 +140,7 @@ float4 BermFieldBaked(float2 gridLocal)
 	SNOW_BERM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
 #ifdef SNOW_DEFORM_SAMPLER
-	return BermFieldMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0);
+	float4 v = BermFieldMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0);
 #else
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
@@ -151,8 +151,12 @@ float4 BermFieldBaked(float2 gridLocal)
 	float4 s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
 	float4 s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 #endif
+	// The dates are baked times their weights (BermFieldCS).
+	v.z = v.y > 1e-5 ? v.z / v.y : 0.0;
+	v.w = v.x > 1e-5 ? v.w / v.x : 0.0;
+	return v;
 }
 
 // ---- Track age (TRACK-VARIATION-RESEARCH.md 3.4) ----

@@ -602,9 +602,9 @@ RWTexture2D<float2> BloodClockRing : register(u1);
 
 // The ageing clock fell back by TrackRebase to stay where half floats hold
 // whole units, so every date falls with it: the cut clocks and the berm
-// bake's (BermFieldCS .zw). Zero stays zero, never cut; a date older than
-// the clock's range stays a date, at 1. Own entry point and binding, like
-// BloodRingCS.
+// bake's (BermFieldCS .zw, each weighted by its .y / .x). Zero stays zero,
+// never cut; a date older than the clock's range stays a date, at 1. Own
+// entry point and binding, like BloodRingCS.
 RWTexture2D<float> TrackClockRebase : register(u0);
 RWTexture2D<float4> BermFieldRebase : register(u1);
 
@@ -620,7 +620,7 @@ RWTexture2D<float4> BermFieldRebase : register(u1);
 	float4 berm = BermFieldRebase[DTid.xy];
 	[branch] if (max(berm.z, berm.w) > 0.0)
 	{
-		berm.zw = berm.zw > 0.0 ? max(berm.zw - TrackRebase, 1.0) : 0.0;
+		berm.zw = berm.zw > 0.0 ? max(berm.zw - TrackRebase * berm.yx, berm.yx) : 0.0;
 		BermFieldRebase[DTid.xy] = berm;
 	}
 }

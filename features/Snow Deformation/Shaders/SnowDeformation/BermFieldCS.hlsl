@@ -186,10 +186,10 @@ bool BermTexel(uint2 phys)
 	const float berm = saturate(b.x / 17.0);
 	const float blur = s.x / 9.0;
 	// Each date weighted by the depth it dated, so the snow cut deepest
-	// speaks for the tap; nothing cut, no date.
-	const float carveDate = s.x > 1e-4 ? s.y / s.x : 0.0;
-	const float bermDate = b.x > 1e-4 ? b.y / b.x : 0.0;
-	OutBermField[phys] = float4(berm, blur, carveDate, bermDate);
+	// speaks for the tap; nothing cut, no date. Stored times its own weight
+	// (blur, berm) so filtering between texels stays a weighted mean;
+	// BermFieldBaked divides it back out.
+	OutBermField[phys] = float4(berm, blur, s.y / 9.0, b.y / 17.0);
 	return berm != 0.0 || blur != 0.0;
 }
 
