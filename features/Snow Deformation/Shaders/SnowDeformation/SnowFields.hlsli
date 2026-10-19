@@ -690,23 +690,38 @@ float4 SnowClimateRow(float worldZ)
 // wet. Under Snow Climate the thin print is the wet look too, so it follows
 // the wetness. An old print is under new snow and lighter: a_dated reads its
 // age at a_gridLocal (the baked carve date), inside the branch, so the date
-// is read only where a print darkens. Darkens a_albedo; returns the roughness
-// cut.
-float SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_depth, float a_worldZ, float2 a_gridLocal, bool a_dated)
+// is read only where a print darkens.
+// Wet Snow and Ice (the rows' y and x): wet snow darkens by Community
+// Shaders' wetness rule (Lighting.hlsl, snow fully porous) and stops
+// sparkling; pressed snow whose meltwater froze glazes. Mirror kIceTint and
+// kIceRoughCut in SnowLighting.hlsli. Darkens a_albedo; returns x the
+// roughness cut, y the share of glints left.
+static const float3 kIceTint = float3(0.86, 0.91, 0.97);
+static const float kIceRoughCut = 0.8;
+
+float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_depth, float a_worldZ, float2 a_gridLocal, bool a_dated)
 {
-	float wetRough = 0.0;
+	float2 look = float2(0.0, 1.0);
 	const float wetPress = smoothstep(0.1, 0.5, a_carve) * (1.0 - smoothstep(0.1, 0.4, a_melt));
-	[branch] if (wetPress > 0.001 && (a_depth < 6.0 || SnowClimateLUT[2].w > 0.001))
+	const bool wetIce = SnowClimateLUT[2].y > 0.001 || max(max(SnowClimateLUT[0].x, SnowClimateLUT[1].x), SnowClimateLUT[2].x) > 0.001;
+	[branch] if (wetIce || (wetPress > 0.001 && (a_depth < 6.0 || SnowClimateLUT[2].w > 0.001)))
 	{
-		const float climateWet = SnowClimateRow(a_worldZ).w;
-		const float thinPrint = (1.0 - smoothstep(1.5, 6.0, a_depth)) * saturate(SnowClimate2.w + climateWet);
-		float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
-		[branch] if (a_dated && TrackAge.y > 0.0 && BermBakeActive > 0.5)
-			wetPrint *= saturate(1.0 - 2.0 * TrackAgeOf(BermFieldBaked(a_gridLocal).z));
-		a_albedo = lerp(a_albedo, a_albedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint);
-		wetRough = wetPrint * (0.24 + 0.26 * climateWet);
+		const float4 row = SnowClimateRow(a_worldZ);
+		a_albedo = lerp(a_albedo, pow(abs(a_albedo), 1.0 + row.y), 0.5);
+		const float glaze = row.x * wetPress;
+		look.y = (1.0 - row.y) * (1.0 - glaze);
+		[branch] if (wetPress > 0.001)
+		{
+			const float climateWet = row.w;
+			const float thinPrint = (1.0 - smoothstep(1.5, 6.0, a_depth)) * saturate(SnowClimate2.w + climateWet);
+			float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
+			[branch] if (a_dated && TrackAge.y > 0.0 && BermBakeActive > 0.5)
+				wetPrint *= saturate(1.0 - 2.0 * TrackAgeOf(BermFieldBaked(a_gridLocal).z));
+			a_albedo = lerp(a_albedo, a_albedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint) * lerp(1.0, kIceTint, glaze);
+			look.x = max(wetPrint * (0.24 + 0.26 * climateWet), glaze * kIceRoughCut);
+		}
 	}
-	return wetRough;
+	return look;
 }
 #endif
 
@@ -734,7 +749,7 @@ float4 SnowConditionAt(float a_worldZ)
 // 1 temperature (blue below freezing, white at it, orange above, a line
 // every 2 C), 2 wetness, 3 stickiness, 4 firmness, 5 all three as RGB, 6
 // track age (a_track: x the age, y how much trench is there; green just cut,
-// red aged, untouched snow white).
+// red aged, untouched snow white), 7 ice (a_track.x: the glaze, cyan).
 float3 SnowConditionColor(float4 a_condition, float a_view, float2 a_track)
 {
 	const float t = a_condition.x;
@@ -756,8 +771,10 @@ float3 SnowConditionColor(float4 a_condition, float a_view, float2 a_track)
 		color = lerp(float3(0.95, 0.95, 0.95), float3(0.55, 0.1, 0.85), a_condition.w);
 	else if (a_view < 5.5)
 		color = a_condition.yzw;
-	else
+	else if (a_view < 6.5)
 		color = lerp(float3(0.95, 0.95, 0.95), lerp(float3(0.15, 0.85, 0.2), float3(0.75, 0.2, 0.05), a_track.x), a_track.y);
+	else
+		color = lerp(float3(0.95, 0.95, 0.95), float3(0.05, 0.75, 1.0), a_track.x);
 	return color;
 }
 #endif

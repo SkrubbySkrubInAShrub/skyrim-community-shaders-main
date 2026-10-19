@@ -115,6 +115,7 @@
 	X(FreshSnowSoftness) \
 	X(SnowClimateStrength) \
 	X(TrackAgeing) \
+	X(WetSnowAndIce) \
 	X(FreshSnowSettleHours) \
 	X(TrampledFlattening) \
 	X(RimLip) \
@@ -753,6 +754,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
+	data.LandIce = SnowWetIceStrength() * SnowIceShown(1);
 	// Snow Trenches on Objects: after the window advance above, which the print window follows.
 	data.PrintFullDepth = BodyPrintScale();
 	data.PrintRect = PrintRectForFrame();
@@ -1138,6 +1140,7 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	perFrameData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
 	perFrameData.AccumulationScale = GetAccumulationDepthScale();
+	perFrameData.ClimateIce = SnowWetIceStrength() * SnowIceShown(1);
 
 	float deltaTime = *globals::game::deltaTime;
 	// Taken here rather than beside the trench work below because the refill is

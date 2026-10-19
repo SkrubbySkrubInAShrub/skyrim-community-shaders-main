@@ -177,10 +177,18 @@ namespace SnowLighting
 			// dark and glossy like the shell's thin print beside it. The tint is
 			// in the shell's albedo convention; a linear set takes it linearised.
 			const float wet = SharedData::snowDeformationSettings.LandWetPrint;
+			// Refrozen (Wet Snow and Ice): a pressed print glazes like the shell's.
+			// Mirror kIceTint and kIceRoughCut in SnowFields.hlsli.
+			const float ice = SharedData::snowDeformationSettings.LandIce;
 			float press = 0.0;
-			[branch] if (wet > 0.001)
-				press = smoothstep(0.1, 0.5, SnowDeformation::GetDeformation(worldXY)) * saturate(wet * 4.0);
-			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press);
+			float glaze = 0.0;
+			[branch] if (max(wet, ice) > 0.001)
+			{
+				const float pressed = smoothstep(0.1, 0.5, SnowDeformation::GetDeformation(worldXY));
+				press = pressed * saturate(wet * 4.0);
+				glaze = pressed * ice;
+			}
+			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.86, 0.91, 0.97), glaze);
 			shellAlbedo *= printTint;
 #	if defined(TRUE_PBR)
 			s.landSnowRaw = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? a * (ENABLE_LL ? printTint : pow(abs(printTint), 2.2)) : (ENABLE_LL ? shellAlbedo : pow(abs(shellAlbedo), 2.2));
@@ -207,7 +215,7 @@ namespace SnowLighting
 				float4 r = LandSnowSample(SnowDeformation::HorizonSnowRmaos, uv0, uv1, uv2, bary, dx, dy);
 				s.landSnowRMAOS = float4(clamp(r.x * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0), 0.0, r.z, r.w * SharedData::snowDeformationSettings.SnowSpecularLevel);
 			}
-			s.landSnowRMAOS.x *= 1.0 - press * (0.24 + 0.26 * wet);
+			s.landSnowRMAOS.x *= 1.0 - max(press * (0.24 + 0.26 * wet), glaze * 0.8);
 			s.landSnowBits = bits;
 			s.landRecolor = true;
 		}

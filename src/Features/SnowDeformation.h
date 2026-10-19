@@ -538,6 +538,8 @@ public:
 		float SnowClimateStrength = 0.75f;
 		/** @brief Track Ageing, 0-2: how fast tracks age on the ageing clock (TRACK-VARIATION-RESEARCH.md 3.4). An old track rounds toward the carve's short blur, loses its rim teeth and lip first, lowers its berm, and wears new snow over its detail and wet print. 1 = fully aged after kTrackAgeSpan clock units (about a day of calm cold, an hour of snowfall); 0 = tracks never age. */
 		float TrackAgeing = 1.0f;
+		/** @brief Wet Snow and Ice (TRACK-VARIATION-RESEARCH.md 3.6, Part 4 Stage 4): wet snow darkens by Community Shaders' wetness rule and stops sparkling; meltwater held in packed snow refreezes into a glaze that bears new prints. Rides Snow Climate. Off = Stage 1's wet print alone. */
+		bool WetSnowAndIce = true;
 		/** @brief Snow condition: how much fresh snow softens trenches - wall sharpness, berm height, rim lip and teeth all ease toward a loose-snow look while the freshness scalar is high. 0 = off, the snow is always firm. */
 		float FreshSnowSoftness = 0.66f;
 		/** @brief Snow condition: game hours of clear weather for fresh snow to settle fully firm. */
@@ -701,7 +703,8 @@ public:
 		float WaterWindowTexel;
 		float WaterWindowDim;
 
-		float padAlphaDensity;
+		/** @brief Ice at the player (SnowIceShown, row 1), for the glaze on the land's recoloured snow. Was a pad. Mirror in SharedData.hlsli. */
+		float LandIce;
 		/** @brief Settings::ProjSnowNormals as 0/1. Mirror in SharedData.hlsli. */
 		float ProjSnowNormalEnable;
 		/** @brief The snow set's specular level (F0 scale), for the land recolor. Mirror in SharedData.hlsli. */
@@ -812,7 +815,8 @@ public:
 		float UndulationAmp;
 		float UndulationScale;
 		float AccumulationScale;
-		float DrawnPad;
+		/** @brief Ice at the player (SnowIceShown, row 1): packed snow bears new prints as a crust does. Was DrawnPad. Mirror in DeformationUpdateCS.hlsl. */
+		float ClimateIce;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, ContactCenter) == 12432, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
@@ -1778,7 +1782,7 @@ public:
 		float4 SnowClimate2;
 		/** @brief Overrides painted everywhere, below 0 = derived per pixel: x wetness, y stickiness, z firmness; w spare. */
 		float4 SnowClimateOverride;
-		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: xyz spare (the retired churn ramp), uploaded as 0; w = Snow Climate x wetness. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
+		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: x = ice (SnowIceShown, Wet Snow and Ice), y = wetness for Wet Snow and Ice, z spare, w = Snow Climate x wetness. All x Snow Climate. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
 		float4 SnowClimateLUT[kClimateLUTRows];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -4416,6 +4420,9 @@ protected:
 		/** @brief Share of the loaded land painted with snow textures; below 0 until measured. */
 		float landSnowShare = -1.0f;
 		float rainHeld = 0.0f;
+		/** @brief Per climate row: meltwater the snow holds, and how much of it has frozen (TickSnowIce). Co-saved as 'SNIC'. */
+		std::array<float, kClimateLUTRows> rowWater{};
+		std::array<float, kClimateLUTRows> rowIce{};
 		float ageingClock = kAgeingClockStart;
 		/** @brief Clock units per game hour, last tick. */
 		float ageingRate = 0.0f;
@@ -4443,6 +4450,16 @@ protected:
 		float windPacking;
 	};
 	SnowCondition GetSnowCondition() const;
+	/** @brief Advances the meltwater and the ice per climate row: water the snow held freezes below 0 C, drains above it, thaws when wet again and is buried by snowfall as tracks are. Inside TickSnowClimate. */
+	void TickSnowIce(float a_elapsed, float a_snowing);
+	/** @brief Ice in climate row a_row as the shells show it: the override, or the live value. */
+	float SnowIceShown(uint32_t a_row) const;
+	/** @brief Snow Climate x Wet Snow and Ice: what every Stage 4 term is scaled by. */
+	float SnowWetIceStrength() const;
+	static constexpr uint32_t kIceRecord = 'SNIC';
+	static constexpr uint32_t kIceRecordVersion = 1;
+	/** @brief Claims 'SNIC': the rows' meltwater and ice. */
+	void RegisterSnowIceCoSave();
 	/** @brief The snow at the player had the air there this temperature: wetness moves with it as height moves it per pixel, overrides apply. */
 	SnowCondition SnowConditionAt(float a_temperature) const;
 	/**
@@ -4474,6 +4491,7 @@ protected:
 	float debugClimateStickinessOverride = -1.0f;
 	float debugClimateFirmnessOverride = -1.0f;
 	float debugAgeingRateOverride = -1.0f;
+	float debugClimateIceOverride = -1.0f;
 	/** @brief Condition view: 0 off, 1 temperature, 2 wetness, 3 stickiness, 4 firmness, 5 all three. */
 	int debugConditionView = 0;
 	/** @brief Writes the scalar. */

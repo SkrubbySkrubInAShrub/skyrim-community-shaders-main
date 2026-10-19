@@ -425,7 +425,10 @@ namespace SharedData
 		float WaterWindowTexel;
 		float WaterWindowDim;
 
-		float padAlphaDensity;
+		// Ice at the player (Wet Snow and Ice): pressed prints in the land's
+		// recoloured snow glaze like the shell's. Was a pad. Mirror in
+		// SnowDeformation.h.
+		float LandIce;
 		// Recolored projected snow also wears the shell snow's normal (vanilla's
 		// own projected normal is a dead write). Mirror in SnowDeformation.h.
 		float ProjSnowNormalEnable;

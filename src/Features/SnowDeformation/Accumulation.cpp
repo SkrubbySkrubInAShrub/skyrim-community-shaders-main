@@ -231,6 +231,13 @@ namespace
 	// Loose snow falls back into the print; the rest of the wall stands.
 	constexpr float kSloughMax = 0.5f;
 
+	// Ageing-clock units a game hour of full snowfall adds.
+	constexpr float kSnowfallAgeing = 20.0f;
+	// Held water freezes at a rate of one per hour from this many degrees of frost.
+	constexpr float kFreezeColdness = 3.0f;
+	// Above freezing, water the snow no longer holds drains over this many hours.
+	constexpr float kDrainHours = 6.0f;
+
 	struct ClimateLookTerms
 	{
 		float berm, lip, teeth, slough;
@@ -336,7 +343,7 @@ void SnowDeformation::TickSnowClimate()
 	// cold keeps a track crisp for a day or two.
 	const float warm = ClimateWarmth(climate.temperature);
 	climate.ageingRate = debugAgeingRateOverride >= 0.0f ? debugAgeingRateOverride :
-	                                                       1.0f + 20.0f * snowing + 8.0f * raining + 4.0f * climate.windPacking * (1.0f - snowing) + 6.0f * warm;
+	                                                       1.0f + kSnowfallAgeing * snowing + 8.0f * raining + 4.0f * climate.windPacking * (1.0f - snowing) + 6.0f * warm;
 	if (elapsed > 0.0f) {
 		climate.ageingClock += climate.ageingRate * elapsed;
 		climate.ageingTotal += (double)climate.ageingRate * elapsed;
@@ -345,7 +352,48 @@ void SnowDeformation::TickSnowClimate()
 			climate.ageingClock -= kAgeingClockStart;
 			climate.ageingRebase += kAgeingClockStart;
 		}
+		TickSnowIce(elapsed, snowing);
 	}
+}
+
+void SnowDeformation::TickSnowIce(float a_elapsed, float a_snowing)
+{
+	auto& climate = snowClimate;
+	const float playerT = debugClimateTemperatureOn ? debugClimateTemperature : climate.temperature;
+	// Snowfall buries the glaze as it buries a track.
+	const float bury = std::exp(-a_elapsed * kSnowfallAgeing * a_snowing / kTrackAgeSpan);
+	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
+		const float t = playerT + (float(i) - 1.0f) * kClimateLUTStep;
+		const float wet = SnowConditionAt(t).wetness;
+		float& water = climate.rowWater[i];
+		float& ice = climate.rowIce[i];
+		water = std::max(water, wet);
+		const float excess = water - wet;
+		if (t < 0.0f) {
+			const float frozen = excess * (1.0f - std::exp(-a_elapsed * std::min(-t / kFreezeColdness, 1.0f)));
+			water -= frozen;
+			ice += frozen;
+		} else {
+			water -= excess * (1.0f - std::exp(-a_elapsed / kDrainHours));
+		}
+		const float thawed = ice * (1.0f - std::exp(-a_elapsed * wet));
+		ice -= thawed;
+		water += thawed;
+		ice = std::clamp(ice * bury, 0.0f, 1.0f);
+		water = std::clamp(water * bury, 0.0f, 1.0f);
+	}
+}
+
+float SnowDeformation::SnowIceShown(uint32_t a_row) const
+{
+	if (debugClimateIceOverride >= 0.0f)
+		return std::min(debugClimateIceOverride, 1.0f);
+	return a_row < kClimateLUTRows ? snowClimate.rowIce[a_row] : 0.0f;
+}
+
+float SnowDeformation::SnowWetIceStrength() const
+{
+	return settings.WetSnowAndIce ? std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) : 0.0f;
 }
 
 float4 SnowDeformation::TrackAgeConstants() const
@@ -389,9 +437,10 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 	look.slough = terms.slough;
 
 	// Rows by the pixel's temperature offset; the shader lerps between them.
+	const float wetIce = SnowWetIceStrength();
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
 		const SnowCondition row = SnowConditionAt(player.temperature + (float(i) - 1.0f) * kClimateLUTStep);
-		look.lut[i] = { 0.0f, 0.0f, 0.0f, look.strength * row.wetness };
+		look.lut[i] = { wetIce * SnowIceShown(i), wetIce * row.wetness, 0.0f, look.strength * row.wetness };
 	}
 	return look;
 }
@@ -426,6 +475,42 @@ void SnowDeformation::RegisterSnowConditionCoSave()
 		[this]() {
 			snowFreshness.store(0.0f, std::memory_order_relaxed);
 			gameClockUnarm.store(true, std::memory_order_release);
+		});
+}
+
+void SnowDeformation::RegisterSnowIceCoSave()
+{
+	CoSave::GetSingleton()->Register(
+		kIceRecord, kIceRecordVersion,
+		[this](const SKSE::SerializationInterface* a_intfc) {
+			if (!a_intfc->OpenRecord(kIceRecord, kIceRecordVersion)) {
+				logger::warn("[SNOW DEFORMATION] could not open the snow ice co-save record");
+				return;
+			}
+			float values[2 * kClimateLUTRows];
+			for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
+				values[i] = snowClimate.rowWater[i];
+				values[kClimateLUTRows + i] = snowClimate.rowIce[i];
+			}
+			if (!a_intfc->WriteRecordData(values, sizeof(values)))
+				logger::warn("[SNOW DEFORMATION] snow ice co-save write failed");
+		},
+		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) {
+			float values[2 * kClimateLUTRows];
+			if (a_version != kIceRecordVersion || a_length != sizeof(values) || a_intfc->ReadRecordData(values, sizeof(values)) != sizeof(values)) {
+				logger::warn("[SNOW DEFORMATION] snow ice co-save is version {} / {} bytes; dropped", a_version, a_length);
+				return;
+			}
+			for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
+				snowClimate.rowWater[i] = std::isfinite(values[i]) ? std::clamp(values[i], 0.0f, 1.0f) : 0.0f;
+				snowClimate.rowIce[i] = std::isfinite(values[kClimateLUTRows + i]) ? std::clamp(values[kClimateLUTRows + i], 0.0f, 1.0f) : 0.0f;
+			}
+			logger::info("[SNOW DEFORMATION] snow ice restored: water {:.2f}/{:.2f}/{:.2f}, ice {:.2f}/{:.2f}/{:.2f}", values[0], values[1], values[2],
+				values[3], values[4], values[5]);
+		},
+		[this]() {
+			snowClimate.rowWater = {};
+			snowClimate.rowIce = {};
 		});
 }
 

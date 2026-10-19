@@ -873,6 +873,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttClimate = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge and loose snow fallen back into them; settled snow just below freezing keeps the full ridge, lip and teeth; wet snow leaves dark prints with crisp walls. Berm Height, Rim Lip and Rim Teeth are the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
 
+		ImGui::Checkbox(T(TKEY("wet_snow_ice"), "Wet Snow and Ice"), &settings.WetSnowAndIce);
+		if (auto _ttWetIce = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, and new prints barely mark them until a thaw or fresh snow ends the ice. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
+
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, the ridge beside trenches shrinks and the rim loses its lip and teeth; trenches cut by distant creatures, spells and shouts also get sloped sides instead of sharp walls. As the snow settles over the following days, the look you set with Berm Height, Rim Lip and Rim Teeth comes back and those walls sharpen again; a trench keeps the walls it was cut with. 0 = off, the snow is always firm. Snow Climate takes over from this as it rises: at 1.00 fresh snow acts through its stickiness and density instead."));
@@ -1906,6 +1910,9 @@ void SnowDeformation::DrawSettings()
 			else
 				WrapTextF("Land snow share: %.2f%s", climate.landSnowShare, debugClimateShareOverride >= 0.0f ? ", override applied" : "");
 			WrapTextF("Wetness: %.2f, %s%s", condition.wetness, wetClass, debugClimateWetnessOverride >= 0.0f ? " (override)" : "");
+			WrapTextF("Meltwater held (2 C colder / here / 2 C warmer): %.2f / %.2f / %.2f | ice %.2f / %.2f / %.2f%s%s", climate.rowWater[0], climate.rowWater[1],
+				climate.rowWater[2], climate.rowIce[0], climate.rowIce[1], climate.rowIce[2], debugClimateIceOverride >= 0.0f ? " (shown: override)" : "",
+				settings.WetSnowAndIce ? "" : " | Wet Snow and Ice is off");
 			WrapTextF("Stickiness: %.2f%s", condition.stickiness, debugClimateStickinessOverride >= 0.0f ? " (override)" : "");
 			WrapTextF("Firmness: %.2f%s | density %.0f kg/m3, hand hardness %s", condition.firmness,
 				debugClimateFirmnessOverride >= 0.0f ? " (override)" : "", condition.density, hardness);
@@ -1943,15 +1950,18 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("climate_firmness_override"), "Firmness Override"), &debugClimateFirmnessOverride, -1.0f, 1.0f, debugClimateFirmnessOverride < 0.0f ? "live" : "%.2f");
 			if (auto _ttCond = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("climate_condition_override_tooltip"), "Not saved. Below 0 the value is derived; at 0 or above it replaces it at the player and in the view."));
+			ImGui::SliderFloat(T(TKEY("climate_ice_override"), "Ice Override"), &debugClimateIceOverride, -1.0f, 1.0f, debugClimateIceOverride < 0.0f ? "live" : "%.2f");
+			if (auto _ttIce = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("climate_ice_override_tooltip"), "Not saved. Below 0 the ice is what the weather has frozen; at 0 or above it replaces it everywhere, without touching the meltwater the snow holds."));
 			ImGui::SliderFloat(T(TKEY("ageing_rate_override"), "Ageing Clock Rate Override"), &debugAgeingRateOverride, -1.0f, 60.0f, debugAgeingRateOverride < 0.0f ? "live" : "%.1f per hour");
 			if (auto _ttAge = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("ageing_rate_override_tooltip"), "Not saved. How fast tracks age, in clock units per game hour: about 1 in calm cold weather, over 20 while it snows. At Track Ageing 1 a track is fully aged after 24 units."));
 
 			{
-				const char* views[] = { "Off", "Temperature", "Wetness", "Stickiness", "Firmness", "All (wet R, sticky G, firm B)", "Track age (green new, red old)" };
+				const char* views[] = { "Off", "Temperature", "Wetness", "Stickiness", "Firmness", "All (wet R, sticky G, firm B)", "Track age (green new, red old)", "Ice (cyan glaze)" };
 				ImGui::Combo(T(TKEY("condition_view"), "Snow Condition View"), &debugConditionView, views, IM_ARRAYSIZE(views));
 				if (auto _ttView = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Track age paints trenches and their berms from green, just cut, to red, fully aged; untouched snow stays white. Roads and objects keep their look."));
+					ImGui::Text("%s", T(TKEY("condition_view_tooltip"), "Paints the ground snow with the condition at each point: higher ground is colder. Track age paints trenches and their berms from green, just cut, to red, fully aged; untouched snow stays white. Ice paints the glaze on packed snow cyan. Roads and objects keep their look."));
 				if (debugConditionView > 0) {
 					static const char* kViewStates[] = { "starting", "compiling", "ready", "failed to compile" };
 					WrapTextF("View shader: %s", kViewStates[std::clamp(conditionViewShaderState.load(std::memory_order_acquire), 0, 3)]);

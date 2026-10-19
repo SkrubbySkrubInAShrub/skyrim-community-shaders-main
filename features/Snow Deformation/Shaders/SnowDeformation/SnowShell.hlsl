@@ -2095,8 +2095,9 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
 		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
 	}
-	// Thin-snow and wet print (SnowWetPrint); wetRough is the roughness cut.
-	const float wetRough = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
+	// Thin-snow and wet print, wet snow and ice (SnowWetPrint): x the roughness
+	// cut, y the glints left.
+	const float2 wetLook = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -2123,9 +2124,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 
 	// Wet print: after the RMAOS overwrite, which would discard it.
-	snowRoughness *= 1.0 - wetRough;
+	snowRoughness *= 1.0 - wetLook.x;
 	// Fresh blood is wet and glossy; dried blood is matte like the snow.
 	snowRoughness = lerp(snowRoughness, 0.22, saturate(bloodCover * 2.0) * bloodFresh * BloodLook2.y);
+	// Soaked snow, ice and blood do not sparkle.
+	const float glintsLeft = wetLook.y * (1.0 - saturate(bloodCover * 3.0));
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -2345,7 +2348,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		ShellClusterCoords(input.WorldPos, glintViewZ, glintClusterUV);
 		glintsLit = SnowLights::ClusterLightCount(glintClusterUV, glintViewZ) > 0;
 	}
-	const float glintsHere = glintsLit ? EnableGlints * (1.0 - saturate(bloodCover * 3.0)) : 0.0;
+	const float glintsHere = glintsLit ? EnableGlints * glintsLeft : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
@@ -2429,7 +2432,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_CONDITION_VIEW)
 	{
 		const float4 trackField = BermFieldPair(gridLocal);
-		const float2 track = float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter)));
+		const float2 track = SnowClimate2.z < 6.5 ? float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter))) :
+		                                             float2(SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z).x * smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(0.1, 0.4, pixelMelt)), 0.0);
 		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z, track);
 		psout.Diffuse.rgb = conditionColor * 2.0;
 		psout.Albedo.rgb = 0.0;

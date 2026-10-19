@@ -3026,15 +3026,16 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// the game's own decal is put back on top by the overlay (Blood.cpp), so
 	// a soak here would darken it twice.
 #ifdef PATCH
-	// Thin-snow and wet print, the ground's (SnowWetPrint), through the road layer.
-	const float wetRough = SnowWetPrint(kSnowAlbedo, pixelDeform, saturate(SampleExclusionField(worldXY).y), PatchSkinDepth(worldXY).x,
+	// Thin-snow and wet print, wet snow and ice, the ground's (SnowWetPrint), through the road layer.
+	const float2 wetLook = SnowWetPrint(kSnowAlbedo, pixelDeform, saturate(SampleExclusionField(worldXY).y), PatchSkinDepth(worldXY).x,
 		input.WorldPos.z + ShellCameraPosAdjust.z, input.trenchGridLocal, true);
 #elif defined(SNOW_OBJECT_PRINTS)
 	// The pressed rim, the ground's thin-snow print in a dusting of the dent's
 	// depth. Prints on objects keep no dates.
-	const float wetRough = SnowWetPrint(kSnowAlbedo, print.x, 0.0, kPrintDentDepth, input.WorldPos.z + ShellCameraPosAdjust.z, 0.0, false);
+	const float2 wetLook = SnowWetPrint(kSnowAlbedo, print.x, 0.0, kPrintDentDepth, input.WorldPos.z + ShellCameraPosAdjust.z, 0.0, false);
 #else
-	const float wetRough = 0.0;
+	// No prints on a coat; wet snow and its sparkle as the ground's.
+	const float2 wetLook = SnowWetPrint(kSnowAlbedo, 0.0, 0.0, 100.0, input.WorldPos.z + ShellCameraPosAdjust.z, 0.0, false);
 #endif
 
 	// PBR response; identical constants to the terrain shell.
@@ -3057,7 +3058,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 #endif
 
 	// Wet print: after the RMAOS overwrite, which would discard it.
-	snowRoughness *= 1.0 - wetRough;
+	snowRoughness *= 1.0 - wetLook.x;
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -3285,7 +3286,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float2 glintClusterUV = glintClip.xy / max(glintClip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
 		glintsLit = SnowLights::ClusterLightCount(glintClusterUV, glintViewZ) > 0;
 	}
-	const float glintsHere = glintsLit ? EnableGlints : 0.0;
+	const float glintsHere = glintsLit ? EnableGlints * wetLook.y : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 #ifdef SNOW_RUNE_GLYPHS

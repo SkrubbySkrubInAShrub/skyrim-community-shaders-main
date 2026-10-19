@@ -1377,6 +1377,7 @@ void SnowDeformation::PostPostLoad()
 	RegisterTrenchCoSave();
 	RegisterAccumulationCoSave();
 	RegisterSnowConditionCoSave();
+	RegisterSnowIceCoSave();
 	RegisterItemSinkCoSave();
 	RegisterPrintCoSave();
 }
