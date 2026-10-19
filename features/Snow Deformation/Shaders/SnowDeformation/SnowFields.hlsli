@@ -230,10 +230,24 @@ float TrackDetailWetScale(float a_age)
 	return saturate(1.0 - a_age * 2.5);
 }
 
-// The sun heightfield march's tap distances, both shells.
+// The sun heightfield march's tap distances, both shells. Inside the trail
+// map the first three give way to kSunNearTaps and the sun envelope.
 static const float kSunMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
+// Inside the trail map (MarchNearHorizon): exact taps at the receiver, in map
+// texels, then the sun envelope read kSunEnvelopeShift texels sunward, where
+// every texel its bilinear blends lies past the receiver.
+static const float kSunNearTaps[4] = { 0.45, 0.9, 1.45, 2.05 };
+static const float kSunEnvelopeShift = 1.5;
+// The envelope bake's run (SnowShell.hlsl MarchSunCS), in map texels: half
+// texels to 10, whole texels to 28.
+static const uint kSunEnvelopeSteps = 38;
 
-#if defined(PSHADER)
+float SunEnvelopeRun(uint a_k)
+{
+	return a_k <= 20u ? 0.5 * a_k : 10.0 + (float)(a_k - 20u);
+}
+
+#if defined(PSHADER) || defined(SNOW_MARCH_SUN_CS)
 // The sun marches' occluder heights, baked (MarchCache.cpp): per deformation
 // texel in the map's own torus, the ground's tap height (MarchHeightCS) and
 // the road's where the statics march takes a road tap, sentinel elsewhere
@@ -242,6 +256,10 @@ static const float kSunMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
 Texture2D<float> MarchHeightGround : register(t106);
 Texture2D<float> MarchHeightRoad : register(t107);
 Texture2D<float> MarchHeightFar : register(t108);
+// The sun envelope over the ground's heights (SnowShell.hlsl MarchSunCS), the
+// same torus: per texel, the highest occluder toward the sun less its run
+// times the sun's tangent.
+Texture2D<float> MarchSunEnvelope : register(t100);
 
 // A cache's four texels around a grid-local point (s00, s10, s01, s11), one
 // gather on s0 (it wraps like DeformTexel); a_f = the bilinear weights.
@@ -307,6 +325,34 @@ void MarchCachedHeights(float2 a_gridLocal, float2 a_stepDir, bool a_near, out f
 		[unroll] for (uint i = 0; i < 5; i++)
 			a_h[i + 1] = MarchHeightFarAt(a_gridLocal + a_stepDir * kSunMarchDist[i]);
 	}
+}
+
+// The march inside the trail map, against the receiver a_ref: x = the horizon
+// over the exact near taps and the two far taps (the sun's tangent), y = how
+// far the sun envelope stands above a_ref + 1 (units).
+float2 MarchNearHorizon(float2 a_gridLocal, float2 a_stepDir, float a_sunTan, float a_ref)
+{
+	SNOW_DEFORM_DIMS(dims);
+	const float texel = 1.0 / (DeformInvWorldSize * dims.x);
+	float horizonTan = -10.0;
+	[unroll] for (uint i = 0; i < 4; i++)
+	{
+		const float d = kSunNearTaps[i] * texel;
+		horizonTan = max(horizonTan, (MarchHeightNear(a_gridLocal + a_stepDir * d) - a_ref - 1.0) / d);
+	}
+	[unroll] for (uint j = 3; j < 5; j++)
+		horizonTan = max(horizonTan, (MarchHeightNear(a_gridLocal + a_stepDir * kSunMarchDist[j]) - a_ref - 1.0) / kSunMarchDist[j]);
+	const float shift = kSunEnvelopeShift * texel;
+	float2 f;
+	const float envelope = MarchCacheBilinear(MarchCacheTexels(MarchSunEnvelope, a_gridLocal + a_stepDir * shift, f), f) - shift * a_sunTan;
+	return float2(horizonTan, envelope - a_ref - 1.0);
+}
+
+// MarchNearHorizon's light: the taps soft by a_soft in the sun's tangent, the
+// envelope by a_softUnits.
+float MarchNearLight(float2 a_horizon, float a_sunTan, float a_soft, float a_softUnits)
+{
+	return min(smoothstep(-1.5 * a_soft, 1.5 * a_soft, a_sunTan - a_horizon.x), smoothstep(-a_softUnits, a_softUnits, -a_horizon.y));
 }
 #endif
 

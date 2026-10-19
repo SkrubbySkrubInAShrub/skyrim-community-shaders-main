@@ -1865,6 +1865,8 @@ public:
 
 	/** @brief The sun heightfield marches' occluder heights, baked (MarchCache.cpp), R32F: [0] the ground march's tap height per deformation texel in the map's torus (SnowShell.hlsl MarchHeightCS), [1] the statics march's road tap there (SnowStaticsShell.hlsl RoadMarchHeightCS; the sentinel where a tap is no road tap), [2] the ground's per land-layer vertex over the FineWindow, for marches that leave the trail map (MarchHeightFarRowsCS). Bound at PS t106-t108 for the ground and object snow. */
 	Texture2D* marchHeight[3] = {};
+	/** @brief The sun envelope over marchHeight[0], R32F in the same torus (SnowShell.hlsl MarchSunCS): per texel, the highest ground height toward the sun less its run times the sun's tangent. The near march reads it at PS t100 in place of its near taps. */
+	Texture2D* marchSunEnvelope = nullptr;
 	enum MarchCS : uint32_t
 	{
 		kGroundTilesCS,
@@ -1872,6 +1874,8 @@ public:
 		kRoadTilesCS,
 		kRoadRowsCS,
 		kFarRowsCS,
+		kSunTilesCS,
+		kSunRowsCS,
 		kMarchCSCount
 	};
 	ID3D11ComputeShader* marchHeightCS[kMarchCSCount] = {};
@@ -1881,6 +1885,8 @@ public:
 		uint32_t RowStart;
 		uint32_t RowCount;
 		uint32_t pad[2];
+		/** @brief The envelope's sun: xy its horizontal direction (unit), z its tangent. */
+		float4 Sun;
 	};
 	STATIC_ASSERT_ALIGNAS_16(MarchCacheCB);
 	ConstantBuffer* marchCacheCB = nullptr;
@@ -1901,12 +1907,17 @@ public:
 	/** @brief Berm bakes run, and the last one the caches applied: the tile list holds only the latest bake's tiles. */
 	uint64_t bermBakeSeq = 0;
 	uint64_t marchCacheBermSeq = 0;
+	/** @brief The sun the envelope is baked for (unit, toward the sun), taken when a sweep starts; whether it holds every texel; its row cursor; rows still to sweep at the fast rate. */
+	float marchSunDir[3] = { 0.0f, 0.0f, 1.0f };
+	bool marchSunValid = false;
+	uint32_t marchSunRowCursor = 0;
+	uint32_t marchSunFastRows = 0;
 	/** @brief Census of the last 300 cache updates, per update: bit 0 key changed, bit 1 near rebuilt whole, bit 2 far rebuilt whole. */
 	static constexpr uint32_t kMarchCensusFrames = 300;
 	std::array<uint8_t, kMarchCensusFrames> marchCensus{};
 	uint32_t marchCensusCursor = 0;
 	uint32_t marchCensusFilled = 0;
-	/** @brief Brings the caches up to date and binds them at PS t106-t108 (DrawShell, after the shell CB upload). False = no caches this frame: the marches must be switched off, as they read nothing else. */
+	/** @brief Brings the caches up to date and binds them at PS t106-t108, the sun envelope at t100 (DrawShell, after the shell CB upload). False = no caches this frame: the marches must be switched off, as they read nothing else. */
 	bool UpdateMarchCaches(const ShellCB& a_cb);
 	void UnbindMarchCaches();
 	void ReleaseMarchCache();	/** @brief The prepass PS writing the deferred attributes [plain, hidden kept]. */

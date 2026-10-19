@@ -2178,19 +2178,30 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		const bool nearCache = MarchCacheCovers(gridLocal, stepDir, kSunMarchDist[4]);
 		[branch] if (nearCache || MarchFarCovers(gridLocal, stepDir, kSunMarchDist[4]))
 		{
-			float h[6];
-			MarchCachedHeights(gridLocal, stepDir, nearCache, h);
-			// The receiver comes from the same cache as the taps, so what the
-			// resampling gets wrong cancels instead of standing as a false rise
-			// over the nearest tap; one unit of bias absorbs the residue.
-			const float marchRef = max(h[0] > -50000.0 ? h[0] : surfZ, surfZ - 2.0);
-			float horizonTan = -10.0;
-			[unroll] for (uint marchI = 0; marchI < 5; marchI++)
-				horizonTan = max(horizonTan, (h[marchI + 1] - marchRef - 1.0) / kSunMarchDist[marchI]);
 			// Near: a crisp penumbra band. Far: a much wider penumbra plus
 			// attenuated strength; the march's per-texel horizon steps stop
 			// reading as hard-edged blocks on distant snow.
 			const float soft = lerp(0.03, 0.35, farShadowT);
+			float marchLight;
+			// The receiver comes from the same cache as the taps, so what the
+			// resampling gets wrong cancels instead of standing as a false rise
+			// over the nearest tap; one unit of bias absorbs the residue.
+			[branch] if (nearCache)
+			{
+				const float h0 = MarchHeightNear(gridLocal);
+				const float marchRef = max(h0 > -50000.0 ? h0 : surfZ, surfZ - 2.0);
+				marchLight = MarchNearLight(MarchNearHorizon(gridLocal, stepDir, sunTan, marchRef), sunTan, soft, lerp(2.0, 8.0, farShadowT));
+			}
+			else
+			{
+				float h[6];
+				MarchCachedHeights(gridLocal, stepDir, false, h);
+				const float marchRef = max(h[0] > -50000.0 ? h[0] : surfZ, surfZ - 2.0);
+				float horizonTan = -10.0;
+				[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+					horizonTan = max(horizonTan, (h[marchI + 1] - marchRef - 1.0) / kSunMarchDist[marchI]);
+				marchLight = smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan);
+			}
 			// Penumbra CENTRED on the horizon: the old band was the same total
 			// width (3*soft) but sat entirely on the LIT side of
 			// sunTan == horizonTan, so the shadow always over-reached its
@@ -2201,7 +2212,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			// and draped stone became a blotch at sunset, and the cascades own
 			// the long shadows there anyway. Same gate on the statics march.
 			const float lowSun = smoothstep(0.04, 0.12, sunTan);
-			sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
+			sunShadow *= lerp(1.0, lerp(marchLight, 1.0, 0.7 * farShadowT), lowSun);
 		}
 	}
 
@@ -2566,6 +2577,103 @@ void MarchHeightTexel(uint2 phys)
 		return;
 	const uint2 t = uint2(DTid.x, (MarchRowStart + DTid.y) % dims.y);
 	MarchHeightOut[t] = MarchTapHeight(float2(t) * FineWindow.w - FineWindow.xy);
+}
+#endif
+
+#ifdef SNOW_MARCH_SUN_CS
+// The sun envelope (SnowFields.hlsli MarchSunEnvelope): at each deformation
+// texel's centre, the highest ground cache height toward the sun less its run
+// times the sun's tangent, over SunEnvelopeRun; a run ends at the window's
+// edge. Over the swept berm-bake tiles or a band of rows.
+RWTexture2D<float> MarchSunOut : register(u0);
+StructuredBuffer<uint> MarchTilesIn : register(t63);
+cbuffer MarchCacheCB : register(b2)
+{
+	uint MarchRowStart;
+	uint MarchRowCount;
+	uint2 MarchCachePad;
+	// xy = the sun's horizontal direction (unit), z = its tangent.
+	float4 MarchSun;
+}
+
+void MarchSunTexel(int2 a_phys)
+{
+	SNOW_DEFORM_DIMS(dims);
+	const int2 phys = a_phys & (int2(dims) - 1);
+	const float2 logical = float2((phys - DeformMapOrigin) & (int2(dims) - 1));
+	const float texel = 1.0 / (DeformInvWorldSize * dims.x);
+	const float2 gridLocal = (logical + 0.5) * texel - GridToDeformOffset;
+	const float2 margin = 1.5 / dims;
+	float envelope = -1e30;
+	bool inside = true;
+	[loop] for (uint k = 1; k <= kSunEnvelopeSteps && inside; k++)
+	{
+		const float s = SunEnvelopeRun(k) * texel;
+		const float2 p = gridLocal + MarchSun.xy * s;
+		const float2 uv = (GridToDeformOffset + p) * DeformInvWorldSize;
+		inside = all(uv >= margin) && all(uv <= 1.0 - margin);
+		[branch] if (inside)
+		{
+			float2 f;
+			envelope = max(envelope, MarchCacheBilinear(MarchCacheTexels(MarchHeightGround, p, f), f) - s * MarchSun.z);
+		}
+	}
+	MarchSunOut[phys] = envelope;
+}
+
+// The segment from a_p along a_v meets the box [a_lo, a_hi].
+bool SunRunMeetsBox(float2 a_p, float2 a_v, float2 a_lo, float2 a_hi)
+{
+	float t0 = 0.0;
+	float t1 = 1.0;
+	bool meets = true;
+	[unroll] for (uint i = 0; i < 2; i++)
+	{
+		[flatten] if (abs(a_v[i]) < 1e-6)
+		{
+			meets = meets && a_p[i] >= a_lo[i] && a_p[i] <= a_hi[i];
+		}
+		else
+		{
+			const float u0 = (a_lo[i] - a_p[i]) / a_v[i];
+			const float u1 = (a_hi[i] - a_p[i]) / a_v[i];
+			t0 = max(t0, min(u0, u1));
+			t1 = min(t1, max(u0, u1));
+		}
+	}
+	return meets && t0 <= t1;
+}
+
+// A changed tile moves the envelope of every texel whose run crosses it: the
+// tile swept away from the sun by the reach, a texel of bilinear margin.
+[numthreads(8, 8, 1)] void MarchSunTilesCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint listIndex = Gid.y * 1024u + Gid.x;
+	if (listIndex >= MarchTilesIn[0])
+		return;
+	const uint packed = MarchTilesIn[1 + listIndex];
+	const int2 tile = int2(packed & 0xFFFFu, packed >> 16u) * 8;
+	const float2 run = MarchSun.xy * (SunEnvelopeRun(kSunEnvelopeSteps) + 1.0);
+	const int2 lo = tile + int2(floor(min(-run, 0.0))) - 1;
+	const int2 hi = tile + 8 + int2(ceil(max(-run, 0.0))) + 1;
+	const float2 boxLo = float2(tile) - 1.0;
+	const float2 boxHi = float2(tile) + 9.0;
+	[loop] for (int y = lo.y + (int)GTid.y; y < hi.y; y += 8)
+	{
+		[loop] for (int x = lo.x + (int)GTid.x; x < hi.x; x += 8)
+		{
+			[branch] if (SunRunMeetsBox(float2(x, y) + 0.5, run, boxLo, boxHi))
+				MarchSunTexel(int2(x, y));
+		}
+	}
+}
+
+[numthreads(8, 8, 1)] void MarchSunRowsCS(uint3 DTid : SV_DispatchThreadID)
+{
+	SNOW_DEFORM_DIMS(dims);
+	if (DTid.x >= (uint)dims.x || DTid.y >= MarchRowCount)
+		return;
+	MarchSunTexel(int2(DTid.x, (MarchRowStart + DTid.y) % (uint)dims.y));
 }
 #endif
 #endif

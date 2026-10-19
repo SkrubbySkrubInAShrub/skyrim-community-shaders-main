@@ -17,13 +17,17 @@
 // [1] the statics march's road tap per deformation texel, the sentinel off the
 //     roads (SnowStaticsShell.hlsl RoadMarchHeightCS);
 // [2] the ground's tap height per land-layer vertex over the FineWindow, for
-//     the marches that leave the trail map (MarchHeightFarRowsCS).
+//     the marches that leave the trail map (MarchHeightFarRowsCS);
+// [3] the sun envelope over [0] (MarchSunCS), which stands in for the near
+//     taps inside the trail map.
 //
 // The near pair follows the berm bake's tile list (the map or the berm field
 // changed there; the scroll's arriving strips are on it too). Every cache
 // also refreshes a band of rows a frame for the slow inputs (snowfall,
 // objects, water, clearings), faster after a terrain or land-layer rebuild,
 // and rebuilds whole when created, re-set, or after a berm bake it missed.
+// The envelope follows the same tiles, swept away from the sun, and its own
+// row band, which also carries the sun's drift.
 
 namespace
 {
@@ -31,20 +35,47 @@ namespace
 	constexpr uint32_t kMarchCacheFastRows = 256;
 	constexpr uint32_t kMarchFarRows = 36;
 	constexpr uint32_t kMarchFarFastRows = 288;
+	constexpr uint32_t kMarchSunRows = 32;
+	constexpr uint32_t kMarchSunFastRows = 256;
 	constexpr UINT kMarchTilesSlot = 63;
 	constexpr UINT kMarchSlot = 106;
+	constexpr UINT kMarchSunSlot = 100;
+	// cos 1 and 5 degrees: a turn of the sun that takes a fast sweep, and one
+	// that takes a whole rebuild.
+	constexpr float kMarchSunFastTurn = 0.99985f;
+	constexpr float kMarchSunFullTurn = 0.99619f;
+
+	// Toward the sun, as State::UpdateSharedData sets DirLightDirection.
+	bool MarchSunDirection(float (&a_dir)[3])
+	{
+		auto* smState = globals::game::smState;
+		auto* node = smState ? smState->shadowSceneNode[0] : nullptr;
+		auto* sunLight = node ? node->GetRuntimeData().sunLight : nullptr;
+		auto* dirLight = sunLight ? skyrim_cast<RE::NiDirectionalLight*>(sunLight->light.get()) : nullptr;
+		if (!dirLight)
+			return false;
+		const auto& d = dirLight->GetWorldDirection();
+		const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+		if (len < 1e-6f)
+			return false;
+		a_dir[0] = -d.x / len;
+		a_dir[1] = -d.y / len;
+		a_dir[2] = -d.z / len;
+		return true;
+	}
 }
 
 ID3D11ComputeShader* SnowDeformation::GetMarchHeightCS(MarchCS a_which)
 {
-	static constexpr const char* entries[kMarchCSCount] = { "MarchHeightTilesCS", "MarchHeightRowsCS", "RoadMarchTilesCS", "RoadMarchRowsCS", "MarchHeightFarRowsCS" };
+	static constexpr const char* entries[kMarchCSCount] = { "MarchHeightTilesCS", "MarchHeightRowsCS", "RoadMarchTilesCS", "RoadMarchRowsCS", "MarchHeightFarRowsCS", "MarchSunTilesCS", "MarchSunRowsCS" };
 	auto*& slot = marchHeightCS[a_which];
 	if (!slot) {
 		const bool road = a_which == kRoadTilesCS || a_which == kRoadRowsCS;
+		const bool sun = a_which == kSunTilesCS || a_which == kSunRowsCS;
 		logger::debug("Compiling {} {}", road ? "SnowStaticsShell" : "SnowShell", entries[a_which]);
 		slot = static_cast<ID3D11ComputeShader*>(road ?
 				CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", { { "SNOW_ROAD_MARCH_CS", "" } }, "cs_5_0", entries[a_which]) :
-				CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));
+				CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { sun ? "SNOW_MARCH_SUN_CS" : "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));
 	}
 	return slot;
 }
@@ -58,12 +89,14 @@ void SnowDeformation::ReleaseMarchCache()
 	}
 	marchCacheValid = false;
 	marchFarValid = false;
+	marchSunValid = false;
 }
 
 void SnowDeformation::UnbindMarchCaches()
 {
 	ID3D11ShaderResourceView* nullSRVs[3] = {};
 	globals::d3d::context->PSSetShaderResources(kMarchSlot, 3, nullSRVs);
+	globals::d3d::context->PSSetShaderResources(kMarchSunSlot, 1, nullSRVs);
 }
 
 namespace
@@ -140,6 +173,14 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		return false;
 	if (farCreated)
 		marchFarValid = false;
+	bool sunCreated = false;
+	if (!EnsureMarchTexture(marchSunEnvelope, dim, "SnowDeformation::MarchSunEnvelope", sunCreated))
+		return false;
+	if (sunCreated)
+		marchSunValid = false;
+	float sunNow[3];
+	if (!shellSnowSampler || !MarchSunDirection(sunNow))
+		return false;
 	if (!marchCacheCB)
 		marchCacheCB = new ConstantBuffer(ConstantBufferDesc<MarchCacheCB>(), "SnowDeformation::MarchCacheCB");
 
@@ -193,6 +234,23 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const uint32_t farRows = farCache ? MarchRows(farFull, kShellFineDim, kMarchFarRows, kMarchFarFastRows, marchFarFastRows, marchFarRowCursor, farStart) : 0;
 	marchCacheFineOrigin[0] = shellFineOriginX;
 	marchCacheFineOrigin[1] = shellFineOriginY;
+
+	// The envelope's sun: a sweep takes the sun as it stands when it starts, as
+	// Terrain Shadows does; a turn past a degree starts a fast sweep, past five
+	// a whole rebuild (a wait, the moon taking over).
+	const float sunDot = sunNow[0] * marchSunDir[0] + sunNow[1] * marchSunDir[1] + sunNow[2] * marchSunDir[2];
+	const bool sunFull = full || !marchSunValid || sunDot < kMarchSunFullTurn;
+	const bool sunTurned = !sunFull && sunDot < kMarchSunFastTurn;
+	if (sunFull || sunTurned || marchSunRowCursor == 0)
+		std::copy(std::begin(sunNow), std::end(sunNow), marchSunDir);
+	if (sunFull)
+		marchSunFastRows = 0;
+	else if (sunTurned || terrainMoved || fineMoved || tracksAged)
+		marchSunFastRows = dim;
+	uint32_t sunStart = 0;
+	const uint32_t sunRows = MarchRows(sunFull, dim, kMarchSunRows, kMarchSunFastRows, marchSunFastRows, marchSunRowCursor, sunStart);
+	const float sunLen2D = std::max(std::hypot(marchSunDir[0], marchSunDir[1]), 1e-4f);
+	const float4 sunCB = { marchSunDir[0] / sunLen2D, marchSunDir[1] / sunLen2D, std::min(marchSunDir[2] / sunLen2D, 100.0f), 0.0f };
 	marchCensus[marchCensusCursor] = uint8_t((keyChanged ? 1u : 0u) | (full ? 2u : 0u) | (farFull ? 4u : 0u));
 	marchCensusCursor = (marchCensusCursor + 1) % kMarchCensusFrames;
 	marchCensusFilled = std::min(marchCensusFilled + 1, kMarchCensusFrames);
@@ -209,6 +267,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		MarchCacheCB band{};
 		band.RowStart = a_start;
 		band.RowCount = a_rows;
+		band.Sun = sunCB;
 		marchCacheCB->Update(band);
 		context->CSSetShader(marchHeightCS[a_cs], nullptr, 0);
 		context->Dispatch((a_dim + 7) / 8, (a_rows + 7) / 8, 1);
@@ -257,12 +316,31 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	}
 	rowsDispatch(kRoadRowsCS, dim, nearStart, nearRows);
 
+	// The sun envelope over the ground heights just written: the swept tiles
+	// and its own row band, gathered through the shells' wrapping sampler.
+	ID3D11ShaderResourceView* groundSRV = marchHeight[0]->srv.get();
+	ID3D11SamplerState* sunSampler = shellSnowSampler.get();
+	setUAV(marchSunEnvelope);
+	context->CSSetShaderResources(kMarchSlot, 1, &groundSRV);
+	context->CSSetSamplers(0, 1, &sunSampler);
+	if (tiles) {
+		MarchCacheCB sunBand{};
+		sunBand.Sun = sunCB;
+		marchCacheCB->Update(sunBand);
+		context->CSSetShader(marchHeightCS[kSunTilesCS], nullptr, 0);
+		context->DispatchIndirect(bermArgsBuffer.get(), 0);
+	}
+	rowsDispatch(kSunRowsCS, dim, sunStart, sunRows);
+
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 	ID3D11ShaderResourceView* nullSRVs[16] = {};
 	context->CSSetShaderResources(0, 16, nullSRVs);
 	context->CSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
 	context->CSSetShaderResources(kMarchTilesSlot, 1, nullSRVs);
+	context->CSSetShaderResources(kMarchSlot, 1, nullSRVs);
+	ID3D11SamplerState* nullSampler = nullptr;
+	context->CSSetSamplers(0, 1, &nullSampler);
 	ID3D11Buffer* nullCBs[3] = {};
 	context->CSSetConstantBuffers(0, 3, nullCBs);
 	context->CSSetShader(nullptr, nullptr, 0);
@@ -270,7 +348,10 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 
 	marchCacheValid = true;
 	marchFarValid = farCache;
+	marchSunValid = true;
 	ID3D11ShaderResourceView* cacheSRVs[3] = { marchHeight[0]->srv.get(), marchHeight[1]->srv.get(), farCache ? marchHeight[2]->srv.get() : nullptr };
 	context->PSSetShaderResources(kMarchSlot, 3, cacheSRVs);
+	ID3D11ShaderResourceView* sunSRV = marchSunEnvelope->srv.get();
+	context->PSSetShaderResources(kMarchSunSlot, 1, &sunSRV);
 	return true;
 }

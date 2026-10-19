@@ -3121,12 +3121,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		const bool nearCache = MarchCacheCovers(input.GridLocal, stepDir, kSunMarchDist[4]);
 		[branch] if (nearCache || MarchFarCovers(input.GridLocal, stepDir, kSunMarchDist[4]))
 		{
-			float h[6];
-			MarchCachedHeights(input.GridLocal, stepDir, nearCache, h);
+			const float h0 = nearCache ? MarchHeightNear(input.GridLocal) : MarchHeightFarAt(input.GridLocal);
 			// Never below the drawn surface by more than the reconstruction's own
 			// slack: a skin standing on a rock or a glacier is far above the
 			// terrain the taps read, and terrain relief must not shadow it.
-			const float refTer = max(h[0] > -50000.0 ? h[0] : surfZ, surfZ - 2.0);
+			const float refTer = max(h0 > -50000.0 ? h0 : surfZ, surfZ - 2.0);
 			// Near softness halved: it existed to hide the tap quantisation the
 			// finer first taps now resolve. Far end untouched.
 			const float soft = lerp(0.03, 0.35, farShadowT);
@@ -3159,30 +3158,41 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						objectTopUsable = false;
 				}
 			}
-			float horizonTan = -10.0;
-			[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+			float marchLight;
+			[branch] if (nearCache)
 			{
-				const float d = kSunMarchDist[marchI];
-				float sh = h[marchI + 1];
-				float ref = refTer;
+				float2 horizon = MarchNearHorizon(input.GridLocal, stepDir, sunTan, refTer);
+				// Road taps at the near distances, against the drawn surface.
 				[branch] if (objectTopUsable)
 				{
-					const float2 sampleLocal = input.GridLocal + stepDir * d;
-					const float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
-					float2 fRoad;
-					const float4 road = MarchCacheTexels(MarchHeightRoad, sampleLocal, fRoad);
-					[flatten] if (all(abs(topLocal) < 0.98) && all(road > -50000.0))
+					[unroll] for (uint marchI = 0; marchI < 3; marchI++)
 					{
-						sh = MarchCacheBilinear(road, fRoad);
-						ref = surfZ;
-						dbgMarch.y += 0.2;
+						const float d = kSunMarchDist[marchI];
+						const float2 sampleLocal = input.GridLocal + stepDir * d;
+						const float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
+						float2 fRoad;
+						const float4 road = MarchCacheTexels(MarchHeightRoad, sampleLocal, fRoad);
+						[flatten] if (all(abs(topLocal) < 0.98) && all(road > -50000.0))
+						{
+							horizon.x = max(horizon.x, (MarchCacheBilinear(road, fRoad) - surfZ - 1.0) / d);
+							dbgMarch.y += 0.2;
+						}
 					}
 				}
-				horizonTan = max(horizonTan, (sh - ref - 1.0) / d);
+				marchLight = MarchNearLight(horizon, sunTan, soft, lerp(2.0, 8.0, farShadowT));
+			}
+			else
+			{
+				float h[6];
+				MarchCachedHeights(input.GridLocal, stepDir, false, h);
+				float horizonTan = -10.0;
+				[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+					horizonTan = max(horizonTan, (h[marchI + 1] - refTer - 1.0) / kSunMarchDist[marchI]);
+				marchLight = smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan);
 			}
 			// Penumbra CENTRED on the horizon (see SnowShell.hlsl): same width,
 			// no bias toward the lit side.
-			float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+			float marchFactor = lerp(marchLight, 1.0, 0.7 * farShadowT);
 			// Fades out toward the horizon, as the terrain march does.
 			marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
 			sunShadow *= marchFactor;
