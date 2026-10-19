@@ -861,6 +861,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttResist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Every new pass over the same snow carves the same share of what is left, so busy paths sink deeper the more they are walked. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
 
+		ImGui::Checkbox(T(TKEY("creature_sink"), "Creatures Sink by Weight"), &settings.CreatureSink);
+		if (auto _ttCreatureSink = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("creature_sink_tooltip"), "Creatures lighter than you sink only part way into the snow. Where the snow is firm enough to carry them, a hare or a fox stands up to half way up it and leaves a shallower trench; in loose new snow they sink further, but never past their belly, and never into something low overhead. Your own weight is the measure: people sink as you do, and anything as heavy as you or heavier stands on the ground under the snow. A creature that dies settles into the snow. Weight comes from each creature's own collision shapes, so modded creatures work too. Off, every creature stands on the ground."));
+
 		ImGui::SliderFloat(T(TKEY("track_ageing"), "Track Ageing"), &settings.TrackAgeing, 0.0f, 2.0f, "%.2f");
 		if (auto _ttTrackAge = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("track_ageing_tooltip"), "How fast tracks age. An old track's walls round off, shallower and wider, its rim loses its teeth and lip, its berm settles, and new snow covers the broken snow and the dark wet print. Snowfall ages tracks fastest: at 1.00 an hour of it does what a day of calm cold does. Walking an old track again makes it fresh where your feet reach the floor. Ages are kept in saves. 0 = tracks never age."));
@@ -1978,6 +1982,20 @@ void SnowDeformation::DrawSettings()
 				itemSinkWatched.load(std::memory_order_relaxed), kItemSinkRadius, (uint32_t)kItemSinkMax, itemSinkHeld.load(std::memory_order_relaxed));
 			WrapTextF("%s", readout.c_str());
 			WrapTextF("Each item type logs its measure and roundness once to CommunityShaders.log ('item sink:').");
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Creature weight")) {
+			creatureSinkReadoutWanted.store(true, std::memory_order_release);
+			std::string readout;
+			{
+				std::scoped_lock lock(creatureLiftLock);
+				readout = creatureSinkReadout;
+			}
+			WrapTextF("creatures watched %u | lifted %u | %.0f us last frame", creatureSinkWatched.load(std::memory_order_relaxed),
+				creatureSinkLifted.load(std::memory_order_relaxed), creatureSinkMicros.load(std::memory_order_relaxed));
+			WrapTextF("%s", readout.c_str());
+			WrapTextF("Each creature race logs its weight once to CommunityShaders.log ('creature weight:').");
 			ImGui::TreePop();
 		}
 

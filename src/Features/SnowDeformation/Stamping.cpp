@@ -1078,10 +1078,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// LOWEST foot instead, which plants a hovering actor's sole no matter
 		// how high it is. Corpses are exempt: a body that has fallen is lying
 		// in the snow, and its dent is correct.
+		// A creature drawn standing in the snow (CreatureSink.cpp) carries the lift in
+		// its bones, and in its ragdoll when Havok drives that to them.
+		bool liftInRagdoll = true;
+		const float bodyLift = isDead ? 0.0f : CreatureLiftOf(formID, &liftInRagdoll);
 		float floatingGap = 0.0f;
 		bool floatingByFeet = false;
 		const bool floating = !isDead &&
-		                      ActorIsFloating(actor.get(), root, bones, footPath, groundZ, &floatingGap, &floatingByFeet);
+		                      ActorIsFloating(actor.get(), root, bones, footPath, groundZ + bodyLift, &floatingGap, &floatingByFeet);
 		if (probing)
 			skeletonProbe.floatingGap = floatingGap;
 		float bodyAlpha = 1.0f;
@@ -1282,8 +1286,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						minFootZ = n->world.translate.z;
 						minFootScale = n->world.scale;
 					}
+				const float footGroundZ = groundZ + bodyLift;
+				const float footReach = bodyLift > 0.0f ? std::clamp(1.0f - bodyLift / std::max(nominalDepth * GetAccumulationDepthScale(), 1.0f), 0.0f, 1.0f) : 1.0f;
 				const bool groundRefStarved =
-					minFootZ != FLT_MAX && minFootZ - groundZ > kFootPlantBand * minFootScale;
+					minFootZ != FLT_MAX && minFootZ - footGroundZ > kFootPlantBand * minFootScale;
 
 				uint32_t footIndex = 0;
 				for (const auto& foot : bones->feet) {
@@ -1331,7 +1337,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// stamp in and out every frame or two, and each flicker is
 					// a real map input. A swing lift clears 1.5x instantly, so
 					// the trail-break latch is unaffected.
-					const float plantRef = groundRefStarved ? minFootZ : groundZ;
+					const float plantRef = groundRefStarved ? minFootZ : footGroundZ;
 					const float plantBand = groundRefStarved ?
 					                            std::max(kFootRelativeBand * boneScale, kFootRelativeLenFactor * footLen) :
 					                            kFootPlantBand * boneScale;
@@ -1364,7 +1370,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					float4 stamp{};
 					stamp.x = tip.x;
 					stamp.y = tip.y;
-					stamp.z = 1.0f;
+					stamp.z = footReach;
 					stamp.w = radius;
 					perFrameData.Stamps[stampCount] = stamp;
 					// StampEnds.w on a carve is the weight it puts through a
@@ -1521,7 +1527,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// Band reference: identical to groundZ for the living (their ground
 		// IS their position); for dead ragdolls it lifts to the body, so
 		// corpses on statics keep their shape stamps.
-		const float bandRefZ = std::max(groundZ, position.z);
+		const float bandRefZ = std::max(groundZ, position.z) + (liftInRagdoll ? 0.0f : bodyLift);
 		uint32_t shapeIndex = 0;
 		if (!useCorpseBones)
 			SnowDeformation::TimedTraverse(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {

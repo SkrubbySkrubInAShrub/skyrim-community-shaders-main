@@ -512,6 +512,8 @@ public:
 		float ItemMinRoundness = 0.20f;
 		/** @brief Percent of full grip: snow damps a dropped item's roll and slide by how deep it is in and how slowly it is travelling. 0 = the game's physics untouched. */
 		float ItemSnowGripPercent = 100.0f;
+		/** @brief Creatures lighter than the player are drawn standing part way up the snow and carve only as deep as they sink (CreatureSink.cpp, TRACK-VARIATION-RESEARCH.md Part 4 Stage 3). Off, every actor stands on the ground under it. */
+		bool CreatureSink = true;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
@@ -2341,6 +2343,8 @@ public:
 	void ItemSinkUpdate();
 	/** @brief Raises the rune and frost pieces the spell scan queued. From the camera-update hook: main thread, before the frame's first pass. */
 	void ApplySpellLifts();
+	/** @brief Draws creatures lighter than the player standing in the snow by weight. From the camera-update hook: main thread, before the frame's first pass. */
+	void CreatureSinkUpdate();
 	/** @brief Probe readout of the last clamp: 0 hook never ran, 1 no shell data under the camera, 2 clear, 3 pulled in, 4 camera state not clamped, 5 off, 6 lifted (player down). */
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
@@ -5235,6 +5239,79 @@ protected:
 
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
+
+	// Creatures stand in the snow by weight (CreatureSink.cpp, TRACK-VARIATION-RESEARCH.md 3.5 and Part 4 Stage 3).
+	/** @brief An actor's ragdoll capsules, measured on its live 3D: the weight and shape the sink is judged by. */
+	struct CreatureBuild
+	{
+		/** @brief Identity only, never dereferenced. */
+		const RE::NiAVObject* root = nullptr;
+		float scale = 0.0f;
+		/** @brief Capsule volume, units^3. */
+		float volume = 0.0f;
+		/** @brief Underside of the largest capsule over the lowest point, the highest seen standing. */
+		float belly = 0.0f;
+		/** @brief Top of the capsules over the lowest point. */
+		float height = 0.0f;
+		float largest = 0.0f;
+		/** @brief Lowest capsule under the actor's position. */
+		float lowestRel = 0.0f;
+		uint32_t capsules = 0;
+		/** @brief Capsules read from bodies Havok simulates; the rest from their bones. */
+		uint32_t simulated = 0;
+		uint32_t reads = 0;
+		uint32_t nextFrame = 0;
+	};
+	struct CreatureLift
+	{
+		/** @brief Identity only. */
+		const RE::NiAVObject* root = nullptr;
+		/** @brief The parent of NPC Root [Root] under the root: no animation writes it. Re-validated against root every frame. */
+		RE::NiAVObject* node = nullptr;
+		CreatureBuild build;
+		/** @brief Eased lift written this frame, and the one this frame's bones carry (last frame's). */
+		float lift = 0.0f;
+		float inBones = 0.0f;
+		/** @brief The lift at death, settling to 0; below 0 while alive. */
+		float settleFrom = -1.0f;
+		float clearance = FLT_MAX;
+		/** @brief Share of the layer a trench under it leaves standing. */
+		float floorShare = 1.0f;
+		/** @brief The ragdoll rose with the last lift the build read: Havok drives it to the drawn bones. */
+		bool havokFollows = true;
+		bool havokKnown = false;
+		bool dead = false;
+		uint32_t seenFrame = 0;
+		float weight = 0.0f;
+		/** @brief What its weight alone lifts it by, before the caps. */
+		float byWeight = 0.0f;
+		float depth = 0.0f;
+		float density = 0.0f;
+		float support = 0.0f;
+		float target = 0.0f;
+		const char* gate = "";
+	};
+	/** @brief Main thread only. */
+	std::unordered_map<uint32_t, CreatureLift> creatureLifts;
+	CreatureBuild playerBuild;
+	struct CreatureLiftDrawn
+	{
+		float inBones;
+		bool havokFollows;
+	};
+	/** @brief This frame's lifts in the bones, by formID, for the stamp gather. Under creatureLiftLock. */
+	std::unordered_map<uint32_t, CreatureLiftDrawn> creatureLiftsDrawn;
+	std::mutex creatureLiftLock;
+	std::unordered_set<uint32_t> creatureRacesLogged;
+	std::string creatureSinkReadout;
+	std::atomic<bool> creatureSinkReadoutWanted{ false };
+	std::atomic<uint32_t> creatureSinkLifted{ 0 };
+	std::atomic<uint32_t> creatureSinkWatched{ 0 };
+	std::atomic<float> creatureSinkMicros{ 0.0f };
+	/** @brief Measures a_build off a_root's capsules on its cadence; false when it has none. a_baseZ is the ground the actor stands on. */
+	bool MeasureCreatureBuild(RE::NiAVObject* a_root, CreatureBuild& a_build, bool a_upright, uint32_t a_frame, float a_baseZ);
+	/** @brief The lift an actor's bones carry this frame, 0 when none; a_havokFollows says whether its ragdoll carries it too. */
+	float CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows = nullptr);
 
 	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.

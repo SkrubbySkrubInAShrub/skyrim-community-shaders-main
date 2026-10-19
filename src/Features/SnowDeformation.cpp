@@ -82,6 +82,7 @@
 	X(FrostDecalsOnSnow) \
 	X(ItemEmbedPercent) 	X(ItemSink) 	X(ItemMinRoundness) \
 	X(ItemSnowGripPercent) \
+	X(CreatureSink) \
 	X(EnableLightningArcs) \
 	X(LightningArcWidth) \
 	X(LightningArcBrightness) \

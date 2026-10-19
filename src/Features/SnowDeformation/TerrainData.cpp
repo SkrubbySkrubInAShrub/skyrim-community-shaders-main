@@ -1862,6 +1862,7 @@ struct SD_PlayerCamera_Update
 		if (snowDeformation.loaded) {
 			snowDeformation.ItemSinkUpdate();
 			snowDeformation.ApplySpellLifts();
+			snowDeformation.CreatureSinkUpdate();
 		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
