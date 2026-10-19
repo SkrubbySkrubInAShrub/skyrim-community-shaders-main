@@ -612,7 +612,7 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 #	endif
 
 #	if defined(EFFECTS11)
-#		include "Effects11/EnbEffectClass.hlsli"
+#		include "Common/EffectEnbClass.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input)

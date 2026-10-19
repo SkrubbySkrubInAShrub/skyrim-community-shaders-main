@@ -1,10 +1,10 @@
-#ifndef EFFECTS11_ENB_EFFECT_CLASS_HLSLI
-#define EFFECTS11_ENB_EFFECT_CLASS_HLSLI
+#ifndef EFFECT_ENB_CLASS_HLSLI
+#define EFFECT_ENB_CLASS_HLSLI
 
 #include "Common/Permutation.hlsli"
 
 // Sorts Effect.hlsl draws the way ENB does for its [FIRE], [LIGHTSPRITE] and [PARTICLE] settings.
-// Reads the Effect shader's permutation defines (ADDBLEND, SOFT, LIGHTING, TEXTURE, ...), so include it from Effect.hlsl only.
+// Reads the Effect shader's permutation defines (ADDBLEND, SOFT, LIGHTING, TEXTURE, ...), so include it from Effect.hlsl only, under EFFECTS11.
 namespace EnbEffectClass
 {
 	static const uint None = 0;
@@ -69,4 +69,4 @@ uint GetEnbEffectClass()
 #endif
 }
 
-#endif  // EFFECTS11_ENB_EFFECT_CLASS_HLSLI
+#endif  // EFFECT_ENB_CLASS_HLSLI
