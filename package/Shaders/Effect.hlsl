@@ -669,8 +669,6 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(EFFECTS11)
 	const uint enbEffectClass = GetEnbEffectClass();
-	if (SharedData::enbSettings.Enable && enbEffectClass == EnbEffectClass::Particle)
-		propertyColor *= SharedData::enbSettings.ParticleIntensity;
 #	endif
 
 #	if defined(EFFECTS11) && defined(IS_VOLUMETRIC_FOG)
@@ -720,6 +718,12 @@ PS_OUTPUT main(PS_INPUT input)
 #	elif defined(MEMBRANE)
 	propertyColor *= 0;
 	lightingInfluence = 0;
+#	endif
+
+#	if defined(EFFECTS11)
+	// After LIGHTING replaces propertyColor, so lit particles (and their clustered lights) respond to ParticleIntensity too.
+	if (SharedData::enbSettings.Enable && enbEffectClass == EnbEffectClass::Particle)
+		propertyColor *= SharedData::enbSettings.ParticleIntensity;
 #	endif
 
 	float4 baseTexColor = float4(1, 1, 1, 1);
