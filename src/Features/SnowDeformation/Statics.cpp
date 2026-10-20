@@ -1397,6 +1397,11 @@ bool SnowDeformation::RoadMapsWanted() const
 	return capturedRoads > 0 || staticsDebugView != 0 || globals::state->frameCount - heightProbeShownFrame < 3;
 }
 
+float2 SnowDeformation::PatchLatticeCentre() const
+{
+	return { std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap, std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap };
+}
+
 void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 {
 	// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see
@@ -1405,10 +1410,8 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// snap has to be the COARSEST band step - snapping to the fine step
 	// would leave outer vertices off their own band's lattice and quad
 	// widths would flip as the camera moves.
-	a_scb.WorldRow0 = {
-		std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap,
-		std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
-	};
+	const float2 centre = PatchLatticeCentre();
+	a_scb.WorldRow0 = { centre.x, centre.y, 0.0f, 0.0f };
 	// Objects carry no depth; roads carry theirs per texel in the skin-depth raster.
 	a_scb.ObjectsDepth = 0.0f;
 	a_scb.RoundedDepth = 0.0f;
@@ -1469,6 +1472,77 @@ uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a
 		}
 	}
 	a_out.LineCount = count;
+	return count;
+}
+
+uint32_t SnowDeformation::PatchLatticeBands(const PatchCullCB& a_lines, float2 a_centre, PatchBand (&a_bands)[kPatchBands]) const
+{
+	// PatchOutsideFootprint over 8x8 blocks: a block's corner range bounds its
+	// patches' (the warp is monotonic), and 8 units over the hull's 16 cover
+	// its float corners. A patch outside every band would get zero factors.
+	static constexpr uint32_t kBlock = 8;
+	static constexpr uint32_t kBlocks = (kPatchGridDim + kBlock - 1) / kBlock;
+	static constexpr double kMargin = 16.0 + 8.0;
+	const auto warp = [](int a_u) {
+		static constexpr double kBandVerts[5] = { 128.0, 16.0, 8.0, 4.0, 57.0 };
+		static constexpr double kBandMul[5] = { 1.0, 2.0, 4.0, 8.0, 32.0 };
+		double a = std::abs(double(a_u));
+		double off = 0.0;
+		for (int band = 0; band < 5; band++) {
+			const double take = std::min(a, kBandVerts[band]);
+			off += take * kBandMul[band];
+			a -= take;
+		}
+		return (a_u < 0 ? -1.0 : 1.0) * (off + a * kBandMul[4]) * 8.0;
+	};
+	double edgeX[kBlocks + 1];
+	double edgeY[kBlocks + 1];
+	for (uint32_t b = 0; b <= kBlocks; b++) {
+		const double w = warp(int(std::min(b * kBlock, kPatchGridDim)) - int(kPatchGridDim / 2));
+		edgeX[b] = double(a_centre.x) + w;
+		edgeY[b] = double(a_centre.y) + w;
+	}
+	// Per block row, the span of its kept blocks.
+	uint32_t rowX0[kBlocks];
+	uint32_t rowX1[kBlocks];
+	uint32_t by0 = kBlocks, by1 = 0;
+	for (uint32_t by = 0; by < kBlocks; by++) {
+		rowX0[by] = kBlocks;
+		rowX1[by] = 0;
+		for (uint32_t bx = 0; bx < kBlocks; bx++) {
+			const double lo[2] = { edgeX[bx] - kMargin, edgeY[by] - kMargin };
+			const double hi[2] = { edgeX[bx + 1] + kMargin, edgeY[by + 1] + kMargin };
+			bool outside = false;
+			for (uint32_t i = 0; i < std::min(a_lines.LineCount, 6u) && !outside; i++) {
+				const auto& l = a_lines.Lines[i];
+				const double px = l.x > 0.0f ? hi[0] : lo[0];
+				const double py = l.y > 0.0f ? hi[1] : lo[1];
+				outside = double(l.x) * px + double(l.y) * py + double(l.z) < 0.0;
+			}
+			if (outside)
+				continue;
+			rowX0[by] = std::min(rowX0[by], bx);
+			rowX1[by] = std::max(rowX1[by], bx + 1);
+		}
+		if (rowX0[by] < rowX1[by]) {
+			by0 = std::min(by0, by);
+			by1 = std::max(by1, by + 1);
+		}
+	}
+	// Equal shares of the kept rows; a band spans the union of its rows' spans.
+	uint32_t count = 0;
+	for (uint32_t b = 0; b < kPatchBands && by0 < by1; b++) {
+		const uint32_t r0 = by0 + (by1 - by0) * b / kPatchBands;
+		const uint32_t r1 = by0 + (by1 - by0) * (b + 1) / kPatchBands;
+		uint32_t x0 = kBlocks, x1 = 0;
+		for (uint32_t by = r0; by < r1; by++) {
+			x0 = std::min(x0, rowX0[by]);
+			x1 = std::max(x1, rowX1[by]);
+		}
+		if (x0 >= x1)
+			continue;
+		a_bands[count++] = { x0 * kBlock, std::min(x1 * kBlock, kPatchGridDim), r0 * kBlock, std::min(r1 * kBlock, kPatchGridDim) };
+	}
 	return count;
 }
 
@@ -2167,6 +2241,125 @@ bool SnowDeformation::EnsureCombineVerify()
 	combineVerifyTex = new Texture2D(desc, "SnowDeformation::ShelterMaskVerify");
 	combineVerifyTex->CreateSRV(srvDesc);
 	combineVerifyTex->CreateUAV(uavDesc);
+	return true;
+}
+
+bool SnowDeformation::EnsurePatchVerify(ID3D11DepthStencilView* a_dsv)
+{
+	if (!a_dsv || !shellDeferredAttr[0] || !shellDeferredAttr[1] || !shellDeferredAttr[2] || !patchDeferredMark)
+		return false;
+	auto device = globals::d3d::device;
+	if (!heightRasterCompareCS)
+		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
+	if (!heightRasterCompareCS)
+		return false;
+	winrt::com_ptr<ID3D11Resource> depthResource;
+	a_dsv->GetResource(depthResource.put());
+	auto depthTexture = depthResource.try_as<ID3D11Texture2D>();
+	if (!depthTexture)
+		return false;
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	depthTexture->GetDesc(&depthDesc);
+	D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+	a_dsv->GetDesc(&dsvDesc);
+	if (!(depthDesc.BindFlags & D3D11_BIND_SHADER_RESOURCE) || dsvDesc.ViewDimension != D3D11_DSV_DIMENSION_TEXTURE2D)
+		return false;
+	DXGI_FORMAT depthSRVFormat = DXGI_FORMAT_UNKNOWN;
+	switch (dsvDesc.Format) {
+	case DXGI_FORMAT_D24_UNORM_S8_UINT:
+		depthSRVFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+		break;
+	case DXGI_FORMAT_D32_FLOAT:
+		depthSRVFormat = DXGI_FORMAT_R32_FLOAT;
+		break;
+	case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+		depthSRVFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+		break;
+	default:
+		return false;
+	}
+	const D3D11_SHADER_RESOURCE_VIEW_DESC depthSRVDesc = { .Format = depthSRVFormat, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } };
+	if (patchVerifyRealDepth != depthTexture.get()) {
+		patchVerifyRealDepthSRV = nullptr;
+		patchVerifyRealDepth = nullptr;
+		if (FAILED(device->CreateShaderResourceView(depthTexture.get(), &depthSRVDesc, patchVerifyRealDepthSRV.put())))
+			return false;
+		patchVerifyRealDepth = depthTexture.get();
+	}
+	if (patchVerifyDepth) {
+		D3D11_TEXTURE2D_DESC have{};
+		patchVerifyDepth->GetDesc(&have);
+		if (have.Width != depthDesc.Width || have.Height != depthDesc.Height || have.Format != depthDesc.Format) {
+			patchVerifyDepth = nullptr;
+			patchVerifyDSV = nullptr;
+			patchVerifyDepthSRV = nullptr;
+		}
+	}
+	if (!patchVerifyDepth) {
+		D3D11_TEXTURE2D_DESC copyDesc = depthDesc;
+		copyDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+		copyDesc.CPUAccessFlags = 0;
+		copyDesc.MiscFlags = 0;
+		copyDesc.Usage = D3D11_USAGE_DEFAULT;
+		if (FAILED(device->CreateTexture2D(&copyDesc, nullptr, patchVerifyDepth.put())) ||
+			FAILED(device->CreateDepthStencilView(patchVerifyDepth.get(), &dsvDesc, patchVerifyDSV.put())) ||
+			FAILED(device->CreateShaderResourceView(patchVerifyDepth.get(), &depthSRVDesc, patchVerifyDepthSRV.put())))
+			return false;
+		Util::SetResourceName(patchVerifyDepth.get(), "SnowDeformation::TrenchPatchVerifyDepth");
+	}
+	Texture2D* const reals[4] = { shellDeferredAttr[0], shellDeferredAttr[1], shellDeferredAttr[2], patchDeferredMark };
+	static constexpr const char* kNames[4] = { "SnowDeformation::TrenchPatchVerifyAttr0", "SnowDeformation::TrenchPatchVerifyAttr1",
+		"SnowDeformation::TrenchPatchVerifyAttr2", "SnowDeformation::TrenchPatchVerifyMark" };
+	for (uint32_t i = 0; i < 4; i++) {
+		if (patchVerifyRT[i] && (patchVerifyRT[i]->desc.Width != reals[i]->desc.Width || patchVerifyRT[i]->desc.Height != reals[i]->desc.Height)) {
+			delete patchVerifyRT[i];
+			patchVerifyRT[i] = nullptr;
+		}
+		if (patchVerifyRT[i])
+			continue;
+		D3D11_TEXTURE2D_DESC desc = reals[i]->desc;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		const D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = { .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } };
+		const D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = { .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } };
+		patchVerifyRT[i] = new Texture2D(desc, kNames[i]);
+		patchVerifyRT[i]->CreateSRV(srvDesc);
+		patchVerifyRT[i]->CreateRTV(rtvDesc);
+	}
+	if (!patchVerifyCount) {
+		D3D11_BUFFER_DESC countDesc{};
+		countDesc.ByteWidth = 5 * kHeightVerifySlotWords * sizeof(uint32_t);
+		countDesc.Usage = D3D11_USAGE_DEFAULT;
+		countDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		countDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		winrt::com_ptr<ID3D11Buffer> count;
+		if (FAILED(device->CreateBuffer(&countDesc, nullptr, count.put())))
+			return false;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		uavDesc.Buffer.NumElements = 5 * kHeightVerifySlotWords;
+		winrt::com_ptr<ID3D11UnorderedAccessView> allUAV;
+		if (FAILED(device->CreateUnorderedAccessView(count.get(), &uavDesc, allUAV.put())))
+			return false;
+		uavDesc.Buffer.NumElements = kHeightVerifySlotWords;
+		for (UINT slot = 0; slot < 5; slot++) {
+			uavDesc.Buffer.FirstElement = slot * kHeightVerifySlotWords;
+			if (FAILED(device->CreateUnorderedAccessView(count.get(), &uavDesc, patchVerifySlotUAV[slot].put())))
+				return false;
+		}
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = countDesc.ByteWidth;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (auto& staging : patchVerifyStaging) {
+			if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, staging.put())))
+				return false;
+		}
+		Util::SetResourceName(count.get(), "SnowDeformation::TrenchPatchVerifyCount");
+		patchVerifyCount = count;
+		patchVerifyAllUAV = allUAV;
+	}
 	return true;
 }
 
@@ -4802,6 +4995,10 @@ void SnowDeformation::DrawCapturedStatics()
 		// the landscape shell. Self-sufficient bindings, same rationale as
 		// the skins.
 		const bool tessellatePatch = settings.Tessellation && patchTessVS && patchHS && patchDS;
+		PatchBand patchBands[kPatchBands] = { { 0, kPatchGridDim, 0, kPatchGridDim } };
+		uint32_t patchBandCount = 1;
+		PatchCullCB cullData{};
+		winrt::com_ptr<ID3D11Buffer> prevPatchVSCB11;
 		if (tessellatePatch) {
 			context->VSSetShader(patchTessVS, nullptr, 0);
 			context->HSSetShader(patchHS, nullptr, 0);
@@ -4828,12 +5025,19 @@ void SnowDeformation::DrawCapturedStatics()
 			// with; no lines culls nothing.
 			if (!patchCullCB)
 				patchCullCB = new ConstantBuffer(ConstantBufferDesc<PatchCullCB>(), "SnowDeformation::PatchCullCB");
-			PatchCullCB cullData{};
 			if (lastShellCBData)
 				FillPatchCullLines(*lastShellCBData, cullData);
+			// Only the lattice bands the lines can reach: the patches left out
+			// would get zero factors, and rows stay in order.
+			if (!patchBoxOff && cullData.LineCount)
+				patchBandCount = PatchLatticeBands(cullData, PatchLatticeCentre(), patchBands);
+			cullData.RowStart = patchBands[0].y0;
+			cullData.ColStart = patchBands[0].x0;
 			patchCullCB->Update(cullData);
 			ID3D11Buffer* cullCB = patchCullCB->CB();
 			context->HSSetConstantBuffers(11, 1, &cullCB);
+			context->VSGetConstantBuffers(11, 1, prevPatchVSCB11.put());
+			context->VSSetConstantBuffers(11, 1, &cullCB);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 		} else {
 			context->VSSetShader(patchVS, nullptr, 0);
@@ -4907,6 +5111,7 @@ void SnowDeformation::DrawCapturedStatics()
 		winrt::com_ptr<ID3D11DepthStencilState> patchDepthState;
 		UINT patchStencilRef = 0;
 		winrt::com_ptr<ID3D11RasterizerState> patchRaster;
+		bool patchVerifyOn = false;
 		if (deferredPatch) {
 			ID3D11DepthStencilView* rawPatchDSV = nullptr;
 			context->OMGetRenderTargets(8, patchRTVPtrs, &rawPatchDSV);
@@ -4917,6 +5122,15 @@ void SnowDeformation::DrawCapturedStatics()
 			context->RSGetState(patchRaster.put());
 			const float markClear[4] = {};
 			context->ClearRenderTargetView(patchDeferredMark->rtv.get(), markClear);
+			if (patchVerify && tessellatePatch && EnsurePatchVerify(patchDSV.get())) {
+				// The targets as the bands find them, for the whole lattice to draw over.
+				context->OMSetRenderTargets(0, nullptr, nullptr);
+				for (uint32_t i = 0; i < 3; i++)
+					context->CopyResource(patchVerifyRT[i]->resource.get(), shellDeferredAttr[i]->resource.get());
+				context->CopyResource(patchVerifyRT[3]->resource.get(), patchDeferredMark->resource.get());
+				context->CopyResource(patchVerifyDepth.get(), patchVerifyRealDepth);
+				patchVerifyOn = true;
+			}
 			ID3D11RenderTargetView* attrRTVs[4] = { shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(), patchDeferredMark->rtv.get() };
 			context->OMSetRenderTargets(4, attrRTVs, patchDSV.get());
 		}
@@ -4924,15 +5138,74 @@ void SnowDeformation::DrawCapturedStatics()
 			context->Begin(patchStatsQuery[shellStatsRing][0].get());
 			context->Begin(patchStatsQuery[shellStatsRing][1].get());
 		}
-		if (tessellatePatch)
-			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
-		else
+		if (tessellatePatch) {
+			auto drawWholeLattice = [&]() {
+				cullData.RowStart = 0;
+				cullData.ColStart = 0;
+				patchCullCB->Update(cullData);
+				context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
+			};
+			patchBoxPatches = 0;
+			if (patchBoxOff) {
+				drawWholeLattice();
+				patchBoxPatches = kPatchGridDim * kPatchGridDim;
+			} else {
+				for (uint32_t b = 0; b < patchBandCount; b++) {
+					const auto& band = patchBands[b];
+					if (b > 0) {
+						cullData.RowStart = band.y0;
+						cullData.ColStart = band.x0;
+						patchCullCB->Update(cullData);
+					}
+					context->DrawInstanced((band.x1 - band.x0) * 4, band.y1 - band.y0, 0, 0);
+					patchBoxPatches += (band.x1 - band.x0) * (band.y1 - band.y0);
+				}
+			}
+			if (patchVerifyOn) {
+				ID3D11RenderTargetView* verifyRTVs[4] = { patchVerifyRT[0]->rtv.get(), patchVerifyRT[1]->rtv.get(), patchVerifyRT[2]->rtv.get(), patchVerifyRT[3]->rtv.get() };
+				context->OMSetRenderTargets(4, verifyRTVs, patchVerifyDSV.get());
+				drawWholeLattice();
+				context->OMSetRenderTargets(0, nullptr, nullptr);
+				const UINT zero4[4] = {};
+				context->ClearUnorderedAccessViewUint(patchVerifyAllUAV.get(), zero4);
+				ID3D11ShaderResourceView* const pairs[5][2] = {
+					{ shellDeferredAttr[0]->srv.get(), patchVerifyRT[0]->srv.get() }, { shellDeferredAttr[1]->srv.get(), patchVerifyRT[1]->srv.get() },
+					{ shellDeferredAttr[2]->srv.get(), patchVerifyRT[2]->srv.get() }, { patchDeferredMark->srv.get(), patchVerifyRT[3]->srv.get() },
+					{ patchVerifyRealDepthSRV.get(), patchVerifyDepthSRV.get() }
+				};
+				winrt::com_ptr<ID3D11ComputeShader> prevVerifyCS;
+				context->CSGetShader(prevVerifyCS.put(), nullptr, nullptr);
+				context->CSSetShader(heightRasterCompareCS, nullptr, 0);
+				for (uint32_t t = 0; t < 5; t++) {
+					ID3D11ShaderResourceView* srvs[2] = { pairs[t][0], pairs[t][1] };
+					ID3D11UnorderedAccessView* uav = patchVerifySlotUAV[t].get();
+					context->CSSetShaderResources(8, 2, srvs);
+					context->CSSetUnorderedAccessViews(4, 1, &uav, nullptr);
+					const auto& d = t < 3 ? shellDeferredAttr[t]->desc : patchDeferredMark->desc;
+					context->Dispatch((d.Width + 7) / 8, (d.Height + 7) / 8, 1);
+				}
+				ID3D11ShaderResourceView* nullPair[2] = {};
+				ID3D11UnorderedAccessView* nullVerifyUAV = nullptr;
+				context->CSSetShaderResources(8, 2, nullPair);
+				context->CSSetUnorderedAccessViews(4, 1, &nullVerifyUAV, nullptr);
+				context->CSSetShader(prevVerifyCS.get(), nullptr, 0);
+				auto& ring = patchVerifyRing;
+				if (!patchVerifyStagingBusy[ring % 3]) {
+					context->CopyResource(patchVerifyStaging[ring % 3].get(), patchVerifyCount.get());
+					patchVerifyStagingBusy[ring % 3] = true;
+					ring++;
+				}
+			}
+		} else {
 			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+		}
 		if (tessellatePatch) {
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			ID3D11Buffer* nullCullCB = nullptr;
 			context->HSSetConstantBuffers(11, 1, &nullCullCB);
+			ID3D11Buffer* restoreVSCB11 = prevPatchVSCB11.get();
+			context->VSSetConstantBuffers(11, 1, &restoreVSCB11);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		}
 		if (deferredPatch) {
@@ -4962,6 +5235,19 @@ void SnowDeformation::DrawCapturedStatics()
 			context->End(patchStatsQuery[shellStatsRing][1].get());
 			context->End(patchStatsQuery[shellStatsRing][0].get());
 			patchStatsArmed = false;
+		}
+		for (uint32_t slot = 0; slot < 3; slot++) {
+			if (!patchVerifyStagingBusy[slot])
+				continue;
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (FAILED(context->Map(patchVerifyStaging[slot].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
+				continue;
+			const auto* words = static_cast<const uint32_t*>(mapped.pData);
+			for (uint32_t t = 0; t < 5; t++)
+				patchVerifyMismatch[t] += words[t * kHeightVerifySlotWords];
+			patchVerifyFrames++;
+			context->Unmap(patchVerifyStaging[slot].get(), 0);
+			patchVerifyStagingBusy[slot] = false;
 		}
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };

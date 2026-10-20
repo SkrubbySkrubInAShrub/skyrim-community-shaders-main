@@ -761,8 +761,8 @@ static const float kWaterNearMax = 3.0;
 // Debug (the height raster cache's verify mode): counts the texels where a
 // kept raster and a fresh draw of the same captures differ, bit for bit, and
 // keeps the first 8 after the count: texel y:x, kept .xy, fresh .xy.
-Texture2D<float2> CompareKept : register(t8);
-Texture2D<float2> CompareFresh : register(t9);
+Texture2D<float4> CompareKept : register(t8);
+Texture2D<float4> CompareFresh : register(t9);
 RWByteAddressBuffer CompareCount : register(u4);
 
 [numthreads(8, 8, 1)] void RasterCompareCS(uint3 dtid
@@ -771,8 +771,8 @@ RWByteAddressBuffer CompareCount : register(u4);
 	CompareKept.GetDimensions(dims.x, dims.y);
 	if (any(dtid.xy >= dims))
 		return;
-	float2 kept = CompareKept[dtid.xy];
-	float2 fresh = CompareFresh[dtid.xy];
+	float4 kept = CompareKept[dtid.xy];
+	float4 fresh = CompareFresh[dtid.xy];
 	if (all(asuint(kept) == asuint(fresh)))
 		return;
 	uint prior;

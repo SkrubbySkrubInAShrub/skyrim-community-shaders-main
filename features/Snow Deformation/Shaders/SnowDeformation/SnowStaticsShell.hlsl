@@ -1624,6 +1624,23 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 }
 #endif
 
+#if ((defined(VSHADER) && defined(SNOW_TESS)) || defined(HULLSHADER)) && defined(PATCH)
+// The view frustum's footprint on the world XY plane: its five planes with z
+// eliminated (Fourier-Motzkin), filled per frame on the CPU from CameraViewProj.
+// A patch's vertices keep its corners' XY hull, so a patch whose XY box is
+// outside one line has no point in the frustum at any height.
+cbuffer PatchCullCB : register(b11)
+{
+	float4 PatchCullLines[6];  // xy normal, z offset: inside where dot(xy, p) + z >= 0
+	uint PatchCullLineCount;
+	// A band of the tessellated draw: one instance per lattice row from
+	// PatchRowStart, columns from PatchColStart (Statics.cpp PatchLatticeBands).
+	uint PatchRowStart;
+	uint PatchColStart;
+	uint patchCullPad;
+}
+#endif
+
 #if defined(VSHADER) && defined(PATCH) && !defined(SNOW_TESS)
 // Trench patch (PATCH define): the landscape shell's recipe applied to objects,
 // on the landscape shell's own warped lattice - an 8-unit core stepping out to
@@ -1653,10 +1670,10 @@ struct TessControlPointPatch
 	float2 WorldXY : TEXCOORD0;
 };
 
-TessControlPointPatch main(uint vertexID : SV_VertexID)
+TessControlPointPatch main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
 {
 	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	uint quadIndex = vertexID / 4;
+	uint quadIndex = (PatchRowStart + instanceID) * kPatchGridDim + PatchColStart + vertexID / 4;
 	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kPatchCorners[vertexID % 4];
 	TessControlPointPatch cp;
 	cp.WorldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
@@ -1690,17 +1707,6 @@ struct TessFactorsPatch
 #include "SnowDeformation/SnowParallax.hlsli"
 
 #if defined(HULLSHADER) && defined(PATCH)
-// The view frustum's footprint on the world XY plane: its five planes with z
-// eliminated (Fourier-Motzkin), filled per frame on the CPU from CameraViewProj.
-// A patch's vertices keep its corners' XY hull, so a patch whose XY box is
-// outside one line has no point in the frustum at any height.
-cbuffer PatchCullCB : register(b11)
-{
-	float4 PatchCullLines[6];  // xy normal, z offset: inside where dot(xy, p) + z >= 0
-	uint PatchCullLineCount;
-	uint3 patchCullPad;
-}
-
 bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
 {
 	float2 lo = min(min(a, b), min(c, d)) - 16.0;

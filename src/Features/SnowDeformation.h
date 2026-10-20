@@ -3628,11 +3628,46 @@ public:
 	{
 		float4 Lines[6];
 		uint32_t LineCount;
-		uint32_t pad[3];
+		/** @brief The tessellated draw's band: first lattice row (its VS adds SV_InstanceID) and first column (SV_VertexID / 4 from 0: the start vertex does not reach it). */
+		uint32_t RowStart;
+		uint32_t ColStart;
+		uint32_t pad;
 	};
 	ConstantBuffer* patchCullCB = nullptr;
 	/** @brief The view frustum's five planes (rows of CameraViewProj, camera-relative) with z eliminated: lines in world XY, inside where dot(xy, p) + z >= 0. */
 	uint32_t FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const;
+	/** @brief The trench patch lattice's centre, snapped to its coarsest band step (StaticsCB::WorldRow0.xy). */
+	float2 PatchLatticeCentre() const;
+	/** @brief Lattice rows [y0, y1) drawn over columns [x0, x1). */
+	struct PatchBand
+	{
+		uint32_t x0, x1, y0, y1;
+	};
+	static constexpr uint32_t kPatchBands = 4;
+	/** @brief The lattice's 8x8 blocks the hull's footprint lines cannot cull, as up to kPatchBands row bands in row order, each over its blocks' column span; returns the band count. */
+	uint32_t PatchLatticeBands(const PatchCullCB& a_lines, float2 a_centre, PatchBand (&a_bands)[kPatchBands]) const;
+	/** @brief A/B, runtime-only: the tessellated patch draws the whole lattice. */
+	bool patchBoxOff = false;
+	/** @brief Debug, runtime-only: the whole lattice (the one Draw the bands replace) also draws into copies of the patch's deferred targets and depth taken before the bands, compared bit for bit with the bands' result (attributes 0-2, mark, depth). */
+	bool patchVerify = false;
+	Texture2D* patchVerifyRT[4] = {};
+	winrt::com_ptr<ID3D11Texture2D> patchVerifyDepth;
+	winrt::com_ptr<ID3D11DepthStencilView> patchVerifyDSV;
+	winrt::com_ptr<ID3D11ShaderResourceView> patchVerifyDepthSRV;
+	/** @brief The SRV over the real depth the patch draws against, and the texture it views. */
+	winrt::com_ptr<ID3D11ShaderResourceView> patchVerifyRealDepthSRV;
+	ID3D11Texture2D* patchVerifyRealDepth = nullptr;
+	winrt::com_ptr<ID3D11Buffer> patchVerifyCount;
+	winrt::com_ptr<ID3D11UnorderedAccessView> patchVerifyAllUAV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> patchVerifySlotUAV[5];
+	winrt::com_ptr<ID3D11Buffer> patchVerifyStaging[3];
+	bool patchVerifyStagingBusy[3] = {};
+	uint32_t patchVerifyRing = 0;
+	uint32_t patchVerifyFrames = 0;
+	uint64_t patchVerifyMismatch[5] = {};
+	bool EnsurePatchVerify(ID3D11DepthStencilView* a_dsv);
+	/** @brief Patches the last tessellated patch draw issued (of kPatchGridDim^2). */
+	uint32_t patchBoxPatches = 0;
 	/** @brief Tessellated patch stages (optional; legacy path is the fallback). */
 	ID3D11VertexShader* patchTessVS = nullptr;
 	ID3D11HullShader* patchHS = nullptr;
