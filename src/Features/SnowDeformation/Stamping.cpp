@@ -528,7 +528,7 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 			float highest = 0.0f, highestAny = 0.0f, lowestAny = 1.0f;
 			RE::BSFixedString highestName, highestAnyName, lowestAnyName;
 			bool bodySeen = false, anySeen = false;
-			RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+			auto visitBody = [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				// SKINNED only. Plain alpha blending is no use on its own -
 				// every NPC's hair and eyes blend - so what is read is the
@@ -557,7 +557,9 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 				}
 				bodySeen = true;
 				return RE::BSVisit::BSVisitControl::kContinue;
-			});
+			};
+			// By reference: the traversal copies its std::function at every node.
+			RE::BSVisit::TraverseScenegraphGeometries(a_root, std::ref(visitBody));
 			if (!bodySeen) {
 				highest = anySeen ? highestAny : 1.0f;
 				highestName = highestAnyName;
@@ -570,8 +572,11 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 				a_bones->anyAlphaSource = lowestAnyName;
 				const bool settling = a_bones->alphaSettle < kBodyAlphaSettleReads;
 				a_bones->alphaRecheck = settling ? kBodyAlphaSettleFrames : kBodyAlphaRecheckFrames;
-				if (settling)
-					a_bones->alphaSettle++;
+				// Bodies that load together settle together: the last settle read
+				// gives each its own phase in the slow cadence, so they do not all
+				// re-walk their 3D on one frame.
+				if (settling && ++a_bones->alphaSettle == kBodyAlphaSettleReads)
+					a_bones->alphaRecheck += static_cast<uint16_t>((reinterpret_cast<uintptr_t>(a_root) >> 4) % kBodyAlphaRecheckFrames);
 			}
 		}
 	}
