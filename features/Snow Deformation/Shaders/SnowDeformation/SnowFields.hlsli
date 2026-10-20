@@ -696,14 +696,42 @@ float4 SnowClimateRow(float worldZ)
 // sparkling; pressed snow whose meltwater froze glazes. Mirror kIceTint and
 // kIceRoughCut in SnowLighting.hlsli. Darkens a_albedo; returns x the
 // roughness cut, y the share of glints left.
-static const float3 kIceTint = float3(0.86, 0.91, 0.97);
+static const float3 kIceTint = float3(0.93, 0.955, 0.985);
 static const float kIceRoughCut = 0.8;
+// Glazed snow's Parallax Depth and Parallax Shadow, as a share of the sliders.
+static const float kIceParallax = 0.5;
+
+float SnowPressed(float a_carve, float a_melt)
+{
+	return smoothstep(0.1, 0.5, a_carve) * (1.0 - smoothstep(0.1, 0.4, a_melt));
+}
+
+// Any row iced: the CPU puts the most ice of the rows in every z.
+bool SnowIceInView()
+{
+	return SnowClimateLUT[0].z > 0.001;
+}
+
+// SnowWetPrint's glaze.
+float SnowIceGlaze(float a_carve, float a_melt, float a_worldZ)
+{
+	return SnowClimateRow(a_worldZ).x * SnowPressed(a_carve, a_melt);
+}
+
+// The sliders' share on glazed snow: 1 off the ice, kIceParallax on it.
+float SnowIceParallax(float a_carve, float a_melt, float a_worldZ)
+{
+	float share = 1.0;
+	[branch] if (SnowIceInView())
+		share = lerp(1.0, kIceParallax, SnowIceGlaze(a_carve, a_melt, a_worldZ));
+	return share;
+}
 
 float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_depth, float a_worldZ, float2 a_gridLocal, bool a_dated)
 {
 	float2 look = float2(0.0, 1.0);
-	const float wetPress = smoothstep(0.1, 0.5, a_carve) * (1.0 - smoothstep(0.1, 0.4, a_melt));
-	const bool wetIce = SnowClimateLUT[2].y > 0.001 || max(max(SnowClimateLUT[0].x, SnowClimateLUT[1].x), SnowClimateLUT[2].x) > 0.001;
+	const float wetPress = SnowPressed(a_carve, a_melt);
+	const bool wetIce = SnowClimateLUT[2].y > 0.001 || SnowIceInView();
 	[branch] if (wetIce || (wetPress > 0.001 && (a_depth < 6.0 || SnowClimateLUT[2].w > 0.001)))
 	{
 		const float4 row = SnowClimateRow(a_worldZ);

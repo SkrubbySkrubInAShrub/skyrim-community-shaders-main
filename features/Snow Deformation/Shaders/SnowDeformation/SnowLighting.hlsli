@@ -188,7 +188,7 @@ namespace SnowLighting
 				press = pressed * saturate(wet * 4.0);
 				glaze = pressed * ice;
 			}
-			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.86, 0.91, 0.97), glaze);
+			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
 			shellAlbedo *= printTint;
 #	if defined(TRUE_PBR)
 			s.landSnowRaw = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? a * (ENABLE_LL ? printTint : pow(abs(printTint), 2.2)) : (ENABLE_LL ? shellAlbedo : pow(abs(shellAlbedo), 2.2));

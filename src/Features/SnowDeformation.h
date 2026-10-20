@@ -1782,7 +1782,7 @@ public:
 		float4 SnowClimate2;
 		/** @brief Overrides painted everywhere, below 0 = derived per pixel: x wetness, y stickiness, z firmness; w spare. */
 		float4 SnowClimateOverride;
-		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: x = ice (SnowIceShown, Wet Snow and Ice), y = wetness for Wet Snow and Ice, z spare, w = Snow Climate x wetness. All x Snow Climate. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
+		/** @brief The climate look per pixel, row i at the player's temperature + (i - 1) x kClimateLUTStep: x = ice (SnowIceShown, Wet Snow and Ice), y = wetness for Wet Snow and Ice, z = the most ice of the rows, in every row (the shaders' ice gate), w = Snow Climate x wetness. All x Snow Climate. SnowShell.hlsl SnowClimateRow interpolates by the pixel's height. */
 		float4 SnowClimateLUT[kClimateLUTRows];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

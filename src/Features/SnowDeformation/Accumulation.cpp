@@ -438,10 +438,15 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 
 	// Rows by the pixel's temperature offset; the shader lerps between them.
 	const float wetIce = SnowWetIceStrength();
+	float mostIce = 0.0f;
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
 		const SnowCondition row = SnowConditionAt(player.temperature + (float(i) - 1.0f) * kClimateLUTStep);
 		look.lut[i] = { wetIce * SnowIceShown(i), wetIce * row.wetness, 0.0f, look.strength * row.wetness };
+		mostIce = std::max(mostIce, look.lut[i].x);
 	}
+	// z: the shaders' one-read ice gate (SnowIceInView).
+	for (auto& entry : look.lut)
+		entry.z = mostIce;
 	return look;
 }
 

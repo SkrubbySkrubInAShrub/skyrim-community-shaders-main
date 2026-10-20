@@ -2023,13 +2023,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// occludes grain and the surface reads as thick. Runs BEFORE every snow
 	// fetch, and shifts the tap set rather than rebuilding it, so albedo,
 	// normal, RMAOS and the parallax shadow all ride the displaced position.
+	// Glazed snow takes less of Parallax Depth and Parallax Shadow.
+	const float iceParallax = SnowIceParallax(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z);
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		// bumpT/bumpB ARE the uv axes (world-XY planar projection); EM's
 		// marcher builds tangent-space view from this frame itself.
 		float3x3 snowTbn = float3x3(bumpT, bumpB, frameNormalWS);
 		DisplacementParams pomParams = SnowDisplacementParams();
-		pomParams.HeightScale *= SnowParallax.z;
+		pomParams.HeightScale *= SnowParallax.z * iceParallax;
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
 		// Trench walls march NOTHING: a march is only honest when the surface
 		// lies in its projection plane, and a 40-60 degree wall lies in neither,
@@ -2310,7 +2312,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			lightUV, lightUVSide, snowHeightMip, snowHeightMipSide,
 			SnowParallaxQuality(shellZ), screenNoise, SnowDisplacementParams());
 
-		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y * iceParallax);
 		// Faded on the same band as the normal map it occludes, and faded out
 		// on walls: the march is jittered by screen-anchored noise, which on a
 		// wall's high-contrast side-projected grain crawls as the camera moves.
@@ -2320,9 +2322,10 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #if defined(SNOW_NOISE_TABLE)
 	// The trench detail shadows itself: the sun's ray from the point the march
 	// met, through the detail heights, as strong as Parallax Shadow makes the
-	// snow texture's.
+	// snow texture's. TrenchDetailShadow is saturate(Parallax Depth).
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailWet, screenNoise), TrenchDetailShadow);
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y * iceParallax), detailWet, screenNoise),
+			min(TrenchDetailShadow, SnowParallax.z * iceParallax));
 #endif
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
@@ -2433,7 +2436,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		const float4 trackField = BermFieldPair(gridLocal);
 		const float2 track = SnowClimate2.z < 6.5 ? float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter))) :
-		                                             float2(SnowClimateRow(input.WorldPos.z + ShellCameraPosAdjust.z).x * smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(0.1, 0.4, pixelMelt)), 0.0);
+		                                             float2(SnowIceGlaze(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z), 0.0);
 		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z, track);
 		psout.Diffuse.rgb = conditionColor * 2.0;
 		psout.Albedo.rgb = 0.0;

@@ -2773,6 +2773,16 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	const float pixelDist = input.pixelDist;
 	const float pixelDeform = input.pixelDeform;
 	const float screenNoise = input.screenNoise;
+	// Glazed snow takes less of Parallax Depth and Parallax Shadow, as on the
+	// ground; a coat is never pressed.
+#ifdef PATCH
+	const float patchMelt = saturate(SampleExclusionField(worldXY).y);
+	const float iceParallax = SnowIceParallax(pixelDeform, patchMelt, input.WorldPos.z + ShellCameraPosAdjust.z);
+#elif defined(SNOW_OBJECT_PRINTS)
+	const float iceParallax = SnowIceParallax(print.x, 0.0, input.WorldPos.z + ShellCameraPosAdjust.z);
+#else
+	const float iceParallax = 1.0;
+#endif
 	// Snow texture taps, shared by albedo, normal and RMAOS, sampled at the
 	// parallax-corrected position. Steep drape sides re-project along the
 	// facing wall plane, since the top-down projection stretches down flanks.
@@ -2894,10 +2904,10 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float printLit = 1.0;
 	[branch] if (printTop > 0.0 && print.x > 0.005 && SnowParallax.y > 0.001)
 		printLit = SnowPrints::DentSunShadow(printAt, SharedData::DirLightDirection.xyz, -frameNormalWS.xy / max(frameNormalWS.z, 0.1), kPrintDentDepth,
-			SnowParallax.y * printTop, screenNoise);
+			SnowParallax.y * printTop * iceParallax, screenNoise);
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001)
-		printLit *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, SharedData::DirLightDirection.xyz, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailWet, screenNoise),
-			TrenchDetailShadow);
+		printLit *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, SharedData::DirLightDirection.xyz, detailPlane, float3(detailRelief, detailLod, SnowParallax.y * iceParallax), detailWet, screenNoise),
+			min(TrenchDetailShadow, SnowParallax.z * iceParallax));
 #endif
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
@@ -2928,7 +2938,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001 && input.detail > 0.001 && input.pom > 0.5)
 	{
 		DisplacementParams pomParams = SnowDisplacementParams();
-		pomParams.HeightScale *= SnowParallax.z;
+		pomParams.HeightScale *= SnowParallax.z * iceParallax;
 
 		// Top plane: bumpT/bumpB ARE its uv axes.
 		float3x3 tbnTop = float3x3(bumpT, bumpB, frameNormalWS);
@@ -3027,7 +3037,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// a soak here would darken it twice.
 #ifdef PATCH
 	// Thin-snow and wet print, wet snow and ice, the ground's (SnowWetPrint), through the road layer.
-	const float2 wetLook = SnowWetPrint(kSnowAlbedo, pixelDeform, saturate(SampleExclusionField(worldXY).y), PatchSkinDepth(worldXY).x,
+	const float2 wetLook = SnowWetPrint(kSnowAlbedo, pixelDeform, patchMelt, PatchSkinDepth(worldXY).x,
 		input.WorldPos.z + ShellCameraPosAdjust.z, input.trenchGridLocal, true);
 #elif defined(SNOW_OBJECT_PRINTS)
 	// The pressed rim, the ground's thin-snow print in a dusting of the dent's
@@ -3256,13 +3266,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			lightUVTop, lightUVSide, snowHeightMip, snowHeightMipSide,
 			SnowParallaxQuality(pixelDist), screenNoise, SnowDisplacementParams());
 
-		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y * iceParallax);
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
 	}
 #ifdef PATCH
 	// The trench detail shadows itself, as on the ground.
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailWet, screenNoise), TrenchDetailShadow);
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(trenchTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y * iceParallax), detailWet, screenNoise),
+			min(TrenchDetailShadow, SnowParallax.z * iceParallax));
 #endif
 #ifdef SNOW_OBJECT_PRINTS
 	sunShadow *= printLit;
