@@ -3966,9 +3966,18 @@ namespace SIE
 			QueryPerformanceCounter(&now);
 			auto queuedTask = task;
 			queuedTask.SetEnqueuedQpc(now.QuadPart);
-			auto [queuedIt, wasAdded] = availableTasks.insert(queuedTask);
-			if (!wasAdded && globals::shaderCache->backgroundCompilation)
-				demandedTasks.insert(availableTasks.extract(queuedIt));
+			bool wasAdded;
+			if (globals::shaderCache->backgroundCompilation) {
+				// Only the game's own draw requests reach Add, so anything queued now is demanded.
+				if (auto queued = availableTasks.extract(queuedTask)) {
+					demandedTasks.insert(std::move(queued));
+					wasAdded = false;
+				} else {
+					wasAdded = demandedTasks.insert(queuedTask).second;
+				}
+			} else {
+				wasAdded = availableTasks.insert(queuedTask).second;
+			}
 			if (wasAdded) {
 				// Increment counters inside the lock so that TryTakeNext, which reads
 				// IsCompiling() after waking up, sees the updated totalTasks and
