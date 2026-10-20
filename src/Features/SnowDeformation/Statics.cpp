@@ -4,6 +4,7 @@
 
 #include <DirectXPackedVector.h>
 #include "Features/SnowDeformation.h"
+#include "Features/SnowDeformation/DevSwitches.h"
 
 #include <d3dcompiler.h>
 
@@ -4584,7 +4585,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
 		if (BloodTilesLive() && !bloodOverlays.empty() && bloodPreSkinDepth && bloodPreSkinDepthSRV) {
-			statsRow("SnowDeformation::Decals - Overlay");
+			statsRow(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Depth Copy"));
 			winrt::com_ptr<ID3D11Resource> mainDepthResource;
 			mainDepthSRV->GetResource(mainDepthResource.put());
 			context->CopyResource(bloodPreSkinDepth.get(), mainDepthResource.get());

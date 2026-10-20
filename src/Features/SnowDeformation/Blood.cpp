@@ -3,6 +3,7 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 #include "Features/SnowDeformation.h"
+#include "Features/SnowDeformation/DevSwitches.h"
 
 #include "Deferred.h"
 #include "Globals.h"
@@ -1875,7 +1876,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	if (!DecalOverlayWanted() || !settings.ProjSnowMatch || !a_postSkinDepth || !copies || !EnsureBloodResources())
 		return;
 	auto* context = a_context;
-	globals::profiler->BeginPass("SnowDeformation::Decals - Overlay");
+	globals::profiler->BeginPass(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Mask"));
 
 	winrt::com_ptr<ID3D11BlendState> savedBlend;
 	FLOAT savedBlendFactor[4]{};
@@ -2012,6 +2013,8 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	ID3D11ShaderResourceView* preSkinSRV = shellPaintsOwn ? bloodPreSkinDepthSRV.get() : nullptr;
 	context->PSSetShaderResources(16, 1, &preSkinSRV);
 
+	globals::profiler->EndPass();
+	globals::profiler->BeginPass(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Composite"));
 	context->Draw(6, 0);
 	bloodOverlaysLast = uint32_t(decals);
 	if (!bloodOverlayLogged) {
