@@ -552,8 +552,6 @@ public:
 		float TrenchDetailRoughness = 1.0f;
 		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
 		float TrenchDetailCoverage = 1.75f;
-		/** @brief Trench detail set: 0 by the snow condition, 1 powder, 3 wet. 2 was the retired firm set; LoadSettings reads it as 0. */
-		int TrenchDetailSet = 0;
 		/** @brief "Snow Self-Shadowing": heightfield self-shadow (the 5-tap horizon march over the cached heights) on the ground snow and object snow, faded out toward a grazing sun. Off = only the cascades and the SSS mask shade the snow. A quality-preset lever (Low turns it off). */
 		bool ShellHorizonMarch = true;
 		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */
@@ -1393,8 +1391,6 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailHeightSRV;
 	bool trenchDetailAttempted = false;
 	void EnsureTrenchDetailTextures();
-	/** @brief This frame's detail sets: x the dominant slice, y the second, z the second's weight (0 = one set). Settings::TrenchDetailSet forces one; by the snow condition wet takes over from powder in a band around wetness 0.5. */
-	float3 TrenchDetailBlend() const;
 	/** @brief Runtime-only: the trench detail coverage view (ShellCB::TrenchDetailView). */
 	bool debugTrenchDetailView = false;
 	struct alignas(16) UndulationFieldCB
@@ -1704,9 +1700,9 @@ public:
 		/** @brief Edge berm crest height as a fraction of local snow depth. */
 		float BermHeightAmp;
 
-		/** @brief Trench detail: the second set's slice and its weight against TrenchDetailSlice's (TrenchDetailBlend()). Claim the retired churn's keepers. */
-		float TrenchDetailSecond;
-		float TrenchDetailMix;
+		/** @brief Layout keepers, uploaded as 0 (the retired Detail Set's second slice and its weight). */
+		float LayoutKeeper8;
+		float LayoutKeeper9;
 		/** @brief Layout keepers, uploaded as 0 (LayoutKeeper4 was the retired parallax trench view). */
 		float DebugNoFarPad;
 		float LayoutKeeper4;
@@ -1722,8 +1718,8 @@ public:
 
 		/** @brief BermReachScale() (Berm Steepness), for the per-pixel berm taps and BermGradStep (the bake reads PerFrame's copy). Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float BermReach;
-		/** @brief Trench detail: the dominant set's slice, 0 powder, 1 wet (TrenchDetailBlend()). Claims the retired distant-snow debug keeper. */
-		uint TrenchDetailSlice;
+		/** @brief Layout keeper, uploaded as 0 (the retired Detail Set's slice). */
+		uint LayoutKeeper10;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
 		float SeamRampInv;
 		/** @brief >0.5: the shells read the baked berm field (t14) instead of recomputing its 17 taps per call. */

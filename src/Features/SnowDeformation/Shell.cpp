@@ -161,18 +161,6 @@ void SnowDeformation::EnsureTrenchDetailTextures()
 	logger::info("[SNOW DEFORMATION] trench detail textures loaded");
 }
 
-float3 SnowDeformation::TrenchDetailBlend() const
-{
-	// Slices: 0 powder, 1 wet. Settings 1 and 3 force one (2 was firm, retired).
-	if (settings.TrenchDetailSet == 1)
-		return { 0.0f, 0.0f, 0.0f };
-	if (settings.TrenchDetailSet == 3)
-		return { 1.0f, 0.0f, 0.0f };
-	const float t = std::clamp((GetSnowCondition().wetness - 0.35f) / 0.3f, 0.0f, 1.0f);
-	const float wet = t * t * (3.0f - 2.0f * t);
-	return wet > 0.5f ? float3{ 1.0f, 0.0f, 1.0f - wet } : float3{ 0.0f, 1.0f, wet };
-}
-
 void SnowDeformation::EnsureShellSnowTextures()
 {
 	if (shellSnowTextureAttempted)
@@ -1756,10 +1744,6 @@ void SnowDeformation::DrawShell()
 	cbData.TrenchDetailRelief = trenchDetail ? std::clamp(settings.TrenchDetailRelief, 0.0f, 2.0f) : 0.0f;
 	cbData.TrenchDetailRoughness = trenchDetail ? std::clamp(settings.TrenchDetailRoughness, 0.3f, 1.5f) : 1.0f;
 	cbData.TrenchDetailCoverage = std::clamp(settings.TrenchDetailCoverage, 0.0f, 2.5f);
-	const float3 detailBlend = TrenchDetailBlend();
-	cbData.TrenchDetailSlice = static_cast<uint>(detailBlend.x);
-	cbData.TrenchDetailSecond = detailBlend.y;
-	cbData.TrenchDetailMix = detailBlend.z;
 	cbData.TrenchDetailShadow = trenchDetail ? std::clamp(settings.ParallaxDepth, 0.0f, 1.0f) : 0.0f;
 	cbData.TrenchDetailView = (trenchDetail && debugTrenchDetailView) ? 1u : 0u;
 	{

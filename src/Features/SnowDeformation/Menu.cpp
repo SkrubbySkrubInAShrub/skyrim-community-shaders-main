@@ -810,7 +810,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_relief"), "Detail Relief"), &settings.TrenchDetailRelief, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttTdRelief = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches, on the ground and on roads. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening), and rises up to 1.5x where something hit the snow hard. 1 = as authored, 0 = off."));
+			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches, on the ground and on roads. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening). Disturbed snow wears the powder detail in every weather; where something hits it hard - a sprint, a dodge, a landing, a body knocked down, lightning, a Force shout - it turns to the impact detail, the harder the more, and rises up to 1.5x. Snow fire has melted wears the impact detail too. 1 = as authored, 0 = off."));
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_roughness"), "Detail Roughness"), &settings.TrenchDetailRoughness, 0.3f, 1.5f, "%.2fx");
 		if (auto _ttTdRough = Util::HoverTooltipWrapper())
@@ -822,23 +822,8 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("object_print_rim"), "Object Print Rim"), &settings.ObjectPrintRimWidth, 0.0f, 15.0f, "%.1f units");
 		if (auto _ttPrintRim = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (its set and Detail Coverage, at twice Detail Relief) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
+			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (Detail Coverage, at twice Detail Relief) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
 
-		{
-			const char* sets[] = { "By Snow Condition", "Powder", "Wet" };
-			int set = settings.TrenchDetailSet == 3 ? 2 : settings.TrenchDetailSet == 1 ? 1 : 0;
-			if (ImGui::Combo(T(TKEY("trench_detail_set"), "Detail Set"), &set, sets, 3))
-				settings.TrenchDetailSet = set == 2 ? 3 : set;
-			if (auto _ttTdSet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_detail_set_tooltip"), "Which detail tile disturbed snow wears. By Snow Condition follows the weather: powder on dry snow, fresh or settled, and wet as the snow turns wet, the one fading into the other. Hard hits turn it toward the wet clods, the harder the more: a sprint, a dodge, a landing, a body knocked down, lightning, a Force shout. Fire turns it wet too. The others force one set for comparison; hits and fire still turn it wet."));
-			if (settings.TrenchDetailSet == 0) {
-				const float3 blend = TrenchDetailBlend();
-				if (blend.z > 0.005f)
-					ImGui::TextDisabled("%s %s %.0f%%, %s %.0f%%", T(TKEY("trench_detail_set_now"), "Now:"), sets[1 + int(blend.x)], 100.0f * (1.0f - blend.z), sets[1 + int(blend.y)], 100.0f * blend.z);
-				else
-					ImGui::TextDisabled("%s %s", T(TKEY("trench_detail_set_now"), "Now:"), sets[1 + int(blend.x)]);
-			}
-		}
 #if !SNOW_ALPHA_BUILD
 		ImGui::Checkbox(T(TKEY("trench_detail_view"), "Detail View"), &debugTrenchDetailView);
 		if (auto _ttTdView = Util::HoverTooltipWrapper())
@@ -1931,10 +1916,6 @@ void SnowDeformation::DrawSettings()
 				const SnowClimateLook look = ComputeSnowClimateLook();
 				WrapTextF("Climate look x Snow Climate %.2f: berm %.2f, lip %.2f, teeth %.2f, wall slough %.2f", look.strength,
 					look.berm, look.lip, look.teeth, look.slough);
-				static const char* kDetailSets[] = { "powder", "wet" };
-				const float3 blend = TrenchDetailBlend();
-				WrapTextF("Trench detail%s: %s %.0f%%, %s %.0f%%", settings.TrenchDetailSet == 0 ? "" : " (forced)", kDetailSets[int(blend.x)], 100.0f * (1.0f - blend.z),
-					kDetailSets[int(blend.y)], 100.0f * blend.z);
 			}
 
 			ImGui::Checkbox(T(TKEY("climate_temperature_override_on"), "Override Temperature"), &debugClimateTemperatureOn);

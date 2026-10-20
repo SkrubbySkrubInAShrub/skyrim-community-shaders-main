@@ -170,8 +170,8 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float StaticsDebugView;
 	float BermHeightAmp;
 
-	float TrenchDetailSecond;  // the second detail set's slice
-	float TrenchDetailMix;     // its weight against TrenchDetailSlice's (0 = one set)
+	float LayoutKeeper8;  // retired Detail Set blend, uploaded as 0
+	float LayoutKeeper9;  // retired Detail Set blend, uploaded as 0
 	// Layout keepers, 0.
 	float DebugNoFarPad;
 	float LayoutKeeper4;
@@ -185,7 +185,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	// 1 / Berm Steepness: the berm tap reach (BermFieldTapped, BermGradStep).
 	float BermReach;
-	uint TrenchDetailSlice;  // the dominant detail set's slice: 0 powder, 1 wet
+	uint LayoutKeeper10;  // retired Detail Set slice, uploaded as 0
 	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
 	// data (fall back to the warped-span fade alone).
 	float SeamRampInv;
@@ -1912,7 +1912,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// snow set's own maps, glints and lights. Fades out with the march and
 	// into an object's coat where the two meet; its relief also with thin
 	// cover and on trampled floors. Snow fire has melted (its marks, the heat
-	// round fires) wears the wet set at full relief; an impact (a sprint, a
+	// round fires) wears the impact set at full relief; an impact (a sprint, a
 	// landing, a strike, a shove) blends toward it by how hard it hit and lifts
 	// the relief up to 1.5x on top of the thin-cover and trampled rules.
 	const float detailFade = 1.0 - smoothstep(1200.0, 2000.0, shellZ);
@@ -1921,7 +1921,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	TrenchDetailTaps detailTaps = (TrenchDetailTaps)0;
 	float detailLod = 0.0;
 	float detailHitH = 0.0;
-	float detailWet = 0.0;
+	float detailImpact = 0.0;
 	const float2 detailPlane = gradZ;
 	float3 shadePos = input.WorldPos;
 #if defined(SNOW_NOISE_TABLE)
@@ -1936,8 +1936,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			// An old track's clods are under new snow; fire's melt is not. The
 			// carve's age in the trench, the berm's on its apron.
 			const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
-			const float impact = marks.y * TrackDetailWetScale(detailAge);
-			detailWet = max(meltWet, impact);
+			const float impact = marks.y * TrackDetailImpactScale(detailAge);
+			detailImpact = max(meltWet, impact);
 			detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
 			               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
 			detailTaps = TrenchDetailTapsAt(worldXYPS);
@@ -1949,7 +1949,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float3 dir = normalize(input.WorldPos);
 		const float4 duv = TrenchDetailStep(detailTaps, dir.xy);
 		float t = TrenchDetailParallaxT(dir, detailPlane, detailTaps, duv,
-			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(shellZ / 1500.0))), detailWet, screenNoise);
+			float3(detailRelief, detailLod, lerp(0.6, 2.0, saturate(shellZ / 1500.0))), detailImpact, screenNoise);
 		detailHitH = (dir.z - dot(dir.xy, detailPlane)) * t;
 		shadePos = input.WorldPos + dir * t;
 		worldXYPS += dir.xy * t;
@@ -1957,7 +1957,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		detailTaps.uv += duv * t;
 	}
 	[branch] if (detailRelief > 0.001)
-		gradZ += TrenchDetailGrad(detailTaps, detailLod, detailWet) * detailRelief;
+		gradZ += TrenchDetailGrad(detailTaps, detailLod, detailImpact) * detailRelief;
 #endif
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
@@ -2324,7 +2324,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// met, through the detail heights, as strong as Parallax Shadow makes the
 	// snow texture's. TrenchDetailShadow is saturate(Parallax Depth).
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y * iceParallax), detailWet, screenNoise),
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y * iceParallax), detailImpact, screenNoise),
 			min(TrenchDetailShadow, SnowParallax.z * iceParallax));
 #endif
 
