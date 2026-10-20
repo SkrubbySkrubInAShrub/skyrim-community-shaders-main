@@ -31,6 +31,41 @@ float Profiler::RollingHistory::GetPercentile(float p) const
 	return sorted[lo] * (1.0f - frac) + sorted[hi] * frac;
 }
 
+void Profiler::RollingHistory::GetPercentiles95And99(float& a_p95, float& a_p99) const
+{
+	if (count == 0) {
+		a_p95 = lastMs;
+		a_p99 = lastMs;
+		return;
+	}
+
+	thread_local std::vector<float> values;
+	values.assign(history, history + count);
+
+	// The same lo/hi/frac as GetPercentile.
+	const auto bounds = [this](float p) {
+		const float idx = (p / 100.0f) * static_cast<float>(count - 1);
+		const uint32_t lo = static_cast<uint32_t>(idx);
+		return std::tuple{ lo, std::min(lo + 1, count - 1), idx - static_cast<float>(lo) };
+	};
+	const auto [lo95, hi95, frac95] = bounds(95.0f);
+	const auto [lo99, hi99, frac99] = bounds(99.0f);
+
+	// nth_element puts the lo-th smallest in place with everything above it to its
+	// right, so the next order statistic is the minimum of that remainder.
+	const auto first = values.begin();
+	std::nth_element(first, first + lo95, values.end());
+	const float s95lo = values[lo95];
+	const float s95hi = hi95 == lo95 ? s95lo : *std::min_element(first + lo95 + 1, values.end());
+	if (lo99 > lo95)
+		std::nth_element(first + lo95 + 1, first + lo99, values.end());
+	const float s99lo = values[lo99];
+	const float s99hi = hi99 == lo99 ? s99lo : *std::min_element(first + lo99 + 1, values.end());
+
+	a_p95 = s95lo * (1.0f - frac95) + s95hi * frac95;
+	a_p99 = s99lo * (1.0f - frac99) + s99hi * frac99;
+}
+
 void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 {
 	Release();
@@ -262,11 +297,9 @@ void Profiler::CollectResults()
 			result.cpuTimeMs = known.cpu.lastMs;
 		}
 		result.avgMs = known.gpu.GetAverage();
-		result.p95Ms = known.gpu.GetPercentile(95.0f);
-		result.p99Ms = known.gpu.GetPercentile(99.0f);
+		known.gpu.GetPercentiles95And99(result.p95Ms, result.p99Ms);
 		result.cpuAvgMs = known.cpu.GetAverage();
-		result.cpuP95Ms = known.cpu.GetPercentile(95.0f);
-		result.cpuP99Ms = known.cpu.GetPercentile(99.0f);
+		known.cpu.GetPercentiles95And99(result.cpuP95Ms, result.cpuP99Ms);
 		result.valid = true;
 		result.historyBuffer = known.gpu.history;
 		result.historyHead = known.gpu.head;

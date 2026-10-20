@@ -51,6 +51,13 @@ public:
 		 * @param p Percentile in [0, 100].
 		 */
 		float GetPercentile(float p) const;
+
+		/**
+		 * @brief Gets the 95th and 99th percentiles together, the values GetPercentile returns.
+		 * @details Selects the order statistics each interpolates between instead of sorting
+		 * a copy per call: CollectResults asks for four per pass every frame.
+		 */
+		void GetPercentiles95And99(float& a_p95, float& a_p99) const;
 	};
 
 	/** @brief Snapshot of GPU/CPU timing data for a single named pass. */
