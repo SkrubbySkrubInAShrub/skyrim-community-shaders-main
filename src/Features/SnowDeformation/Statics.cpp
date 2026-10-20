@@ -160,8 +160,58 @@ struct SD_PointerHash
 	}
 };
 
+// The per-draw caches: open addressing with each value beside its key, so a
+// probe reads one cache line where std::unordered_map reads the bucket array
+// and then a node. Callers clear past 16384 entries, so a probe always meets
+// an empty slot.
+template <class V>
+class SD_InlinePointerTable
+{
+public:
+	static constexpr uint32_t kSlots = 32768;
+
+	size_t size() const { return count; }
+
+	void clear()
+	{
+		if (slots)
+			for (uint32_t i = 0; i < kSlots; i++)
+				slots[i].key = nullptr;
+		count = 0;
+	}
+
+	std::pair<V*, bool> try_emplace(const void* a_key)
+	{
+		if (!slots)
+			slots = std::make_unique<Slot[]>(kSlots);
+		for (uint32_t i = static_cast<uint32_t>(SD_PointerHash{}(a_key));; i++) {
+			Slot& slot = slots[i & (kSlots - 1)];
+			if (slot.key == a_key)
+				return { &slot.value, false };
+			if (!slot.key) {
+				slot.key = a_key;
+				slot.value = V{};
+				count++;
+				return { &slot.value, true };
+			}
+		}
+	}
+
+private:
+#pragma warning(push)
+#pragma warning(disable: 4324)  // padded to a cache line on purpose
+	struct alignas(64) Slot
+	{
+		const void* key = nullptr;
+		V value{};
+	};
+#pragma warning(pop)
+	std::unique_ptr<Slot[]> slots;
+	uint32_t count = 0;
+};
+
 // File scope: a function-local static pays the thread-safe init check on every call.
-static std::unordered_map<const char*, GeometryNameFacts, SD_PointerHash> sNameFactsCache;
+static SD_InlinePointerTable<GeometryNameFacts> sNameFactsCache;
 
 static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 {
@@ -183,8 +233,8 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 	const uint32_t length = (uint32_t)strlen(name);
 	uint64_t head = 0;
 	memcpy(&head, name, std::min<size_t>(length, sizeof(head)));
-	auto [it, inserted] = cache.try_emplace(name);
-	auto& f = it->second;
+	auto [facts, inserted] = cache.try_emplace(name);
+	auto& f = *facts;
 	if (inserted || f.length != length || f.head != head) {
 		f = {};
 		f.length = length;
@@ -560,7 +610,7 @@ struct GeometryRecord
 	uint32_t depthVersion = 0;
 };
 
-static std::unordered_map<const void*, GeometryRecord, SD_PointerHash> sGeometryRecordCache;
+static SD_InlinePointerTable<GeometryRecord> sGeometryRecordCache;
 
 // The pass blends over the surface beneath it (decal or alpha blend): its
 // Masks write is blended too, and a coat cannot follow its fade.
@@ -585,8 +635,8 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 		cache.clear();
 		lastRecord = nullptr;
 	}
-	auto [it, inserted] = cache.try_emplace(a_geometry);
-	auto& r = it->second;
+	auto [record, inserted] = cache.try_emplace(a_geometry);
+	auto& r = *record;
 	if (inserted || r.material != a_material || r.name != name) {
 		r = {};
 		r.material = a_material;
@@ -2400,7 +2450,11 @@ void SnowDeformation::RenderObjectHeightMap()
 				farRecordIndex[ci] = farCount++;
 	}
 	const uint32_t farRecordBase = captureCount * recordBlocks;
-	std::vector<StaticsCB> captureRecords(size_t(farRecordBase) + farCount);
+	// Kept across frames: a fresh vector of this size (MBs at thousands of
+	// captures) paid its allocation and page faults on top of the zero fill.
+	static std::vector<StaticsCB> sCaptureRecords;
+	sCaptureRecords.assign(size_t(farRecordBase) + farCount, StaticsCB{});
+	auto& captureRecords = sCaptureRecords;
 	// A capture wholly outside a window rasterizes to nothing there; the list
 	// reaches the object-snow range, far past the raster windows.
 	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
@@ -4391,7 +4445,10 @@ void SnowDeformation::DrawCapturedStatics()
 	if (!skinSssMarch) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Snow Depth Sync");
 	}
-	std::vector<StaticsCB> skinRecords(skinDraws.size());
+	// Kept across frames, as sCaptureRecords.
+	static std::vector<StaticsCB> sSkinRecords;
+	sSkinRecords.assign(skinDraws.size(), StaticsCB{});
+	auto& skinRecords = sSkinRecords;
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinSmoothSRVs(skinDraws.size());
 	for (size_t si = 0; si < skinDraws.size(); si++) {
 		const auto& d = skinDraws[si];
