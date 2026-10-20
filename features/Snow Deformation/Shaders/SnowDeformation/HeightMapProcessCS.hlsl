@@ -57,7 +57,8 @@ cbuffer HeightProcessCB : register(b0)
 	float ShelterConeTan;  // tan(drift angle from vertical), > 0: sizes the enclosure disc
 
 	uint HeightProcessKeeper;  // layout keeper, 0
-	uint3 HeightProcessPad;
+	uint DeadGhostTiles;  // ScrollCS: dead ghosts leave their tile's flag alone
+	uint2 HeightProcessPad;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -242,7 +243,12 @@ uint ScrollTexel(uint2 texel, uint2 dims)
 	OutA[dtid.xy] = top;
 	if (kScrollBottoms)
 		OutB[dtid.xy] = bottom;
-	return (top > -50000.0 && bottom < 50000.0) ? 1u : 0u;
+	// A ghost's top sinks and its bottom rises. Once the bottom stands
+	// ShelterBandHeight + 60 over the top, ShelterTap is +0 under every
+	// centre's terrain (floating needs top - terrain > 40, the band needs
+	// clearance < ShelterBandHeight + 100); +1 covers the rounding.
+	bool dead = DeadGhostTiles != 0 && bottom - top > ShelterBandHeight + 61.0;
+	return (top > -50000.0 && bottom < 50000.0 && !dead) ? 1u : 0u;
 }
 
 // How strongly the raster at p reads as a floating structure above the
@@ -413,18 +419,12 @@ groupshared uint combineElevated;
 // Zero marks a rim the layer must taper to: off the footprint, or a column
 // standing well above a neighbour (an internal step, e.g. one stone on
 // another). The cone passes then raise the interior at the angle of repose.
-[numthreads(8, 8, 1)] void ObjectConeSeedCS(uint3 dtid
-											: SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-
-	float top = InA[dtid.xy];
-	if (top < -50000.0) {
-		OutA[dtid.xy] = 0.0;
-		return;
-	}
+// One texel's seed; ObjectConeSeedCS and ConeFusedCS both take it from here.
+float ObjectConeSeedAt(uint2 texel, uint2 dims)
+{
+	float top = InA[texel];
+	if (top < -50000.0)
+		return 0.0;
 
 	// Per-texel seed, floored by the class constant. InB is the skin-depth
 	// raster: ROADS write their own class there, so the cone over a road
@@ -435,7 +435,7 @@ groupshared uint combineElevated;
 	// floor is what keeps everything else byte-identical: non-carving
 	// objects write ZERO depth to the raster, and an unfloored seed would
 	// collapse their cone and with it every skin's edge taper.
-	float texelDepth = max(InB[dtid.xy], 0.0);
+	float texelDepth = max(InB[texel], 0.0);
 	float seed = max(texelDepth, ObjectSnowDepth);
 
 	// Internal rims: a LEVEL BREAK sheds the layer the same way the outer
@@ -457,7 +457,7 @@ groupshared uint combineElevated;
 	[unroll] for (int i = 0; i < 4; i++)
 	{
 		int2 offs = int2(i == 0 ? 1 : (i == 1 ? -1 : 0), i == 2 ? 1 : (i == 3 ? -1 : 0));
-		int2 p = int2(dtid.xy) + offs;
+		int2 p = int2(texel) + offs;
 		if (any(p < 0) || any(p >= int2(dims)))
 			continue;
 		float n1 = InA[uint2(p)];
@@ -466,7 +466,7 @@ groupshared uint combineElevated;
 		// tap and the max across them, retired 2026-09-06). Cling: the shell
 		// rolls at its own raster edge whatever sits nearby.
 		float n2 = -100000.0;
-		int2 p2 = int2(dtid.xy) + offs * 2;
+		int2 p2 = int2(texel) + offs * 2;
 		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
 			n2 = InA[uint2(p2)];
 		float n = n1;
@@ -507,7 +507,16 @@ groupshared uint combineElevated;
 		}
 	}
 
-	OutA[dtid.xy] = rim ? 0.0 : seed;
+	return rim ? 0.0 : seed;
+}
+
+[numthreads(8, 8, 1)] void ObjectConeSeedCS(uint3 dtid
+											: SV_DispatchThreadID) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+	OutA[dtid.xy] = ObjectConeSeedAt(dtid.xy, dims);
 }
 
 // InA = depth field. OutA = one repose iteration at ConeStep.
@@ -605,21 +614,97 @@ static const float kOpenPad = 24.0;
 // - which also feeds the crest-freeze tap ring a smoother field. The cone
 // has no sentinels (0 at rims and off-footprint), so plain averaging needs
 // no guards; lambda <= 0.5 is unconditionally stable for this stencil.
+// The neighbours come in the order +x, -x, +y, -y.
+float ConeSettle(float h, float a_px, float a_nx, float a_py, float a_ny)
+{
+	float avg = (a_px + a_nx + a_py + a_ny) * 0.25;
+	return lerp(h, avg, saturate(DiffuseLambda));
+}
+
 [numthreads(8, 8, 1)] void ObjectConeDiffuseCS(uint3 dtid
 											   : SV_DispatchThreadID) {
 	uint2 dims;
 	OutA.GetDimensions(dims.x, dims.y);
 	if (any(dtid.xy >= dims))
 		return;
-	float h = InA[dtid.xy];
 	int2 c = int2(dtid.xy);
 	int2 mx = int2(dims) - 1;
-	float avg = (InA[uint2(clamp(c + int2(1, 0), int2(0, 0), mx))] +
-					InA[uint2(clamp(c - int2(1, 0), int2(0, 0), mx))] +
-					InA[uint2(clamp(c + int2(0, 1), int2(0, 0), mx))] +
-					InA[uint2(clamp(c - int2(0, 1), int2(0, 0), mx))]) *
-	            0.25;
-	OutA[dtid.xy] = lerp(h, avg, saturate(DiffuseLambda));
+	OutA[dtid.xy] = ConeSettle(InA[dtid.xy],
+		InA[uint2(clamp(c + int2(1, 0), int2(0, 0), mx))],
+		InA[uint2(clamp(c - int2(1, 0), int2(0, 0), mx))],
+		InA[uint2(clamp(c + int2(0, 1), int2(0, 0), mx))],
+		InA[uint2(clamp(c - int2(0, 1), int2(0, 0), mx))]);
+}
+
+// A cone chain with no repose step (none can move a texel: the deepest seed
+// is under one texel's rise at the slope) in ONE dispatch. Each group seeds
+// its 16x16 tile and a two-texel ring into groupshared memory, settles twice
+// there and writes the tile: the seed pass and both ObjectConeDiffuseCS passes
+// without the two full-window round trips between them. Every texel takes
+// the same seed function and the same ConeSettle over the same clamped
+// neighbours, so the cone is bit-identical. It seeds from the object maps
+// (t0, t1, t3).
+#define CONE_TILE 16
+#define CONE_RING 2
+#define CONE_SPAN (CONE_TILE + 2 * CONE_RING)
+groupshared float coneSeedShared[CONE_SPAN * CONE_SPAN];
+groupshared float coneSettleShared[CONE_SPAN * CONE_SPAN];
+
+// Slot of window texel p in a tile whose ring starts at a_origin.
+uint ConeSlot(int2 p, int2 a_origin)
+{
+	int2 l = p - a_origin;
+	return uint(l.y * CONE_SPAN + l.x);
+}
+
+[numthreads(CONE_TILE, CONE_TILE, 1)] void ConeFusedCS(uint3 gid
+													   : SV_GroupID, uint3 gtid
+													   : SV_GroupThreadID, uint gi
+													   : SV_GroupIndex) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	const int2 dimsI = int2(dims);
+	const int2 mx = dimsI - 1;
+	const int2 origin = int2(gid.xy) * CONE_TILE - CONE_RING;
+
+	// Seeds over the tile and its two-texel ring; ring texels past the window
+	// stay unwritten, the clamps below never reach them.
+	[loop] for (uint seedI = gi; seedI < CONE_SPAN * CONE_SPAN; seedI += CONE_TILE * CONE_TILE)
+	{
+		const int2 p = origin + int2(seedI % CONE_SPAN, seedI / CONE_SPAN);
+		[branch] if (all(p >= 0) && all(p < dimsI))
+		{
+			coneSeedShared[seedI] = ObjectConeSeedAt(uint2(p), dims);
+		}
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	// The first settle over the tile and a one-texel ring.
+	const uint inner = CONE_SPAN - 2;
+	[loop] for (uint settleI = gi; settleI < inner * inner; settleI += CONE_TILE * CONE_TILE)
+	{
+		const int2 p = origin + 1 + int2(settleI % inner, settleI / inner);
+		[branch] if (all(p >= 0) && all(p < dimsI))
+		{
+			coneSettleShared[ConeSlot(p, origin)] = ConeSettle(coneSeedShared[ConeSlot(p, origin)],
+				coneSeedShared[ConeSlot(clamp(p + int2(1, 0), int2(0, 0), mx), origin)],
+				coneSeedShared[ConeSlot(clamp(p - int2(1, 0), int2(0, 0), mx), origin)],
+				coneSeedShared[ConeSlot(clamp(p + int2(0, 1), int2(0, 0), mx), origin)],
+				coneSeedShared[ConeSlot(clamp(p - int2(0, 1), int2(0, 0), mx), origin)]);
+		}
+	}
+	GroupMemoryBarrierWithGroupSync();
+
+	// The second over the tile.
+	const int2 p = int2(gid.xy) * CONE_TILE + int2(gtid.xy);
+	[branch] if (all(p < dimsI))
+	{
+		OutA[uint2(p)] = ConeSettle(coneSettleShared[ConeSlot(p, origin)],
+			coneSettleShared[ConeSlot(clamp(p + int2(1, 0), int2(0, 0), mx), origin)],
+			coneSettleShared[ConeSlot(clamp(p - int2(1, 0), int2(0, 0), mx), origin)],
+			coneSettleShared[ConeSlot(clamp(p + int2(0, 1), int2(0, 0), mx), origin)],
+			coneSettleShared[ConeSlot(clamp(p - int2(0, 1), int2(0, 0), mx), origin)]);
+	}
 }
 
 // Water the data route reads: the raw water window minus every lone wet

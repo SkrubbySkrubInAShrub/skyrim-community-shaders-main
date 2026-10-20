@@ -2903,6 +2903,21 @@ public:
 	bool FarLevelActive() const { return heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
 	/** @brief Cone passes the chain ran this frame (of kConeSteps). */
 	uint32_t conePassesCoarse = 0;
+	/** @brief A/B, runtime-only: the cones run as separate seed and settle passes even where ConeFusedCS could take them. */
+	bool coneFusedOff = false;
+	/** @brief Debug, runtime-only: every fused or kept cone is recomputed by the separate passes into coneVerifyTex and compared bit for bit (heightRasterVerifyCount slots 4 and 5). */
+	bool coneVerify = false;
+	uint32_t coneRuns = 0;
+	uint32_t coneFusedRuns = 0;
+	/** @brief The cone verify's reference target (R32F, created on first use). */
+	Texture2D* coneVerifyTex = nullptr;
+	bool EnsureConeVerify();
+	/** @brief A/B, runtime-only: every ghost with a top and a bottom keeps its tile elevated (HeightProcessCB::DeadGhostTiles 0). */
+	bool deadGhostTilesOff = false;
+	/** @brief Debug, runtime-only: CombineCS runs a second time with no tile flags (t4 unbound never skips) into combineVerifyTex, compared bit for bit (slot 6). */
+	bool combineVerify = false;
+	Texture2D* combineVerifyTex = nullptr;
+	bool EnsureCombineVerify();
 	/** @brief Only road skins, the trench patch, the march's road taps and the debug views read the cones and the near level: true when one of them can this frame. */
 	bool RoadMapsWanted() const;
 	/** @brief The sky-openness field holds the last height-map run's bake (Volume Snow reads that one), so a run that turns the bake back on need not bake it again before the volume draws. */
@@ -3007,13 +3022,14 @@ public:
 	uint32_t heightRasterKeptBits = 0;
 	uint32_t heightRasterRuns = 0;
 	uint32_t heightRasterKept[3] = {};
-	uint32_t heightRasterVerified[3] = {};
-	/** @brief Mismatching texels per compared target: layer-1 raster, skin depth, fine, far. */
-	uint64_t heightRasterMismatch[4] = {};
+	/** @brief Verified runs per level: layer 1, fine, far, object cone, road cone, shelter mask. */
+	uint32_t heightRasterVerified[6] = {};
+	/** @brief Mismatching texels per compared target: layer-1 raster, skin depth, fine, far, object cone, road cone, shelter mask. */
+	uint64_t heightRasterMismatch[7] = {};
 	Texture2D* heightRasterVerifyTex[4] = {};
 	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyCount;
 	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifyAllUAV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifySlotUAV[4];
+	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifySlotUAV[7];
 	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyStaging[3];
 	uint32_t heightRasterVerifyStagingLevels[3] = {};
 	uint32_t heightRasterVerifyRing = 0;
@@ -3036,6 +3052,8 @@ public:
 	ID3D11ComputeShader* objectSkyOpenCS = nullptr;
 	/** @brief P4: one Jacobi settling iteration over a cone depth field (ObjectConeDiffuseCS). */
 	ID3D11ComputeShader* objectConeDiffuseCS = nullptr;
+	/** @brief ConeFusedCS: a cone with no repose step, seed and both settles in one dispatch. */
+	ID3D11ComputeShader* objectConeFusedCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
@@ -3075,7 +3093,8 @@ public:
 
 		/** @brief Layout keeper, uploaded as 0. */
 		uint keeper;
-		uint pad0;
+		/** @brief ScrollCS: a ghost whose bottom has risen ShelterBandHeight + 61 over its top no longer marks its tile elevated for CombineCS (0 = every floating texel does). */
+		uint DeadGhostTiles;
 		uint pad1;
 		uint pad2;
 	};
