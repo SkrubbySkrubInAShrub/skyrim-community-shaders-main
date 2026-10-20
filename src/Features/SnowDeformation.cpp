@@ -124,6 +124,7 @@
 	X(TrenchDetailRoughness) \
 	X(TrenchDetailCoverage) \
 	X(SpeedSpoil) \
+	X(SpeedSpoilSize) \
 	X(ShellHorizonMarch) \
 	X(SnowGlints) \
 	X(SnowScreenSpaceShadows) \

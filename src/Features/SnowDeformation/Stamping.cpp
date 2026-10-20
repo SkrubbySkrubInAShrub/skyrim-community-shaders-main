@@ -1242,7 +1242,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			const float spoilTravelX = position.x - impactFrom.x;
 			const float spoilTravelY = position.y - impactFrom.y;
 			const float spoilTravel = std::sqrt(spoilTravelX * spoilTravelX + spoilTravelY * spoilTravelY);
-			const float wedgeLength = spoilSpeed * kSpoilKickSeconds * std::clamp(impactWeight, 0.5f, 2.0f);
+			const float wedgeLength = spoilSpeed * kSpoilKickSeconds * std::clamp(impactWeight, 0.5f, 2.0f) * std::clamp(settings.SpeedSpoilSize, 0.1f, 2.0f);
 			uint32_t spoilIndex = 0;
 			for (const auto& spoilFoot : bones->feet) {
 				const uint32_t spoilKeyIndex = spoilIndex++;
@@ -1262,7 +1262,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						const float armX = backX * kSpoilSpreadCos - backY * kSpoilSpreadSin * spoilSide;
 						const float armY = backY * kSpoilSpreadCos + backX * kSpoilSpreadSin * spoilSide;
 						perFrameData.Stamps[stampCount] = { spoilState.last.x + armX * wedgeLength, spoilState.last.y + armY * wedgeLength, 0.0f,
-							std::clamp(kSpoilArmWidth * wedgeLength, 8.0f, kMaxStampShapeRadius) };
+							std::clamp(kSpoilArmWidth * wedgeLength, 4.0f, kMaxStampShapeRadius) };
 						perFrameData.StampEnds[stampCount] = { spoilState.last.x, spoilState.last.y, kStampModeCarve + kStampImpactScale * spoilEnergy, 0.0f };
 						stampCount++;
 					}

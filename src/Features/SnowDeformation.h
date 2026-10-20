@@ -554,6 +554,8 @@ public:
 		float TrenchDetailCoverage = 1.75f;
 		/** @brief A/B, default off until judged: a fast foot leaving its print throws a wedge of impact energy back from it (no carve), and the trench detail shows that thrown snow past the trench too. */
 		bool SpeedSpoil = false;
+		/** @brief Speed Spoil: the wedge's length and width, as a share of a kick at the actor's speed (0.1-2). */
+		float SpeedSpoilSize = 0.5f;
 		/** @brief "Snow Self-Shadowing": heightfield self-shadow (the 5-tap horizon march over the cached heights) on the ground snow and object snow, faded out toward a grazing sun. Off = only the cascades and the SSS mask shade the snow. A quality-preset lever (Low turns it off). */
 		bool ShellHorizonMarch = true;
 		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */

@@ -1910,6 +1910,8 @@
     "feature.snow_deformation.snow_trenches_tooltip": "Everything about the ground being walked through: how long a trench is remembered, how wide and how sharply it cuts, and the look of the disturbed snow around it. Untouched snow is never affected.",
     "feature.snow_deformation.speed_spoil": "Speed Spoil",
     "feature.snow_deformation.speed_spoil_count": "Wedges thrown since load:",
+    "feature.snow_deformation.speed_spoil_size": "Spoil Size",
+    "feature.snow_deformation.speed_spoil_size_tooltip": "How far the thrown snow reaches, length and width together. At 1 a sprint throws it about a metre back from each print; 0.5 is half that. Applies to new wedges.",
     "feature.snow_deformation.speed_spoil_tooltip": "Under test. A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads.",
     "feature.snow_deformation.spell_cat_fire": "Fire",
     "feature.snow_deformation.spell_cat_fire_tooltip": "Fire melts snow into soft basins. Unlike a footprint, a melt keeps deepening for as long as the heat stands over it.",

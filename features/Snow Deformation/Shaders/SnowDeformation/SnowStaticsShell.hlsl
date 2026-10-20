@@ -455,6 +455,10 @@ static float2 gDeferredGridDy;
 static float gDeferredZDx;
 static float gDeferredZDy;
 #endif
+#if defined(PSHADER) && !defined(SNOW_CONDITION_VIEW) && !defined(PATCH)
+// Object snow paints Debugging Options > Snow Condition at runtime (SnowClimate2.z).
+#	define SNOW_CONDITION_VIEW_RUNTIME
+#endif
 #include "SnowDeformation/SnowFields.hlsli"
 #if defined(PSHADER) && (defined(SNOW_OBJECT_PRINTS) || defined(VOXEL))
 // Snow Trenches on Objects: the drape's print twin, chosen per draw where the
@@ -2690,6 +2694,23 @@ struct SkinShadeResult
 	// The trench detail's mask (patch), for its coverage view.
 	float detailMask;
 };
+#if defined(SNOW_CONDITION_VIEW) && defined(PATCH)
+// Snow Condition View's track term on the road patch, as the ground's: the
+// trench's age (6) or its glaze (7).
+float2 PatchConditionTrack(float2 a_trenchGridLocal, float2 a_worldXY, float a_deform, float a_worldZ)
+{
+	float2 track = 0.0;
+	[branch] if (SnowClimate2.z < 6.5)
+	{
+		const float4 field = BermFieldPair(a_trenchGridLocal);
+		track = float2(lerp(TrackAgeOf(field.w), TrackAgeOf(field.z), smoothstep(0.0, 0.1, a_deform)), saturate(10.0 * max(a_deform, field.x)));
+	}
+	else
+		track.x = SnowIceLook(a_deform, saturate(SampleExclusionField(a_worldXY).y), a_worldZ);
+	return track;
+}
+#endif
+
 SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 {
 	// Where lighting and shadows are evaluated; depth readers stay on the sheet.
@@ -4901,6 +4922,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
+#	if defined(SNOW_CONDITION_VIEW_RUNTIME) && !defined(PATCH)
+	// Debugging Options > Snow Condition, as the ground paints it, on object
+	// snow: no trenches there, and the ice view shows the coat's crust (a
+	// print's own glaze would cost the print twin registers). The road patch
+	// has a view variant of its own.
+	[branch] if (SnowClimate2.z > 0.5)
+	{
+		const float viewZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(viewZ), SnowClimate2.z, float2(SnowIceLook(0.0, 0.0, viewZ), 0.0)) * 2.0;
+		psout.Albedo.rgb = 0.0;
+		psout.Specular.rgb = 0.0;
+		psout.Reflectance.rgb = 0.0;
+	}
+#	endif
 	return psout;
 #endif  // !SNOW_STATICS_DEPTH_PREPASS && !SNOW_PATCH_ATTR
 }
@@ -4972,7 +5007,8 @@ PS_OUTPUT main(float4 pos : SV_Position)
 #ifdef SNOW_CONDITION_VIEW
 	// Debugging Options > Snow Condition, as the ground paints it.
 	{
-		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(rel.z + ShellCameraPosAdjust.z), SnowClimate2.z, 0.0) * 2.0;
+		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(rel.z + ShellCameraPosAdjust.z), SnowClimate2.z,
+								PatchConditionTrack(grid.xy, GridOrigin + grid.xy, ssi.pixelDeform, rel.z + ShellCameraPosAdjust.z)) * 2.0;
 		psout.Albedo.rgb = 0.0;
 		psout.Specular.rgb = 0.0;
 		psout.Reflectance.rgb = 0.0;

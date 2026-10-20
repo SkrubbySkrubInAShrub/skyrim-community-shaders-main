@@ -446,10 +446,11 @@ float TrenchDetailMask(float a_carve, float2 a_bermPair, float a_coverage)
 }
 
 // Speed Spoil: the trench detail over snow a fast foot threw past the trench,
-// where its impact energy lies. Undated there, so it reads fresh.
+// where its impact energy lies. Undated there, so it reads fresh. Past the
+// run's own body ring (a sprint's 0.2), which belongs in the trench.
 float TrenchSpoilMask(float a_energy)
 {
-	return smoothstep(0.05, 0.3, a_energy);
+	return smoothstep(0.3, 0.45, a_energy);
 }
 
 // One tap's stored height (0.5 = the tile mean): the powder set, mixed toward
@@ -767,7 +768,7 @@ float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_
 }
 #endif
 
-#ifdef SNOW_CONDITION_VIEW
+#if defined(SNOW_CONDITION_VIEW) || defined(SNOW_CONDITION_VIEW_RUNTIME)
 // Debugging Options > Snow Condition. Mirrors SnowDeformation::GetSnowCondition
 // (Accumulation.cpp): the player's values shifted by height. xyzw =
 // temperature (C), wetness, stickiness, firmness.

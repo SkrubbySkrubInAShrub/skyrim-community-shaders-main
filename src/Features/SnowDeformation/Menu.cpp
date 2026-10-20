@@ -827,8 +827,12 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("speed_spoil"), "Speed Spoil"), &settings.SpeedSpoil);
 		if (auto _ttSpoil = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "Under test. A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads."));
-		if (settings.SpeedSpoil)
+		if (settings.SpeedSpoil) {
+			ImGui::SliderFloat(T(TKEY("speed_spoil_size"), "Spoil Size"), &settings.SpeedSpoilSize, 0.1f, 2.0f, "%.2fx");
+			if (auto _ttSpoilSize = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("speed_spoil_size_tooltip"), "How far the thrown snow reaches, length and width together. At 1 a sprint throws it about a metre back from each print; 0.5 is half that. Applies to new wedges."));
 			ImGui::TextDisabled("%s %llu", T(TKEY("speed_spoil_count"), "Wedges thrown since load:"), static_cast<unsigned long long>(speedSpoilWedges));
+		}
 
 #if !SNOW_ALPHA_BUILD
 		ImGui::Checkbox(T(TKEY("trench_detail_view"), "Detail View"), &debugTrenchDetailView);
