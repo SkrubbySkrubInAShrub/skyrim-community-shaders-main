@@ -1789,7 +1789,7 @@ void SnowDeformation::DrawShell()
 		const SnowCondition condition = GetSnowCondition();
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		cbData.SnowClimate = { condition.temperature, kClimateLapse, player ? player->GetPosition().z : 0.0f, condition.freshness };
-		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 6), 1.0f - look.strength };
+		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 7), 1.0f - look.strength };
 		cbData.SnowClimateOverride = { debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, 0.0f };
 		std::copy(look.lut.begin(), look.lut.end(), cbData.SnowClimateLUT);
 	}
