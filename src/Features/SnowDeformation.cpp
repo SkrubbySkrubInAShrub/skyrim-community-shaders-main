@@ -138,6 +138,7 @@
 	X(BloodSheen) \
 	X(BloodSpreadSeconds) \
 	X(DeformMapResolution) \
+	X(VRAMAwareTrenchMap) \
 	X(ObjectTrenchResolution) \
 	X(ObjectPrintRimWidth) \
 	X(RangeTrenchesM) \
@@ -793,8 +794,10 @@ void SnowDeformation::ApplyRangeSettings()
 		// the value back so the next save holds what is running.
 		const uint desired = settings.DeformMapResolution >= 4096u ? 4096u : (settings.DeformMapResolution >= 2048u ? 2048u : 1024u);
 		settings.DeformMapResolution = desired;
-		if (desired != deformMapDim) {
-			deformMapDim = desired;
+		// The VRAM cap runs the map smaller without touching the setting.
+		const uint effective = settings.VRAMAwareTrenchMap && deformMapVramCap ? std::min(desired, deformMapVramCap) : desired;
+		if (effective != deformMapDim) {
+			deformMapDim = effective;
 			CreateDeformationTextures();
 			mapOrigin.x &= (int)deformMapDim - 1;
 			mapOrigin.y &= (int)deformMapDim - 1;
@@ -2654,6 +2657,19 @@ void SnowDeformation::TickVRAMLog()
 	QueryAdapterVRAM(usageMB, budgetMB);
 	if (budgetMB == 0)
 		return;
+
+	// One step down a session, taken once the free budget is smaller than
+	// what the step frees: half the dimension is a quarter of the bytes.
+	if (settings.VRAMAwareTrenchMap && !deformMapVramCap && deformMapDim > 2048u) {
+		auto bytes = [](Texture2D* a_wrap) { return a_wrap ? TextureBytes(a_wrap->resource.get()) : uint64_t(0); };
+		const uint64_t deformMB = (bytes(deformationTextures[0]) + bytes(deformationTextures[1])) >> 20;
+		const uint64_t freesMB = deformMB - deformMB / 4;
+		if (usageMB + freesMB > budgetMB) {
+			deformMapVramCap = 2048u;
+			deformMapDimDirty = true;
+			logger::info("[SNOW DEFORMATION] VRAM-aware trench map: {} -> 2048 for this session (adapter {}/{} MB, the step frees ~{} MB)", deformMapDim, usageMB, budgetMB, freesMB);
+		}
+	}
 
 	const bool overBudget = usageMB > budgetMB;
 	const bool bigDelta = usageMB > vramLastLoggedMB + 256 || vramLastLoggedMB > usageMB + 512;

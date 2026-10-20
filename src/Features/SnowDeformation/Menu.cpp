@@ -766,6 +766,14 @@ void SnowDeformation::DrawSettings()
 			}
 			if (auto _ttRes = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("map_resolution_tooltip"), "Resolution of the map every trench, melt mark and berm lives in. The main performance dial for this section: cost scales with the square of it, so each step down roughly quarters the trench passes' GPU time. Detail follows the Trenches range too - at the default range, 2048 gives roughly 12 cm per texel, 1024 roughly 24 cm (footprints soften but trails stay). 4096 halves the texel again and costs roughly four times 2048's trench-pass time and video memory; the High preset uses it. Changing it clears the map; remembered trenches are re-injected from the store."));
+			if (ImGui::Checkbox(T(TKEY("vram_aware_map"), "VRAM-Aware Map Size"), &settings.VRAMAwareTrenchMap) && !settings.VRAMAwareTrenchMap && deformMapVramCap) {
+				deformMapVramCap = 0;
+				deformMapDimDirty = true;
+			}
+			if (auto _ttVram = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("vram_aware_map_tooltip"), "When the graphics card's free video memory budget gets smaller than what 4096 costs over 2048 (about 190 MB), the map runs at 2048 for the rest of the session: past the budget the driver moves textures to system memory and frames stall. The resolution above keeps its value. The map clears once; remembered trenches are re-injected from the store."));
+			if (deformMapVramCap && deformMapDim < settings.DeformMapResolution)
+				ImGui::TextDisabled("%s %u", T(TKEY("vram_aware_map_active"), "Video memory over budget this session, map running at"), deformMapDim);
 		}
 
 		{

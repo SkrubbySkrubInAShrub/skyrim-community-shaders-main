@@ -582,6 +582,8 @@ public:
 		float BloodSpreadSeconds = 1.5f;
 		/** @brief Deformation map resolution (1024, 2048 or 4096, snapped to pow2 - the toroidal mask requires it). 4096 was retired 2026-09-21 (trenches looked worse at it, 4.71 ms) and is back since 2026-10-15 at Josef's call: the default and the High preset. The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 4096;
+		/** @brief Runs the map at 2048 for the session once the adapter's free video memory budget is smaller than what 4096 costs over 2048: past the budget the driver demotes textures to system memory and frames stall on paging. DeformMapResolution keeps its value. */
+		bool VRAMAwareTrenchMap = true;
 		/** @brief Snow Trenches on Objects: the print map's texels a side (512, 1024 or 2048) at kPrintTexel units each, so the reach around the player is 11, 22 or 44 m. A quality-preset lever. */
 		uint32_t ObjectTrenchResolution = 2048;
 		/** @brief "Object Print Rim": how far past a print's edge, in units (0-15), the snow on an object is broken up: the trench detail reaches this far at twice Detail Relief, fading out. 0 = the print's own edge only. */
@@ -4077,6 +4079,8 @@ protected:
 	uint deformMapDim = kTextureDim;
 	/** @brief Settings::DeformMapResolution changed; ApplyRangeSettings recreates the map and the store's window-sized companions and clears; the world-anchored store re-injects what it holds. */
 	bool deformMapDimDirty = false;
+	/** @brief Settings::VRAMAwareTrenchMap's cap on the map (0 = none): set at most once a session by TickVRAMLog, applied by ApplyRangeSettings. */
+	uint deformMapVramCap = 0;
 	bool rangeInitApplied = false;
 
 	// ---- Idle skip (DEFORMATION-UPDATE-PLAN S1) ----
