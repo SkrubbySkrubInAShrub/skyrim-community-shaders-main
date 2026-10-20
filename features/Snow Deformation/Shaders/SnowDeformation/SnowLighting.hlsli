@@ -177,8 +177,9 @@ namespace SnowLighting
 			// dark and glossy like the shell's thin print beside it. The tint is
 			// in the shell's albedo convention; a linear set takes it linearised.
 			const float wet = SharedData::snowDeformationSettings.LandWetPrint;
-			// Refrozen (Wet Snow and Ice): a pressed print glazes like the shell's.
-			// Mirror kIceTint and kIceRoughCut in SnowFields.hlsli.
+			// Refrozen (Wet Snow and Ice): a pressed print glazes like the shell's,
+			// the rest of the snow by the sun crust's share. Mirror kIceTint,
+			// kIceRoughCut and kIceSurfaceGlaze in SnowFields.hlsli.
 			const float ice = SharedData::snowDeformationSettings.LandIce;
 			float press = 0.0;
 			float glaze = 0.0;
@@ -186,7 +187,7 @@ namespace SnowLighting
 			{
 				const float pressed = smoothstep(0.1, 0.5, SnowDeformation::GetDeformation(worldXY));
 				press = pressed * saturate(wet * 4.0);
-				glaze = pressed * ice;
+				glaze = max(pressed, 0.1) * ice;
 			}
 			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
 			shellAlbedo *= printTint;

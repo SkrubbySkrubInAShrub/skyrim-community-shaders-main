@@ -213,14 +213,19 @@ bool SnowDeformation::MeasureCreatureBuild(RE::NiAVObject* a_root, CreatureBuild
 	return true;
 }
 
-float SnowDeformation::CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows)
+float SnowDeformation::CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows, float* a_weight)
 {
 	std::scoped_lock lock(creatureLiftLock);
 	auto found = creatureLiftsDrawn.find(a_formID);
-	if (found == creatureLiftsDrawn.end())
+	if (found == creatureLiftsDrawn.end()) {
+		if (a_weight)
+			*a_weight = 0.0f;
 		return 0.0f;
+	}
 	if (a_havokFollows)
 		*a_havokFollows = found->second.havokFollows;
+	if (a_weight)
+		*a_weight = found->second.weight;
 	return found->second.inBones;
 }
 
@@ -435,8 +440,8 @@ void SnowDeformation::CreatureSinkUpdate()
 		std::scoped_lock lock(creatureLiftLock);
 		creatureLiftsDrawn.clear();
 		for (const auto& [formID, state] : creatureLifts)
-			if (state.inBones > 0.0f)
-				creatureLiftsDrawn[formID] = { state.inBones, state.havokFollows };
+			if (state.inBones > 0.0f || state.weight > 0.0f)
+				creatureLiftsDrawn[formID] = { state.inBones, state.havokFollows, state.weight };
 		if (wantReadout)
 			creatureSinkReadout = std::move(text);
 	}

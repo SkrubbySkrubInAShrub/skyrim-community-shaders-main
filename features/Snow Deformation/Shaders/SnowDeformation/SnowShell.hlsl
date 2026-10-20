@@ -170,7 +170,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float StaticsDebugView;
 	float BermHeightAmp;
 
-	float LayoutKeeper8;  // retired Detail Set blend, uploaded as 0
+	float SpeedSpoil;     // Settings::SpeedSpoil, 0 or 1
 	float LayoutKeeper9;  // retired Detail Set blend, uploaded as 0
 	// Layout keepers, 0.
 	float DebugNoFarPad;
@@ -1928,20 +1928,25 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		const float4 detailField = BermFieldPair(gridLocal);
-		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, TrenchDetailCoverage) * detailFade * (1.0 - objectMeet.x);
-		[branch] if (detailMask > 0.0)
+		const float detailReach = detailFade * (1.0 - objectMeet.x);
+		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, TrenchDetailCoverage) * detailReach;
+		[branch] if (detailMask > 0.0 || SpeedSpoil > 0.5)
 		{
 			const float2 marks = SampleDetailMarks(gridLocal);
-			const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
-			// An old track's clods are under new snow; fire's melt is not. The
-			// carve's age in the trench, the berm's on its apron.
-			const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
-			const float impact = marks.y * TrackDetailImpactScale(detailAge);
-			detailImpact = max(meltWet, impact);
-			detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
-			               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
-			detailTaps = TrenchDetailTapsAt(worldXYPS);
-			detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
+			detailMask = max(detailMask, SpeedSpoil * TrenchSpoilMask(marks.y) * detailReach);
+			[branch] if (detailMask > 0.0)
+			{
+				const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
+				// An old track's clods are under new snow; fire's melt is not. The
+				// carve's age in the trench, the berm's on its apron.
+				const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
+				const float impact = marks.y * TrackDetailImpactScale(detailAge);
+				detailImpact = max(meltWet, impact);
+				detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
+				               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
+				detailTaps = TrenchDetailTapsAt(worldXYPS);
+				detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
+			}
 		}
 	}
 	[branch] if (detailRelief > 0.05)
@@ -2436,7 +2441,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		const float4 trackField = BermFieldPair(gridLocal);
 		const float2 track = SnowClimate2.z < 6.5 ? float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter))) :
-		                                             float2(SnowIceGlaze(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z), 0.0);
+		                                             float2(SnowIceLook(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z), 0.0);
 		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z, track);
 		psout.Diffuse.rgb = conditionColor * 2.0;
 		psout.Albedo.rgb = 0.0;

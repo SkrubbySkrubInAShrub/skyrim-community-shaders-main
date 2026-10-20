@@ -552,6 +552,8 @@ public:
 		float TrenchDetailRoughness = 1.0f;
 		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
 		float TrenchDetailCoverage = 1.75f;
+		/** @brief A/B, default off until judged: a fast foot leaving its print throws a wedge of impact energy back from it (no carve), and the trench detail shows that thrown snow past the trench too. */
+		bool SpeedSpoil = false;
 		/** @brief "Snow Self-Shadowing": heightfield self-shadow (the 5-tap horizon march over the cached heights) on the ground snow and object snow, faded out toward a grazing sun. Off = only the cascades and the SSS mask shade the snow. A quality-preset lever (Low turns it off). */
 		bool ShellHorizonMarch = true;
 		/** @brief "Snow Sparkle": both shells' specular runs TruePBR's glint NDF (needs its glint noise). Off = plain specular. A quality-preset lever. */
@@ -1700,8 +1702,9 @@ public:
 		/** @brief Edge berm crest height as a fraction of local snow depth. */
 		float BermHeightAmp;
 
-		/** @brief Layout keepers, uploaded as 0 (the retired Detail Set's second slice and its weight). */
-		float LayoutKeeper8;
+		/** @brief Settings::SpeedSpoil, 0 or 1: the trench detail shows the impact energy lying past the trench. Was a layout keeper. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float SpeedSpoil;
+		/** @brief Layout keeper, uploaded as 0 (the retired Detail Set's second slice's weight). */
 		float LayoutKeeper9;
 		/** @brief Layout keepers, uploaded as 0 (LayoutKeeper4 was the retired parallax trench view). */
 		float DebugNoFarPad;
@@ -5312,8 +5315,10 @@ protected:
 	{
 		float inBones;
 		bool havokFollows;
+		/** @brief Capsule volume over the player's, 0 = unmeasured. */
+		float weight;
 	};
-	/** @brief This frame's lifts in the bones, by formID, for the stamp gather. Under creatureLiftLock. */
+	/** @brief This frame's lifts in the bones and the creatures' weights, by formID, for the stamp gather. Under creatureLiftLock. */
 	std::unordered_map<uint32_t, CreatureLiftDrawn> creatureLiftsDrawn;
 	std::mutex creatureLiftLock;
 	std::unordered_set<uint32_t> creatureRacesLogged;
@@ -5324,8 +5329,8 @@ protected:
 	std::atomic<float> creatureSinkMicros{ 0.0f };
 	/** @brief Measures a_build off a_root's capsules on its cadence; false when it has none. a_baseZ is the ground the actor stands on. */
 	bool MeasureCreatureBuild(RE::NiAVObject* a_root, CreatureBuild& a_build, bool a_upright, uint32_t a_frame, float a_baseZ);
-	/** @brief The lift an actor's bones carry this frame, 0 when none; a_havokFollows says whether its ragdoll carries it too. */
-	float CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows = nullptr);
+	/** @brief The lift an actor's bones carry this frame, 0 when none; a_havokFollows says whether its ragdoll carries it too, a_weight its weight against the player's (0 = unmeasured: people, or Creatures Sink by Weight off). */
+	float CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows = nullptr, float* a_weight = nullptr);
 
 	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.
@@ -5907,4 +5912,14 @@ protected:
 		bool wasInAir = false;
 	};
 	std::unordered_map<uint32_t, ImpactTrack> impactTracks;
+	/** @brief Speed Spoil: per foot ((formID << 8) | index), planted last visit, where, and when. */
+	struct SpoilFoot
+	{
+		float2 last{};
+		uint32_t frame = 0;
+		bool planted = false;
+	};
+	std::unordered_map<uint64_t, SpoilFoot> spoilFeet;
+	/** @brief Speed Spoil wedges thrown since load, for the menu. */
+	uint64_t speedSpoilWedges = 0;
 };

@@ -138,7 +138,7 @@ cbuffer ShellCB : register(b0)
 	float BermHeightAmp;
 
 	// The second detail set's slice and its weight (see SnowShell.hlsl).
-	float LayoutKeeper8;
+	float SpeedSpoil;
 	float LayoutKeeper9;
 	// Layout keepers, 0.
 	float DebugNoFarPad;
@@ -2728,6 +2728,13 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 #	ifdef PATCH
 		const float4 patchField = BermFieldPair(input.trenchGridLocal);
 		detailMask = TrenchDetailMask(input.pixelDeform, patchField.xy, TrenchDetailCoverage) * detailFade;
+		// Speed Spoil, as on the ground: thrown snow past the trench.
+		float2 marks = 0.0;
+		[branch] if (SpeedSpoil > 0.5)
+		{
+			marks = SampleDetailMarks(input.trenchGridLocal);
+			detailMask = max(detailMask, TrenchSpoilMask(marks.y) * detailFade);
+		}
 #	else
 		// No berm on an object: the depth as a share of a full print is the
 		// carve, and the rim, which reaches past it, the blur around it.
@@ -2737,7 +2744,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		[branch] if (detailMask > 0.001)
 		{
 #	ifdef PATCH
-			const float2 marks = SampleDetailMarks(input.trenchGridLocal);
+			[branch] if (SpeedSpoil < 0.5)
+				marks = SampleDetailMarks(input.trenchGridLocal);
 			const float meltWet = smoothstep(kSpellMarkStart, 0.15, marks.x);
 			// An old track's clods are under new snow; fire's melt is not. The
 			// carve's age in the trench, the berm's on its apron.

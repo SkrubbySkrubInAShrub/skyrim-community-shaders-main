@@ -126,6 +126,16 @@ static constexpr float kImpactFallSpan = 600.0f;
 static constexpr float kImpactKnockedDown = 0.6f;
 static constexpr float kImpactStampMin = 0.03f;
 static constexpr float kImpactTrackGap = 0.25f;
+// Speed Spoil (an estimate, as the impact terms are): a foot leaving its print
+// past a run throws a wedge back from it, its two arms kSpoilSpread either side
+// of the way back, as long as the snow flies in kSpoilKickSeconds at the
+// actor's speed, each arm kSpoilArmWidth of that wide. Its energy reaches 1
+// kSpoilSpeedSpan past the run.
+static constexpr float kSpoilSpeedSpan = 300.0f;
+static constexpr float kSpoilKickSeconds = 0.15f;
+static constexpr float kSpoilSpreadCos = 0.906f;
+static constexpr float kSpoilSpreadSin = 0.423f;
+static constexpr float kSpoilArmWidth = 0.3f;
 // Skeletons carry bones that are hidden or never composed for this race
 // (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
 // world transform at the origin. A capsule anchored on one combs a trench
@@ -844,6 +854,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// once the actor has passed them all.
 		float impact = 0.0f;
 		RE::NiPoint3 impactFrom = position;
+		// Ground speed for Speed Spoil, 0 in the air.
+		float spoilSpeed = 0.0f;
 		if (!isDead) {
 			if (impactTracks.size() > 512 && !impactTracks.contains(formID))
 				impactTracks.clear();
@@ -876,8 +888,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				track.speedEnergy = inAir ? 0.0f : std::clamp((track.speed - kImpactSpeedFloor) / kImpactSpeedSpan, 0.0f, kImpactSpeedMax);
 				track.landingEnergy = inAir ? 0.0f : landing;
 				track.knockEnergy = !inAir && down ? kImpactKnockedDown : 0.0f;
-				if (!inAir)
+				if (!inAir) {
 					impact = std::max({ track.speedEnergy, track.landingEnergy, track.knockEnergy });
+					spoilSpeed = track.speed;
+				}
 				track.prev = position;
 				track.time = passClockSeconds;
 				track.seen = true;
@@ -908,8 +922,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (probing)
 				skeletonProbe.gapToLand = position.z - landZ;
 			// The map is 2D: an impact on a walkway would churn the trenches below.
-			if (position.z - landZ > kElevatedStampCutoff)
+			if (position.z - landZ > kElevatedStampCutoff) {
 				impact = 0.0f;
+				spoilSpeed = 0.0f;
+			}
 			if (position.z - landZ > kElevatedStampCutoff && !rasterCandidate) {
 				if (probing)
 					skeletonProbe.verdict = "gated: elevated surface (above land cutoff)";
@@ -1081,7 +1097,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// A creature drawn standing in the snow (CreatureSink.cpp) carries the lift in
 		// its bones, and in its ragdoll when Havok drives that to them.
 		bool liftInRagdoll = true;
-		const float bodyLift = isDead ? 0.0f : CreatureLiftOf(formID, &liftInRagdoll);
+		float creatureWeight = 0.0f;
+		const float bodyLift = isDead ? 0.0f : CreatureLiftOf(formID, &liftInRagdoll, &creatureWeight);
 		float floatingGap = 0.0f;
 		bool floatingByFeet = false;
 		const bool floating = !isDead &&
@@ -1198,6 +1215,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (SnowEventsWanted())
 			CollectActorSnowEvents(actor.get(), isDead, position, groundZ, bones, root);
 
+		// A creature hits the snow by its weight against the player's as it
+		// loads it (CreatureSink.cpp): the cube root, its weight over its feet.
+		// People and the unmeasured are the player's.
+		const float impactWeight = creatureWeight > 0.0f ? std::cbrt(creatureWeight) : 1.0f;
+		impact = std::min(impact * impactWeight, 1.0f);
 		// The impact as a stamp that carves nothing: its energy rides the mode
 		// over the actor's path this frame, out past its feet.
 		if (impact > kImpactStampMin && stampCount < actorCeiling) {
@@ -1209,6 +1231,48 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			perFrameData.Stamps[stampCount] = stamp;
 			perFrameData.StampEnds[stampCount] = { impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * impact, 0.0f };
 			stampCount++;
+		}
+		// Speed Spoil: a foot leaving its print past a run throws a wedge of
+		// impact energy back from it, carving nothing.
+		if (settings.SpeedSpoil && footPath && bones) {
+			if (spoilFeet.size() > 1024)
+				spoilFeet.clear();
+			const uint32_t spoilFrame = globals::state->frameCount;
+			const float spoilEnergy = std::min(std::clamp((spoilSpeed - kImpactSpeedFloor) / kSpoilSpeedSpan, 0.0f, 1.0f) * impactWeight, 1.0f);
+			const float spoilTravelX = position.x - impactFrom.x;
+			const float spoilTravelY = position.y - impactFrom.y;
+			const float spoilTravel = std::sqrt(spoilTravelX * spoilTravelX + spoilTravelY * spoilTravelY);
+			const float wedgeLength = spoilSpeed * kSpoilKickSeconds * std::clamp(impactWeight, 0.5f, 2.0f);
+			uint32_t spoilIndex = 0;
+			for (const auto& spoilFoot : bones->feet) {
+				const uint32_t spoilKeyIndex = spoilIndex++;
+				auto* spoilNode = spoilFoot.node.get();
+				if (!spoilNode || spoilNode->world.scale < 0.01f)
+					continue;
+				auto& spoilState = spoilFeet[(uint64_t(formID) << 8) | (spoilKeyIndex & 0xFF)];
+				// The bone path's plant band and its release: a foot lifts when it
+				// clears 1.5x the band it planted in.
+				const float spoilBand = kFootPlantBand * spoilNode->world.scale * (spoilState.planted ? 1.5f : 1.0f);
+				const bool spoilPlanted = spoilNode->world.translate.z - (groundZ + bodyLift) <= spoilBand;
+				const bool spoilSeen = spoilState.frame != 0 && spoilFrame - spoilState.frame <= 2;
+				if (spoilSeen && spoilState.planted && !spoilPlanted && spoilEnergy > kImpactStampMin && spoilTravel > 1e-3f && stampCount + 2 <= actorCeiling) {
+					const float backX = -spoilTravelX / spoilTravel;
+					const float backY = -spoilTravelY / spoilTravel;
+					for (const float spoilSide : { -1.0f, 1.0f }) {
+						const float armX = backX * kSpoilSpreadCos - backY * kSpoilSpreadSin * spoilSide;
+						const float armY = backY * kSpoilSpreadCos + backX * kSpoilSpreadSin * spoilSide;
+						perFrameData.Stamps[stampCount] = { spoilState.last.x + armX * wedgeLength, spoilState.last.y + armY * wedgeLength, 0.0f,
+							std::clamp(kSpoilArmWidth * wedgeLength, 8.0f, kMaxStampShapeRadius) };
+						perFrameData.StampEnds[stampCount] = { spoilState.last.x, spoilState.last.y, kStampModeCarve + kStampImpactScale * spoilEnergy, 0.0f };
+						stampCount++;
+					}
+					speedSpoilWedges++;
+				}
+				if (spoilPlanted)
+					spoilState.last = { spoilNode->world.translate.x, spoilNode->world.translate.y };
+				spoilState.planted = spoilPlanted;
+				spoilState.frame = spoilFrame;
+			}
 		}
 
 		// S1: an actor inside the contact window carves by its skinned mesh

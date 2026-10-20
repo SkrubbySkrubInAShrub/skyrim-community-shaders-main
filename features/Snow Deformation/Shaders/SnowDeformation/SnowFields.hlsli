@@ -445,6 +445,13 @@ float TrenchDetailMask(float a_carve, float2 a_bermPair, float a_coverage)
 	return smoothstep(cut - 0.4, cut, f) * smoothstep(0.0, 0.15, f);
 }
 
+// Speed Spoil: the trench detail over snow a fast foot threw past the trench,
+// where its impact energy lies. Undated there, so it reads fresh.
+float TrenchSpoilMask(float a_energy)
+{
+	return smoothstep(0.05, 0.3, a_energy);
+}
+
 // One tap's stored height (0.5 = the tile mean): the powder set, mixed toward
 // the impact set by a_impact (something hit the snow, or fire melted it).
 float TrenchDetailHeight01(float2 a_uv, float a_lod, float a_impact)
@@ -689,11 +696,14 @@ float4 SnowClimateRow(float worldZ)
 // is read only where a print darkens.
 // Wet Snow and Ice (the rows' y and x): wet snow darkens by Community
 // Shaders' wetness rule (Lighting.hlsl, snow fully porous) and stops
-// sparkling; pressed snow whose meltwater froze glazes. Mirror kIceTint and
-// kIceRoughCut in SnowLighting.hlsli. Darkens a_albedo; returns x the
-// roughness cut, y the share of glints left.
+// sparkling; pressed snow whose meltwater froze glazes, and the rest of the
+// surface takes kIceSurfaceGlaze of that glaze (the sun crust a thaw and a
+// freeze leave). Mirror kIceTint, kIceRoughCut and kIceSurfaceGlaze in
+// SnowLighting.hlsli. Darkens a_albedo; returns x the roughness cut, y the
+// share of glints left.
 static const float3 kIceTint = float3(0.93, 0.955, 0.985);
 static const float kIceRoughCut = 0.8;
+static const float kIceSurfaceGlaze = 0.1;
 // Glazed snow's Parallax Depth and Parallax Shadow, as a share of the sliders.
 static const float kIceParallax = 0.5;
 
@@ -708,10 +718,16 @@ bool SnowIceInView()
 	return SnowClimateLUT[0].z > 0.001;
 }
 
-// SnowWetPrint's glaze.
+// The pressed snow's glaze, which softens the parallax.
 float SnowIceGlaze(float a_carve, float a_melt, float a_worldZ)
 {
 	return SnowClimateRow(a_worldZ).x * SnowPressed(a_carve, a_melt);
+}
+
+// The glaze SnowWetPrint draws: the pressed snow's, and the surface crust.
+float SnowIceLook(float a_carve, float a_melt, float a_worldZ)
+{
+	return SnowClimateRow(a_worldZ).x * max(SnowPressed(a_carve, a_melt), kIceSurfaceGlaze);
 }
 
 // The sliders' share on glazed snow: 1 off the ice, kIceParallax on it.
@@ -732,8 +748,10 @@ float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_
 	{
 		const float4 row = SnowClimateRow(a_worldZ);
 		a_albedo = lerp(a_albedo, pow(abs(a_albedo), 1.0 + row.y), 0.5);
-		const float glaze = row.x * wetPress;
+		const float glaze = row.x * max(wetPress, kIceSurfaceGlaze);
 		look.y = (1.0 - row.y) * (1.0 - glaze);
+		look.x = glaze * kIceRoughCut;
+		a_albedo *= lerp(1.0, kIceTint, glaze);
 		[branch] if (wetPress > 0.001)
 		{
 			const float climateWet = row.w;
@@ -741,8 +759,8 @@ float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_
 			float wetPrint = wetPress * max(thinPrint, 0.8 * climateWet);
 			[branch] if (a_dated && TrackAge.y > 0.0 && BermBakeActive > 0.5)
 				wetPrint *= saturate(1.0 - 2.0 * TrackAgeOf(BermFieldBaked(a_gridLocal).z));
-			a_albedo = lerp(a_albedo, a_albedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint) * lerp(1.0, kIceTint, glaze);
-			look.x = max(wetPrint * (0.24 + 0.26 * climateWet), glaze * kIceRoughCut);
+			a_albedo = lerp(a_albedo, a_albedo * float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * climateWet), wetPrint);
+			look.x = max(wetPrint * (0.24 + 0.26 * climateWet), look.x);
 		}
 	}
 	return look;

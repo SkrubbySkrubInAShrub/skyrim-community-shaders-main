@@ -824,6 +824,12 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPrintRim = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (Detail Coverage, at twice Detail Relief) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
 
+		ImGui::Checkbox(T(TKEY("speed_spoil"), "Speed Spoil"), &settings.SpeedSpoil);
+		if (auto _ttSpoil = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "Under test. A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads."));
+		if (settings.SpeedSpoil)
+			ImGui::TextDisabled("%s %llu", T(TKEY("speed_spoil_count"), "Wedges thrown since load:"), static_cast<unsigned long long>(speedSpoilWedges));
+
 #if !SNOW_ALPHA_BUILD
 		ImGui::Checkbox(T(TKEY("trench_detail_view"), "Detail View"), &debugTrenchDetailView);
 		if (auto _ttTdView = Util::HoverTooltipWrapper())
@@ -848,7 +854,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("creature_sink"), "Creatures Sink by Weight"), &settings.CreatureSink);
 		if (auto _ttCreatureSink = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("creature_sink_tooltip"), "Creatures lighter than you sink only part way into the snow. Where the snow is firm enough to carry them, a hare or a fox stands up to half way up it and leaves a shallower trench; in loose new snow they sink further, but never past their belly, and never into something low overhead. Your own weight is the measure: people sink as you do, and anything as heavy as you or heavier stands on the ground under the snow. A creature that dies settles into the snow. Weight comes from each creature's own collision shapes, so modded creatures work too. Off, every creature stands on the ground."));
+			ImGui::Text("%s", T(TKEY("creature_sink_tooltip"), "Creatures lighter than you sink only part way into the snow. Where the snow is firm enough to carry them, a hare or a fox stands up to half way up it and leaves a shallower trench; in loose new snow they sink further, but never past their belly, and never into something low overhead. Your own weight is the measure: people sink as you do, and anything as heavy as you or heavier stands on the ground under the snow. A creature that dies settles into the snow. Weight comes from each creature's own collision shapes, so modded creatures work too. The same weight sets how hard a creature hits the snow: a horse's gallop or landing throws more broken snow than a fox's. Off, every creature stands on the ground and hits the snow as you do."));
 
 		ImGui::SliderFloat(T(TKEY("track_ageing"), "Track Ageing"), &settings.TrackAgeing, 0.0f, 2.0f, "%.2f");
 		if (auto _ttTrackAge = Util::HoverTooltipWrapper())
@@ -860,7 +866,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("wet_snow_ice"), "Wet Snow and Ice"), &settings.WetSnowAndIce);
 		if (auto _ttWetIce = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, and new prints barely mark them until a thaw or fresh snow ends the ice. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
+			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, and new prints barely mark them until a thaw or fresh snow ends the ice. The rest of the snow takes a faint crust of the same glaze. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
