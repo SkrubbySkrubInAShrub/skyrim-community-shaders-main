@@ -1871,7 +1871,9 @@ namespace SIE
 					try {
 						std::filesystem::create_directories(directoryPath);
 					} catch (std::filesystem::filesystem_error const& ex) {
-						logger::error("Failed to create folder: {}", ex.what());
+						// Concurrent compiles of one shader type race here; the folder existing afterwards is success.
+						if (!std::filesystem::is_directory(directoryPath))
+							logger::error("Failed to create folder: {}", ex.what());
 					}
 				}
 
