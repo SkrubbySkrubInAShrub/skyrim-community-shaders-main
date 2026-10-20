@@ -258,7 +258,7 @@ namespace SnowHitch
 		return true;
 	}
 
-	json Report(float a_thresholdMs, uint32_t a_top)
+	json Report(float a_thresholdMs, uint32_t a_top, const std::string& a_module)
 	{
 		g_running = false;
 		if (g_thread.joinable())
@@ -292,8 +292,8 @@ namespace SnowHitch
 		{
 			uint32_t hitch = 0, normal = 0;
 		};
-		std::unordered_map<std::string, Tally> leafModules, leafAt, stackModules, stackAt;
-		uint32_t hitchSamples = 0, normalSamples = 0;
+		std::unordered_map<std::string, Tally> leafModules, leafAt, stackModules, stackAt, moduleAt;
+		uint32_t hitchSamples = 0, normalSamples = 0, moduleSamples = 0;
 		for (uint32_t i = 0; i < sampleCount; i++) {
 			const Sample& s = g_samples[i];
 			auto it = std::upper_bound(marks.begin(), marks.end(), s.qpc, [](int64_t q, const Mark& m) { return q < m.qpc; });
@@ -309,17 +309,27 @@ namespace SnowHitch
 			bump(leafModules, ModuleOf(s.rip));
 			bump(leafAt, Where(s.rip & ~0xFull));
 			std::unordered_set<std::string> seen;
+			bool charged = !a_module.empty() && ModuleOf(s.rip) == a_module;
+			if (charged)
+				bump(moduleAt, Where(s.rip & ~0xFull));
 			for (uint32_t r = 0; r < s.returns; r++) {
 				const std::string m = ModuleOf(s.ret[r]);
 				if (seen.insert(m).second)
 					bump(stackModules, m);
 				bump(stackAt, Where(s.ret[r]));
+				if (!charged && !a_module.empty() && m == a_module) {
+					bump(moduleAt, "via " + Where(s.ret[r]));
+					charged = true;
+				}
 			}
+			moduleSamples += charged;
 		}
 		auto table = [&](const std::unordered_map<std::string, Tally>& a_map) {
 			std::vector<std::pair<std::string, Tally>> rows(a_map.begin(), a_map.end());
 			const double h = std::max(1u, hitchSamples), n = std::max(1u, normalSamples);
-			std::sort(rows.begin(), rows.end(), [&](const auto& a, const auto& b) { return a.second.hitch / h - a.second.normal / n > b.second.hitch / h - b.second.normal / n; });
+			// One side empty (a threshold below or above every frame): rank by count.
+			const auto key = [&](const Tally& t) { return hitchSamples && normalSamples ? t.hitch / h - t.normal / n : double(t.hitch + t.normal); };
+			std::sort(rows.begin(), rows.end(), [&](const auto& a, const auto& b) { return key(a.second) > key(b.second); });
 			json t = json::array();
 			for (size_t i = 0; i < rows.size() && i < a_top; i++)
 				t.push_back({ { "at", rows[i].first }, { "hitchShare", rows[i].second.hitch / h }, { "normalShare", rows[i].second.normal / n }, { "hitch", rows[i].second.hitch }, { "normal", rows[i].second.normal } });
@@ -334,6 +344,11 @@ namespace SnowHitch
 		out["leafAt"] = table(leafAt);
 		out["stackModules"] = table(stackModules);
 		out["stackAt"] = table(stackAt);
+		if (!a_module.empty()) {
+			out["module"] = a_module;
+			out["moduleSamples"] = moduleSamples;
+			out["moduleAt"] = table(moduleAt);
+		}
 		return out;
 	}
 }

@@ -104,7 +104,7 @@ namespace
 			if (action == "start")
 				out = { { "started", SnowHitch::Start(args.value("intervalUs", 1000u)) } };
 			else
-				out = SnowHitch::Report(args.value("thresholdMs", 60.0f), args.value("top", 25u));
+				out = SnowHitch::Report(args.value("thresholdMs", 60.0f), args.value("top", 25u), args.value("module", std::string{}));
 		} catch (const std::exception& e) {
 			out = { { "error", e.what() } };
 		}
@@ -358,7 +358,7 @@ void SnowDeformation::InstallDevBenchTools()
 		R"({"description":"Snow Deformation CPU census: 30-frame averages (ms, rdtsc calibrated to QPC) of named CPU spans - Prepass and DrawShell whole, DrawShell's consecutive segments - plus the capture hook, actor/land stamping, depth and traversal counters. Stamps: stampsTotal/carveStampsTotal/rowsMarkedTotal are cumulative (read deltas); lastStampers lists the actors that emitted stamps in the latest frame that had any (props and spells not attributed).","inputSchema":{"type":"object","properties":{"arm":{"type":"integer","description":"Frames the census stays armed (default 120)."},"history":{"type":"integer","description":"Return the newest N per-frame rows (up to 1200): frame, periodMs, hookMs, actorMs, landMs, then every span (historyColumns), oldest first."}}}})";
 	dvb->RegisterTool("snowdeformation.cpucensus", cpuCensusDesc, &CpuCensusTool, nullptr);
 	static constexpr const char* hitchSamplerDesc =
-		R"({"description":"Stutter hunt: samples the render thread's stack (leaf address plus return addresses found in the top 4 KB) every intervalUs while started, and on report stops and compares frames longer than thresholdMs with the rest: leaf modules and addresses, and modules and return addresses on the stack, each with its share of hitch-frame and normal-frame samples.","readOnly":true,"inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["start","report"]},"intervalUs":{"type":"integer"},"thresholdMs":{"type":"number"},"top":{"type":"integer"}}}})";
+		R"({"description":"Stutter hunt: samples the render thread's stack (leaf address plus return addresses found in the top 4 KB) every intervalUs while started, and on report stops and compares frames longer than thresholdMs with the rest: leaf modules and addresses, and modules and return addresses on the stack, each with its share of hitch-frame and normal-frame samples. With module (e.g. CommunityShaders.dll), moduleAt charges every sample to that module: its own code at the leaf, or 'via' the nearest return address into it, so time in the driver or engine lands on the call that spent it. A threshold below or above every frame ranks the tables by count.","readOnly":true,"inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["start","report"]},"intervalUs":{"type":"integer"},"thresholdMs":{"type":"number"},"top":{"type":"integer"},"module":{"type":"string"}}}})";
 	dvb->RegisterTool("snowdeformation.hitchsampler", hitchSamplerDesc, &HitchSamplerTool, nullptr);
 	static constexpr const char* trenchProbeDesc =
 		R"({"description":"Persistent trench store depth (0-1, bilinear) at world positions in the active worldspace. points: [[x,y],...].","readOnly":true,"inputSchema":{"type":"object","properties":{"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}},"required":["points"]}})";
