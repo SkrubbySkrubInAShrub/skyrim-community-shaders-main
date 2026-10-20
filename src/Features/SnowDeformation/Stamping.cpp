@@ -3,6 +3,7 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 #include "Features/SnowDeformation.h"
+#include "Features/SnowDeformation/HitchSampler.h"
 
 #include "Features/SnowDeformation/AlphaBuild.h"
 
@@ -2127,8 +2128,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 // first.
 void SnowDeformation::RollCpuCensus()
 {
+	SnowHitch::OnFrame();
 	// rdtsc -> ms, from the rdtsc and QPC deltas since the last roll.
 	static double ticksToMs = 0.0;
+	double periodMs = 0.0;
 	{
 		static LARGE_INTEGER qpcFreq = [] {
 			LARGE_INTEGER f;
@@ -2142,6 +2145,7 @@ void SnowDeformation::RollCpuCensus()
 		const uint64_t tscNow = __rdtsc();
 		if (tscPrev != 0 && tscNow > tscPrev) {
 			const double ms = 1000.0 * double(qpcNow.QuadPart - qpcPrev.QuadPart) / double(qpcFreq.QuadPart);
+			periodMs = ms;
 			const double ratio = ms / double(tscNow - tscPrev);
 			ticksToMs = ticksToMs == 0.0 ? ratio : ticksToMs + (ratio - ticksToMs) * 0.05;
 		}
@@ -2151,6 +2155,19 @@ void SnowDeformation::RollCpuCensus()
 	auto ema = [](float& a_shown, float a_value) { a_shown += (a_value - a_shown) * (1.0f / 30.0f); };
 	auto& c = cpuCensus;
 	auto& s = cpuShown;
+	{
+		std::scoped_lock ringLock(c.frameRingLock);
+		auto& row = c.frameRing[c.frameRingHead];
+		row.frame = globals::state->frameCount;
+		row.periodMs = float(periodMs);
+		row.hookMs = float(c.hookTicks * ticksToMs);
+		row.actorMs = float(c.actorTicks * ticksToMs);
+		row.landMs = float(c.landTicks * ticksToMs);
+		for (uint32_t i = 0; i < CpuCensus::kSpanCount; i++)
+			row.spanMs[i] = float(c.spanTicks[i] * ticksToMs);
+		c.frameRingHead = (c.frameRingHead + 1) % CpuCensus::kFrameRing;
+		c.frameRingCount = std::min(c.frameRingCount + 1, CpuCensus::kFrameRing);
+	}
 	ema(s.hookMs, float(c.hookTicks * ticksToMs));
 	ema(s.hookCalls, float(c.hookCalls));
 	ema(s.actorMs, float(c.actorTicks * ticksToMs));

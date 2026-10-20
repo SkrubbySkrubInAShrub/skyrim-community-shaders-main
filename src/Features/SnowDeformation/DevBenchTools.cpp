@@ -1,4 +1,5 @@
 #include "Features/SnowDeformation.h"
+#include "Features/SnowDeformation/HitchSampler.h"
 
 #include "Features/PerformanceOverlay.h"
 #include "Globals.h"
@@ -39,11 +40,13 @@ namespace
 		a_write(a_sink, dumped.c_str());
 	}
 
-	void CpuCensusTool(void*, const char*, void* a_sink, DevBenchAPI::WriteFn a_write)
+	void CpuCensusTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		json out;
 		try {
-			globals::features::snowDeformation.cpuCensusArmedUntil = globals::state->frameCount + 120;
+			const json args = a_argsJson && *a_argsJson ? json::parse(a_argsJson) : json::object();
+			// arm: frames the census stays armed (default 120); history: the newest N frame rows, oldest first.
+			globals::features::snowDeformation.cpuCensusArmedUntil = globals::state->frameCount + std::clamp(args.value("arm", 120u), 1u, 100000u);
 			const auto& s = globals::features::snowDeformation.cpuShown;
 			json spans = json::array();
 			for (uint32_t i = 0; i < SnowDeformation::CpuCensus::kSpanCount; i++)
@@ -65,6 +68,43 @@ namespace
 				{ "landMs", s.landMs }, { "landCalls", s.landCalls }, { "depthMs", s.depthMs }, { "depthCalls", s.depthCalls },
 				{ "traverseMs", s.traverseMs }, { "traverseCalls", s.traverseCalls },
 				{ "frame_count", globals::state->frameCountAtomic.load(std::memory_order_relaxed) } };
+			if (const uint32_t want = args.value("history", 0u); want > 0) {
+				auto& ring = SnowDeformation::cpuCensus;
+				json names = json::array({ "frame", "periodMs", "hookMs", "actorMs", "landMs" });
+				for (uint32_t i = 0; i < SnowDeformation::CpuCensus::kSpanCount; i++)
+					names.push_back(SnowDeformation::CpuCensus::kSpanNames[i]);
+				json rows = json::array();
+				{
+					std::scoped_lock ringLock(ring.frameRingLock);
+					const uint32_t n = std::min(want, ring.frameRingCount);
+					for (uint32_t k = 0; k < n; k++) {
+						const auto& r = ring.frameRing[(ring.frameRingHead + SnowDeformation::CpuCensus::kFrameRing - n + k) % SnowDeformation::CpuCensus::kFrameRing];
+						json row = json::array({ r.frame, r.periodMs, r.hookMs, r.actorMs, r.landMs });
+						for (uint32_t i = 0; i < SnowDeformation::CpuCensus::kSpanCount; i++)
+							row.push_back(r.spanMs[i]);
+						rows.push_back(std::move(row));
+					}
+				}
+				out["historyColumns"] = std::move(names);
+				out["history"] = std::move(rows);
+			}
+		} catch (const std::exception& e) {
+			out = { { "error", e.what() } };
+		}
+		const std::string dumped = out.dump();
+		a_write(a_sink, dumped.c_str());
+	}
+
+	void HitchSamplerTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		json out;
+		try {
+			const json args = a_argsJson && *a_argsJson ? json::parse(a_argsJson) : json::object();
+			const std::string action = args.value("action", "report");
+			if (action == "start")
+				out = { { "started", SnowHitch::Start(args.value("intervalUs", 1000u)) } };
+			else
+				out = SnowHitch::Report(args.value("thresholdMs", 60.0f), args.value("top", 25u));
 		} catch (const std::exception& e) {
 			out = { { "error", e.what() } };
 		}
@@ -315,8 +355,11 @@ void SnowDeformation::InstallDevBenchTools()
 		R"({"description":"The F10 performance overlay's shader-type table: per BSShader type, smoothed draw calls and CPU wall time (ms) between draw submissions attributed to that type - NOT GPU time. live=false means the overlay is hidden and the numbers are stale (toggle it with F10).","readOnly":true,"inputSchema":{"type":"object","properties":{}}})";
 	dvb->RegisterTool("snowdeformation.shadertypes", shaderTypesDesc, &ShaderTypesTool, nullptr);
 	static constexpr const char* cpuCensusDesc =
-		R"({"description":"Snow Deformation CPU census: 30-frame averages (ms, rdtsc calibrated to QPC) of named CPU spans - Prepass and DrawShell whole, DrawShell's consecutive segments - plus the capture hook, actor/land stamping, depth and traversal counters. Stamps: stampsTotal/carveStampsTotal/rowsMarkedTotal are cumulative (read deltas); lastStampers lists the actors that emitted stamps in the latest frame that had any (props and spells not attributed).","inputSchema":{"type":"object","properties":{}}})";
+		R"({"description":"Snow Deformation CPU census: 30-frame averages (ms, rdtsc calibrated to QPC) of named CPU spans - Prepass and DrawShell whole, DrawShell's consecutive segments - plus the capture hook, actor/land stamping, depth and traversal counters. Stamps: stampsTotal/carveStampsTotal/rowsMarkedTotal are cumulative (read deltas); lastStampers lists the actors that emitted stamps in the latest frame that had any (props and spells not attributed).","inputSchema":{"type":"object","properties":{"arm":{"type":"integer","description":"Frames the census stays armed (default 120)."},"history":{"type":"integer","description":"Return the newest N per-frame rows (up to 1200): frame, periodMs, hookMs, actorMs, landMs, then every span (historyColumns), oldest first."}}}})";
 	dvb->RegisterTool("snowdeformation.cpucensus", cpuCensusDesc, &CpuCensusTool, nullptr);
+	static constexpr const char* hitchSamplerDesc =
+		R"({"description":"Stutter hunt: samples the render thread's stack (leaf address plus return addresses found in the top 4 KB) every intervalUs while started, and on report stops and compares frames longer than thresholdMs with the rest: leaf modules and addresses, and modules and return addresses on the stack, each with its share of hitch-frame and normal-frame samples.","readOnly":true,"inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["start","report"]},"intervalUs":{"type":"integer"},"thresholdMs":{"type":"number"},"top":{"type":"integer"}}}})";
+	dvb->RegisterTool("snowdeformation.hitchsampler", hitchSamplerDesc, &HitchSamplerTool, nullptr);
 	static constexpr const char* trenchProbeDesc =
 		R"({"description":"Persistent trench store depth (0-1, bilinear) at world positions in the active worldspace. points: [[x,y],...].","readOnly":true,"inputSchema":{"type":"object","properties":{"points":{"type":"array","items":{"type":"array","items":{"type":"number"}}}},"required":["points"]}})";
 	dvb->RegisterTool("snowdeformation.trenchprobe", trenchProbeDesc, &TrenchProbeTool, nullptr);

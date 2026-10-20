@@ -2739,6 +2739,19 @@ public:
 		uint64_t storeCalls[kStorePathCount] = {};
 		uint64_t storeRaises[kStorePathCount] = {};
 		uint32_t trenchStorePath = kStoreRoll;
+		/** @brief Per-frame history for stutter hunts (DevBench snowdeformation.cpucensus history): each frame's period, roll to roll, and every span's raw ms while armed. Written by the render thread, read by DevBench's, under frameRingLock. */
+		static constexpr uint32_t kFrameRing = 1200;
+		struct FrameRow
+		{
+			uint32_t frame;
+			float periodMs;
+			float hookMs, actorMs, landMs;
+			float spanMs[kSpanCount];
+		};
+		FrameRow frameRing[kFrameRing] = {};
+		uint32_t frameRingHead = 0;
+		uint32_t frameRingCount = 0;
+		std::mutex frameRingLock;
 	};
 	static inline CpuCensus cpuCensus;
 	static inline bool cpuCensusArmed = false;
