@@ -2650,6 +2650,24 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 void SnowDeformation::TickVRAMLog()
 {
 	vramTickCounter++;
+
+	// One step down a session, taken once the free budget is smaller than
+	// what the step frees: half the dimension is a quarter of the bytes.
+	// Checked every frame while armed: the driver evicts between the log's
+	// samples, so a 120-tick sample can miss every moment over the line.
+	if (settings.VRAMAwareTrenchMap && !deformMapVramCap && deformMapDim > 2048u) {
+		uint64_t nowMB = 0, nowBudgetMB = 0;
+		QueryAdapterVRAM(nowMB, nowBudgetMB);
+		auto bytes = [](Texture2D* a_wrap) { return a_wrap ? TextureBytes(a_wrap->resource.get()) : uint64_t(0); };
+		const uint64_t deformMB = (bytes(deformationTextures[0]) + bytes(deformationTextures[1])) >> 20;
+		const uint64_t freesMB = deformMB - deformMB / 4;
+		if (nowBudgetMB && nowMB + freesMB > nowBudgetMB) {
+			deformMapVramCap = 2048u;
+			deformMapDimDirty = true;
+			logger::info("[SNOW DEFORMATION] VRAM-aware trench map: {} -> 2048 for this session (adapter {}/{} MB, the step frees ~{} MB)", deformMapDim, nowMB, nowBudgetMB, freesMB);
+		}
+	}
+
 	if (vramTickCounter % 120 != 1)
 		return;
 
@@ -2657,19 +2675,6 @@ void SnowDeformation::TickVRAMLog()
 	QueryAdapterVRAM(usageMB, budgetMB);
 	if (budgetMB == 0)
 		return;
-
-	// One step down a session, taken once the free budget is smaller than
-	// what the step frees: half the dimension is a quarter of the bytes.
-	if (settings.VRAMAwareTrenchMap && !deformMapVramCap && deformMapDim > 2048u) {
-		auto bytes = [](Texture2D* a_wrap) { return a_wrap ? TextureBytes(a_wrap->resource.get()) : uint64_t(0); };
-		const uint64_t deformMB = (bytes(deformationTextures[0]) + bytes(deformationTextures[1])) >> 20;
-		const uint64_t freesMB = deformMB - deformMB / 4;
-		if (usageMB + freesMB > budgetMB) {
-			deformMapVramCap = 2048u;
-			deformMapDimDirty = true;
-			logger::info("[SNOW DEFORMATION] VRAM-aware trench map: {} -> 2048 for this session (adapter {}/{} MB, the step frees ~{} MB)", deformMapDim, usageMB, budgetMB, freesMB);
-		}
-	}
 
 	const bool overBudget = usageMB > budgetMB;
 	const bool bigDelta = usageMB > vramLastLoggedMB + 256 || vramLastLoggedMB > usageMB + 512;
