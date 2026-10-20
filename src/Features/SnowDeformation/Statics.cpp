@@ -2752,7 +2752,7 @@ void SnowDeformation::RenderObjectHeightMap()
 															 std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.x), std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.y),
 															 std::bit_cast<uint32_t>(processData.TerrainTexelSize), processData.TerrainDim, roadRaster ? 1u : 0u }));
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
-	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Layer 1"));
 	if (!layer1Kept)
 		drawLayer1(heightRaster->rtv.get(), heightSkinDepth->rtv.get());
 	else
@@ -2773,7 +2773,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
-	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Ghost Merge"));
 	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
 
@@ -2784,7 +2784,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		const bool kept = levelKept(a_level, rasterKey(a_draws, { reinterpret_cast<uint64_t>(heightVS), reinterpret_cast<uint64_t>(topOnlyPS) }));
 		const bool verify = verifyOn && (kept || heightRasterVerifyMiss);
 		context->PSSetShader(topOnlyPS, nullptr, 0);
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow(a_level == 1 ? "SnowDeformation::Objects - Height Maps Fine" : "SnowDeformation::Objects - Height Maps Far"));
 		auto draw = [&](Texture2D* a_into) {
 			context->ClearRenderTargetView(a_into->rtv.get(), topClear);
 			ID3D11RenderTargetView* levelRTVs[1] = { a_into->rtv.get() };
@@ -2904,7 +2904,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// fields; the capture pass binds b1 to the VS only.
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel"));
 		SD_DrawBinds peelBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
@@ -2954,7 +2954,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 		// Same merge for the peeled layer, before the next peel reads it;
 		// tops only, nothing reads a peeled layer's bottoms.
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel Merge"));
 		if (heightScrollTopCS)
 			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr, nullptr);
 		else
@@ -2968,7 +2968,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// the previous top, which this run has only read.
 	const bool skyWanted = settings.VolumeSnow && objectSkyOpenCS && objectSkyOpen;
 	auto bakeSkyOpen = [&](Texture2D* a_top) {
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Sky"));
 		context->CSSetShader(objectSkyOpenCS, nullptr, 0);
 		ID3D11ShaderResourceView* openSRV = a_top->srv.get();
 		ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
@@ -3003,7 +3003,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Combine: raw tops/bottoms -> shelter mask (bottomFiltered); bare ground
 	// under floating walkways/roofs/bridges.
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
-	globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Combine"));
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
@@ -3062,7 +3062,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (!roadMaps) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 	} else if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
-		globals::profiler->BeginPass("SnowDeformation::Objects - Height Maps");
+		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Cones"));
 		const auto coarseSteps = activeConeSteps(processData, std::max(maxSeedDepth, processData.ObjectSnowDepth));
 		conePassesCoarse = uint32_t(coarseSteps.size());
 		// The chain lands back in its cone texture only over an even number of

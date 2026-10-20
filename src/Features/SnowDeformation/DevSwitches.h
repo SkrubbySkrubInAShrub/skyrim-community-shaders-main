@@ -12,4 +12,13 @@ namespace SnowDevSwitches
 	{
 		return decalOverlaySplit.load(std::memory_order_relaxed) ? a_part : "SnowDeformation::Decals - Overlay";
 	}
+
+	// heightMapSplit: the same for the Objects - Height Maps row (layer 1,
+	// ghost merge, fine, far, peel, peel merge, combine, cones, sky).
+	inline std::atomic<bool> heightMapSplit{ false };
+
+	inline const char* HeightMapRow(const char* a_part)
+	{
+		return heightMapSplit.load(std::memory_order_relaxed) ? a_part : "SnowDeformation::Objects - Height Maps";
+	}
 }
