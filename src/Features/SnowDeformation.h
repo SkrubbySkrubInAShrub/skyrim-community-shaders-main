@@ -552,8 +552,8 @@ public:
 		float TrenchDetailRoughness = 1.0f;
 		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
 		float TrenchDetailCoverage = 1.75f;
-		/** @brief A/B, default off until judged: a fast foot leaving its print throws a wedge of impact energy back from it (no carve), and the trench detail shows that thrown snow past the trench too. */
-		bool SpeedSpoil = false;
+		/** @brief A fast foot leaving its print throws a wedge of impact energy back from it (no carve), and the trench detail shows that thrown snow past the trench too. */
+		bool SpeedSpoil = true;
 		/** @brief Speed Spoil: the wedge's length and width, as a share of a kick at the actor's speed (0.1-2). */
 		float SpeedSpoilSize = 0.5f;
 		/** @brief "Snow Self-Shadowing": heightfield self-shadow (the 5-tap horizon march over the cached heights) on the ground snow and object snow, faded out toward a grazing sun. Off = only the cascades and the SSS mask shade the snow. A quality-preset lever (Low turns it off). */

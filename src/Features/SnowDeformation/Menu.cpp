@@ -826,7 +826,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("speed_spoil"), "Speed Spoil"), &settings.SpeedSpoil);
 		if (auto _ttSpoil = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "Under test. A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads."));
+			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads."));
 		if (settings.SpeedSpoil) {
 			ImGui::SliderFloat(T(TKEY("speed_spoil_size"), "Spoil Size"), &settings.SpeedSpoilSize, 0.1f, 2.0f, "%.2fx");
 			if (auto _ttSpoilSize = Util::HoverTooltipWrapper())
