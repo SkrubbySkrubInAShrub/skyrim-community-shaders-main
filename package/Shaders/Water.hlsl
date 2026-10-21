@@ -825,6 +825,12 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
+float GetScreenDepthWater(float2 screenPosition)
+{
+	float depth = DepthTex.Load(float3(screenPosition, 0)).x;
+	return (CameraDataWater.w / (-depth * CameraDataWater.z + CameraDataWater.x));
+}
+
 float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
 {
 #			if !defined(DYNAMIC_CUBEMAPS)
@@ -861,7 +867,13 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
 	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
 	float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
-	float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
+	float2 ssrUndistortedUv = (FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw;
+	float2 ssrReflectionUv = ssrUndistortedUv + 0.05 * normal.xy;
+#				if defined(DEPTH) && !defined(VERTEX_ALPHA_DEPTH)
+	float ssrLookupDepth = GetScreenDepthWater(FrameBuffer::DynamicResolutionParams1.xy * (ssrReflectionUv / SSRParams.zw));
+	float waterSurfaceDepth = mul(FrameBuffer::CameraView, float4(input.WPosition.xyz, 1)).z;
+	ssrReflectionUv = lerp(ssrReflectionUv, ssrUndistortedUv, saturate((waterSurfaceDepth - ssrLookupDepth) * 0.5));
+#				endif
 	float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
 	float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
 	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
@@ -876,12 +888,6 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 
 // Effects 11 water: depth over which the surface reaches full opacity at the shore
 static const float ShoreFadeDepth = 12.0;
-
-float GetScreenDepthWater(float2 screenPosition)
-{
-	float depth = DepthTex.Load(float3(screenPosition, 0)).x;
-	return (CameraDataWater.w / (-depth * CameraDataWater.z + CameraDataWater.x));
-}
 
 float3 GetLdotN(float3 normal)
 {
@@ -906,8 +912,8 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 	if (SharedData::enbSettings.EnableWater) {
 		float fresnelExponent = SharedData::enbSettings.WaterFresnelMultiplier;
 		// pow(0, 0) is NaN on GPU
-		float fresnelRI = fresnelExponent != 0.0 ? pow(abs(FresnelRI.x), fresnelExponent) : 1.0;
-		float fresnel = (1 - fresnelRI) * pow(viewAngle, 5) + fresnelRI;
+		float fresnelFalloff = fresnelExponent != 0.0 ? pow(viewAngle, 5.0 * fresnelExponent) : 1.0;
+		float fresnel = (1 - FresnelRI.x) * fresnelFalloff + FresnelRI.x;
 		fresnel = lerp(SharedData::enbSettings.WaterFresnelMin, SharedData::enbSettings.WaterFresnelMax, fresnel);
 		return fresnel * SharedData::enbSettings.WaterReflectionAmount;
 	}
@@ -1024,6 +1030,23 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 #				endif
 	return reflectionMul * sunColor;
 #			endif
+}
+
+float3 GetWaterBackScatter(float3 normal, float3 viewDirection)
+{
+	float3 backScatter = 0.0;
+	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)) {
+		float3 scatterColor = (ShallowColor.xyz + DeepColor.xyz) * 0.5;
+		scatterColor = max(0.0, lerp(dot(scatterColor, 1.0 / 3.0).xxx, scatterColor, 2.0));
+
+		float towardSun = saturate(dot(viewDirection, SharedData::DirLightDirection.xyz));
+		towardSun *= towardSun;
+		towardSun *= towardSun;
+		towardSun *= towardSun;
+
+		backScatter = scatterColor * saturate(dot(normal, -SharedData::DirLightDirection.xyz)) * towardSun * saturate(SharedData::DirLightDirection.z * 4.0) * ShadowSampling::GetDirectionalLighting();
+	}
+	return backScatter;
 }
 #		endif
 
@@ -1230,7 +1253,8 @@ PS_OUTPUT main(PS_INPUT input)
 
 #				if defined(UNDERWATER)
 	float3 finalSpecularColor = lerp(ShallowColor.xyz, specularColor, 0.5);
-	float3 finalColor = saturate(1 - length(input.WPosition.xyz) * 0.002) * ((1 - fresnel) * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
+	float snellWindow = smoothstep(0.6, 0.72, saturate(dot(viewDirection, normal)));
+	float3 finalColor = saturate(1 - length(input.WPosition.xyz) * 0.002) * ((1 - fresnel) * snellWindow * (diffuseColor - finalSpecularColor)) + finalSpecularColor;
 	// Add ripple and splash color effects for underwater
 #					if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
 	// DEBUG MODE: Override water color with debug visualization (darker for underwater)
@@ -1258,6 +1282,8 @@ PS_OUTPUT main(PS_INPUT input)
 		shoreFadedSurface = true;
 #					endif
 	}
+
+	sunColor += GetWaterBackScatter(normal, viewDirection) * surfaceShadow;
 
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * surfaceMul, distanceBlendFactor);
