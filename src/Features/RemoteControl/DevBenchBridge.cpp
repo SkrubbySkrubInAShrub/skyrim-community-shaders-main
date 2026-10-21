@@ -41,7 +41,9 @@ namespace
 {
 	using json = nlohmann::json;
 
-	std::unordered_set<Feature*> g_bootLoadedFeatures;
+	// Main thread only: the only features toggle may switch back on. One off for any other
+	// reason was never loaded, or turned itself off during boot, and must stay off.
+	std::unordered_set<Feature*> g_toggledOffFeatures;
 
 	// Current render frame, used as a coarse "enqueued at" stamp so callers can poll
 	// inspect(kind=state) until frame_count advances past it (i.e. a queued main-thread
@@ -251,9 +253,11 @@ namespace
 			const bool explicitVal = a_args.value("enabled", false);
 			task->AddTask([target, hasExplicit, explicitVal, shortName]() {
 				const bool applied = hasExplicit ? explicitVal : !target->loaded;
-				if (applied && !g_bootLoadedFeatures.contains(target))
+				if (applied && !target->loaded && !g_toggledOffFeatures.contains(target))
 					return;
 				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+				if (target->loaded && !applied)
+					g_toggledOffFeatures.insert(target);
 				target->loaded = applied;
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
@@ -801,10 +805,6 @@ namespace DevBenchBridge
 	 */
 	void Install()
 	{
-		for (auto* feature : Feature::GetFeatureList())
-			if (feature->loaded)
-				g_bootLoadedFeatures.insert(feature);
-
 		auto* dvb = DevBenchAPI::GetDevBenchInterface001();
 		if (!dvb) {
 			logger::info("DevBenchBridge: devbench not present; CS tools not registered");
