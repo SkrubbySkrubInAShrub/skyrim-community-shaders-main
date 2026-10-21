@@ -540,8 +540,12 @@ void ScreenSpaceGI::SetupResources()
 			texIlCoCg[1]->CreateUAV(uavDesc);
 		}
 
-		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R8_UNORM;
 		{
+			UINT aoFormatSupport = 0;
+			const bool aoHighPrecision = SUCCEEDED(device->CheckFormatSupport(DXGI_FORMAT_R16_UNORM, &aoFormatSupport)) &&
+			                             (aoFormatSupport & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW);
+			srvDesc.Format = uavDesc.Format = texDesc.Format = aoHighPrecision ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+
 			texAo[0] = eastl::make_unique<Texture2D>(texDesc, "SSGI::AO[0]");
 			texAo[0]->CreateSRV(srvDesc);
 			texAo[0]->CreateUAV(uavDesc);
@@ -549,7 +553,10 @@ void ScreenSpaceGI::SetupResources()
 			texAo[1] = eastl::make_unique<Texture2D>(texDesc, "SSGI::AO[1]");
 			texAo[1]->CreateSRV(srvDesc);
 			texAo[1]->CreateUAV(uavDesc);
+		}
 
+		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R8_UNORM;
+		{
 			texAccumFrames[0] = eastl::make_unique<Texture2D>(texDesc, "SSGI::AccumFrames[0]");
 			texAccumFrames[0]->CreateSRV(srvDesc);
 			texAccumFrames[0]->CreateUAV(uavDesc);
@@ -647,7 +654,7 @@ void ScreenSpaceGI::CompileComputeShaders()
 
 	std::vector<ShaderCompileInfo>
 		shaderInfos = {
-			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "LINEAR_FILTER", "" } } },
+			{ &prefilterDepthsCompute, "prefilterDepths.cs.hlsl", { { "WEIGHTED_FILTER", "" } } },
 			{ &prefilterRadianceCompute, "prefilterRadiance.cs.hlsl", {} },
 			{ &prefilterNormalCompute, "prefilterNormal.cs.hlsl", {} },
 			{ &radianceDisoccCompute, "radianceDisocc.cs.hlsl", {} },
@@ -921,6 +928,7 @@ void ScreenSpaceGI::DrawSSGI()
 		srvs.at(6) = texIlCoCg[inputGITexIdx]->srv.get();
 		srvs.at(7) = texGiSpecular[inputAoTexIdx]->srv.get();
 		srvs.at(8) = texNormal->srv.get();
+		srvs.at(9) = texAo[inputAoTexIdx]->srv.get();
 
 		uavs.at(0) = texAo[!inputAoTexIdx]->uav.get();
 		uavs.at(1) = texIlY[!inputGITexIdx]->uav.get();

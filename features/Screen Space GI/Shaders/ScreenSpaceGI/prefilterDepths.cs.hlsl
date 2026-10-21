@@ -35,6 +35,15 @@ float DepthMIPFilter(float depth0, float depth1, float depth2, float depth3)
 {
 #ifdef LINEAR_FILTER
 	return (depth0 + depth1 + depth2 + depth3) * 0.25;
+#elif defined(WEIGHTED_FILTER)
+	float maxDepth = max(max(depth0, depth1), max(depth2, depth3));
+	const float effectFalloffRange = 0.615;
+	const float effectRadius = 0.75 * EffectRadius;
+	const float falloffRange = max(effectFalloffRange * effectRadius, 1e-4);
+	const float falloffMul = -1.0 / falloffRange;
+	const float falloffAdd = effectRadius * (1.0 - effectFalloffRange) / falloffRange + 1.0;
+	float4 weights = saturate((maxDepth - float4(depth0, depth1, depth2, depth3)) * falloffMul + falloffAdd);
+	return dot(weights, float4(depth0, depth1, depth2, depth3)) / max(dot(weights, 1.0), 1e-4);
 #elif defined(MAX_FILTER)
 	return max(max(depth0, depth1), max(depth2, depth3));
 #elif defined(MIN_FILTER)

@@ -145,7 +145,7 @@ float2x2 getRotationMatrix(float noise)
 		float3 normalSample = GBuffer::DecodeNormal(normalRoughnessSample.xy);
 
 		// geometry weight
-		w *= saturate(1 - abs(dot(normal, posSample - pos)) * DistanceNormalisation);
+		w *= saturate(1 - abs(dot(normal, posSample - pos)) * DistanceNormalisation * 100.0 / max(pos.z, 1.0));
 		// normal weight
 		w *= 1 - saturate(FastMath::acosFast4(saturate(dot(normalSample, normal))) / halfAngle);
 

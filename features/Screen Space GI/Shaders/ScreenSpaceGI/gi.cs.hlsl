@@ -42,6 +42,7 @@ Texture2D<float4> srcPrevY : register(t5);             // maybe half-res
 Texture2D<float2> srcPrevCoCg : register(t6);          // maybe half-res
 Texture2D<float4> srcPrevGISpecular : register(t7);    // maybe half-res
 Texture2D<float2> srcNormal : register(t8);
+Texture2D<float> srcPrevAo : register(t9);  // maybe half-res
 
 RWTexture2D<unorm float> outAo : register(u0);
 RWTexture2D<float4> outY : register(u1);
@@ -360,6 +361,7 @@ void CalculateGI(
 
 		float4 prevY = srcPrevY[pxCoord];
 		float2 prevCoCg = srcPrevCoCg[pxCoord];
+		float prevAo = srcPrevAo[pxCoord];
 
 		// Clamp history to the local color neighbourhood to prevent ghosting
 		// and reduce pops when disocclusion fires (SVGF, Schied 2017).
@@ -384,8 +386,15 @@ void CalculateGI(
 
 			prevY = clamp(prevY, nMinY, nMaxY);
 			prevCoCg = clamp(prevCoCg, nMinCoCg, nMaxCoCg);
+
+			float aoL = srcPrevAo[pxCoord + int2(-1, 0)];
+			float aoR = srcPrevAo[pxCoord + int2(1, 0)];
+			float aoU = srcPrevAo[pxCoord + int2(0, -1)];
+			float aoD = srcPrevAo[pxCoord + int2(0, 1)];
+			prevAo = clamp(prevAo, min(min(min(aoL, aoR), min(aoU, aoD)), currAo), max(max(max(aoL, aoR), max(aoU, aoD)), currAo));
 		}
 
+		currAo = lerp(prevAo, currAo, lerpFactor);
 		currY = lerp(prevY, currY, lerpFactor);
 		currCoCg = lerp(prevCoCg, currCoCg, lerpFactor);
 #	ifdef GI_SPECULAR
