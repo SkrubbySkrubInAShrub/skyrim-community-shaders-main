@@ -242,6 +242,7 @@ Texture2D<float4> TexUnderwaterMask : register(t3);
 #	endif
 #	if defined(ENVCUBE) && defined(RAIN) && defined(RAIN_REFRACTION)
 Texture2D<float4> TexRaindropNormals : register(t80);
+Texture2D<float4> TexRainBackground : register(t81);
 #	endif
 
 cbuffer PerGeometry : register(b2)
@@ -307,6 +308,20 @@ float3 ShadeLight(ParticleSurface surface, float3 lightColor, float3 L)
 	return lightColor;
 }
 
+#	if defined(REFRACTIVE_RAIN)
+float3 GetRaindropExitDirection(float3 viewDirection, float3 normalWS, float strength)
+{
+	float3 rayDirection = -viewDirection;
+	float cosIncident = saturate(dot(normalWS, viewDirection));
+	float sinIncident = sqrt(saturate(1.0 - cosIncident * cosIncident));
+	float deviation = 2.0 * (asin(sinIncident) - asin(sinIncident / 1.33)) * strength;
+	float3 towardCenter = dot(normalWS, rayDirection) * rayDirection - normalWS;
+	float towardCenterLength = length(towardCenter);
+	float3 towardCenterDirection = towardCenterLength > 1e-4 ? towardCenter / max(towardCenterLength, 1e-4) : 0.0;
+	return rayDirection * cos(deviation) + towardCenterDirection * sin(deviation);
+}
+#	endif
+
 /** @brief Sun color at positionWS after directional, world and cloud shadows. */
 float3 GetDirLightColor(float3 positionWS)
 {
@@ -367,7 +382,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(REFRACTIVE_RAIN)
 	if (SharedData::rainRefractionSettings.Enable) {
-		float4 raindropNormal = TexRaindropNormals.Sample(SampSourceTexture, input.RaindropData.xy);
+		float2 raindropDx = ddx(input.RaindropData.xy);
+		float2 raindropDy = ddy(input.RaindropData.xy);
+		float4 raindropNormal;
+		[branch] if (SharedData::rainRefractionSettings.Supersampling)
+		{
+			static const float2 RaindropSampleOffsets[4] = { float2(-0.375, 0.125), float2(0.125, 0.375), float2(0.375, -0.125), float2(-0.125, -0.375) };
+			raindropNormal = 0.0;
+			[unroll] for (uint sampleIndex = 0; sampleIndex < 4; sampleIndex++)
+			{
+				float2 sampleUV = input.RaindropData.xy + RaindropSampleOffsets[sampleIndex].x * raindropDx + RaindropSampleOffsets[sampleIndex].y * raindropDy;
+				raindropNormal += TexRaindropNormals.SampleGrad(SampSourceTexture, sampleUV, raindropDx * 0.5, raindropDy * 0.5);
+			}
+			raindropNormal *= 0.25;
+		}
+		else
+		{
+			raindropNormal = TexRaindropNormals.SampleGrad(SampSourceTexture, input.RaindropData.xy, raindropDx, raindropDy);
+		}
 		float alpha = saturate(raindropNormal.w * (1.0 - SharedData::rainRefractionSettings.MotionTransparency));
 		clip(alpha - (4.0 / 255.0));
 		raindropNormal.y = 1.0 - raindropNormal.y;
@@ -401,14 +433,37 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			refractDir = -V;
 
 		float3 reflectColor = ColorManagement::SceneToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, reflectDir, 0).xyz);
-		float3 refractColor = ColorManagement::SceneToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, refractDir, 0).xyz);
+		float3 exitDir = GetRaindropExitDirection(V, normalWS, SharedData::rainRefractionSettings.RefractionFactor);
+		float4 exitCS = mul(FrameBuffer::CameraViewProj, float4(exitDir, 0.0));
+		float2 backgroundUV = exitCS.xy / max(exitCS.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		float2 backgroundBlur = FrameBuffer::DynamicResolutionParams1.xy * exp2(max(SharedData::rainRefractionSettings.MotionBluriness - 1.0, 0.0));
+		float2 backgroundDx = ddx(backgroundUV) * backgroundBlur;
+		float2 backgroundDy = ddy(backgroundUV) * backgroundBlur;
+
+		uint backgroundWidth, backgroundHeight, backgroundLevels;
+		TexRainBackground.GetDimensions(0, backgroundWidth, backgroundHeight, backgroundLevels);
+
+		float3 refractColor;
+		[branch] if (SharedData::rainRefractionSettings.ScreenRefraction && backgroundWidth > 0)
+		{
+			float2 edgeDistance = min(backgroundUV, 1.0 - backgroundUV);
+			float screenWeight = exitCS.w > 1e-4 ? saturate(min(edgeDistance.x, edgeDistance.y) * 20.0) : 0.0;
+			float2 backgroundSampleUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(saturate(backgroundUV));
+			float3 screenColor = ColorManagement::SceneToLinear(TexRainBackground.SampleGrad(SampSourceTexture, backgroundSampleUV, backgroundDx, backgroundDy).xyz);
+			float3 cubemapColor = ColorManagement::SceneToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, exitDir, 0).xyz);
+			refractColor = lerp(cubemapColor, screenColor, screenWeight);
+		}
+		else
+		{
+			refractColor = ColorManagement::SceneToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, refractDir, 0).xyz);
+		}
 
 		// The env cubemap only carries faint bounce light, so lights are shaded on the drop directly
 		ParticleSurface drop = { true, normalWS, V, refractDir };
 		float3 directLighting = ShadeLight(drop, GetDirLightColor(posWS.xyz), SharedData::DirLightDirection.xyz);
 		AddPointLighting(posWS.xyz, drop, directLighting);
 
-		psout.Color.xyz = ColorManagement::LinearToScene(lerp(refractColor, reflectColor, fresnel) + directLighting);
+		psout.Color.xyz = ColorManagement::LinearToScene((lerp(refractColor, reflectColor, fresnel) + directLighting) * SharedData::rainRefractionSettings.Brightness);
 		psout.Color.w = alpha;
 		psout.Normal = float4(0, 1, 0, alpha);
 		return psout;

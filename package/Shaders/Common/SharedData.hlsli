@@ -473,7 +473,11 @@ namespace SharedData
 		uint Enable;
 		float MotionStretch;
 		float MotionTransparency;
-		float pad0;
+		uint ScreenRefraction;
+		float RefractionFactor;
+		float MotionBluriness;
+		float Brightness;
+		uint Supersampling;
 	};
 
 	cbuffer FeatureData : register(b6)

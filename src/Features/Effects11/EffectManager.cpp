@@ -335,6 +335,10 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterBoolSetting("Enable", "RAIN", true, false);
 	settingManager.RegisterTimeOfDaySetting("MotionStretch", "RAIN", 0.28f, 0.0f, 1.0f, 0.01f, true);
 	settingManager.RegisterTimeOfDaySetting("MotionTransparency", "RAIN", 0.1f, 0.0f, 1.0f, 0.01f, true);
+	settingManager.RegisterBoolSetting("EnableSupersampling", "RAIN", false, false);
+	settingManager.RegisterFloatSetting("RefractionFactor", "RAIN", 1.0f, 0.0f, 2.0f, 0.01f, false);
+	settingManager.RegisterTimeOfDaySetting("MotionBluriness", "RAIN", 1.0f, 0.0f, 6.0f, 0.01f, true);
+	settingManager.RegisterTimeOfDaySetting("Brightness", "RAIN", 1.0f, 0.0f, 10.0f, 0.01f, true);
 
 	settingManager.RegisterTimeOfDaySetting("Amount", "CLOUDSHADOWS", 0.5f, 0.0f, 4.0f, 0.01f, true);
 
@@ -403,6 +407,8 @@ void EffectManager::RegisterSettings()
 	ids.gammaCurve = settingManager.GetSettingID("GammaCurve", "COLORCORRECTION");
 
 	ids.enableRain = settingManager.GetSettingID("Enable", "RAIN");
+	ids.rainRefractionFactor = settingManager.GetSettingID("RefractionFactor", "RAIN");
+	ids.rainSupersampling = settingManager.GetSettingID("EnableSupersampling", "RAIN");
 }
 
 void EffectManager::ExecuteEffect(EffectBase& a_effect, uint32_t enableSettingID)
