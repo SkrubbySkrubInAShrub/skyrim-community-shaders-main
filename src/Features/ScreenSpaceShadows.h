@@ -31,7 +31,8 @@ public:
 		float ShadowContrast = 1.0f;
 		uint Enable = 1;
 		uint SampleCount = 1;
-		uint pad0[3];
+		uint FilterShadowMask = 1;
+		uint pad0[2];
 	};
 
 	BendSettings bendSettings;
@@ -63,6 +64,34 @@ public:
 	ID3D11ComputeShader* raymarchCS = nullptr;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
+
+	struct alignas(16) ShadowMaskFilterCB
+	{
+		float4 CameraData;
+		float2 DepthScale;
+		float2 RenderSize;
+		float FarDepthValue;
+		float3 pad0;
+	};
+	STATIC_ASSERT_ALIGNAS_16(ShadowMaskFilterCB);
+
+	ConstantBuffer* shadowMaskFilterCB = nullptr;
+	ID3D11ComputeShader* shadowMaskFilterCS = nullptr;
+	Texture2D* filteredShadowMaskTexture = nullptr;
+	uint32_t shadowMaskFrame = UINT32_MAX;
+	bool shadowMaskFilterCompileFailed = false;
+
+	/** @brief Marks the engine shadow mask as rendered this frame so Prepass may filter it. */
+	void OnShadowMaskRendered();
+
+	/**
+	 * @brief Returns the compiled shadow mask filter compute shader, compiling it on first use.
+	 * @return The compiled ID3D11ComputeShader, or nullptr on failure.
+	 */
+	ID3D11ComputeShader* GetShadowMaskFilterCS();
+
+	/** @brief Applies a depth-aware blur to the engine shadow mask in place. */
+	void FilterShadowMask();
 
 	/** @brief Creates the raymarch constant buffer, point border sampler, and shadow output texture. */
 	virtual void SetupResources() override;

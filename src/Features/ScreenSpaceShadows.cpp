@@ -1,5 +1,7 @@
 #include "ScreenSpaceShadows.h"
 
+#include <DirectXTex.h>
+
 #include "Features/TerrainBlending.h"
 #include "I18n/I18n.h"
 #include "State.h"
@@ -20,7 +22,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SampleCount,
 	SurfaceThickness,
 	BilinearThreshold,
-	ShadowContrast)
+	ShadowContrast,
+	FilterShadowMask)
 
 void ScreenSpaceShadows::DrawSettings()
 {
@@ -45,6 +48,10 @@ void ScreenSpaceShadows::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shadow_contrast_tooltip"), "Contrast boost for the shadow transition. Higher values produce harder shadow edges."));
 
+		ImGui::Checkbox(T(TKEY("filter_shadow_mask"), "Filter Shadow Mask"), (bool*)&bendSettings.FilterShadowMask);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("filter_shadow_mask_tooltip"), "Applies a depth-aware blur to the sun and light shadow mask, softening shadow map aliasing without bleeding across object edges."));
+
 		ImGui::Spacing();
 		ImGui::Spacing();
 		ImGui::TreePop();
@@ -62,6 +69,16 @@ void ScreenSpaceShadows::InvalidateRaymarchShaders()
 void ScreenSpaceShadows::ClearShaderCache()
 {
 	InvalidateRaymarchShaders();
+	if (shadowMaskFilterCS) {
+		shadowMaskFilterCS->Release();
+		shadowMaskFilterCS = nullptr;
+	}
+	shadowMaskFilterCompileFailed = false;
+}
+
+void ScreenSpaceShadows::OnShadowMaskRendered()
+{
+	shadowMaskFrame = globals::state->frameCount;
 }
 
 uint ScreenSpaceShadows::GetScaledSampleCount()
@@ -101,6 +118,107 @@ ID3D11ComputeShader* ScreenSpaceShadows::GetComputeRaymarch()
 		raymarchCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0");
 	}
 	return raymarchCS;
+}
+
+ID3D11ComputeShader* ScreenSpaceShadows::GetShadowMaskFilterCS()
+{
+	if (!shadowMaskFilterCS && !shadowMaskFilterCompileFailed) {
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (globals::features::terrainBlending.loaded)
+			defines.push_back({ "TERRAIN_BLENDING", "" });
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		if (filteredShadowMaskTexture && filteredShadowMaskTexture->uav)
+			filteredShadowMaskTexture->uav->GetDesc(&uavDesc);
+		if (DirectX::FormatDataType(uavDesc.Format) == DirectX::FORMAT_TYPE_UNORM)
+			defines.push_back({ "SHADOW_MASK_UNORM", "" });
+		shadowMaskFilterCS = (ID3D11ComputeShader*)Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\ShadowMaskFilterCS.hlsl", defines, "cs_5_0");
+		if (!shadowMaskFilterCS) {
+			logger::error("[SSS] Failed to compile the shadow mask filter shader, shadow mask filtering disabled");
+			shadowMaskFilterCompileFailed = true;
+		}
+	}
+	return shadowMaskFilterCS;
+}
+
+void ScreenSpaceShadows::FilterShadowMask()
+{
+	auto renderer = globals::game::renderer;
+	if (!filteredShadowMaskTexture || !renderer)
+		return;
+
+	auto& shadowMask = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+	auto* depthSRV = Util::GetCurrentSceneDepthSRV(false);
+	if (!shadowMask.texture || !shadowMask.SRV || !depthSRV)
+		return;
+
+	auto shader = GetShadowMaskFilterCS();
+	if (!shader)
+		return;
+
+	ZoneScopedS(8);
+	TracyD3D11Zone(globals::state->tracyCtx, "SSS - Shadow Mask Filter");
+	globals::profiler->BeginPass("ScreenSpaceShadows::ShadowMaskFilter");
+
+	auto context = globals::d3d::context;
+
+	D3D11_TEXTURE2D_DESC maskDesc{};
+	shadowMask.texture->GetDesc(&maskDesc);
+
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	{
+		winrt::com_ptr<ID3D11Resource> depthResource;
+		depthSRV->GetResource(depthResource.put());
+		winrt::com_ptr<ID3D11Texture2D> depthTexture;
+		if (depthResource && depthResource.try_as(depthTexture) && depthTexture)
+			depthTexture->GetDesc(&depthDesc);
+	}
+	if (!depthDesc.Width || !depthDesc.Height)
+		depthDesc = maskDesc;
+
+	const float2 maskSize = { (float)maskDesc.Width, (float)maskDesc.Height };
+	const float2 renderSize = Util::ConvertToDynamic(maskSize, true);
+	const uint copyWidth = std::min((uint)std::ceil(renderSize.x), maskDesc.Width);
+	const uint copyHeight = std::min((uint)std::ceil(renderSize.y), maskDesc.Height);
+	if (!copyWidth || !copyHeight) {
+		globals::profiler->EndPass();
+		return;
+	}
+
+	ShadowMaskFilterCB data{};
+	data.CameraData = Util::GetCameraData();
+	data.DepthScale = { (float)depthDesc.Width / maskSize.x, (float)depthDesc.Height / maskSize.y };
+	data.RenderSize = { (float)copyWidth, (float)copyHeight };
+	data.FarDepthValue = 1.0f;
+	shadowMaskFilterCB->Update(data);
+
+	ID3D11ShaderResourceView* views[2] = { shadowMask.SRV, depthSRV };
+	context->CSSetShaderResources(0, 2, views);
+
+	auto uav = filteredShadowMaskTexture->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+	auto buffer = shadowMaskFilterCB->CB();
+	context->CSSetConstantBuffers(0, 1, &buffer);
+
+	context->CSSetShader(shader, nullptr, 0);
+	context->Dispatch((copyWidth + 7) / 8, (copyHeight + 7) / 8, 1);
+
+	views[0] = nullptr;
+	views[1] = nullptr;
+	context->CSSetShaderResources(0, 2, views);
+
+	uav = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+	buffer = nullptr;
+	context->CSSetConstantBuffers(0, 1, &buffer);
+
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	D3D11_BOX box{ 0, 0, 0, copyWidth, copyHeight, 1 };
+	context->CopySubresourceRegion(shadowMask.texture, 0, 0, 0, 0, filteredShadowMaskTexture->resource.get(), 0, &box);
+
+	globals::profiler->EndPass();
 }
 
 void ScreenSpaceShadows::DrawShadows()
@@ -232,6 +350,9 @@ void ScreenSpaceShadows::Prepass()
 {
 	auto context = globals::d3d::context;
 
+	if (bendSettings.FilterShadowMask && shadowMaskFrame == globals::state->frameCount)
+		FilterShadowMask();
+
 	float white[4] = { 1, 1, 1, 1 };
 	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
 
@@ -312,6 +433,41 @@ void ScreenSpaceShadows::SetupResources()
 		screenSpaceShadowsTexture = new Texture2D(texDesc, "SSS::ShadowTexture");
 		screenSpaceShadowsTexture->CreateSRV(srvDesc);
 		screenSpaceShadowsTexture->CreateUAV(uavDesc);
+	}
+
+	shadowMaskFilterCB = new ConstantBuffer(ConstantBufferDesc<ShadowMaskFilterCB>(), "SSS::ShadowMaskFilterCB");
+
+	{
+		auto device = globals::d3d::device;
+		auto shadowMask = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK];
+
+		D3D11_TEXTURE2D_DESC texDesc{};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+
+		shadowMask.texture->GetDesc(&texDesc);
+		shadowMask.SRV->GetDesc(&srvDesc);
+
+		UINT formatSupport = 0;
+		if (texDesc.SampleDesc.Count == 1 &&
+			SUCCEEDED(device->CheckFormatSupport(srvDesc.Format, &formatSupport)) &&
+			(formatSupport & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW)) {
+			texDesc.MipLevels = 1;
+			texDesc.ArraySize = 1;
+			texDesc.Usage = D3D11_USAGE_DEFAULT;
+			texDesc.CPUAccessFlags = 0;
+			texDesc.MiscFlags = 0;
+			texDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = srvDesc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			filteredShadowMaskTexture = new Texture2D(texDesc, "SSS::FilteredShadowMask");
+			filteredShadowMaskTexture->CreateUAV(uavDesc);
+		} else {
+			logger::warn("[SSS] Shadow mask format {} has no typed UAV support, shadow mask filter disabled", magic_enum::enum_name(srvDesc.Format));
+		}
 	}
 }
 #undef I18N_KEY_PREFIX

@@ -25,6 +25,7 @@
 #include "Features/PostProcessing.h"
 #include "Features/RainRefraction.h"
 #include "Features/RemoteControl/NvPerf.h"
+#include "Features/ScreenSpaceShadows.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Skylighting.h"
@@ -164,6 +165,12 @@ void State::Draw()
 
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
+				constexpr auto shadowMaskFlags = static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask) |
+				                                 static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskSpot) |
+				                                 static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskPb) |
+				                                 static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmaskDpb);
+				if (currentPixelDescriptor & shadowMaskFlags)
+					globals::features::screenSpaceShadows.OnShadowMaskRendered();
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
 					if (volumetricShadows.loaded)
 						volumetricShadows.CopyShadowLightData();

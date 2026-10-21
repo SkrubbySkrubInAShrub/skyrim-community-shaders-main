@@ -2550,6 +2550,8 @@
     "feature.screen_space_shadows.description": "Screen Space Shadows enhances shadow quality by adding detailed contact shadows and improving shadow accuracy.\nThis technique adds fine-detail shadows that traditional shadow mapping might miss.",
     "feature.screen_space_shadows.enable": "Enable",
     "feature.screen_space_shadows.enable_tooltip": "Enable screen-space contact shadows from the sun/moon direction.",
+    "feature.screen_space_shadows.filter_shadow_mask": "Filter Shadow Mask",
+    "feature.screen_space_shadows.filter_shadow_mask_tooltip": "Applies a depth-aware blur to the sun and light shadow mask, softening shadow map aliasing without bleeding across object edges.",
     "feature.screen_space_shadows.general": "General",
     "feature.screen_space_shadows.key_feature_1": "Enhanced contact shadows",
     "feature.screen_space_shadows.key_feature_2": "Improved shadow detail",
