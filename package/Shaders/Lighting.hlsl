@@ -1150,6 +1150,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		&& LANDSCAPE_PARALLAX_ENABLED
 #			endif
 	) {
+#			if defined(LANDSCAPE)
 		float3 ndx = ddx(vertexNormal);
 		float3 ndy = ddy(vertexNormal);
 		float3 fdx = ddx(input.WorldPosition.xyz);
@@ -1158,21 +1159,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float normalDelta = length(max(abs(ndx), abs(ndy))) * fragSize;
 		float3 flatWorldNormal = normalize(-cross(fdx, fdy));
 		normalSmoothness = saturate(1.0 - dot(vertexNormal, flatWorldNormal));
-#			if defined(LANDSCAPE)
 		curvature = sqrt(normalDelta);
 		displacementParams[0].HeightScale = saturate(1.0 - curvature);
 		displacementParams[0].FlattenAmount = (normalSmoothness + curvature);
 #			else
-		// Objects: do not crush HeightScale (that flattens convex faces you are looking at).
-		// Only add FlattenAmount past the facing hemisphere (grazing > facing) and only if bent.
-		// Flat walls stay at bend ≈ 0. Flatten tracks UV stretch (÷ facing).
-		curvature = normalDelta;
-		float facing = saturate(dot(vertexNormal, viewDirection));
-		float grazing = 1.0 - facing;
-		float bend = saturate(normalSmoothness + curvature);
-		float silhouette = saturate(grazing - facing);
-		// Cap FlattenAmount: ÷facing tracks UV stretch but can explode at grazing (~14× at the 0.0625 floor).
-		displacementParams.FlattenAmount = saturate(silhouette * bend * rcp(max(facing, 0.0625)));
+		displacementParams.FlattenAmount = ExtendedMaterials::GetObjectFlattenAmount(vertexNormal, input.WorldPosition.xyz, viewDirection);
 #			endif
 	}
 #		endif
@@ -1205,23 +1196,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	MESH_TV_SAMPLE(envMaskSample, TexEnvMaskSampler, SampEnvMaskSampler, uv);
 	float envMaskBase = envMaskSample.x;
 	if (SharedData::extendedMaterialSettings.EnableComplexMaterial) {
-		const float kMaskEpsilon = (4.0 / 255.0);
-
 		const float4 mipSample = TexEnvMaskSampler.SampleLevel(SampEnvMaskSampler, uv, 15);
-		complexMaterial = mipSample.w < (1.0 - kMaskEpsilon);
-
-		const bool grayscaleMask = (abs(mipSample.x - mipSample.y) < kMaskEpsilon) &&
-		                           (abs(mipSample.x - mipSample.z) < kMaskEpsilon) &&
-		                           (abs(mipSample.y - mipSample.z) < kMaskEpsilon);
-		// Preserve height-only masks while rejecting grayscale environment masks
-		const bool solidBlackHeightMask = all(mipSample.xyz < kMaskEpsilon) &&
-		                                  mipSample.w > kMaskEpsilon &&
-		                                  mipSample.w < (1.0 - kMaskEpsilon);
-		if (grayscaleMask && !solidBlackHeightMask)
-			complexMaterial = false;
+		complexMaterial = ExtendedMaterials::IsComplexMaterial(mipSample);
 
 		if (complexMaterial) {
-			if (envMaskSample.w > kMaskEpsilon && envMaskSample.w < (1.0 - kMaskEpsilon)) {
+			if (ExtendedMaterials::HasComplexHeight(envMaskSample.w)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler);
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, applyMeshTV, meshOffset, pixelOffset);
@@ -1778,7 +1757,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 triWeights = Triplanar::GetWeights(tbnTr[2], triFaceNormal);
 	float projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x;
 #		if defined(SNOW_DEFORMATION) && defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
-	projNoise = SnowLighting::ParallaxProjNoise(projNoise, input.WorldPosition.xyz, triWeights, uv, uvOriginal);
+	projNoise = SnowLighting::ParallaxProjNoise(snowState, projNoise, input.WorldPosition.xyz, triWeights, uv, uvOriginal);
 #		endif
 	float3 texProj = normalize(input.TexProj);
 #		if defined(TREE_ANIM) || defined(LODOBJECTSHD)

@@ -14,7 +14,7 @@
 
 // Statics.cpp: runtime shader compile returning the bytecode (input layouts
 // need it), and the vertex position size a vertex descriptor implies.
-ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr, const char* a_extraDefine5 = nullptr);
+ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr, const char* a_extraDefine5 = nullptr, const char* a_extraDefine6 = nullptr);
 uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 
 struct SnowDeformation : Feature
@@ -2306,6 +2306,10 @@ public:
 		bool matoSnow;
 		/** @brief The capturing pass's technique is one whose paint Snow Follows Parallax can move (envmap's complex material, TruePBR displacement): Lighting may read the projection noise off the mesh there. StaticsCB::ParallaxFollow. */
 		bool mayParallax;
+		/** @brief Snow Follows Parallax: the object's height map as Extended Materials marches it (TruePBR displacement or the complex-material env mask), null without one or with the setting off; parallaxUV/parallax fill StaticsCB::ObjParallaxUV/ObjParallax. */
+		winrt::com_ptr<ID3D11ShaderResourceView> parallaxSRV;
+		float4 parallaxUV = {};
+		float4 parallax = {};
 		/** @brief SmoothedNormalsFor's entry, valid in frame smoothFrame while smoothResets matches smoothedNormalsResets. */
 		SmoothedNormalsEntry* smoothEntry = nullptr;
 		uint32_t smoothFrame = UINT32_MAX;
@@ -2549,6 +2553,11 @@ public:
 		float LODBatch;
 		/** @brief CapturedSnowStatic::snowTex as 0/1: the coat follows Lighting's written verdict alone, never a reconstruction. Took the padLODCells slot, so the buffer layout is untouched. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float TexturedSnow;
+
+		/** @brief Snow Follows Parallax, read by the SNOW_COAT_PARALLAX variants: the object's uv transform, Lighting's TexcoordOffset (offset xy, scale zw). Mirror in SnowStaticsShell.hlsl. */
+		float4 ObjParallaxUV;
+		/** @brief x HeightScale (0 = no parallax), y the height channel (0 TruePBR displacement, 3 complex-material env mask), zw the dims scale and mip shift that make ExtendedMaterials::GetMipLevelFromDims the source's own mip rule. Mirror in SnowStaticsShell.hlsl. */
+		float4 ObjParallax;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -3585,6 +3594,14 @@ public:
 	ID3D11PixelShader* staticsPSDrapePrepass = nullptr;
 	/** @brief The drapes' print twin (SNOW_OBJECT_PRINTS): the no-export drape PS plus the rim around a bare print. Chosen per draw where the print map holds prints under it; a compile failure keeps those drapes on staticsPSDrapeNoDepth. */
 	ID3D11PixelShader* staticsPSDrapePrintsNoDepth = nullptr;
+	/** @brief Snow Follows Parallax (SNOW_COAT_PARALLAX): the skin VS that also carries the object's uv and tangent frame, and the drape and print-twin shading PS that march the object's parallax and read the coat's material where it lands. Both loops of a drape with a height map take this VS; a compile failure keeps it on the plain pair. */
+	ID3D11VertexShader* staticsVSParallax = nullptr;
+	winrt::com_ptr<ID3DBlob> staticsVSParallaxBlob;
+	ID3D11PixelShader* staticsPSDrapeParallax = nullptr;
+	ID3D11PixelShader* staticsPSDrapePrintsParallax = nullptr;
+	bool coatParallaxTried = false;
+	/** @brief Compiles the three on first use (the setting on); true when the VS and the drape PS exist. */
+	bool EnsureCoatParallaxShaders();
 	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */
 	struct alignas(16) SkinCullBound
 	{
@@ -3765,6 +3782,9 @@ public:
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
 	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
 	ID3D11InputLayout* StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILParallaxCache;
+	/** @brief The same against staticsVSParallax, adding TEXCOORD0 and BINORMAL; null (cached) for descriptors without uv or tangents. */
+	ID3D11InputLayout* StaticsParallaxInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 
 	/** @brief Prop contact field (MESH-CONTACT-PLAN Route B, rigid half): moving props' render meshes rasterized from above, MIN-blended world Z per column, over a fine window around the deformation centre. R32G32F: R = bodies (Snow Resistance applies), G = loose props. Per frame, never accumulated; the stamp pass carves from it per texel. */
 	Texture2D* contactHeight = nullptr;

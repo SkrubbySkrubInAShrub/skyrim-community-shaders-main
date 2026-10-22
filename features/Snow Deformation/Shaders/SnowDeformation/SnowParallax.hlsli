@@ -261,7 +261,15 @@ static float2 g_snowParallaxBaseUV;
 // the depth the march resolves is the depth of the grain actually drawn.
 float EMParallaxCustomHeight(float2 uv, float mip)
 {
+#	ifdef SNOW_COAT_PARALLAX
+	// The object's own march (Snow Follows Parallax).
+	[branch] if (gObjectParallaxMarch)
+		return ObjectParallaxHeight(uv, mip);
+	else
+		return SampleSnowHeight(g_snowParallaxTaps, uv - g_snowParallaxBaseUV, mip);
+#	else
 	return SampleSnowHeight(g_snowParallaxTaps, uv - g_snowParallaxBaseUV, mip);
+#	endif
 }
 
 // Parallax occlusion march: Extended Materials' OWN GetParallaxCoords

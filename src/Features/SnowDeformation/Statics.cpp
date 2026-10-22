@@ -10,10 +10,12 @@
 
 #include "Deferred.h"
 #include "Features/ExponentialHeightFog.h"
+#include "Features/ExtendedMaterials.h"
 #include "Features/IBL.h"
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Utils/D3D.h"
 
 #include <bit>
@@ -1275,11 +1277,44 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	}
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed && !snowTexOverlay;
-	// The techniques whose paint Snow Follows Parallax can move (complex material
-	// and TruePBR displacement); vanilla parallax shapes paint nothing.
-	const bool mayParallax = (0x3F & (a_rawTechnique >> 24)) == static_cast<uint32_t>(SIE::ShaderCache::LightingShaderTechniques::Envmap) ||
-	                         (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+	// Snow Follows Parallax: the height map Extended Materials marches for this
+	// draw, read from the material as CS's TruePBR and the game bind it - the
+	// displacement, or the env mask a complex material keeps its height in -
+	// and the scale, channel and mip rule Lighting gives it. Vanilla parallax
+	// shapes paint nothing; object LOD takes no parallax.
+	winrt::com_ptr<ID3D11ShaderResourceView> parallaxSRV;
+	float4 parallaxUV = {};
+	float4 parallax = {};
+	if (settings.SnowFollowsParallax && !lodBatch && globals::features::extendedMaterials.loaded) {
+		const auto& em = globals::features::extendedMaterials.settings;
+		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		RE::NiSourceTexture* height = nullptr;
+		if (material && material->GetFeature() == BSLightingShaderMaterialPBR::FEATURE) {
+			auto* pbr = static_cast<BSLightingShaderMaterialPBR*>(material);
+			if (em.EnableParallax && pbr->displacementTexture != nullptr && pbr->displacementTexture != globals::game::graphicsState->GetRuntimeData().defaultTextureBlack &&
+				!pbr->pbrFlags.any(PBRFlags::InterlayerParallax)) {
+				height = pbr->displacementTexture.get();
+				parallax = { pbr->GetDisplacementScale(), 0.0f, 2.0f, 1.0f };
+			}
+		} else if (material && material->GetFeature() == RE::BSShaderMaterial::Feature::kEnvironmentMap && (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
+			auto* envmap = static_cast<RE::BSLightingShaderMaterialEnvmap*>(material);
+			if (em.EnableComplexMaterial && envmap->envMaskTexture) {
+				height = envmap->envMaskTexture.get();
+				parallax = { 1.0f, 3.0f, 1.0f, 0.0f };
+			}
+		}
+		if (height && height->rendererTexture && height->rendererTexture->resourceView) {
+			parallaxSRV.copy_from(height->rendererTexture->resourceView);
+			const uint32_t transform = globals::game::smState->textureTransformCurrentBuffer;
+			parallaxUV = { material->texCoordOffset[transform].x, material->texCoordOffset[transform].y,
+				material->texCoordScale[transform].x, material->texCoordScale[transform].y };
+		}
+	}
+	const bool mayParallax = parallaxSRV != nullptr;
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, projNoiseWeight, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow, mayParallax });
+	capturedStatics.back().parallaxSRV = std::move(parallaxSRV);
+	capturedStatics.back().parallaxUV = parallaxUV;
+	capturedStatics.back().parallax = parallax;
 	capturedRoads += road ? 1u : 0u;
 	capturedLoaded += lodBatch ? 0u : 1u;
 }
@@ -1314,7 +1349,7 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4, const char* a_extraDefine5)
+ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4, const char* a_extraDefine5, const char* a_extraDefine6)
 {
 	// Blob disk cache (see ShaderPrime.cpp): the fixed flag set below is part
 	// of the "sdblob" env token, and the full key round-trips through the
@@ -1328,6 +1363,8 @@ ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, cons
 		defs += std::format(";{}", a_extraDefine4);
 	if (a_extraDefine5)
 		defs += std::format(";{}", a_extraDefine5);
+	if (a_extraDefine6)
+		defs += std::format(";{}", a_extraDefine6);
 	const auto pathUtf8 = Util::WStringToString(a_path);
 	const auto cacheFile = std::format("{}_{}_blob_{:016x}.bin",
 		std::filesystem::path(a_path).stem().string(), a_target,
@@ -1372,6 +1409,7 @@ ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, cons
 		{ a_extraDefine3 ? a_extraDefine3 : "DX11", "" },
 		{ a_extraDefine4 ? a_extraDefine4 : "DX11", "" },
 		{ a_extraDefine5 ? a_extraDefine5 : "DX11", "" },
+		{ a_extraDefine6 ? a_extraDefine6 : "DX11", "" },
 		{ "WINPC", "" },
 		{ "DX11", "" },
 		{ nullptr, nullptr }
@@ -4271,8 +4309,11 @@ void SnowDeformation::DrawCapturedStatics()
 	// the rim term tessellates it to the cap everywhere (its cone is under
 	// the 4-unit "rim is near" threshold on every texel).
 	bool skinStagesTess = false;
+	// The Snow Follows Parallax VS is bound (drapes with a height map).
+	bool skinVSParallax = false;
 	auto bindSkinStages = [&](bool a_tess) {
 		skinStagesTess = a_tess;
+		skinVSParallax = false;
 		if (a_tess) {
 			context->VSSetShader(staticsTessVS, nullptr, 0);
 			context->HSSetShader(staticsHS, nullptr, 0);
@@ -4500,9 +4541,13 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11ShaderResourceView* smoothSRV;
 		// A drape over prints: shaded by the print twin.
 		bool prints;
+		// Snow Follows Parallax: a drape with a height map draws through the
+		// parallax VS with this layout (null otherwise).
+		ID3D11InputLayout* layoutParallax;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
+	const bool coatParallax = settings.SnowFollowsParallax && EnsureCoatParallaxShaders();
 	// Grown a frame late from what the last frame asked for: the allocation
 	// below has to hand out ranges before the total is known.
 	EnsureClusterResources(clusterScratchNeeded);
@@ -4611,7 +4656,8 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? smooth->boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound) });
+			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound),
+			(coatParallax && s4Shell && cap.parallaxSRV) ? StaticsParallaxInputLayoutFor(descKey, desc) : nullptr });
 		printTwinDraws += skinDraws.back().prints ? 1u : 0u;
 	}
 	printTwinDrawsLast = printTwinDraws;
@@ -4824,6 +4870,10 @@ void SnowDeformation::DrawCapturedStatics()
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinRecords[si]);
 		skinRecords[si].SkinSssSeen = skinSssMarch ? 1.0f : 0.0f;
+		if (d.layoutParallax) {
+			skinRecords[si].ObjParallaxUV = d.cap->parallaxUV;
+			skinRecords[si].ObjParallax = d.cap->parallax;
+		}
 		// Debug views only. Stable per object: the submission order moves
 		// with the camera.
 		skinRecords[si].DebugSkinId = 0.0f;
@@ -4841,6 +4891,7 @@ void SnowDeformation::DrawCapturedStatics()
 		boundStaticsPS = nullptr;
 		uint32_t drawIndex = 0;
 		bool boundDecal = false;
+		ID3D11ShaderResourceView* boundParallaxSRV = nullptr;
 		SD_DrawBinds binds;
 		for (const auto& d : skinDraws) {
 			const auto& cap = *d.cap;
@@ -4863,7 +4914,7 @@ void SnowDeformation::DrawCapturedStatics()
 					context->RSSetViewports(vpCount, boundDecal ? decalVps : vps);
 			}
 			[[maybe_unused]] auto* geometry = d.geometry;
-			binds.Layout(context, d.layout);
+			binds.Layout(context, d.layoutParallax ? d.layoutParallax : d.layout);
 			binds.Vertex(context, d.vb, d.stride);
 			// Cluster skins draw the compacted stream; everything else draws
 			// the mesh's own indices, as before.
@@ -4879,6 +4930,19 @@ void SnowDeformation::DrawCapturedStatics()
 			const bool wantTess = tessellateSkins && !d.s4Shell;
 			if (wantTess != skinStagesTess)
 				bindSkinStages(wantTess);
+			// Both loops: the prepass and the shading draw must raster the same VS.
+			const bool wantParallaxVS = !wantTess && d.layoutParallax != nullptr;
+			if (wantParallaxVS != skinVSParallax) {
+				context->VSSetShader(wantParallaxVS ? staticsVSParallax : staticsVS, nullptr, 0);
+				skinVSParallax = wantParallaxVS;
+			}
+			if (!a_prepass) {
+				ID3D11ShaderResourceView* parallaxSRV = d.layoutParallax ? cap.parallaxSRV.get() : nullptr;
+				if (parallaxSRV != boundParallaxSRV) {
+					context->PSSetShaderResources(59, 1, &parallaxSRV);
+					boundParallaxSRV = parallaxSRV;
+				}
+			}
 			if (skinRecordsLive) {
 				BindStaticsRecord(recordIndex, true, wantTess, skinParity);
 			} else {
@@ -4891,6 +4955,8 @@ void SnowDeformation::DrawCapturedStatics()
 			// drapes over prints shade through the print twin.
 			const bool drapePS = d.s4Shell && staticsDebugView == 0;
 			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth : staticsPSDrapeNoDepth;
+			if (d.layoutParallax)
+				drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? (staticsPSDrapePrintsParallax ? staticsPSDrapePrintsParallax : staticsPSDrapePrintsNoDepth) : staticsPSDrapeParallax;
 			ID3D11PixelShader* wantPS = nullptr;
 			if (a_prepass)
 				wantPS = (drapePS && staticsPSDrapePrepass) ? staticsPSDrapePrepass : staticsPSPrepassNoDepth;
@@ -5043,6 +5109,7 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(59, 1, &nullSmoothSRV);
 	context->HSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(24, 1, &nullSmoothSRV);
@@ -5495,6 +5562,53 @@ ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, co
 		globals::d3d::device->CreateInputLayout(elements, 2, staticsVSBlob->GetBufferPointer(), staticsVSBlob->GetBufferSize(), layout.put());
 	}
 	return layout.get();
+}
+
+ID3D11InputLayout* SnowDeformation::StaticsParallaxInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
+{
+	using Vertex = RE::BSGraphics::Vertex;
+	if (!staticsVSParallaxBlob || !a_desc.HasFlag(Vertex::VF_UV) || !a_desc.HasFlag(Vertex::VF_TANGENT))
+		return nullptr;
+	auto& layout = staticsILParallaxCache[a_descKey];
+	if (!layout) {
+		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
+		// Lighting's own attributes: the tangent frame spans POSITION.w, NORMAL.w and BINORMAL.
+		D3D11_INPUT_ELEMENT_DESC elements[4] = {
+			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, a_desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "BINORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(Vertex::VA_BINORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		};
+		globals::d3d::device->CreateInputLayout(elements, 4, staticsVSParallaxBlob->GetBufferPointer(), staticsVSParallaxBlob->GetBufferSize(), layout.put());
+	}
+	return layout.get();
+}
+
+bool SnowDeformation::EnsureCoatParallaxShaders()
+{
+	if (!coatParallaxTried) {
+		coatParallaxTried = true;
+		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
+		const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
+		const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SNOW_COAT_PARALLAX"));
+		if (blob && SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsVSParallax))) {
+			staticsVSParallaxBlob = blob;
+			Util::SetResourceName(staticsVSParallax, "SnowDeformation::StaticsShellVS Parallax");
+		}
+		blob = nullptr;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX"));
+		if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapeParallax)))
+			Util::SetResourceName(staticsPSDrapeParallax, "SnowDeformation::StaticsShellPS Drape Parallax");
+		blob = nullptr;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS", "SNOW_COAT_PARALLAX"));
+		if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrintsParallax)))
+			Util::SetResourceName(staticsPSDrapePrintsParallax, "SnowDeformation::StaticsShellPS Drape Prints Parallax");
+		logger::info("[SNOW DEFORMATION] Snow Follows Parallax coat shaders: VS {}, drape {}, prints {}",
+			staticsVSParallax ? "ok" : "FAILED", staticsPSDrapeParallax ? "ok" : "FAILED", staticsPSDrapePrintsParallax ? "ok" : "FAILED");
+	}
+	return staticsVSParallax && staticsPSDrapeParallax;
 }
 
 // The engine's own list of live water bodies: every loaded cell's water and

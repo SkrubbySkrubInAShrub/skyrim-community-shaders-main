@@ -18,6 +18,9 @@
 // MaterialProperties.
 #	include "Common/PBR.hlsli"
 #endif
+#if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
+#	include "SnowDeformation/SnowParallaxFollow.hlsli"
+#endif
 
 namespace SnowLighting
 {
@@ -28,6 +31,8 @@ namespace SnowLighting
 		// as snow and the swap ran; the albedo is saved for the write tail.
 		bool projMatch;
 		float3 projAlbedo;
+		// Snow Follows Parallax: mesh point to the parallax texel, in world units.
+		float3 parallaxShift;
 		// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
 		bool underWater;
 		// Snow Trenches on Objects: the print's depth share here.
@@ -420,37 +425,33 @@ namespace SnowLighting
 	}
 
 #	if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
-	// Snow Follows Parallax: the projection's noise, which shapes the paint's
-	// edge, read at the mesh point whose texel Extended Materials' parallax
-	// drew here, so the paint and the coat that copies its verdict stay on the
-	// drawn surface instead of the mesh. The uv shift reaches world through the
-	// inverse screen Jacobian of the geometric uv; the gradients stay the
-	// mesh's, or every step in the parallax would blow the mip up. Vanilla
-	// parallax shapes paint nothing, so for them this is dead code.
-	float ParallaxProjNoise(float projNoise, float3 worldRel, float3 triWeights, float2 uv, float2 uvOriginal)
+	// Snow Follows Parallax: the projected snow at the mesh point whose texel
+	// Extended Materials' parallax drew here, so the paint, its texture and
+	// the coat that copies its verdict stay on the drawn surface instead of
+	// the mesh. Records the shift for the recolor and returns the noise, which
+	// shapes the paint's edge, read there; gradients stay the mesh's, or every
+	// step in the parallax would blow the mip up. Vanilla parallax shapes
+	// paint nothing, so for them this is dead code.
+	float ParallaxProjNoise(inout State s, float projNoise, float3 worldRel, float3 triWeights, float2 uv, float2 uvOriginal)
 	{
 		[branch] if (SharedData::snowDeformationSettings.ParallaxFollow > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 		{
 			// Fine derivatives: the coarse ones Lighting takes elsewhere would be
 			// merged with these and held live across the shader (+1 register).
-			const float2 uvDx = ddx_fine(uvOriginal);
-			const float2 uvDy = ddy_fine(uvOriginal);
 			const float3 pDx = ddx_fine(worldRel);
 			const float3 pDy = ddy_fine(worldRel);
-			const float2 shift = uv - uvOriginal;
-			const float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
-			bool follow = any(shift != 0.0) && det * det > 1e-6 * dot(uvDx, uvDx) * dot(uvDy, uvDy);
+			s.parallaxShift = SnowParallaxFollow::UVShiftToWorld(uv - uvOriginal, ddx_fine(uvOriginal), ddy_fine(uvOriginal), pDx, pDy);
 #		if defined(TRUE_PBR)
 			// An interlayer shift shows the layer under the coat; the snow lies on the coat.
-			follow = follow && (PBRFlags & PBR::Flags::InterlayerParallax) == 0;
+			[flatten] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
+				s.parallaxShift = 0.0;
 #		endif
-			[branch] if (follow)
+			[branch] if (any(s.parallaxShift != 0.0))
 			{
-				const float2 px = float2(uvDy.y * shift.x - uvDy.x * shift.y, uvDx.x * shift.y - uvDx.y * shift.x) / det;
-				const float3 p = worldRel + FrameBuffer::CameraPosAdjust.xyz + pDx * px.x + pDy * px.y;
 				const float tiling = ProjectedUVParams.z;
-				projNoise = Triplanar::SampleGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, p, triWeights, tiling, pDx * tiling, pDy * tiling).x;
+				projNoise = Triplanar::SampleGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, worldRel + FrameBuffer::CameraPosAdjust.xyz + s.parallaxShift,
+					triWeights, tiling, pDx * tiling, pDy * tiling).x;
 			}
 		}
 		return projNoise;
@@ -486,6 +487,10 @@ namespace SnowLighting
 				// mask and flips planes on the quads straddling mesh creases - a
 				// line of a different snow texel along the edge.
 				float3 snowTriWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
+				// Read where the paint lies (Snow Follows Parallax), with the mesh's gradients.
+				const float3 snowPos = projWorldPos + s.parallaxShift;
+				float3 snowGradX, snowGradY;
+				Triplanar::ComputeGradients(projWorldPos, 1.0 / SnowDeformation::SnowUVTile, snowGradX, snowGradY);
 				// THE RELIEF. Vanilla's own projected normal never reaches the
 				// G-buffer: Lighting builds worldNormal from the tangent-space
 				// normal BEFORE the projected block, and the block's
@@ -500,9 +505,9 @@ namespace SnowLighting
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 #		if defined(SPARKLE)
-					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampColorSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
 #		else
-					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
 #		endif
 					SnowGrain(worldNormal, texN, snowTriWeights, screenNoise, snowVerdict);
 				}
@@ -513,9 +518,9 @@ namespace SnowLighting
 				// The sparkle pass declares no projected-diffuse sampler (s3 is
 				// its own texture there); its colour sampler is the same wrap state.
 #		if defined(SPARKLE)
-				float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 #		else
-				float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 #		endif
 				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
 				s.projAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowProjSample : Color::LinearToSrgb(snowProjSample)) : Color::ColorToLinear(snowProjSample);

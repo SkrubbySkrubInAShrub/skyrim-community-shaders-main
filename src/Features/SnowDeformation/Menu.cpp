@@ -337,7 +337,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("snow_follows_parallax"), "Snow Follows Parallax"), &settings.SnowFollowsParallax);
 		if (auto _ttFollowParallax = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_follows_parallax_tooltip"), "On objects drawn with Extended Materials parallax (complex parallax and PBR displacement), the snow's edge is placed on the surface the parallax draws rather than on the flat mesh under it, so the stone no longer slides beneath the snow as the camera moves and the snow stops looking like it floats. The projected snow and the drape's coat over it move together. Objects on the older vanilla parallax shader are not affected. A test switch: off is the previous look."));
+			ImGui::Text("%s", T(TKEY("snow_follows_parallax_tooltip"), "On objects drawn with Extended Materials parallax (PBR displacement and complex parallax), the snow lies on the surface the parallax draws instead of on the flat mesh under it: its edge and its own texture move with the stone as the camera moves, so the stone no longer slides beneath the snow and the snow stops looking like it floats. Both the game's recolored projected snow and the drape's coat over it follow. The first time it is switched on, the coat compiles its shaders, a stall of a few seconds once. Objects on the older vanilla parallax shader are not affected. A test switch: off is the previous look."));
 
 		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
 		if (auto _ttBare = Util::HoverTooltipWrapper())

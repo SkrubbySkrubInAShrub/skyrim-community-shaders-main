@@ -2401,6 +2401,17 @@ void SnowDeformation::ClearShaderCache()
 	if (staticsPSDrapePrintsNoDepth)
 		staticsPSDrapePrintsNoDepth->Release();
 	staticsPSDrapePrintsNoDepth = nullptr;
+	if (staticsVSParallax)
+		staticsVSParallax->Release();
+	staticsVSParallax = nullptr;
+	staticsVSParallaxBlob = nullptr;
+	if (staticsPSDrapeParallax)
+		staticsPSDrapeParallax->Release();
+	staticsPSDrapeParallax = nullptr;
+	if (staticsPSDrapePrintsParallax)
+		staticsPSDrapePrintsParallax->Release();
+	staticsPSDrapePrintsParallax = nullptr;
+	coatParallaxTried = false;
 	if (patchVS)
 		patchVS->Release();
 	patchVS = nullptr;
@@ -2424,6 +2435,7 @@ void SnowDeformation::ClearShaderCache()
 	ReleasePatchDeferred();
 	staticsVSBlob = nullptr;
 	staticsILCache.clear();
+	staticsILParallaxCache.clear();
 	staticsShadersFailed = false;
 	if (smoothAccumulateCS)
 		smoothAccumulateCS->Release();

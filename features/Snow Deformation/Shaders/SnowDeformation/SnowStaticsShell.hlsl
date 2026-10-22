@@ -335,6 +335,14 @@ cbuffer StaticCB : register(b1)
 	// in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float LODBatch;
 	float TexturedSnow;
+
+	// Snow Follows Parallax, read by the SNOW_COAT_PARALLAX variants: the
+	// object's uv transform (Lighting's TexcoordOffset: offset xy, scale zw)
+	// and its parallax: x HeightScale, y the height channel (0 displacement,
+	// 3 complex material), zw the dims scale and mip shift that make
+	// GetMipLevelFromDims the source's own mip rule. Mirror in SnowDeformation.h.
+	float4 ObjParallaxUV;
+	float4 ObjParallax;
 }
 
 #ifdef SNOW_STATICS_DRAPE
@@ -781,6 +789,10 @@ struct VS_INPUT
 {
 	float4 Position : POSITION0;
 	float4 Normal : NORMAL0;
+#ifdef SNOW_COAT_PARALLAX
+	float2 TexCoord0 : TEXCOORD0;
+	float4 Bitangent : BINORMAL0;
+#endif
 	uint VertexID : SV_VertexID;
 };
 
@@ -811,6 +823,14 @@ struct VS_OUTPUT
 	// Post-shelter depth target for this column (no facing gate, no taper,
 	// no distance collapse). The PS rim band scales to it.
 	float LiftTarget : TEXCOORD9;
+#ifdef SNOW_COAT_PARALLAX
+	// The object's uv and tangent frame as Lighting builds them, for marching
+	// its parallax. Last, so the variants without them still link.
+	float2 ObjUV : TEXCOORD10;
+	float3 ObjT : TEXCOORD11;
+	float3 ObjB : TEXCOORD12;
+	float3 ObjN : TEXCOORD13;
+#endif
 };
 
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
@@ -1691,7 +1711,66 @@ struct TessFactorsPatch
 };
 #endif
 
+#if defined(PSHADER) && defined(SNOW_COAT_PARALLAX)
+// Snow Follows Parallax: the object's own height map (TruePBR displacement or
+// complex-material env mask), bound per draw.
+Texture2D<float4> ObjectParallaxMap : register(t59);
+// While set, Extended Materials' march reads the object's map
+// (EMParallaxCustomHeight) instead of the snow's.
+static bool gObjectParallaxMarch = false;
+float ObjectParallaxHeight(float2 uv, float mip)
+{
+	const float4 h = ObjectParallaxMap.SampleLevel(SnowSampler, uv, mip);
+	return ObjParallax.y > 1.5 ? h.w : h.x;
+}
+#endif
+
 #include "SnowDeformation/SnowParallax.hlsli"
+
+#if defined(PSHADER) && defined(SNOW_COAT_PARALLAX)
+#	include "SnowDeformation/SnowParallaxFollow.hlsli"
+// The world offset from this coat pixel's mesh point to the one whose texel
+// the object's parallax drew here: Extended Materials' own march on the
+// object's map, with Lighting's inputs, so the coat's snow moves with it.
+float3 ObjectParallaxShift(VS_OUTPUT input)
+{
+	float3 shift = 0.0;
+	[branch] if (ObjParallax.x > 0.0)
+	{
+		const float2 uv = input.ObjUV;
+		const float2 uvDx = ddx_fine(uv);
+		const float2 uvDy = ddy_fine(uv);
+		const float3 posDx = ddx_fine(input.WorldPos);
+		const float3 posDy = ddy_fine(input.WorldPos);
+		const float3 viewDirection = -normalize(input.WorldPos);
+		const float3x3 tbnTr = float3x3(normalize(input.ObjT), normalize(input.ObjB), normalize(input.ObjN));
+		DisplacementParams params;
+		params.DisplacementScale = 1.0;
+		params.DisplacementOffset = 0.0;
+		params.HeightScale = ObjParallax.x;
+		params.FlattenAmount = 0.0;
+		[branch] if (SharedData::extendedMaterialSettings.EnableParallaxWarpingFix)
+			params.FlattenAmount = ExtendedMaterials::GetObjectFlattenAmount(tbnTr[2], input.WorldPos, viewDirection);
+		float2 dims;
+		ObjectParallaxMap.GetDimensions(dims.x, dims.y);
+		const float mip = max(ExtendedMaterials::GetMipLevelFromDims(uv, dims * ObjParallax.z) - ObjParallax.w, 0.0);
+		bool march = true;
+		[branch] if (ObjParallax.y > 1.5)
+			march = ExtendedMaterials::IsComplexMaterial(ObjectParallaxMap.SampleLevel(SnowSampler, uv, 15)) &&
+			        ExtendedMaterials::HasComplexHeight(ObjectParallaxMap.Sample(SnowSampler, uv).w);
+		[branch] if (march)
+		{
+			gObjectParallaxMarch = true;
+			float pixelOffset;
+			const float2 parallaxUV = ExtendedMaterials::GetParallaxCoords(input.CurrentClip.w, uv, mip, viewDirection, tbnTr, 0.0,
+				ObjectParallaxMap, SnowSampler, 0, params, false, (StochasticOffsets)0, pixelOffset);
+			gObjectParallaxMarch = false;
+			shift = SnowParallaxFollow::UVShiftToWorld(parallaxUV - uv, uvDx, uvDy, posDx, posDy);
+		}
+	}
+	return shift;
+}
+#endif
 
 #if defined(HULLSHADER) && defined(PATCH)
 bool PatchOutsideFootprint(float2 a, float2 b, float2 c, float2 d)
@@ -2305,6 +2384,13 @@ VS_OUTPUT main(VS_INPUT input)
 	// Authored-relief mode repurposes the interpolant: the raw authored
 	// vertex alpha, for the PS's per-pixel weight rebuild.
 	vsout.ProjFactor = ProjPixelEnable > 1.5 ? lift.ProjLinear : lift.ProjFactor;
+#	ifdef SNOW_COAT_PARALLAX
+	vsout.ObjUV = input.TexCoord0 * ObjParallaxUV.zw + ObjParallaxUV.xy;
+	const float3x3 world3 = float3x3(WorldRow0.xyz, WorldRow1.xyz, WorldRow2.xyz);
+	vsout.ObjT = normalize(mul(world3, float3(input.Position.w, input.Normal.w * 2.0 - 1.0, input.Bitangent.w * 2.0 - 1.0)));
+	vsout.ObjB = normalize(mul(world3, input.Bitangent.xyz * 2.0 - 1.0));
+	vsout.ObjN = normalize(mul(world3, input.Normal.xyz * 2.0 - 1.0));
+#	endif
 	return vsout;
 }
 #else
@@ -2670,6 +2756,11 @@ struct SkinShadeInput
 	// where its decal covers that height (SnowFields.hlsli MarkReaches).
 	// kMarkAnyBase on the road patch.
 	float markBase;
+#ifdef SNOW_COAT_PARALLAX
+	// Snow Follows Parallax: where the snow's material is read, relative to
+	// the coat pixel (ObjectParallaxShift).
+	float3 surfaceShift;
+#endif
 };
 struct SkinShadeResult
 {
@@ -2853,7 +2944,26 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
 	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
-#ifdef SNOW_PATCH_DEFERRED
+#ifdef SNOW_COAT_PARALLAX
+	// Snow Follows Parallax: the material where the object's parallax drew
+	// its texel, at the mesh's own derivatives. Glints ride shadePos.
+	const float4 snowUVDeriv = float4(ddx(snowUV), ddy(snowUV));
+	const float4 snowUVSideDeriv = float4(ddx(snowUVSideUnfolded), ddy(snowUVSideUnfolded));
+	const float2 sideShift = snowSideDropsX ? input.surfaceShift.yz : input.surfaceShift.xz;
+	snowUV += input.surfaceShift.xy / kSnowUVTile;
+	snowSidePlane += sideShift;
+	snowUVSideUnfolded += sideShift / kSnowUVTile;
+	snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
+	shadePos += input.surfaceShift;
+	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXY + input.surfaceShift.xy);
+	snowTaps.duvdx = snowUVDeriv.xy;
+	snowTaps.duvdy = snowUVDeriv.zw;
+	SnowTaps snowTapsSide = ComputeSnowTapsNoGrad(snowUVSide, snowSidePlane);
+	snowTapsSide.duvdx = snowUVSideDeriv.xy;
+	snowTapsSide.duvdy = snowUVSideDeriv.zw;
+	float snowHeightMip = SnowHeightMipGrad(snowUVDeriv.xy, snowUVDeriv.zw);
+	float snowHeightMipSide = SnowHeightMipGrad(snowUVSideDeriv.xy, snowUVSideDeriv.zw);
+#elif defined(SNOW_PATCH_DEFERRED)
 	// The attribute pass's derivatives (the detail-parallax shift's own is
 	// dropped, as on the ground).
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXY);
@@ -4597,6 +4707,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 #else
 	ssi.geoNz = abs(geoFacing.z);
 	ssi.markBase = input.WorldPos.z + ShellCameraPosAdjust.z - input.Lift;
+#endif
+#ifdef SNOW_COAT_PARALLAX
+	ssi.surfaceShift = ObjectParallaxShift(input);
 #endif
 	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
 	normalWS = ssr.normalWS;
