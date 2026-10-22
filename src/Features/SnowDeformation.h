@@ -620,9 +620,9 @@ public:
 		/** @brief "Unpainted Shapes Stay Bare" (2026-09-22): a shape of a snow-MATO object that the game draws without projection writes the drape's read-back mask as "known, unpainted", instead of leaving 0 there and having the drape read "unknown" as licence to coat. Found with XPMF, which strips the projected flag from one shape of a building; the shape then overdraws its projected siblings' verdict. Positive snow MATOs only, so mesh replacers and drifts keep the reconstruct path. */
 		bool UnprojectedShapesBare = true;
 		/** @brief "Snow Follows Parallax" (A/B, 2026-10-22): on an object drawn with Extended Materials parallax, Lighting reads the projection's noise where the parallax drew the texel instead of on the mesh, so the projected snow's edge, and the drape's coat that copies it, stays on the drawn surface as the camera moves. Shapes on the vanilla parallax technique paint nothing and keep the coat's reconstruction on the mesh. */
-		bool SnowFollowsParallax = false;
+		bool SnowFollowsParallax = true;
 		/** @brief "Flatten Parallax Under Snow" (A/B, 2026-10-22): on an object with projected snow, Extended Materials' parallax fades as the projection covers the surface (its noise-free weight, judged in Lighting before the parallax runs), flat where the snow lies solid, so the snow, its coat and its prints lie on a surface that does not move. Snow fills the cracks. Stacks with SnowFollowsParallax, which then follows the relief that stays; the coat's march takes the same share. */
-		bool FlattenParallaxUnderSnow = false;
+		bool FlattenParallaxUnderSnow = true;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Snow Drift Angle" (degrees from vertical). Cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)): tents, not overhangs. Higher asks for deeper cover before the band shelters. */
