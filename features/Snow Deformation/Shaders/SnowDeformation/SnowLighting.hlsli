@@ -460,14 +460,13 @@ namespace SnowLighting
 #		if !defined(MODELSPACENORMALS) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
 #			define SNOW_FLATTEN_PARALLAX
 	// Flatten Parallax Under Snow: the share of Extended Materials' parallax this
-	// pixel keeps. Snow fills the cracks: the relief fades out under the
-	// projected snow and across a band around it, vanilla's projected-material
-	// ramp (5 x weight) ending at the paint's edge, so the snow, its coat and its
-	// prints lie on a surface that stays put. Judged before the parallax runs,
-	// so the weight is rebuilt from what does not need it - the projection's
-	// noise, the vertex normal and alpha - and prints keep their rock flat.
-	// Lighting scales the march's height by it and raises the self-shadow's
-	// base height toward the map's top, so the relief's shadows fade with it.
+	// pixel keeps. The relief fades as the projection covers the surface, from
+	// the noise-free weight at which vanilla's material first shows (-0.1) to the
+	// one every noise value paints in full (noise scale + 0.1). Smooth on purpose:
+	// a depth that followed the noise's patches swirled the rock between them.
+	// Lighting scales the march's height by it and raises the self-shadow's base
+	// height; the coat's march takes the same share (SnowStaticsShell
+	// ObjectParallaxShift).
 	float ParallaxUnderSnow(float3 worldRel, float3 vertexNormal, float3 texProj, float vertexAlpha)
 	{
 		float keep = 1.0;
@@ -477,15 +476,12 @@ namespace SnowLighting
 #			if defined(TREE_ANIM)
 			vertexAlpha = 1.0;
 #			endif
-			const float3 absWorld = worldRel + FrameBuffer::CameraPosAdjust.xyz;
 			// Runs before BeginObject: the water test is its own.
 			State s = (State)0;
-			s.underWater = SnowDeformation::UnderWater(absWorld);
-			const float3 triWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
-			const float projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, absWorld, triWeights, ProjectedUVParams.z).x;
+			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 			const float projDot = dot(vertexNormal, normalize(texProj));
-			const float projWeight = -ProjectedUVParams.x * projNoise + (projDot * ProjectionAlpha(s, vertexAlpha, projDot) - ProjectedUVParams.w);
-			keep = 1.0 - smoothstep(0.0, 1.0, 5.0 * (projWeight + 0.2));
+			const float coverWeight = projDot * ProjectionAlpha(s, vertexAlpha, projDot) - ProjectedUVParams.w;
+			keep = 1.0 - smoothstep(-0.1, ProjectedUVParams.x + 0.1, coverWeight);
 		}
 		return keep;
 	}

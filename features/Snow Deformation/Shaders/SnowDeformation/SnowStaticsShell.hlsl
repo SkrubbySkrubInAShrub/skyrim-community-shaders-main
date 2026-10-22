@@ -1748,6 +1748,10 @@ float3 ObjectParallaxShift(VS_OUTPUT input)
 		params.DisplacementScale = 1.0;
 		params.DisplacementOffset = 0.0;
 		params.HeightScale = ObjParallax.x;
+		// Flatten Parallax Under Snow: Lighting's share (SnowLighting
+		// ParallaxUnderSnow), off the noise-free weight the coat rebuilds.
+		[flatten] if (SharedData::snowDeformationSettings.ParallaxFlatten > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && ProjThreshold > -0.9)
+			params.HeightScale *= 1.0 - smoothstep(-0.1, ProjNoiseScale + 0.1, tbnTr[2].z * input.ProjFactor - max(ProjThreshold, 0.0));
 		params.FlattenAmount = 0.0;
 		[branch] if (SharedData::extendedMaterialSettings.EnableParallaxWarpingFix)
 			params.FlattenAmount = ExtendedMaterials::GetObjectFlattenAmount(tbnTr[2], input.WorldPos, viewDirection);
