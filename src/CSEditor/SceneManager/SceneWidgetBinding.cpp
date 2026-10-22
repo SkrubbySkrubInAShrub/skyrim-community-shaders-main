@@ -1260,7 +1260,7 @@ bool SceneWidgetBinding::Guard::TryResetFromGesture()
 
 	bool reset = false;
 	for (const auto& component : components) {
-		const auto* defaultValue = FindStateLayerValue(*component.setting, &State::GetFeatureDefaults);
+		const auto* defaultValue = FindStateLayerValue(*component.setting, &::State::GetFeatureDefaults);
 		if (!defaultValue || SceneSettingsManager::AppliedValuesEqual(*defaultValue, ReadEditedValue(component)))
 			continue;
 		WriteComponent(value.data, component, *defaultValue);
