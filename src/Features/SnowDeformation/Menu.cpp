@@ -335,6 +335,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttProjNormals = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it."));
 
+		ImGui::Checkbox(T(TKEY("snow_follows_parallax"), "Snow Follows Parallax"), &settings.SnowFollowsParallax);
+		if (auto _ttFollowParallax = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_follows_parallax_tooltip"), "On objects drawn with Extended Materials parallax (complex parallax and PBR displacement), the snow's edge is placed on the surface the parallax draws rather than on the flat mesh under it, so the stone no longer slides beneath the snow as the camera moves and the snow stops looking like it floats. The projected snow and the drape's coat over it move together. Objects on the older vanilla parallax shader are not affected. A test switch: off is the previous look."));
+
 		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
 		if (auto _ttBare = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("unprojected_shapes_bare_tooltip"), "A building whose snow is painted on by the game is drawn as several shapes, and some of them carry no snow at all. Those plain shapes are drawn over the snowy ones, and they wipe out the note the game leaves for the drape saying whether a spot was painted. With no note, the drape assumes nothing was ever decided and lays snow anyway - which is how door frames and posts under a roof end up sleeved in snow. On, a plain shape leaves the note \"considered, no snow here\" and the drape stays off it. Only objects with a real snow material are affected; snow-textured mesh replacements and drifts are not."));

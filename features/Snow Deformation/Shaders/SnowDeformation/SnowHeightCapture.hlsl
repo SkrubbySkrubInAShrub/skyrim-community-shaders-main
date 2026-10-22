@@ -46,7 +46,7 @@ cbuffer StaticCB : register(b1)
 	float RoadField;
 	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
 	float ProjNoiseWeight;   // layout sync with SnowStaticsShell; unused here
-	float padProjDensity;    // layout sync with SnowStaticsShell
+	float ParallaxFollow;    // layout sync with SnowStaticsShell; unused here
 	// Class override code, matching the skin VS: 0 = flat classifier,
 	// 1 = force ROUNDED (mountain/cliff family; every PD draw in
 	// authored-relief mode), 2 = force FLAT (plank family). Mirror in

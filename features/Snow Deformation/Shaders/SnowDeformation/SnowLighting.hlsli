@@ -419,6 +419,44 @@ namespace SnowLighting
 		return lerp(projWeight, min(projWeight, -1.0), SnowPrints::Bare(s.printShare, projNoise));
 	}
 
+#	if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
+	// Snow Follows Parallax: the projection's noise, which shapes the paint's
+	// edge, read at the mesh point whose texel Extended Materials' parallax
+	// drew here, so the paint and the coat that copies its verdict stay on the
+	// drawn surface instead of the mesh. The uv shift reaches world through the
+	// inverse screen Jacobian of the geometric uv; the gradients stay the
+	// mesh's, or every step in the parallax would blow the mip up. Vanilla
+	// parallax shapes paint nothing, so for them this is dead code.
+	float ParallaxProjNoise(float projNoise, float3 worldRel, float3 triWeights, float2 uv, float2 uvOriginal)
+	{
+		[branch] if (SharedData::snowDeformationSettings.ParallaxFollow > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+		{
+			// Fine derivatives: the coarse ones Lighting takes elsewhere would be
+			// merged with these and held live across the shader (+1 register).
+			const float2 uvDx = ddx_fine(uvOriginal);
+			const float2 uvDy = ddy_fine(uvOriginal);
+			const float3 pDx = ddx_fine(worldRel);
+			const float3 pDy = ddy_fine(worldRel);
+			const float2 shift = uv - uvOriginal;
+			const float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
+			bool follow = any(shift != 0.0) && det * det > 1e-6 * dot(uvDx, uvDx) * dot(uvDy, uvDy);
+#		if defined(TRUE_PBR)
+			// An interlayer shift shows the layer under the coat; the snow lies on the coat.
+			follow = follow && (PBRFlags & PBR::Flags::InterlayerParallax) == 0;
+#		endif
+			[branch] if (follow)
+			{
+				const float2 px = float2(uvDy.y * shift.x - uvDy.x * shift.y, uvDx.x * shift.y - uvDx.y * shift.x) / det;
+				const float3 p = worldRel + FrameBuffer::CameraPosAdjust.xyz + pDx * px.x + pDy * px.y;
+				const float tiling = ProjectedUVParams.z;
+				projNoise = Triplanar::SampleGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, p, triWeights, tiling, pDx * tiling, pDy * tiling).x;
+			}
+		}
+		return projNoise;
+	}
+#	endif
+
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
 	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
 	// picks texture vs flat-color projection in Lighting; when the CPU

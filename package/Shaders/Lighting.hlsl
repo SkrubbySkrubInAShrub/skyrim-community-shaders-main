@@ -1777,6 +1777,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 triFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
 	float3 triWeights = Triplanar::GetWeights(tbnTr[2], triFaceNormal);
 	float projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x;
+#		if defined(SNOW_DEFORMATION) && defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
+	projNoise = SnowLighting::ParallaxProjNoise(projNoise, input.WorldPosition.xyz, triWeights, uv, uvOriginal);
+#		endif
 	float3 texProj = normalize(input.TexProj);
 #		if defined(TREE_ANIM) || defined(LODOBJECTSHD)
 	float vertexAlpha = 1;

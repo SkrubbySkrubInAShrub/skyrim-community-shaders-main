@@ -377,7 +377,10 @@ namespace SharedData
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
-		uint padEnable;
+		// Snow Follows Parallax: Lighting reads the projection noise where
+		// the object's parallax drew its texel (SnowLighting
+		// ParallaxProjNoise). Was a pad. Mirror in SnowDeformation.h.
+		float ParallaxFollow;
 
 		uint DebugTerrainOverlay;
 		// Horizon snow (LOD terrain recolor): distance ramp start and 1/band,

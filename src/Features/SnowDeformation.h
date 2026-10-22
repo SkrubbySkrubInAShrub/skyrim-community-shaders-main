@@ -619,6 +619,8 @@ public:
 		bool ProjSnowNormals = true;
 		/** @brief "Unpainted Shapes Stay Bare" (2026-09-22): a shape of a snow-MATO object that the game draws without projection writes the drape's read-back mask as "known, unpainted", instead of leaving 0 there and having the drape read "unknown" as licence to coat. Found with XPMF, which strips the projected flag from one shape of a building; the shape then overdraws its projected siblings' verdict. Positive snow MATOs only, so mesh replacers and drifts keep the reconstruct path. */
 		bool UnprojectedShapesBare = true;
+		/** @brief "Snow Follows Parallax" (A/B, 2026-10-22): on an object drawn with Extended Materials parallax, Lighting reads the projection's noise where the parallax drew the texel instead of on the mesh, so the projected snow's edge, and the drape's coat that copies it, stays on the drawn surface as the camera moves. Shapes on the vanilla parallax technique paint nothing and keep the coat's reconstruction on the mesh. */
+		bool SnowFollowsParallax = false;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Snow Drift Angle" (degrees from vertical). Cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)): tents, not overhangs. Higher asks for deeper cover before the band shelters. */
@@ -672,7 +674,8 @@ public:
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
-		uint padEnable;
+		/** @brief Settings::SnowFollowsParallax as 0/1 (was a pad). Mirror in SharedData.hlsli. */
+		float ParallaxFollow;
 
 		uint DebugTerrainOverlay;
 		/** @brief Horizon snow (LOD terrain recolor): distance ramp start and 1/band, aligned to the shell edge. */
@@ -2301,6 +2304,8 @@ public:
 		bool snowTex;
 		/** @brief The projected MATO classifies as snow (the record's cached class). */
 		bool matoSnow;
+		/** @brief The capturing pass's technique is one whose paint Snow Follows Parallax can move (envmap's complex material, TruePBR displacement): Lighting may read the projection noise off the mesh there. StaticsCB::ParallaxFollow. */
+		bool mayParallax;
 		/** @brief SmoothedNormalsFor's entry, valid in frame smoothFrame while smoothResets matches smoothedNormalsResets. */
 		SmoothedNormalsEntry* smoothEntry = nullptr;
 		uint32_t smoothFrame = UINT32_MAX;
@@ -2337,7 +2342,7 @@ public:
 	uint32_t statProjVetoedPrev = 0;
 
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
-	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, uint32_t a_rawTechnique);
 
 	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit, classified from the pass technique (currentRawTechnique), and re-binds t102/t103 for classified draws. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
 	void SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass);
@@ -2502,7 +2507,8 @@ public:
 		float ProjThreshold;
 		/** @brief CapturedSnowStatic::projNoiseWeight: the coat's reach swaps that noise term for a hex-tiled read of the same map. Took the padProjMask slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseWeight;
-		float padProjDensity;
+		/** @brief >0.5: Snow Follows Parallax is on and this draw's technique can carry Extended Materials parallax, so Lighting may have read the projection noise off the mesh; the coat's reach then keeps the game's noise instead of swapping it. Took the padProjDensity slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ParallaxFollow;
 		/** @brief Class override code: 0 = flat classifier decides, 1 = force ROUNDED (CapturedSnowStatic::forceRounded, and every PD draw in authored-relief mode), 2 = force FLAT (plankFamily in authored-relief mode). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

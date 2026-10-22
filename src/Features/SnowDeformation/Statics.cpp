@@ -860,7 +860,7 @@ void SnowDeformation::CapturePreDecalMasks()
 		dsv->Release();
 }
 
-void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
+void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, uint32_t a_rawTechnique)
 {
 	ScopedTicks _hookTicks(cpuCensus.hookTicks, cpuCensus.hookCalls);
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
@@ -1275,7 +1275,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed && !snowTexOverlay;
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, projNoiseWeight, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow });
+	// The techniques whose paint Snow Follows Parallax can move (complex material
+	// and TruePBR displacement); vanilla parallax shapes paint nothing.
+	const bool mayParallax = (0x3F & (a_rawTechnique >> 24)) == static_cast<uint32_t>(SIE::ShaderCache::LightingShaderTechniques::Envmap) ||
+	                         (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, projNoiseWeight, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow, mayParallax });
 	capturedRoads += road ? 1u : 0u;
 	capturedLoaded += lodBatch ? 0u : 1u;
 }
@@ -1293,7 +1297,7 @@ struct SD_BSLightingShader_SetupGeometry
 		func(shader, a_pass, a_flags);
 
 		if (snowDeformation.loaded) {
-			snowDeformation.BSLightingShader_SetupGeometry(a_pass);
+			snowDeformation.BSLightingShader_SetupGeometry(a_pass, shader ? shader->currentRawTechnique : 0);
 			snowDeformation.LandscapeSnowSetup(a_pass, true);
 		}
 	}
@@ -3577,6 +3581,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
 	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
 	a_scb.ProjNoiseWeight = a_cap.projNoiseWeight;
+	a_scb.ParallaxFollow = (settings.SnowFollowsParallax && a_cap.mayParallax) ? 1.0f : 0.0f;
 	// 2 = the S4 shell owns this draw; 0 = classic path.
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;

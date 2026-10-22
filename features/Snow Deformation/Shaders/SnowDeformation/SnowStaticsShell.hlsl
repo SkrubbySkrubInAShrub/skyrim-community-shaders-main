@@ -266,7 +266,10 @@ cbuffer StaticCB : register(b1)
 	// The noise term's weight in Lighting's projWeight (ProjectedUVParams.x);
 	// 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseWeight;
-	float padProjDensity;
+	// >0.5: Snow Follows Parallax may have moved Lighting's noise read off the
+	// mesh on this draw, so the reach keeps the game's noise (no swap). Mirror
+	// in SnowDeformation.h.
+	float ParallaxFollow;
 	// Class override code: 0 = flat classifier decides, 1 = force ROUNDED
 	// (mountain/cliff family - a jagged cliff's split normals score "flat";
 	// and EVERY PD draw in authored-relief mode, per Josef's call to retire
@@ -4459,7 +4462,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// both at the scene point. Each stage is skipped where no read left in
 				// [0, 1] can move the cut across [-0.01, 0.02]; unswapped, the verdict
 				// is the same there. Inputs must match the prepass: no bent normalWS.
-				const float swapW = ProjNoiseWeight * saturate(EdgeFlankWidth / kDetileRamp);
+				// No swap where Lighting may have read its noise off the mesh
+				// (Snow Follows Parallax): the scene point is not where realW's term came from.
+				const float swapW = ParallaxFollow > 0.5 ? 0.0 : ProjNoiseWeight * saturate(EdgeFlankWidth / kDetileRamp);
 				const float steepMin = 1.0 - SteepThin;
 				[branch] if (swapW > 0.0 && realW > -0.9 && realW + reachW + swapW >= -0.01 && realW + max(reachW - swapW, 0.0) * steepMin <= 0.02)
 				{
