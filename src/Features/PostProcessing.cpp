@@ -99,17 +99,14 @@ void PostProcessing::DrawSettings()
 
 	{
 		auto& cam = cinematicCamera;
-		// The settings page (2) draws its own enable checkbox via Controller::DrawSettings.
-		if (pipelinePageNum != 2) {
-			ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &cam.settings.Enabled);
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
-									  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
-			ImGui::SameLine();
-			if (Icons::LabeledButton("##CinematicCameraSettings", Icons::TI(ICON_TI_MENU_2),
-					T("feature.post_processing.cinematic_camera.settings", "Settings")))
-				pipelinePageNum = 2;
-		}
+		ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &cam.settings.Enabled);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
+								  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
+		ImGui::SameLine();
+		if (Icons::LabeledButton("##CinematicCameraSettings", Icons::TI(ICON_TI_MENU_2),
+				T("feature.post_processing.cinematic_camera.settings", "Settings")))
+			pipelinePageNum = 2;
 
 		if (const auto* state = cam.GetState()) {
 			const auto isoText = state->Exposure == CinematicCamera::ExposureMode::AutoISO ?
