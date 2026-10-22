@@ -52,7 +52,10 @@ void SnowDeformation::LoadTraceRecord(const char* a_name, double a_ms)
 	if (!loadTraceActive.load(std::memory_order_acquire))
 		return;
 	std::scoped_lock lock(loadTraceMutex);
-	auto& phase = loadTracePhases[a_name];
+	auto it = loadTracePhases.find(std::string_view(a_name));
+	if (it == loadTracePhases.end())
+		it = loadTracePhases.emplace(a_name, LoadTracePhase{}).first;
+	auto& phase = it->second;
 	phase.count++;
 	phase.totalMs += a_ms;
 	phase.maxMs = std::max(phase.maxMs, a_ms);

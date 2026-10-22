@@ -1925,8 +1925,11 @@ void SnowDeformation::DrawShell()
 	const bool early = shellEarlyFrame == globals::state->frameCount;
 	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	const bool shellGround = shellDrawGroundGated || early;
-	// The raised sun cascades read the same object fields as the ground snow.
-	const bool landscapeReads = settings.SnowCastsShadows && !GroundShellsSuspended();
+	// The raised sun cascades read the same object fields as the ground snow;
+	// an interior has no land to raise.
+	const bool cascadeReads = settings.SnowCastsShadows && !GroundShellsSuspended();
+	const bool interior = InInteriorCell();
+	const bool landscapeReads = cascadeReads && (!interior || interiorHeightGateOff);
 	// Off the ground, the captures feed only their own skins (and the volume).
 	if (!shellGround && !landscapeReads && !settings.VolumeSnow)
 		CullUnseenCaptures(cbData);
@@ -1943,7 +1946,11 @@ void SnowDeformation::DrawShell()
 	// volume) is off in a bare square with nothing captured.
 	spanClock.Lap(CpuCensus::kSpanShellSetup);
 	const bool nothingDraws = !shellGround && !landscapeReads && capturedStatics.empty() && !settings.VolumeSnow;
-	if (nothingDraws)
+	// An interior idles once no ghost can be in the window; until then it runs.
+	const bool idleInterior = nothingDraws && cascadeReads && interior;
+	if (idleInterior && HeightMapIdleReady())
+		IdleObjectHeightMap();
+	else if (nothingDraws && !idleInterior)
 		SkipObjectHeightMap();
 	else if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
@@ -2006,6 +2013,12 @@ void SnowDeformation::DrawShell()
 	// caster too.
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cbData.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
+	// After this frame's deposits: a blood map with none in the window reads 0 everywhere.
+	if (bloodMapWritten && (windowOrigin.x > bloodWrittenBox.z || windowOrigin.x + deformWorldSize < bloodWrittenBox.x ||
+							   windowOrigin.y > bloodWrittenBox.w || windowOrigin.y + deformWorldSize < bloodWrittenBox.y))
+		bloodMapWritten = false;
+	if (!bloodMapWritten && !bloodLatchOff)
+		cbData.BloodLook2.z = 0.0f;
 	shellCB->Update(cbData);
 
 	// Snapshot for next frame's shadow-caster injection (it runs at the
@@ -2015,9 +2028,20 @@ void SnowDeformation::DrawShell()
 	*lastShellCBData = cbData;
 
 	// The sun marches read only the baked heights: without them this frame,
-	// no march.
+	// no march. Only the ground PS and the skins march; kMarchIdleFrames
+	// without either stops the caches, and the next update rebuilds them whole.
 	UnbindMarchCaches();
-	if ((cbData.ShellFlags.x & 1) != 0 && !UpdateMarchCaches(cbData)) {
+	const bool marchReaders = shellGround || !capturedStatics.empty();
+	marchIdleFrames = (marchReaders || marchIdleOff) ? 0 : std::min(marchIdleFrames + 1, kMarchIdleFrames);
+	const bool marchIdle = marchIdleFrames >= kMarchIdleFrames;
+	if (marchIdle) {
+		marchCacheValid = false;
+		marchFarValid = false;
+		marchSunValid = false;
+		marchIdleSkipped++;
+		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - March Cache");
+	}
+	if ((cbData.ShellFlags.x & 1) != 0 && (marchIdle || !UpdateMarchCaches(cbData))) {
 		cbData.ShellFlags.x &= ~1;
 		shellCB->Update(cbData);
 		*lastShellCBData = cbData;
@@ -2030,7 +2054,8 @@ void SnowDeformation::DrawShell()
 	{
 		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
 		// Read by the shell PS (shellGround) and the skins (any capture) only.
-		if (masksRT.SRV && masksRT.texture && !nothingDraws) {
+		const bool masksReaders = masksCopyGateOff ? !nothingDraws : (shellGround || !capturedStatics.empty());
+		if (masksRT.SRV && masksRT.texture && masksReaders) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
 			D3D11_TEXTURE2D_DESC masksDesc{};

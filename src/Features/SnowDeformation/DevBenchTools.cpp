@@ -139,6 +139,19 @@ namespace
 		a_write(a_sink, dumped.c_str());
 	}
 
+	void ReaderGatesTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
+	{
+		json out;
+		try {
+			const json args = a_argsJson && *a_argsJson ? json::parse(a_argsJson) : json::object();
+			out = globals::features::snowDeformation.DevBenchReaderGatesArgs(args);
+		} catch (const std::exception& e) {
+			out = { { "error", e.what() } };
+		}
+		const std::string dumped = out.dump();
+		a_write(a_sink, dumped.c_str());
+	}
+
 	void LandscapeTool(void*, const char* a_argsJson, void* a_sink, DevBenchAPI::WriteFn a_write)
 	{
 		json out;
@@ -345,6 +358,30 @@ json SnowDeformation::DevBenchShellArgs(const json& a_args)
 							{ "ps", p.psInvocations }, { "primitives", p.rasterizedPrimitives }, { "samplesPassed", p.samplesPassed } } } };
 }
 
+json SnowDeformation::DevBenchReaderGatesArgs(const json& a_args)
+{
+	auto flag = [&](const char* a_key, bool& a_off) {
+		if (a_args.contains(a_key) && a_args[a_key].is_boolean())
+			a_off = !a_args[a_key].get<bool>();
+	};
+	flag("interiorHeightGate", interiorHeightGateOff);
+	flag("masksCopyGate", masksCopyGateOff);
+	flag("marchIdle", marchIdleOff);
+	flag("bloodLatch", bloodLatchOff);
+	flag("landMaskFeatureGate", landMaskFeatureGateOff);
+	flag("recordGrowth", staticsRecordGrowOff);
+	return { { "interiorHeightGate", !interiorHeightGateOff }, { "masksCopyGate", !masksCopyGateOff }, { "marchIdle", !marchIdleOff },
+		{ "bloodLatch", !bloodLatchOff }, { "landMaskFeatureGate", !landMaskFeatureGateOff }, { "recordGrowth", !staticsRecordGrowOff },
+		{ "heightIdleFrames", heightIdleFrames }, { "heightGhostsLive", heightGhostsLive },
+		{ "heightGhostBox", { heightGhostBox.x, heightGhostBox.y, heightGhostBox.z, heightGhostBox.w } }, { "heightMapValid", heightMapValid },
+		{ "marchIdleFrames", marchIdleFrames }, { "marchIdleSkipped", marchIdleSkipped },
+		{ "bloodMapWritten", bloodMapWritten }, { "bloodWrittenBox", { bloodWrittenBox.x, bloodWrittenBox.y, bloodWrittenBox.z, bloodWrittenBox.w } },
+		{ "landMaskHits", landMaskHits.load(std::memory_order_relaxed) }, { "landMaskMisses", landMaskMisses.load(std::memory_order_relaxed) },
+		{ "landMaskForeignHits", landMaskForeignHits.load(std::memory_order_relaxed) },
+		{ "recordCapacity", staticsRecordCapacity }, { "recordRefused", staticsRecordRefused }, { "recordFallbacks", staticsRecordFallbacks },
+		{ "interior", InInteriorCell() }, { "frame_count", globals::state->frameCountAtomic.load(std::memory_order_relaxed) } };
+}
+
 json SnowDeformation::DevBenchVolumeArgs(const json& a_args)
 {
 	if (a_args.contains("memorySeconds") && a_args["memorySeconds"].is_number())
@@ -377,6 +414,9 @@ void SnowDeformation::InstallDevBenchTools()
 	auto* dvb = DevBenchAPI::GetDevBenchInterface001();
 	if (!dvb)
 		return;
+	static constexpr const char* readerGatesDesc =
+		R"({"description":"Reader-gate A/B switches (runtime-only, all default true = gate on). interiorHeightGate: indoors the cascades stop keeping the object height maps running; they idle once no ghost can be in the window (heightIdleFrames, heightGhostsLive, heightGhostBox). masksCopyGate: the pre-shell Masks copy runs only for the ground snow or a capture. marchIdle: the sun-march caches stop after 30 frames with no ground snow and no capture and rebuild whole on return (marchIdleFrames, marchIdleSkipped). bloodLatch: the shells skip the blood map while no deposit lies in the window (bloodMapWritten, bloodWrittenBox). landMaskFeatureGate: the land snow-mask lookup runs only for landscape materials (landMaskForeignHits counts hits it would drop; counted only with the gate off). recordGrowth: the statics record buffers grow past 8192 records instead of falling back to per-draw updates (recordCapacity, recordFallbacks). No args = read state.","inputSchema":{"type":"object","properties":{"interiorHeightGate":{"type":"boolean"},"masksCopyGate":{"type":"boolean"},"marchIdle":{"type":"boolean"},"bloodLatch":{"type":"boolean"},"landMaskFeatureGate":{"type":"boolean"},"recordGrowth":{"type":"boolean"}}}})";
+	dvb->RegisterTool("snowdeformation.readergates", readerGatesDesc, &ReaderGatesTool, nullptr);
 	static constexpr const char* shaderTypesDesc =
 		R"({"description":"The F10 performance overlay's shader-type table: per BSShader type, smoothed draw calls and CPU wall time (ms) between draw submissions attributed to that type - NOT GPU time. live=false means the overlay is hidden and the numbers are stale (toggle it with F10).","readOnly":true,"inputSchema":{"type":"object","properties":{}}})";
 	dvb->RegisterTool("snowdeformation.shadertypes", shaderTypesDesc, &ShaderTypesTool, nullptr);

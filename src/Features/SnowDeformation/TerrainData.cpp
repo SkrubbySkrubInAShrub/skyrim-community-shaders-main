@@ -1202,23 +1202,29 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	if (material == nullptr || !(debugTerrainOverlay || LandBlendActive()))
 		return;
 
+	// Vanilla and TruePBR landscape materials answer kMultiTexLandLODBlend;
+	// only land quads' materials are registered.
+	const auto feature = material->GetFeature();
+	const bool landFeature = feature == RE::BSShaderMaterial::Feature::kMultiTexLand ||
+	                         feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend ||
+	                         feature == static_cast<RE::BSShaderMaterial::Feature>(33);
+	if (!landFeature && !landMaskFeatureGateOff)
+		return;
 	uint8_t mask = 0;
 	{
 		const std::shared_lock lock(snowMaskMutex);
 		auto it = snowMasks.find(reinterpret_cast<uintptr_t>(material));
 		if (it == snowMasks.end()) {
-			// Count misses only for landscape materials, where a miss is a bug.
-			// Vanilla and TruePBR landscape materials answer kMultiTexLandLODBlend.
-			auto feature = material->GetFeature();
-			if (feature == RE::BSShaderMaterial::Feature::kMultiTexLand ||
-				feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend ||
-				feature == static_cast<RE::BSShaderMaterial::Feature>(33))
+			// A miss on a land material is a bug.
+			if (landFeature)
 				landMaskMisses.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
 		mask = it->second;
 	}
 
+	if (!landFeature)
+		landMaskForeignHits.fetch_add(1, std::memory_order_relaxed);
 	landMaskHits.fetch_add(1, std::memory_order_relaxed);
 	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << kSnowLandIsSnowShift;
 

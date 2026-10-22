@@ -83,6 +83,7 @@ void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 	auto context = globals::d3d::context;
 	context->ClearRenderTargetView(bloodMapTexture->rtv.get(), zero);
 	context->ClearRenderTargetView(bloodClockTexture->rtv.get(), zero);
+	bloodMapWritten = false;
 	bloodSeen.clear();
 	bloodTilesDrop = true;
 	logger::info("[SNOW DEFORMATION] blood map {}x{} created", desc.Width, desc.Height);
@@ -1842,6 +1843,14 @@ void SnowDeformation::RenderBloodCapture()
 	context->OMSetRenderTargets(2, nullRTVs, nullptr);
 	context->RSSetState(savedRaster.get());
 	globals::profiler->EndPass();
+
+	if (bloodDepositsLast > 0 || bloodDiscsLast > 0) {
+		const float4 window = { windowOrigin.x, windowOrigin.y, windowOrigin.x + deformWorldSize, windowOrigin.y + deformWorldSize };
+		bloodWrittenBox = bloodMapWritten ? float4{ std::min(bloodWrittenBox.x, window.x), std::min(bloodWrittenBox.y, window.y),
+												std::max(bloodWrittenBox.z, window.z), std::max(bloodWrittenBox.w, window.w) } :
+		                                    window;
+		bloodMapWritten = true;
+	}
 }
 
 // The game's blood decals drawn again over the object-snow coat, into the

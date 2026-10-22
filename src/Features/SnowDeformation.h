@@ -915,6 +915,12 @@ public:
 	Texture2D* bloodClockTexture = nullptr;
 	ID3D11ShaderResourceView* GetBloodMapSRV() const { return bloodMapTexture ? bloodMapTexture->srv.get() : nullptr; }
 	ID3D11ShaderResourceView* GetBloodClockSRV() const { return bloodClockTexture ? bloodClockTexture->srv.get() : nullptr; }
+	/** @brief The map may hold a deposit: set by a capture or disc draw; cleared with the map, or once the window misses every window a deposit landed in (the ring zeroes what leaves). Clear = BloodLook2.z 0. */
+	bool bloodMapWritten = false;
+	/** @brief Union (min x, min y, max x, max y) of the windows deposits landed in since bloodMapWritten was set. */
+	float4 bloodWrittenBox = {};
+	/** @brief DevBench A/B: true keeps the map live whenever blood is on, as before the latch. */
+	bool bloodLatchOff = false;
 	/** @brief Sum of RefillAmount over the session: the snowfall clock a deposit is dated by. */
 	float bloodBurialClock = 0.0f;
 	/** @brief Smallest refill applied in one dispatch: two R16F steps just below 1.0, so it always moves a stored value. */
@@ -1923,6 +1929,12 @@ public:
 	uint32_t marchSunFastRows = 0;
 	/** @brief Census of the last 300 cache updates, per update: bit 0 key changed, bit 1 near rebuilt whole, bit 2 far rebuilt whole. */
 	static constexpr uint32_t kMarchCensusFrames = 300;
+	/** @brief Frames in a row with no march reader (no ground snow, no capture); from kMarchIdleFrames the caches stop and the next update rebuilds them whole. */
+	uint32_t marchIdleFrames = 0;
+	static constexpr uint32_t kMarchIdleFrames = 30;
+	uint64_t marchIdleSkipped = 0;
+	/** @brief DevBench A/B: true keeps the caches updating with no reader, as before the idle gate. */
+	bool marchIdleOff = false;
 	std::array<uint8_t, kMarchCensusFrames> marchCensus{};
 	uint32_t marchCensusCursor = 0;
 	uint32_t marchCensusFilled = 0;
@@ -2254,6 +2266,7 @@ public:
 	// ---- Statics snow skin: capture & redraw ----
 
 	/** @brief One snow-flagged draw captured this frame, for re-rendering inflated in DrawShell. NiPointer keeps the geometry alive across the frame even if its cell detaches mid-frame. */
+	struct SmoothedNormalsEntry;
 	struct CapturedSnowStatic
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
@@ -2288,6 +2301,10 @@ public:
 		bool snowTex;
 		/** @brief The projected MATO classifies as snow (the record's cached class). */
 		bool matoSnow;
+		/** @brief SmoothedNormalsFor's entry, valid in frame smoothFrame while smoothResets matches smoothedNormalsResets. */
+		SmoothedNormalsEntry* smoothEntry = nullptr;
+		uint32_t smoothFrame = UINT32_MAX;
+		uint32_t smoothResets = 0;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -2363,6 +2380,8 @@ public:
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
+	/** @brief DevBench A/B: true takes the copy whenever any object-field reader runs, as before it was gated on its own readers. */
+	bool masksCopyGateOff = false;
 	/** @brief The Masks note as it stood before the frame's first DECAL-MODE lighting draw. Decal mode blends every render target, the Masks channel included, so a decal over painted snow drags the drape's verdict off "painted" toward its own value (measured 2026-09-22: 48 -> 20 under Inn01:0, and the drape cut itself out in the decal's alpha pattern). The coat takes whichever of this and the live copy reads as more painted. */
 	winrt::com_ptr<ID3D11Texture2D> preDecalMasksTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preDecalMasksSRV;
@@ -2815,8 +2834,12 @@ public:
 	ID3D11ComputeShader* smoothFlatStatsCS = nullptr;
 	ConstantBuffer* smoothCB = nullptr;
 
-	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
-	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
+	/** @brief The smoothed-normal entry for a captured geometry, built on first sight (SmoothNormalsCS passes) and cached thereafter; usable once ready. Null without one (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
+	SmoothedNormalsEntry* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
+	/** @brief EnsureSmoothedNormals for a capture, looked up once per frame. */
+	SmoothedNormalsEntry* SmoothedNormalsFor(CapturedSnowStatic& a_cap);
+	/** @brief Bumped by ResetSmoothedNormals: entries a capture kept from before it are gone. */
+	uint32_t smoothedNormalsResets = 0;
 	/** @brief ONE StaticsCB recipe for both the visible skin draw and the shadow caster - the caster must be the exact surface the shell renders, and a drifted copy of this fill would be the CB-mirror class of bug. Presence flags come from the call site (the caster looks resources up without creating them). */
 	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, StaticsCB& a_scb) const;
 	/** @brief ONE StaticsCB recipe for the trench patch, shared by the visible patch draw and its shadow caster for the same drift reason as FillSkinDrawCB. Implemented in SnowDeformation/Statics.cpp. */
@@ -3532,6 +3555,18 @@ public:
 	void RenderObjectHeightMap();
 	/** @brief Bare square, nothing captured, no volume snow: no reader of the object fields runs, so the block is skipped and its rows read 0; the next run rebuilds from a clear. */
 	void SkipObjectHeightMap();
+	/** @brief Interior with nothing reading the object fields and no ghost in the maps: the window and the exclusion walk advance as a run's would; no GPU work. */
+	void IdleObjectHeightMap();
+	/** @brief The maps hold sentinels only, are valid, and were built at the current reach. */
+	bool HeightMapIdleReady() const;
+	/** @brief World XY box (min x, min y, max x, max y) of every layer-1 draw since the maps last held sentinels only. Ghosts die only by scrolling out, so none survive once the box misses the window. */
+	float4 heightGhostBox = {};
+	bool heightGhostsLive = true;
+	uint64_t heightIdleFrames = 0;
+	/** @brief DevBench A/B: true keeps the interior's height maps running for the cascades, as before the interior gate. */
+	bool interiorHeightGateOff = false;
+	/** @brief A window move past this many texels restarts the exclusion walk. */
+	static constexpr int kGatherJumpTexels = 32;
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;
@@ -3707,8 +3742,17 @@ public:
 	winrt::com_ptr<ID3D11Buffer> staticsRecordCB[2];
 	bool staticsRecordChecked = false;
 	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
-	static constexpr uint32_t kStaticsRecordMax = 8192;
-	bool EnsureStaticsRecordCB();
+	static constexpr uint32_t kStaticsRecordStart = 8192;
+	static constexpr uint32_t kStaticsRecordMax = 65536;
+	/** @brief Records per copy: doubles from kStaticsRecordStart to the largest upload seen, up to kStaticsRecordMax. */
+	uint32_t staticsRecordCapacity = 0;
+	/** @brief The smallest capacity the device refused; never asked again. */
+	uint32_t staticsRecordRefused = 0;
+	/** @brief Uploads that fell back to per-draw updates for want of room. */
+	uint64_t staticsRecordFallbacks = 0;
+	/** @brief DevBench A/B: true holds the buffers at kStaticsRecordStart, as before they grew. */
+	bool staticsRecordGrowOff = false;
+	bool EnsureStaticsRecordCB(uint32_t a_count);
 	/** @brief a_needed (optional, one byte per record): records left out are not copied; it must cover every record a draw binds. */
 	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count, const uint8_t* a_needed = nullptr);
 	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, bool a_tessStages, uint32_t& a_parity);
@@ -3962,6 +4006,8 @@ public:
 	json DevBenchShellArgs(const json& a_args);
 	/** @brief DevBench: applies volume measurement args (memorySeconds, showRings) and returns the volume's live state per level. Implemented in DevBenchTools.cpp. */
 	json DevBenchVolumeArgs(const json& a_args);
+	/** @brief DevBench: the reader gates' A/B switches (interior height maps, masks copy, march idle, blood latch, land-mask feature test, record growth) and their counters. Implemented in DevBenchTools.cpp. */
+	json DevBenchReaderGatesArgs(const json& a_args);
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
 	float ProbeTrenchStore(float a_worldX, float a_worldY);
 	/** @brief Profiler timers are a shared 128-slot frame budget; a frame may open this many landscape runs. */
@@ -3982,6 +4028,10 @@ public:
 	/** @brief Diagnostics shown in the settings UI: landscape materials that hit/missed the snow-mask cache at draw time. */
 	std::atomic<uint64_t> landMaskHits{ 0 };
 	std::atomic<uint64_t> landMaskMisses{ 0 };
+	/** @brief Hits on a material whose feature is not a landscape one (counted only with the feature gate off). */
+	std::atomic<uint64_t> landMaskForeignHits{ 0 };
+	/** @brief DevBench A/B: true takes the snow-mask lock and lookup for every material, as before the feature gate. */
+	bool landMaskFeatureGateOff = false;
 
 	/** @brief Thread-safe size read for the settings UI. */
 	size_t snowMasksSizeForUI()
@@ -4749,7 +4799,7 @@ protected:
 	std::chrono::steady_clock::time_point loadTraceLastNotable;
 	std::chrono::steady_clock::time_point loadTraceLastFrame;
 	bool loadTraceFrameSeen = false;
-	std::map<std::string, LoadTracePhase> loadTracePhases;
+	std::map<std::string, LoadTracePhase, std::less<>> loadTracePhases;
 	std::vector<std::string> loadTraceTimeline;
 	uint32_t loadTraceFrames = 0;
 	uint32_t loadTraceStallFrames = 0;
