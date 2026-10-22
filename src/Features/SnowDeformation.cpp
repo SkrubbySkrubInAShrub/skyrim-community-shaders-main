@@ -162,6 +162,7 @@
 	X(ProjSnowNormals) \
 	X(UnprojectedShapesBare) \
 	X(SnowFollowsParallax) \
+	X(FlattenParallaxUnderSnow) \
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \
@@ -754,7 +755,8 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LODObjectEnable = (settings.EnableSnowDeformation && settings.LODObjectSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowTexturedEnable = (settings.EnableSnowDeformation && settings.SnowTexturedRecolor && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
-	data.ParallaxFollow = settings.SnowFollowsParallax ? 1.0f : 0.0f;
+	data.ParallaxFollow = SnowFollowsParallaxLive() ? 1.0f : 0.0f;
+	data.ParallaxFlatten = settings.FlattenParallaxUnderSnow ? 1.0f : 0.0f;
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;

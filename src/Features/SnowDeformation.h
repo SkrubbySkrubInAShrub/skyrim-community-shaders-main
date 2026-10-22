@@ -621,6 +621,8 @@ public:
 		bool UnprojectedShapesBare = true;
 		/** @brief "Snow Follows Parallax" (A/B, 2026-10-22): on an object drawn with Extended Materials parallax, Lighting reads the projection's noise where the parallax drew the texel instead of on the mesh, so the projected snow's edge, and the drape's coat that copies it, stays on the drawn surface as the camera moves. Shapes on the vanilla parallax technique paint nothing and keep the coat's reconstruction on the mesh. */
 		bool SnowFollowsParallax = false;
+		/** @brief "Flatten Parallax Under Snow" (A/B, 2026-10-22, the alternative to SnowFollowsParallax): Extended Materials' parallax fades out under an object's projected snow and across a band around it, judged in Lighting before the parallax runs, so the snow, its coat and its prints lie on a surface that does not move. Snow fills the cracks. While on, the coat's own parallax march (SnowFollowsParallax) stays off. */
+		bool FlattenParallaxUnderSnow = false;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Snow Drift Angle" (degrees from vertical). Cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)): tents, not overhangs. Higher asks for deeper cover before the band shelters. */
@@ -721,6 +723,10 @@ public:
 
 		/** @brief Snow Trenches on Objects: the world print texels [xy, zw) the print map (t114) holds this frame; empty = nothing to read. Mirror in SharedData.hlsli. */
 		DirectX::XMINT4 PrintRect;
+
+		/** @brief Settings::FlattenParallaxUnderSnow as 0/1. Mirror in SharedData.hlsli. */
+		float ParallaxFlatten;
+		float padParallaxFlatten[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -1088,6 +1094,8 @@ public:
 	bool DecalOverlayWanted() const { return settings.BloodOnSnow || settings.DecalsOnObjectSnow; }
 	/** @brief Object snow paints the rune glyphs and frost marks itself where they reach it: when the overlay would otherwise take their decals (Statics.cpp CaptureDecalOverlay's gate). */
 	bool CoatPaintsMarks() const { return settings.DecalsOnObjectSnow && settings.ProjSnowMatch; }
+	/** @brief Snow Follows Parallax, unless Flatten Parallax Under Snow is on: the two A/B routes never stack. */
+	bool SnowFollowsParallaxLive() const { return settings.SnowFollowsParallax && !settings.FlattenParallaxUnderSnow; }
 	/** @brief The overlay decals' alpha in screen space: x the ones that are not blood, y all of them (the overlay's cover). */
 	Texture2D* decalMaskTexture = nullptr;
 	ID3D11VertexShader* decalMaskVS = nullptr;

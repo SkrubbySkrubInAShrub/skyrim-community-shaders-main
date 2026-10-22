@@ -1203,10 +1203,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (ExtendedMaterials::HasComplexHeight(envMaskSample.w)) {
 				complexMaterialParallax = true;
 				mipLevel = ExtendedMaterials::GetMipLevel(uv, TexEnvMaskSampler);
+#			if defined(SNOW_FLATTEN_PARALLAX)
+				const float snowHeightScale = displacementParams.HeightScale;
+				const float snowParallaxKeep = SnowLighting::ParallaxUnderSnow(input.WorldPosition.xyz, vertexNormal, input.TexProj, input.Color.w);
+				displacementParams.HeightScale *= snowParallaxKeep;
+#			endif
 				uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, viewDirection, tbnTr, screenNoise, TexEnvMaskSampler, SampTerrainParallaxSampler, 3, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 				if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0) {
 					MESH_TV_HEIGHT(sh0, TexEnvMaskSampler, SampEnvMaskSampler, uv, mipLevel, 3);
+#			if defined(SNOW_FLATTEN_PARALLAX)
+					sh0 = lerp(1.0, sh0, snowParallaxKeep);
+#			endif
 				}
+#			if defined(SNOW_FLATTEN_PARALLAX)
+				displacementParams.HeightScale = snowHeightScale;
+#			endif
 				MESH_TV_SAMPLE(complexMaterialColor, TexEnvMaskSampler, SampEnvMaskSampler, uv);
 			} else {
 				complexMaterialColor = envMaskSample;
@@ -1252,10 +1263,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			displacementParams.HeightScale *= PBRParams1.y;
 		}
 		mipLevel = ExtendedMaterials::GetMipLevel(uv, TexParallaxSampler);
+#				if defined(SNOW_FLATTEN_PARALLAX)
+		const float snowHeightScale = displacementParams.HeightScale;
+		const float snowParallaxKeep = SnowLighting::ParallaxUnderSnow(input.WorldPosition.xyz, vertexNormal, input.TexProj, input.Color.w);
+		displacementParams.HeightScale *= snowParallaxKeep;
+#				endif
 		uv = ExtendedMaterials::GetParallaxCoords(viewPosition.z, uv, mipLevel, refractedViewDirection, tbnTr, screenNoise, TexParallaxSampler, SampParallaxSampler, 0, displacementParams, applyMeshTV, meshOffset, pixelOffset);
 		if (SharedData::extendedMaterialSettings.EnableShadows && parallaxShadowQuality > 0.0) {
 			MESH_TV_HEIGHT(sh0, TexParallaxSampler, SampParallaxSampler, uv, mipLevel, 0);
+#				if defined(SNOW_FLATTEN_PARALLAX)
+			sh0 = lerp(1.0, sh0, snowParallaxKeep);
+#				endif
 		}
+#				if defined(SNOW_FLATTEN_PARALLAX)
+		displacementParams.HeightScale = snowHeightScale;
+#				endif
 	}
 #			endif  // !FACEGEN
 #		endif      // TRUE_PBR

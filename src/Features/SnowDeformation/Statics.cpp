@@ -1285,7 +1285,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	winrt::com_ptr<ID3D11ShaderResourceView> parallaxSRV;
 	float4 parallaxUV = {};
 	float4 parallax = {};
-	if (settings.SnowFollowsParallax && !lodBatch && globals::features::extendedMaterials.loaded) {
+	if (SnowFollowsParallaxLive() && !lodBatch && globals::features::extendedMaterials.loaded) {
 		const auto& em = globals::features::extendedMaterials.settings;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		RE::NiSourceTexture* height = nullptr;
@@ -3625,7 +3625,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
 	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
 	a_scb.ProjNoiseWeight = a_cap.projNoiseWeight;
-	a_scb.ParallaxFollow = (settings.SnowFollowsParallax && a_cap.mayParallax) ? 1.0f : 0.0f;
+	a_scb.ParallaxFollow = (SnowFollowsParallaxLive() && a_cap.mayParallax) ? 1.0f : 0.0f;
 	// 2 = the S4 shell owns this draw; 0 = classic path.
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;
@@ -4553,7 +4553,7 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
-	const bool coatParallax = settings.SnowFollowsParallax && EnsureCoatParallaxShaders();
+	const bool coatParallax = SnowFollowsParallaxLive() && EnsureCoatParallaxShaders();
 	// Grown a frame late from what the last frame asked for: the allocation
 	// below has to hand out ranges before the total is known.
 	EnsureClusterResources(clusterScratchNeeded);

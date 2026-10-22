@@ -456,6 +456,40 @@ namespace SnowLighting
 		}
 		return projNoise;
 	}
+
+#		if !defined(MODELSPACENORMALS) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
+#			define SNOW_FLATTEN_PARALLAX
+	// Flatten Parallax Under Snow: the share of Extended Materials' parallax this
+	// pixel keeps. Snow fills the cracks: the relief fades out under the
+	// projected snow and across a band around it, vanilla's projected-material
+	// ramp (5 x weight) ending at the paint's edge, so the snow, its coat and its
+	// prints lie on a surface that stays put. Judged before the parallax runs,
+	// so the weight is rebuilt from what does not need it - the projection's
+	// noise, the vertex normal and alpha - and prints keep their rock flat.
+	// Lighting scales the march's height by it and raises the self-shadow's
+	// base height toward the map's top, so the relief's shadows fade with it.
+	float ParallaxUnderSnow(float3 worldRel, float3 vertexNormal, float3 texProj, float vertexAlpha)
+	{
+		float keep = 1.0;
+		[branch] if (SharedData::snowDeformationSettings.ParallaxFlatten > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+		{
+#			if defined(TREE_ANIM)
+			vertexAlpha = 1.0;
+#			endif
+			const float3 absWorld = worldRel + FrameBuffer::CameraPosAdjust.xyz;
+			// Runs before BeginObject: the water test is its own.
+			State s = (State)0;
+			s.underWater = SnowDeformation::UnderWater(absWorld);
+			const float3 triWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
+			const float projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, absWorld, triWeights, ProjectedUVParams.z).x;
+			const float projDot = dot(vertexNormal, normalize(texProj));
+			const float projWeight = -ProjectedUVParams.x * projNoise + (projDot * ProjectionAlpha(s, vertexAlpha, projDot) - ProjectedUVParams.w);
+			keep = 1.0 - smoothstep(0.0, 1.0, 5.0 * (projWeight + 0.2));
+		}
+		return keep;
+	}
+#		endif
 #	endif
 
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)

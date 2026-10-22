@@ -339,6 +339,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttFollowParallax = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_follows_parallax_tooltip"), "On objects drawn with Extended Materials parallax (PBR displacement and complex parallax), the snow lies on the surface the parallax draws instead of on the flat mesh under it: its edge and its own texture move with the stone as the camera moves, so the stone no longer slides beneath the snow and the snow stops looking like it floats. Both the game's recolored projected snow and the drape's coat over it follow. The first time it is switched on, the coat compiles its shaders, a stall of a few seconds once. Objects on the older vanilla parallax shader are not affected. A test switch: off is the previous look."));
 
+		ImGui::Checkbox(T(TKEY("flatten_parallax_under_snow"), "Flatten Parallax Under Snow"), &settings.FlattenParallaxUnderSnow);
+		if (auto _ttFlattenParallax = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("flatten_parallax_under_snow_tooltip"), "The other answer to snow floating over parallax objects: where an object's projected snow lies, and in a band around it, the object's Extended Materials parallax (PBR displacement and complex parallax) fades out, the way real snow fills cracks and crevices, and the shadows the relief casts on itself fade with it. The snow, its coat and the tracks in it then sit on a surface that does not move, and bare rock away from the snow keeps its full relief. Objects on the older vanilla parallax shader carry no projected snow and are not affected. Overrides Snow Follows Parallax while both are on. A test switch: off is the previous look."));
+
 		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
 		if (auto _ttBare = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("unprojected_shapes_bare_tooltip"), "A building whose snow is painted on by the game is drawn as several shapes, and some of them carry no snow at all. Those plain shapes are drawn over the snowy ones, and they wipe out the note the game leaves for the drape saying whether a spot was painted. With no note, the drape assumes nothing was ever decided and lays snow anyway - which is how door frames and posts under a roof end up sleeved in snow. On, a plain shape leaves the note \"considered, no snow here\" and the drape stays off it. Only objects with a real snow material are affected; snow-textured mesh replacements and drifts are not."));
@@ -1842,7 +1846,7 @@ void SnowDeformation::DrawSettings()
 
 			WrapTextF("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
 			WrapTextF("Snow Follows Parallax, last frame: %u captures with a height map, %u drapes on the parallax coat%s",
-				parallaxCapturesLast, parallaxCoatDrawsLast, (settings.SnowFollowsParallax && coatParallaxTried && !staticsVSParallax) ? " (SHADERS FAILED TO COMPILE)" : "");
+				parallaxCapturesLast, parallaxCoatDrawsLast, (SnowFollowsParallaxLive() && coatParallaxTried && !staticsVSParallax) ? " (SHADERS FAILED TO COMPILE)" : "");
 			ImGui::TreePop();
 		}
 

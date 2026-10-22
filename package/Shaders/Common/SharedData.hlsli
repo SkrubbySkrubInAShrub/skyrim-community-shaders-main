@@ -445,6 +445,12 @@ namespace SharedData
 		// map (t114) holds for this frame; empty = nothing to read. Mirror in
 		// SnowDeformation.h.
 		int4 PrintRect;
+
+		// Flatten Parallax Under Snow: Extended Materials' parallax fades out
+		// under projected snow and a band around it (SnowLighting
+		// ParallaxUnderSnow). Mirror in SnowDeformation.h.
+		float ParallaxFlatten;
+		float3 padParallaxFlatten;
 	};
 
 	cbuffer FeatureData : register(b6)
