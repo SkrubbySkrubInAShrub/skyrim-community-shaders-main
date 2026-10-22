@@ -441,6 +441,7 @@ namespace CinematicCamera
 
 	void Controller::DrawSettings()
 	{
+		ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &settings.Enabled);
 		if (!settings.Enabled)
 			return;
 
