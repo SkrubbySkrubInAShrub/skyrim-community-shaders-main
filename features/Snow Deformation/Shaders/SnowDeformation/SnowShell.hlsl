@@ -183,7 +183,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	// side of the junction; 0 = off.
 	float ObjectMeetBand;
 
-	// 1 / Berm Steepness: the berm tap reach (BermFieldTapped, BermGradStep).
+	// 1 / Berm Steepness: the berm tap reach (BermGradStep).
 	float BermReach;
 	uint LayoutKeeper10;  // retired Detail Set slice, uploaded as 0
 	// 1/width of the depth ramp inside the loaded-cell seam; 0 = no seam
@@ -585,33 +585,6 @@ float SampleDeformation(float2 gridLocal)
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
 }
 
-// DISPLACED depth at a point: total minus the melted portion. A berm is snow
-// that had to go somewhere, and melted snow leaves no spoil, so the berm
-// field is built from this rather than from total depth. Doing it here rather
-// than scaling the finished berm down means a boot print through a melt basin
-// still throws its own ridge.
-float SampleDisplacedFast(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	// Only MELTED depth is spoil-free. Channel y is signed and negative means
-	// scorch, which was displaced and keeps its berm.
-	return saturate(v.x - max(v.y, 0.0));
-}
-
 // SampleMelted / SampleScorch live in SnowFields.hlsli
 //: both shells read the surface-state channels identically.
 
@@ -876,29 +849,12 @@ float3 ShellObjectMeet(float2 worldXY, float sheetZ)
 // weight giving a long tail instead of a knife along the stamp falloff.
 // BermShape and the tap ring are in SnowFields.hlsli.
 
-// The A/B path: the carve itself stands in for its short blur, so the
-// walls do not soften without the bake, and tracks are dated now: they do
-// not age either.
-float4 BermFieldTapped(float2 gridLocal)
-{
-	float b = SampleDisplacedFast(gridLocal);
-	[unroll] for (int i = 0; i < 16; i++)
-		b += SampleDisplacedFast(gridLocal + kBermTaps[i] * BermReach);
-	return float4(saturate(b / 17.0), SampleDeformationFast(gridLocal), TrackAge.x, TrackAge.x);
-}
-
-// The berm field dominated the shell's pixel cost at 68 loads a call, and the
-// normal alone needs four. BermBakeActive routes to the bake; the tapped path
-// stays compiled so the two can be A/B'd from the debug menu. x = berm,
-// y = the carve's short blur, zw = the carve's and the berm's dates.
+// The baked berm field; the bake exists wherever the shells draw (it is
+// created with the map). x = berm, y = the carve's short blur, zw = the
+// carve's and the berm's dates.
 float4 BermFieldPair(float2 gridLocal)
 {
-	float4 field = 0.0;
-	[branch] if (BermBakeActive > 0.5)
-		field = BermFieldBaked(gridLocal);
-	else
-		field = BermFieldTapped(gridLocal);
-	return field;
+	return BermFieldBaked(gridLocal);
 }
 
 float BermField(float2 gridLocal)

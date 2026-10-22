@@ -89,7 +89,10 @@ static const float kTrackAgeHorizon = 128.0;
 // Must match kWallBlurReach in SnowFields.hlsli.
 static const float kWallBlurReach = 12.0;
 
-// Must match kBermTaps in SnowShell.hlsl / SnowStaticsShell.hlsl.
+// 17 taps on two staggered 8-point rings. Tap COUNT is the anti-seam: for
+// a straight trail edge each tap's projection crosses zero at a different
+// distance, so the field climbs in 1/17 steps instead of the 2/9 ledge a
+// sparse ring printed as a visible contour line ~34 units out.
 static const float2 kBermTaps[16] = {
 	float2(18.0, 0.0), float2(12.73, 12.73), float2(0.0, 18.0), float2(-12.73, 12.73),
 	float2(-18.0, 0.0), float2(-12.73, -12.73), float2(0.0, -18.0), float2(12.73, -12.73),

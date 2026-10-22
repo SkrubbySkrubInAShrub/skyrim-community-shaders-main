@@ -707,27 +707,11 @@ float SampleDeformation(float2 gridLocal)
 // to carry a ridge) and a geometry berm would straddle the patch/skin
 // height seam.
 
-// The A/B path: the carve itself stands in for its short blur, so the
-// walls do not soften without the bake, and tracks are dated now: they do
-// not age either.
-float4 BermFieldTapped(float2 gridLocal)
-{
-	const float centre = SampleDeformation(gridLocal);
-	float b = centre;
-	[unroll] for (int i = 0; i < 16; i++)
-		b += SampleDeformation(gridLocal + kBermTaps[i] * BermReach);
-	return float4(saturate(b / 17.0), centre, TrackAge.x, TrackAge.x);
-}
-
+// The bake exists wherever the skins draw (it is created with the map).
 // x = berm, y = the carve's short blur, zw = the carve's and the berm's dates.
 float4 BermFieldPair(float2 gridLocal)
 {
-	float4 field = 0.0;
-	[branch] if (BermBakeActive > 0.5)
-		field = BermFieldBaked(gridLocal);
-	else
-		field = BermFieldTapped(gridLocal);
-	return field;
+	return BermFieldBaked(gridLocal);
 }
 
 float BermField(float2 gridLocal)

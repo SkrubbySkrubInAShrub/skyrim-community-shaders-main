@@ -17,8 +17,7 @@
 // UndulationFieldMap (t29), SnowSampler
 // (PS) and the TerrainVariation include - all declared before this include.
 // Deliberately NOT shared: the deformation .x samplers (the landscape
-// smooths bicubic, statics stays bilinear by cost) and BermFieldTapped,
-// which rides each shell's own sampler.
+// smooths bicubic, statics stays bilinear by cost).
 
 // ShapeNoiseHash / ShapeNoise / UndulationNorm live in SnowNoise.hlsli so
 // the undulation bake CS shares the exact functions without the ShellCB
@@ -129,21 +128,9 @@ float BermShape(float bermDeform)
 	return smoothstep(0.02, 0.32, bermDeform);
 }
 
-// 17 taps on two staggered 8-point rings. Tap COUNT is the anti-seam: for
-// a straight trail edge each tap's projection crosses zero at a different
-// distance, so the field climbs in 1/17 steps instead of the 2/9 ledge a
-// sparse ring printed as a visible contour line ~34 units out. Bilinear
-// taps: the 17-way average supplies the smoothness bicubic would.
-static const float2 kBermTaps[16] = {
-	float2(18.0, 0.0), float2(12.73, 12.73), float2(0.0, 18.0), float2(-12.73, 12.73),
-	float2(-18.0, 0.0), float2(-12.73, -12.73), float2(0.0, -18.0), float2(12.73, -12.73),
-	float2(36.96, 15.31), float2(15.31, 36.96), float2(-15.31, 36.96), float2(-36.96, 15.31),
-	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
-};
-
-// Berm Steepness scales the rings by BermReach. The shading step follows it,
-// floored at half a map texel (below that the bilinear bake shades in
-// facets); exactly 4 at the default reach.
+// Berm Steepness scales the bake's rings (BermFieldCS kBermTaps) by
+// BermReach. The shading step follows it, floored at half a map texel (below
+// that the bilinear bake shades in facets); exactly 4 at the default reach.
 float BermGradStep()
 {
 	SNOW_DEFORM_DIMS(dims);
