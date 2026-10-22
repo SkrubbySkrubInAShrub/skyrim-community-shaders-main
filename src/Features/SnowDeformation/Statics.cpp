@@ -1289,14 +1289,20 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		const auto& em = globals::features::extendedMaterials.settings;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		RE::NiSourceTexture* height = nullptr;
-		if (material && material->GetFeature() == BSLightingShaderMaterialPBR::FEATURE) {
+		// TruePBR's own test (TruePBR::BSLightingShader_SetupMaterial): the pass's
+		// flag, not GetFeature(), which reports kDefault for PBR materials.
+		using LightingTechnique = SIE::ShaderCache::LightingShaderTechniques;
+		const auto technique = static_cast<LightingTechnique>(0x3F & (a_rawTechnique >> 24));
+		const bool truePbr = (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
+		if (material && truePbr && (technique == LightingTechnique::None || technique == LightingTechnique::TreeAnim)) {
 			auto* pbr = static_cast<BSLightingShaderMaterialPBR*>(material);
 			if (em.EnableParallax && pbr->displacementTexture != nullptr && pbr->displacementTexture != globals::game::graphicsState->GetRuntimeData().defaultTextureBlack &&
 				!pbr->pbrFlags.any(PBRFlags::InterlayerParallax)) {
 				height = pbr->displacementTexture.get();
 				parallax = { pbr->GetDisplacementScale(), 0.0f, 2.0f, 1.0f };
 			}
-		} else if (material && material->GetFeature() == RE::BSShaderMaterial::Feature::kEnvironmentMap && (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
+		} else if (material && !truePbr && technique == LightingTechnique::Envmap && material->GetFeature() == RE::BSShaderMaterial::Feature::kEnvironmentMap &&
+				   (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
 			auto* envmap = static_cast<RE::BSLightingShaderMaterialEnvmap*>(material);
 			if (em.EnableComplexMaterial && envmap->envMaskTexture) {
 				height = envmap->envMaskTexture.get();
@@ -4554,10 +4560,13 @@ void SnowDeformation::DrawCapturedStatics()
 	uint32_t scratchNext = 0;
 	uint32_t scratchWanted = 0;
 	uint32_t printTwinDraws = 0;
+	uint32_t parallaxCaptures = 0;
+	uint32_t parallaxCoatDraws = 0;
 	for (auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
+		parallaxCaptures += cap.parallaxSRV ? 1u : 0u;
 		// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
 		// its no-PD pillows stood alone on the steps, and at fill 100 the
 		// S4 shell stacked on top of them). Only two things draw now:
@@ -4659,8 +4668,11 @@ void SnowDeformation::DrawCapturedStatics()
 			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound),
 			(coatParallax && s4Shell && cap.parallaxSRV) ? StaticsParallaxInputLayoutFor(descKey, desc) : nullptr });
 		printTwinDraws += skinDraws.back().prints ? 1u : 0u;
+		parallaxCoatDraws += skinDraws.back().layoutParallax ? 1u : 0u;
 	}
 	printTwinDrawsLast = printTwinDraws;
+	parallaxCapturesLast = parallaxCaptures;
+	parallaxCoatDrawsLast = parallaxCoatDraws;
 
 	auto statsRow = [](const char* a_name) {
 		globals::profiler->EndPass();

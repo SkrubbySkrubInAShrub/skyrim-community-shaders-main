@@ -1841,6 +1841,8 @@ void SnowDeformation::DrawSettings()
 
 
 			WrapTextF("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
+			WrapTextF("Snow Follows Parallax, last frame: %u captures with a height map, %u drapes on the parallax coat%s",
+				parallaxCapturesLast, parallaxCoatDrawsLast, (settings.SnowFollowsParallax && coatParallaxTried && !staticsVSParallax) ? " (SHADERS FAILED TO COMPILE)" : "");
 			ImGui::TreePop();
 		}
 

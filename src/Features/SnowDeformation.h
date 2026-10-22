@@ -5115,6 +5115,9 @@ protected:
 	DirectX::XMINT4 printRectPublished = { 0, 0, 0, 0 };
 	/** @brief Debug readout: drape draws on the print twin last frame. */
 	uint32_t printTwinDrawsLast = 0;
+	/** @brief Debug readout, Snow Follows Parallax last frame: captures that carried a height map, and drapes drawn through the parallax coat. */
+	uint32_t parallaxCapturesLast = 0;
+	uint32_t parallaxCoatDrawsLast = 0;
 
 	/** @brief The print map's frame: window, mirror, ring, inject, refill, stamp, view. Runs after the trench dispatch; a_trenchPassRan says whether PerFrame (b0) holds this frame's values. */
 	void UpdateObjectPrints(ID3D11DeviceContext* a_context, const PerFrame& a_frame, bool a_trenchPassRan);
