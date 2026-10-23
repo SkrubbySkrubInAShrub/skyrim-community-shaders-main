@@ -74,7 +74,7 @@ public:
 	virtual void DataLoaded() override;
 	/** @brief Creates HDR, output, and UI textures, constant buffer, and upgrades LDR render targets. */
 	virtual void SetupResources() override;
-	/** @brief Releases cached HDR output and UI brightness compute shaders. */
+	/** @brief Releases cached compute shaders and patched blend states. */
 	virtual void ClearShaderCache() override;
 	/** @brief Installs HDR pipeline hooks when the Upscaling feature is not loaded. */
 	virtual void PostPostLoad() override;
@@ -195,6 +195,7 @@ public:
 	Texture2D* uiTexture = nullptr;            // Separate UI render target for proper compositing
 	Texture2D* cleanSceneCapture = nullptr;    // Pre-blur copy of hdrTexture for clean captures
 	uint cleanSceneCaptureFrame = UINT32_MAX;  // frameCount when cleanSceneCapture was last refreshed
+	uint movieDrawnFrame = UINT32_MAX;         // frameCount when a Bink movie was last drawn into the UI buffer
 
 	ID3D11ComputeShader* hdrOutputCS = nullptr;
 	/** @brief Returns the HDR output compute shader, compiling it on first use. */
