@@ -572,6 +572,41 @@ namespace
 		}
 		return it->second;
 	}
+
+	// Does another geometry of this one's model take the road class by name,
+	// and pass the material gate (projection data or a landscape snow
+	// diffuse)? A road replacer's alpha-tested strips over the road shape
+	// (TMD Dirt Roads) inherit that verdict.
+	bool ModelRoadPassesGate(RE::BSGeometry* a_geometry)
+	{
+		RE::NiAVObject* root = a_geometry->parent;
+		for (RE::NiAVObject* node = a_geometry; node; node = node->parent) {
+			if (node->GetUserData()) {
+				root = node;
+				break;
+			}
+		}
+		if (!root)
+			return false;
+		bool found = false;
+		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_mate) -> RE::BSVisit::BSVisitControl {
+			const char* name = a_mate->name.c_str();
+			if (a_mate == a_geometry || !name || !ContainsNoCase(name, "road") || ContainsNoCase(name, "bridge"))
+				return RE::BSVisit::BSVisitControl::kContinue;
+			auto* property = netimmerse_cast<RE::BSLightingShaderProperty*>(a_mate->GetGeometryRuntimeData().shaderProperty.get());
+			auto* material = property ? static_cast<RE::BSLightingShaderMaterialBase*>(property->material) : nullptr;
+			auto* textureSet = material ? material->textureSet.get() : nullptr;
+			const char* diffuse = textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+			if (!diffuse || ContainsNoCase(diffuse, "bridge"))
+				return RE::BSVisit::BSVisitControl::kContinue;
+			const bool paving = (ContainsNoCase(diffuse, "floor") || ContainsNoCase(diffuse, "slate")) && !ContainsNoCase(diffuse, "roof");
+			if (!ContainsNoCase(diffuse, "landscape") && !paving)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			found = property->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV) || ClassifySnowPath(material).base;
+			return found ? RE::BSVisit::BSVisitControl::kStop : RE::BSVisit::BSVisitControl::kContinue;
+		});
+		return found;
+	}
 }
 
 // One record per geometry: every material-, name- and reference-derived fact
@@ -595,6 +630,9 @@ struct GeometryRecord
 	// Diffuse path names blood: a decal-mode draw of it is a blood mark.
 	bool bloodTex = false;
 	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
+	// Alpha-tested, not road-named, in a model whose road shape passes the
+	// material gate: part of that road's surface (ModelRoadPassesGate).
+	bool roadLayer = false;
 	// Diffuse under a landscape folder, or a paving texture (floor/slate,
 	// not roof): the road-name signal needs one of them.
 	bool landscapeTex = false;
@@ -696,6 +734,9 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 				r.seasonsProj = sosIt->second;
 			}
 		}
+		auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
+		if (alpha && alpha->GetAlphaTesting() && !nameFacts.road && !nameFacts.bridge && r.roadTex != 2)
+			r.roadLayer = ModelRoadPassesGate(a_geometry);
 	}
 	lastGeometry = a_geometry;
 	lastRecord = &r;
@@ -1079,7 +1120,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		// Snow-named textures capture under the toggle: their skin coats off
 		// the recolor's written weight.
 		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed && !snowTexOverlay;
-		if (!(rec.pathBase || naturalFeature || isObjectLOD || snowNamedCapture)) {
+		if (!(rec.pathBase || naturalFeature || isObjectLOD || snowNamedCapture || rec.roadLayer)) {
 			LogCaptureVerdict(a_pass, "rejected: no family signal at material gate (name/texture both missed)");
 			return;
 		}
@@ -1106,9 +1147,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	// decals. LOD atlases keep their coat; it reads the recolor's own weight.
 	// Architecture surfaces (a thatch roof's fringe, plank ends) test alpha
 	// too and are not cards; foliage textures under architecture still are.
+	// Nor are a road model's strips: they lie on the road (rec.roadLayer).
 	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
 	const bool alphaTested = alphaProperty && alphaProperty->GetAlphaTesting();
-	if (!lodBatch && !decalDepth && !rec.pathArchitecture && alphaTested) {
+	if (!lodBatch && !decalDepth && !rec.pathArchitecture && alphaTested && !rec.roadLayer) {
 		LogCaptureVerdict(a_pass, "rejected: alpha-tested card");
 		return;
 	}
@@ -1143,6 +1185,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	bool road = !bridge && nameFacts.road && (rec.landscapeTex || rec.pavingTex);
 	// Which signal decided it, for the road-classification log below.
 	const char* roadVia = road ? "name" : (bridge ? "bridge excluded" : "no");
+	// A road replacer's strips are the surface the game draws over its road
+	// shape: left out, the road top sat up to 15 units under them and the
+	// road's snow lost the depth test to the dirt (TMD Dirt Roads).
+	if (!road && !bridge && rec.roadLayer) {
+		road = true;
+		roadVia = "road model layer";
+	}
 	if (!road && !bridge && rec.roadTex == 1) {
 		road = true;
 		roadVia = "texture";
@@ -1152,6 +1201,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	if (road && GroundShellsSuspended()) {
 		road = false;
 		roadVia = "city";
+	}
+	// Off the road class a strip is an alpha-tested card again.
+	if (rec.roadLayer && !road) {
+		LogCaptureVerdict(a_pass, "rejected: road model layer outside the road class");
+		return;
 	}
 
 	// Measured to the bound's nearest point, not the origin: a long wall or
