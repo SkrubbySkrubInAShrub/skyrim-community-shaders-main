@@ -31,6 +31,8 @@ namespace SnowLighting
 		// as snow and the swap ran; the albedo is saved for the write tail.
 		bool projMatch;
 		float3 projAlbedo;
+		// Its material response (ShellRMAOS), for the write tail's re-light.
+		float4 projRMAOS;
 		// Snow Follows Parallax: mesh point to the parallax texel, in world units.
 		float3 parallaxShift;
 		// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
@@ -86,6 +88,21 @@ namespace SnowLighting
 		bumpB *= rsqrt(max(dot(bumpB, bumpB), 1e-8));
 		worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * weight);
 	}
+
+	// The shell's material response (SnowShell.hlsl): roughness and F0 from an
+	// RMAOS texel of its set under the set's scales, AO as authored, metallic 0.
+	float4 ShellRMAOS(float4 r)
+	{
+		return float4(clamp(r.x * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0), 0.0, r.z, r.w * SharedData::snowDeformationSettings.SnowSpecularLevel);
+	}
+
+	// Its defaults (kSnowRoughness, kSnowF0) where the set has no RMAOS map:
+	// DebugTerrainOverlay bit 512 says t105 is bound with the set.
+	bool ShellHasRMAOS()
+	{
+		return (uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 512) != 0;
+	}
+	static const float4 kShellRMAOSDefault = float4(0.6, 0.0, 1.0, 0.028);
 
 #if defined(LANDSCAPE) || ((defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR))
 	// The shell's snow set through the shell's own anti-tiling taps
@@ -236,12 +253,9 @@ namespace SnowLighting
 				s.landSnowNormal = float2(n.x, -n.y);
 			}
 			// The shell's material defaults; its RMAOS map where the set has one.
-			s.landSnowRMAOS = float4(0.6, 0.0, 1.0, 0.028);
-			[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 512) != 0)
-			{
-				float4 r = SnowSetSample(SnowDeformation::HorizonSnowRmaos, taps);
-				s.landSnowRMAOS = float4(clamp(r.x * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0), 0.0, r.z, r.w * SharedData::snowDeformationSettings.SnowSpecularLevel);
-			}
+			s.landSnowRMAOS = kShellRMAOSDefault;
+			[branch] if (ShellHasRMAOS())
+				s.landSnowRMAOS = ShellRMAOS(SnowSetSample(SnowDeformation::HorizonSnowRmaos, taps));
 			s.landSnowRMAOS.x *= 1.0 - max(press * (0.24 + 0.26 * wet), glaze * 0.8);
 			s.landSnowBits = bits;
 			s.landRecolor = true;
@@ -538,9 +552,12 @@ namespace SnowLighting
 				// recipe, applied here to the pixels the coat does not own:
 				// same additive perturbation and same +Y reference frame as
 				// SnowStaticsShell, so coat and bare PD carry one grain and
-				// their junction is a seam of height only.
+				// their junction is a seam of height only. The object's own bump
+				// goes first, as vanilla's projected normal replaces it: a glacier
+				// slab's ice streaks read through the snow (Alftand, 2026-10-23).
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
+					worldNormal = normalize(lerp(worldNormal, vertexNormal, snowVerdict));
 #		if defined(SPARKLE)
 					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
 #		else
@@ -575,11 +592,22 @@ namespace SnowLighting
 				// does not change can only be the sample.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 64) != 0)
 					s.projAlbedo = snowProjSample;
+				// The shell's response at the albedo's texel. Its scalar stand-ins
+				// (0.6 x roughness scale) left the slabs glossier than the ground.
+				s.projRMAOS = kShellRMAOSDefault;
+				[branch] if (ShellHasRMAOS())
+				{
+#		if defined(SPARKLE)
+					s.projRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
+#		else
+					s.projRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
+#		endif
+				}
 #		if defined(TRUE_PBR)
 				// PBR pixels are convention-correct already: albedo + the shell's
-				// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).
+				// response (rawRMAOS.w IS F0).
 				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
-				rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), projectedMaterialWeight);
+				rawRMAOS = lerp(rawRMAOS, s.projRMAOS, projectedMaterialWeight);
 #		else
 				// Vanilla pixels get the albedo here; the write tail re-lights
 				// the snow fraction through the PBR evaluators (hue+brightness).
@@ -613,9 +641,9 @@ namespace SnowLighting
 		{
 			MaterialProperties snowMaterial = (MaterialProperties)0;
 			snowMaterial.BaseColor = s.projAlbedo;
-			snowMaterial.Roughness = clamp(0.6 * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0);
-			snowMaterial.F0 = 0.028;
-			snowMaterial.AO = 1.0;
+			snowMaterial.Roughness = s.projRMAOS.x;
+			snowMaterial.F0 = s.projRMAOS.w;
+			snowMaterial.AO = s.projRMAOS.z;
 			DirectContext snowContext = dirLightContext;
 			snowContext.lightColor *= Color::PBRLightingCompensation;
 			DirectLightingOutput snowLit;
@@ -669,7 +697,10 @@ namespace SnowLighting
 					snowTexAlbedo = s.texWeight.xxx;
 #	if defined(TRUE_PBR)
 				baseColor = lerp(baseColor, snowTexAlbedo, s.texWeight);
-				rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), s.texWeight);
+				float4 snowTexRMAOS = kShellRMAOSDefault;
+				[branch] if (ShellHasRMAOS())
+					snowTexRMAOS = ShellRMAOS(Triplanar::SampleStochastic(SnowDeformation::HorizonSnowRmaos, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise));
+				rawRMAOS = lerp(rawRMAOS, snowTexRMAOS, s.texWeight);
 #	else
 				baseColor = lerp(baseColor, snowTexAlbedo * Color::VanillaDiffuseColorMult(), s.texWeight);
 #	endif

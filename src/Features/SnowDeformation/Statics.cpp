@@ -852,9 +852,9 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		// the cubemap pass; t101 only survives via its later re-bind).
 		// Re-bind per classified draw, where it is actually sampled. t104 =
 		// the water raster for the underwater veto, same fate.
-		ID3D11ShaderResourceView* horizonSnowSRVs[3] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get(),
-			waterFineTexture ? waterFineTexture->srv.get() : nullptr };
-		globals::d3d::context->PSSetShaderResources(102, 3, horizonSnowSRVs);
+		ID3D11ShaderResourceView* horizonSnowSRVs[4] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get(),
+			waterFineTexture ? waterFineTexture->srv.get() : nullptr, shellSnowRmaosSRV.get() };
+		globals::d3d::context->PSSetShaderResources(102, 4, horizonSnowSRVs);
 		// The print readers (t114-t115), same fate; only projected snow reads them.
 		if (projectedSnow && printRectPublished.z > printRectPublished.x)
 			BindPrintReaders(globals::d3d::context);
