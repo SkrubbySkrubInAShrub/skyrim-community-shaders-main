@@ -609,7 +609,9 @@ namespace
 	{
 		static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 		{
-			globals::features::snowDeformation.LandscapeSnowRestore();
+			auto& snow = globals::features::snowDeformation;
+			snow.NoteMainViewport();
+			snow.LandscapeSnowRestore();
 			func(a_shader, a_pass, a_flags);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1046,6 +1048,25 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		context->Begin(slot.stats[i].get());
 	slot.drawCount++;
 	ls.curDraw = int(i);
+}
+
+void SnowDeformation::NoteMainViewport()
+{
+	// The main pass's depth range, read after the frame's first deferred-pass
+	// lighting draw went out: before its draw the context can still hold an
+	// earlier pass's viewport (the water's reflection draws first, at range 1).
+	auto* state = globals::state;
+	if (mainViewportFrame == state->frameCount || !loaded || !settings.EnableSnowDeformation || !state->inWorld || !globals::deferred->deferredPass ||
+		(state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections)))
+		return;
+	UINT count = 1;
+	D3D11_VIEWPORT vp{};
+	globals::d3d::context->RSGetViewports(&count, &vp);
+	if (!count)
+		return;
+	mainViewportMinDepth = vp.MinDepth;
+	mainViewportMaxDepth = vp.MaxDepth;
+	mainViewportFrame = state->frameCount;
 }
 
 void SnowDeformation::LandscapeSnowRestore()

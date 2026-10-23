@@ -2990,7 +2990,7 @@ public:
 	uint heightCurrent = 0;
 	bool heightMapValid = false;
 	float2 heightWindowCenter = { 0, 0 };
-	/** @brief Depth range of the game's main-pass viewport, sampled once per frame by the capture hook. The deferred span ends on the blended-decal viewport (max depth 0.999968 against the pass's 0.999998), and a shell drawn through that cap sits ~3e-5 NDC nearer than its own object. */
+	/** @brief Depth range of the game's main-pass viewport, sampled once per frame after the first deferred-pass lighting draw (NoteMainViewport). The deferred span ends on the blended-decal viewport (max depth 0.999968 against the pass's 0.999998), and a shell drawn through that cap sits ~3e-5 NDC nearer than its own object. */
 	float mainViewportMinDepth = 0.0f;
 	float mainViewportMaxDepth = 1.0f;
 	uint32_t mainViewportFrame = UINT32_MAX;
@@ -3962,6 +3962,8 @@ public:
 	void LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighting);
 	/** @brief Before the game's RestoreGeometry: puts back everything LandscapeSnowSetup changed. */
 	void LandscapeSnowRestore();
+	/** @brief After a Lighting draw went out (its RestoreGeometry): the first deferred-pass draw of the frame records the main pass's viewport depth range (mainViewportMaxDepth). */
+	void NoteMainViewport();
 	/** @brief Rebuilds the landscape's ShellCB copy and SRV set from the live fields; false while one is missing or the footprint holds no snow. */
 	bool LandscapeSnowRefresh();
 	/** @brief The surface's SRV set t0-t58 (the slots ShellVertexZ and the landscape hull read), from the fields as they stand now. */
