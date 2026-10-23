@@ -1041,6 +1041,8 @@ void SnowDeformation::PrepassSimulation()
 	capturedLoadedPrev = capturedLoaded;
 	capturedLoaded = 0;
 	capturedRoads = 0;
+	coatReachBounds[1].swap(coatReachBounds[0]);
+	coatReachBounds[0].clear();
 
 	// Publish last frame's projected-snow classification counters for the
 	// menu debug readout, then reset for this frame's opaque pass.

@@ -630,24 +630,24 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 				Util::SetResourceName(preSnowDepthRTV.get(), "SnowDeformation::PreSnowDepth RTV");
 			}
 		}
-		// Copy of the main depth (CopyResource: same format as the source,
-		// read through the game's own SRV format), taken between the
-		// landscape shell and the skins.
-		D3D11_TEXTURE2D_DESC preDesc = depthDesc;
-		preDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		preDesc.MiscFlags = 0;
-		preDesc.CPUAccessFlags = 0;
-		preDesc.Usage = D3D11_USAGE_DEFAULT;
-		D3D11_SHADER_RESOURCE_VIEW_DESC mainSrvDesc{};
-		a_mainDepthSRV->GetDesc(&mainSrvDesc);
+		// The main depth between the landscape shell and the skins, over the
+		// decals' rectangle (PreSnowCopyCS, R32F like the pre-snow copy).
+		D3D11_TEXTURE2D_DESC skinCopyDesc = desc;
+		skinCopyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		bloodPreSkinDepth = nullptr;
 		bloodPreSkinDepthSRV = nullptr;
-		if (SUCCEEDED(device->CreateTexture2D(&preDesc, nullptr, bloodPreSkinDepth.put()))) {
+		bloodPreSkinDepthUAV = nullptr;
+		if (SUCCEEDED(device->CreateTexture2D(&skinCopyDesc, nullptr, bloodPreSkinDepth.put()))) {
 			Util::SetResourceName(bloodPreSkinDepth.get(), "SnowDeformation::BloodPreSkinDepth");
-			if (FAILED(device->CreateShaderResourceView(bloodPreSkinDepth.get(), &mainSrvDesc, bloodPreSkinDepthSRV.put())))
+			if (FAILED(device->CreateShaderResourceView(bloodPreSkinDepth.get(), &srvDesc, bloodPreSkinDepthSRV.put())) ||
+				FAILED(device->CreateUnorderedAccessView(bloodPreSkinDepth.get(), &copyUavDesc, bloodPreSkinDepthUAV.put()))) {
 				bloodPreSkinDepth = nullptr;
-			else
+				bloodPreSkinDepthSRV = nullptr;
+				bloodPreSkinDepthUAV = nullptr;
+			} else {
 				Util::SetResourceName(bloodPreSkinDepthSRV.get(), "SnowDeformation::BloodPreSkinDepth SRV");
+				Util::SetResourceName(bloodPreSkinDepthUAV.get(), "SnowDeformation::BloodPreSkinDepth UAV");
+			}
 		}
 	}
 	if (!shellPrepassMainDepthState) {
@@ -878,18 +878,26 @@ D3D11_BOX SnowDeformation::ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint3
 
 void SnowDeformation::TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV)
 {
+	globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
+	CopyDepthRect(a_context, a_mainDepthSRV, preSnowRect, preSnowDepthUAV.get());
+	globals::profiler->EndPass();
+	preSnowDepthThisFrame = true;
+}
+
+void SnowDeformation::CopyDepthRect(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV, const D3D11_BOX& a_box, ID3D11UnorderedAccessView* a_uav)
+{
+	if (a_box.right <= a_box.left || a_box.bottom <= a_box.top)
+		return;
 	ID3D11RenderTargetView* rawRTVs[8] = {};
 	ID3D11DepthStencilView* rawDSV = nullptr;
 	a_context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
 	a_context->OMSetRenderTargets(0, nullptr, nullptr);
-	globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
-	DepthSyncRectCB rectData{ { preSnowRect.left, preSnowRect.top }, { preSnowRect.right - preSnowRect.left, preSnowRect.bottom - preSnowRect.top } };
+	DepthSyncRectCB rectData{ { a_box.left, a_box.top }, { a_box.right - a_box.left, a_box.bottom - a_box.top } };
 	depthSyncRectCB->Update(rectData);
 	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
-	ID3D11UnorderedAccessView* copyUAV = preSnowDepthUAV.get();
 	a_context->CSSetConstantBuffers(2, 1, &rectCB);
 	a_context->CSSetShaderResources(0, 1, &a_mainDepthSRV);
-	a_context->CSSetUnorderedAccessViews(2, 1, &copyUAV, nullptr);
+	a_context->CSSetUnorderedAccessViews(2, 1, &a_uav, nullptr);
 	a_context->CSSetShader(GetPreSnowCopyCS(), nullptr, 0);
 	a_context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
 	ID3D11ShaderResourceView* nullCopySRV = nullptr;
@@ -899,7 +907,6 @@ void SnowDeformation::TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11Shad
 	a_context->CSSetUnorderedAccessViews(2, 1, &nullCopyUAV, nullptr);
 	a_context->CSSetConstantBuffers(2, 1, &nullCopyCB);
 	a_context->CSSetShader(nullptr, nullptr, 0);
-	globals::profiler->EndPass();
 	a_context->OMSetRenderTargets(8, rawRTVs, rawDSV);
 	for (auto* rtv : rawRTVs) {
 		if (rtv)
@@ -907,7 +914,6 @@ void SnowDeformation::TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11Shad
 	}
 	if (rawDSV)
 		rawDSV->Release();
-	preSnowDepthThisFrame = true;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetDepthSyncCS()
@@ -2080,7 +2086,7 @@ void SnowDeformation::DrawShell()
 		// overlay puts the decals' own contribution back over thin snow
 		// (Blood.cpp). Only while blood decals are in view.
 		bloodPreSnowValid = false;
-		if (!bloodOverlays.empty() && DecalOverlayWanted() && bloodPreDecalValid)
+		if (!bloodOverlays.empty() && DecalOverlayWanted() && bloodPreDecalValid && !capturedStatics.empty())
 			CopyBloodTargets(false);
 	}
 

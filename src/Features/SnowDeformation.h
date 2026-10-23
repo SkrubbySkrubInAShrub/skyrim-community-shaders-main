@@ -1089,6 +1089,26 @@ public:
 	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u, bool a_ownClock = false, ID3D11VertexShader* a_skinnedVS = nullptr);
 	/** @brief Joins the frame's overlay set: the decal's screen rectangle, and at the frame's first decal the pre-decal copy. Once per geometry. */
 	void RegisterDecalOverlay(const BloodCapture& a_capture);
+	/** @brief Whether the overlay can change a pixel of a decal with this world bound: a loaded capture's skin reaches it (the skin cull's sphere plus kDecalOverlayMaxLift), or the ground snow draws (its contest reads the pre-decal Masks under every decal), or volume snow is on. Implemented in Blood.cpp. */
+	bool DecalReachesSnow(const RE::NiBound& a_bound);
+	/** @brief SnowBloodCapture.hlsl kOverlayMaxLift: the composite keeps pixels whose snow lies at most this far in front of the decal along the view ray. */
+	static constexpr float kDecalOverlayMaxLift = 24.0f;
+	/** @brief XY bound spheres (x, y, radius) of the loaded captures: [0] this frame so far, [1] last frame. */
+	std::vector<float3> coatReachBounds[2];
+	/** @brief Both lists on a kCoatReachCell grid over the loaded square plus one cell, each sphere grown by the skin cull's margin and kDecalOverlayMaxLift: one bit row per grid row. Built at the frame's first decal test, topped up from [0] as captures arrive. */
+	static constexpr float kCoatReachCell = 256.0f;
+	std::vector<uint64_t> coatReachGrid;
+	float coatReachOrigin[2] = {};
+	int coatReachDim = 0;
+	int coatReachWords = 0;
+	uint32_t coatReachFrame = UINT32_MAX;
+	size_t coatReachMarked = 0;
+	void MarkCoatReach(float a_x, float a_y, float a_radius);
+	/** @brief DevBench A/B: true registers every decal again while a loaded capture exists anywhere, as before the reach test. */
+	bool decalReachGateOff = false;
+	/** @brief Decal draws the reach test turned away, this frame and the last finished one. */
+	uint32_t decalReachMisses = 0;
+	uint32_t decalReachMissesLast = 0;
 	/** @brief From the capture hook: one of the engine's runtime decals that is not blood. Overlay only, never the blood map. */
 	void CaptureDecalOverlay(RE::BSRenderPass* a_pass);
 	bool DecalOverlayWanted() const { return settings.BloodOnSnow || settings.DecalsOnObjectSnow; }
@@ -1096,6 +1116,10 @@ public:
 	bool CoatPaintsMarks() const { return settings.DecalsOnObjectSnow && settings.ProjSnowMatch; }
 	/** @brief The overlay decals' alpha in screen space: x the ones that are not blood, y all of them (the overlay's cover). */
 	Texture2D* decalMaskTexture = nullptr;
+	/** @brief ClearView over the decals' rectangle when the driver supports it natively; otherwise the whole target is cleared. */
+	winrt::com_ptr<ID3D11DeviceContext1> decalMaskContext1;
+	bool decalMaskClearView = false;
+	bool decalMaskClearViewChecked = false;
 	ID3D11VertexShader* decalMaskVS = nullptr;
 	ID3D11VertexShader* decalMaskSkinVS = nullptr;
 	ID3D11PixelShader* decalMaskPS = nullptr;
@@ -1197,9 +1221,10 @@ public:
 	bool bloodTilesLogged = false;
 	/** @brief Set where the deformation map is cleared whole (worldspace or range change): the tiles' ground is gone. */
 	bool bloodTilesDrop = false;
-	/** @brief The main depth after the landscape shell and before the object-snow skins, copied on frames the decal overlay will run with tiles live: a pixel the skins left alone is the shell's, and the shell paints its own blood. */
+	/** @brief The main depth after the landscape shell and before the object-snow skins, copied over the decals' rectangle on frames the decal overlay will run with tiles live: a pixel the skins left alone is the shell's, and the shell paints its own blood. R32F like preSnowDepth (PreSnowCopyCS). */
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodPreSkinDepthUAV;
 	bool bloodPreSkinDepthThisFrame = false;
 	/** @brief Per tile, kBloodTileSnapDim a side on the blood map's own texel grid: the map's texels as the tile was seeded (sRGB view), and the highest concentration every mark redrawn into the tile since has deposited there (the map's own shader and blend). */
 	winrt::com_ptr<ID3D11Texture2D> bloodTileSnapshot;
@@ -2071,6 +2096,8 @@ public:
 	D3D11_BOX preSnowRect{};
 	/** @brief Takes the pre-snow copy now (PreSnowCopyCS over preSnowRect), with the output-merger bindings saved and restored around it. */
 	void TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV);
+	/** @brief PreSnowCopyCS: the main depth's floats over a_box into an R32F UAV, with the output-merger bindings saved and restored around it. A depth-stencil source cannot be copied in part. */
+	void CopyDepthRect(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV, const D3D11_BOX& a_box, ID3D11UnorderedAccessView* a_uav);
 	ID3D11PixelShader* GetShellFillPSPreSnow();
 	ID3D11PixelShader* shellFillPSPreSnow = nullptr;
 	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution. */

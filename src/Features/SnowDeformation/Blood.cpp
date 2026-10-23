@@ -362,6 +362,12 @@ void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 	if (capturedLoaded == 0 && capturedLoadedPrev == 0)
 		return;
 	auto* geometry = a_capture.geometry.get();
+	if (bloodOverlaySet.contains(geometry))
+		return;
+	if (!decalReachGateOff && !DecalReachesSnow(geometry->worldBound)) {
+		decalReachMisses++;
+		return;
+	}
 	const BloodCapture& capture = a_capture;
 	// Every frame, once per geometry (the hook sees a decal once per pass
 	// that draws it): the decal's screen rectangle joins the overlay's. The
@@ -411,6 +417,67 @@ void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 		}
 		bloodOverlays.push_back(capture);
 	}
+}
+
+void SnowDeformation::MarkCoatReach(float a_x, float a_y, float a_radius)
+{
+	const float reach = a_radius + settings.RoadMeshesDepth + kSkinCullMargin + kDecalOverlayMaxLift;
+	const int x0 = std::max(int(std::floor((a_x - reach - coatReachOrigin[0]) / kCoatReachCell)), 0);
+	const int x1 = std::min(int(std::floor((a_x + reach - coatReachOrigin[0]) / kCoatReachCell)), coatReachDim - 1);
+	const int y0 = std::max(int(std::floor((a_y - reach - coatReachOrigin[1]) / kCoatReachCell)), 0);
+	const int y1 = std::min(int(std::floor((a_y + reach - coatReachOrigin[1]) / kCoatReachCell)), coatReachDim - 1);
+	for (int y = y0; y <= y1; ++y) {
+		uint64_t* row = coatReachGrid.data() + size_t(y) * coatReachWords;
+		for (int w = x0 >> 6; w <= x1 >> 6; ++w)
+			row[w] |= (~0ull >> (63 - std::min(x1 - (w << 6), 63))) & (~0ull << std::max(x0 - (w << 6), 0));
+	}
+}
+
+bool SnowDeformation::DecalReachesSnow(const RE::NiBound& a_bound)
+{
+	// While the ground snow draws, every decal: its pre-decal Masks put the
+	// land's grain back under it for the shell's contest (Masks.y 0 cuts thin
+	// snow), and without live tiles the composite covers thin ground snow.
+	const uint32_t frame = globals::state->frameCount;
+	if (settings.VolumeSnow || shellDrawGroundGated || shellEarlyFrame == frame)
+		return true;
+	if (coatReachFrame != frame) {
+		coatReachFrame = frame;
+		coatReachMarked = 0;
+		coatReachDim = 0;
+		int sqMinX, sqMinY, sqMaxX, sqMaxY;
+		if (LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY)) {
+			constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+			coatReachOrigin[0] = float(sqMinX - 1) * kCellSize;
+			coatReachOrigin[1] = float(sqMinY - 1) * kCellSize;
+			coatReachDim = int(float(std::max(sqMaxX - sqMinX, sqMaxY - sqMinY) + 3) * kCellSize / kCoatReachCell);
+			coatReachWords = (coatReachDim + 63) >> 6;
+			coatReachGrid.assign(size_t(coatReachDim) * coatReachWords, 0ull);
+			for (const auto& b : coatReachBounds[1])
+				MarkCoatReach(b.x, b.y, b.z);
+		}
+	}
+	if (coatReachDim == 0)
+		return true;
+	for (; coatReachMarked < coatReachBounds[0].size(); ++coatReachMarked) {
+		const auto& b = coatReachBounds[0][coatReachMarked];
+		MarkCoatReach(b.x, b.y, b.z);
+	}
+	const float r = a_bound.radius;
+	const int x0 = int(std::floor((a_bound.center.x - r - coatReachOrigin[0]) / kCoatReachCell));
+	const int x1 = int(std::floor((a_bound.center.x + r - coatReachOrigin[0]) / kCoatReachCell));
+	const int y0 = int(std::floor((a_bound.center.y - r - coatReachOrigin[1]) / kCoatReachCell));
+	const int y1 = int(std::floor((a_bound.center.y + r - coatReachOrigin[1]) / kCoatReachCell));
+	// Past the grid nothing was marked: no claim.
+	if (!(r >= 0.0f) || x0 < 0 || y0 < 0 || x1 >= coatReachDim || y1 >= coatReachDim)
+		return true;
+	for (int y = y0; y <= y1; ++y) {
+		const uint64_t* row = coatReachGrid.data() + size_t(y) * coatReachWords;
+		for (int w = x0 >> 6; w <= x1 >> 6; ++w)
+			if (row[w] & (~0ull >> (63 - std::min(x1 - (w << 6), 63))) & (~0ull << std::max(x0 - (w << 6), 0)))
+				return true;
+	}
+	return false;
 }
 
 void SnowDeformation::CaptureDecalOverlay(RE::BSRenderPass* a_pass)
@@ -681,6 +748,14 @@ bool SnowDeformation::EnsureDecalMask(uint32_t a_width, uint32_t a_height)
 		logger::warn("[SNOW DEFORMATION] decal mask disabled (shader or blend state failed): spell marks stay under object snow, the overlay is not gated by its decals");
 		decalMaskFailed = true;
 		return false;
+	}
+	if (!decalMaskClearViewChecked) {
+		decalMaskClearViewChecked = true;
+		D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
+		if (SUCCEEDED(globals::d3d::context->QueryInterface(__uuidof(ID3D11DeviceContext1), decalMaskContext1.put_void())) && decalMaskContext1 &&
+			SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))))
+			decalMaskClearView = options.ClearView != FALSE;
+		logger::info("[SNOW DEFORMATION] decal mask: {}", decalMaskClearView ? "cleared over the decals' rectangle (ClearView)" : "cleared whole (no native ClearView)");
 	}
 	if (decalMaskTexture && (decalMaskTexture->desc.Width != a_width || decalMaskTexture->desc.Height != a_height)) {
 		delete decalMaskTexture;
@@ -1862,6 +1937,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 {
 	bloodOverlaysLast = 0;
 	bloodOverlaySet.clear();
+	decalReachMissesLast = std::exchange(decalReachMisses, 0u);
 	const bool copies = bloodPreSnowValid && bloodPreDecalValid;
 	bloodPreSnowValid = false;
 	bloodPreDecalValid = false;
@@ -1966,7 +2042,13 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		ID3D11DepthStencilView* savedDSV = nullptr;
 		context->OMGetRenderTargets(8, savedRTVs, &savedDSV);
 		const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		context->ClearRenderTargetView(decalMaskTexture->rtv.get(), zero);
+		// The composite reads the mask inside the decals' rectangle only.
+		if (decalMaskClearView) {
+			const D3D11_RECT clearRect = bloodCopyRect;
+			decalMaskContext1->ClearView(decalMaskTexture->rtv.get(), zero, &clearRect, 1);
+		} else {
+			context->ClearRenderTargetView(decalMaskTexture->rtv.get(), zero);
+		}
 		ID3D11RenderTargetView* maskRTV = decalMaskTexture->rtv.get();
 		context->OMSetRenderTargets(1, &maskRTV, nullptr);
 		context->OMSetBlendState(decalMaskBlendState.get(), nullptr, 0xFFFFFFFF);

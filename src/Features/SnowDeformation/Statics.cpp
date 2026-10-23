@@ -1362,6 +1362,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	capturedStatics.back().parallax = parallax;
 	capturedRoads += road ? 1u : 0u;
 	capturedLoaded += lodBatch ? 0u : 1u;
+	if (!lodBatch) {
+		const auto& wb = a_pass->geometry->worldBound;
+		coatReachBounds[0].push_back({ wb.center.x, wb.center.y, wb.radius });
+	}
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -4252,8 +4256,13 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 
 void SnowDeformation::DrawCapturedStatics()
 {
-	if (SnowShadersPending(2))
+	// Every early exit ends the decal overlay's frame: a list left standing
+	// keeps DrawShell's pre-snow copies running with nothing to read them.
+	auto endOverlay = [this] { DrawBloodOverlay(globals::d3d::context, nullptr); };
+	if (SnowShadersPending(2)) {
+		endOverlay();
 		return;
+	}
 	if (cpuCensusArmed) {
 		// Order-free: the game hands the passes over in a different order
 		// each frame, so entries hash on their own and the sum is the list.
@@ -4294,15 +4303,16 @@ void SnowDeformation::DrawCapturedStatics()
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Setup & Cull");
 		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Trench Patch");
+		endOverlay();
 		return;
 	}
 	// Not on the world map: skins strobed there as the panning camera
 	// crossed capture gates, and a skin without the shell beside it only
 	// mismatches the map. Mirrors the recolor gate in GetCommonSettingsGPU.
-	if (globals::state->isMapMenuOpen)
+	if (globals::state->isMapMenuOpen || !EnsureStaticsShaders()) {
+		endOverlay();
 		return;
-	if (!EnsureStaticsShaders())
-		return;
+	}
 
 	// The skins' depth prepass (see the fills below), decided here: the
 	// pre-snow copy DrawShell left to this pass rides its first fill.
@@ -5068,11 +5078,11 @@ void SnowDeformation::DrawCapturedStatics()
 		// The decal overlay leaves the landscape shell's pixels to the blood
 		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
-		if (BloodTilesLive() && !bloodOverlays.empty() && bloodPreSkinDepth && bloodPreSkinDepthSRV) {
+		if (BloodTilesLive() && !bloodOverlays.empty() && bloodPreSkinDepthUAV && bloodPreSkinDepthSRV && GetPreSnowCopyCS() && depthSyncRectCB) {
 			statsRow(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Depth Copy"));
-			winrt::com_ptr<ID3D11Resource> mainDepthResource;
-			mainDepthSRV->GetResource(mainDepthResource.put());
-			context->CopyResource(bloodPreSkinDepth.get(), mainDepthResource.get());
+			// The composite reads it inside the decals' rectangle only.
+			const RECT& rc = bloodCopyRect;
+			CopyDepthRect(context, mainDepthSRV, D3D11_BOX{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 }, bloodPreSkinDepthUAV.get());
 			bloodPreSkinDepthThisFrame = true;
 		} else {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
