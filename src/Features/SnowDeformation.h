@@ -3617,6 +3617,21 @@ public:
 	bool exteriorHeightGateOff = false;
 	/** @brief Last CascadeSnowSoon answer DrawShell took (DevBench readout). */
 	bool cascadeSnowSoonLast = true;
+	/** @brief DevBench A/B: true gives the height maps the whole loaded square's verdict again, with no cascade footprint test. */
+	bool cascadeHeightGateOff = false;
+	/** @brief DevBench A/B: true raises every sun cascade while the shell footprint holds snow, as before the per-cascade test. */
+	bool cascadeRaiseGateOff = false;
+	/** @brief The cascade camera the last raise verdict was taken for (per-frame buffer), and the verdict. */
+	Matrix cascadeGateVP{};
+	float4 cascadeGateCam{};
+	uint32_t cascadeGateFrame = UINT32_MAX;
+	bool cascadeGateMeets = true;
+	/** @brief Sun cascade cameras raised and left unraised, this frame and the last. */
+	uint32_t cascadeRaised = 0;
+	uint32_t cascadeSkipped = 0;
+	uint32_t cascadeRaisedLast = 0;
+	uint32_t cascadeSkippedLast = 0;
+	uint32_t cascadeCountFrame = UINT32_MAX;
 	/** @brief A window move past this many texels restarts the exclusion walk. */
 	static constexpr int kGatherJumpTexels = 32;
 
@@ -4201,8 +4216,19 @@ protected:
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
 	/** @brief WindowHasSnow over the ground snow's own footprint, which reaches far past the deformation window. False means no snow can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
-	/** @brief Superset of ShellFootprintHasSnow as the next frame's sun cascades can see it: any snowy or never-looked-at cell of the loaded square, or a snowy cell one past it (the square moves when the player crosses a cell). Land past the square never bakes, so unknown there does not count. Implemented in TerrainData.cpp. */
-	bool CascadeSnowSoon() const;
+	/** @brief Whether the next frame's sun cascades may raise snow: a snowy or never-looked-at cell of the loaded square, or a snowy cell one past it (the square moves when the player crosses a cell), that meets one of this frame's cascade footprints. Land past the square never bakes, so unknown there does not count. Without sun descriptors, any such cell. Implemented in TerrainData.cpp. */
+	bool CascadeSnowSoon();
+	/** @brief Four side planes of a clip footprint, world space, inside where >= 0. */
+	using FootprintPlanes = std::array<std::array<double, 4>, 4>;
+	static constexpr size_t kMaxSunFootprints = 4;
+	/** @brief The sun's shadow-map footprints this frame from its descriptors (lightTransform: absolute world to slice UV, inside 0..w); false with no sun shadow light or descriptor. Implemented in TerrainData.cpp. */
+	bool SunCascadeFootprints(FootprintPlanes* a_out, size_t& a_count) const;
+	/** @brief Whether a cell the sun cascades can raise meets one of a_count footprints: the snowy cells of the loaded square, and with a_soon its never-looked-at cells and the snowy cells one past it. A cell's box spans the land of it and its neighbours up to a_rise above, grown sideways by a_rise and a vertex spacing; an unknown cell takes the known land's range. True with no square or no known land. Implemented in TerrainData.cpp. */
+	bool SnowCellsMeetFootprints(const FootprintPlanes* a_planes, size_t a_count, float a_rise, bool a_soon);
+	/** @brief The sun cascade being drawn (the per-frame buffer's camera) meets a snowy cell's raised land; cached per cascade camera. Implemented in LandscapeSnow.cpp. */
+	bool LsCascadeMeetsSnow();
+	/** @brief The raise's highest lift above the land: LsConfig::lift, the hull's cull height. Implemented in LandscapeSnow.cpp. */
+	float LsRiseReach() const;
 	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
 	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
 	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square narrowed to the view), for the debug menu. */

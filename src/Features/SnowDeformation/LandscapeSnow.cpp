@@ -649,6 +649,43 @@ void SnowDeformation::InstallLandscapeSnow()
 	stl::write_vfunc<0x7, LS_Utility_RestoreGeometry>(RE::VTABLE_BSUtilityShader[0]);
 }
 
+float SnowDeformation::LsRiseReach() const
+{
+	return std::max(ls.cfg.lift, 0.0f);
+}
+
+bool SnowDeformation::LsCascadeMeetsSnow()
+{
+	// Shadow maps draw with their cascade's camera in the per-frame buffer.
+	const auto& fb = globals::game::frameBufferCached;
+	const auto& m = fb.GetCameraViewProj();
+	const auto& cam = fb.GetCameraPosAdjust();
+	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
+	if (cascadeCountFrame != frame) {
+		cascadeCountFrame = frame;
+		cascadeRaisedLast = std::exchange(cascadeRaised, 0u);
+		cascadeSkippedLast = std::exchange(cascadeSkipped, 0u);
+		cascadeGateFrame = UINT32_MAX;
+	}
+	if (cascadeGateFrame == frame && std::memcmp(&cascadeGateVP, &m, sizeof(m)) == 0 && std::memcmp(&cascadeGateCam, &cam, sizeof(cam)) == 0)
+		return cascadeGateMeets;
+	cascadeGateFrame = frame;
+	cascadeGateVP = m;
+	cascadeGateCam = cam;
+	// |x|, |y| <= w of row . (p - cam, 1); z is pancaked, so no near or far plane.
+	FootprintPlanes planes;
+	for (int i = 0; i < 4; i++) {
+		const int r = i >> 1;
+		const double s = (i & 1) ? -1.0 : 1.0;
+		for (int c = 0; c < 4; c++)
+			planes[i][c] = double(m.m[3][c]) + s * double(m.m[r][c]);
+		planes[i][3] -= planes[i][0] * cam.x + planes[i][1] * cam.y + planes[i][2] * cam.z;
+	}
+	cascadeGateMeets = SnowCellsMeetFootprints(&planes, 1, LsRiseReach(), false);
+	(cascadeGateMeets ? cascadeRaised : cascadeSkipped)++;
+	return cascadeGateMeets;
+}
+
 bool SnowDeformation::LandscapeSnowRefresh()
 {
 	ls.cbValid = false;
@@ -912,6 +949,10 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			LandscapeSnowRefresh();
 		}
 		if (!ls.cbValid)
+			want = LsMode::kNone;
+		// No snowy land this cascade can show: every vertex would keep the land's
+		// height, so the whole cascade draws as the game's own.
+		else if (want != LsMode::kNone && !cascadeRaiseGateOff && !LsCascadeMeetsSnow())
 			want = LsMode::kNone;
 	}
 	float2 boundXY{};

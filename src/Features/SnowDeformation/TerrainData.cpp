@@ -1535,11 +1535,129 @@ uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_max
 	return kSnowGateBare;
 }
 
-bool SnowDeformation::CascadeSnowSoon() const
+bool SnowDeformation::SunCascadeFootprints(FootprintPlanes* a_out, size_t& a_count) const
+{
+	a_count = 0;
+	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
+	auto* sun = shadowSceneNode ? shadowSceneNode->GetRuntimeData().sunShadowDirLight : nullptr;
+	if (!sun)
+		return false;
+	const auto& descriptors = sun->GetRuntimeData().shadowmapDescriptors;
+	for (uint32_t i = 0; i < descriptors.size() && a_count < kMaxSunFootprints; ++i) {
+		// uv = p * L (row vectors, absolute world); the slice is 0 <= u, v <= w.
+		const auto& L = reinterpret_cast<const DirectX::XMFLOAT4X4&>(descriptors[i].lightTransform);
+		auto& planes = a_out[a_count++];
+		for (int k = 0; k < 2; ++k) {
+			planes[2 * k] = { L.m[0][k], L.m[1][k], L.m[2][k], L.m[3][k] };
+			planes[2 * k + 1] = { L.m[0][3] - L.m[0][k], L.m[1][3] - L.m[1][k], L.m[2][3] - L.m[2][k], L.m[3][3] - L.m[3][k] };
+		}
+	}
+	return a_count > 0;
+}
+
+bool SnowDeformation::SnowCellsMeetFootprints(const FootprintPlanes* a_planes, size_t a_count, float a_rise, bool a_soon)
 {
 	int sqMinX, sqMinY, sqMaxX, sqMaxY;
 	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
 		return true;
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const uint32_t stamp = snowDepthVersion.load(std::memory_order_acquire);
+	if (viewGateCellZVersion != stamp) {
+		viewGateCellZ.clear();
+		viewGateCellZVersion = stamp;
+	}
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	const std::shared_lock snowLock(shellSnowyCellMutex);
+	const std::shared_lock cellLock(shellCellMutex);
+	if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
+		return true;
+	auto keyOf = [](int a_cx, int a_cy) { return (uint64_t(uint32_t(a_cx)) << 32) | uint32_t(a_cy); };
+	// A baked cell's land height range (kViewGateMarginZ out), or none.
+	auto landRange = [&](int a_cx, int a_cy) -> const std::pair<float, float>* {
+		const uint64_t key = keyOf(a_cx, a_cy);
+		if (auto z = viewGateCellZ.find(key); z != viewGateCellZ.end())
+			return &z->second;
+		auto it = shellCells.find(key);
+		if (it == shellCells.end() || it->second.worldspaceID != worldspace)
+			return nullptr;
+		const auto [lo, hi] = std::minmax_element(it->second.height.begin(), it->second.height.end());
+		return &viewGateCellZ.try_emplace(key, std::pair{ *lo - kViewGateMarginZ, *hi + kViewGateMarginZ }).first->second;
+	};
+	// Every baked cell's range over the square and one cell past it: what an unknown cell takes.
+	std::optional<std::pair<float, float>> known;
+	auto knownRange = [&]() -> const std::pair<float, float>& {
+		if (!known) {
+			known = std::pair{ std::numeric_limits<float>::max(), std::numeric_limits<float>::lowest() };
+			for (int cy = sqMinY - 1; cy <= sqMaxY + 1; ++cy)
+				for (int cx = sqMinX - 1; cx <= sqMaxX + 1; ++cx)
+					if (const auto* z = landRange(cx, cy))
+						known = std::pair{ std::min(known->first, z->first), std::max(known->second, z->second) };
+		}
+		return *known;
+	};
+	// A triangle with a raised vertex reaches one vertex diagonal past its cell, over neighbours' land.
+	auto blockRange = [&](int a_cx, int a_cy) {
+		std::pair<float, float> r{ std::numeric_limits<float>::max(), std::numeric_limits<float>::lowest() };
+		for (int dy = -1; dy <= 1; ++dy) {
+			for (int dx = -1; dx <= 1; ++dx) {
+				const auto* z = landRange(a_cx + dx, a_cy + dy);
+				const auto& use = z ? *z : knownRange();
+				r = { std::min(r.first, use.first), std::max(r.second, use.second) };
+			}
+		}
+		return r;
+	};
+	const float grow = kShellVertexSpacing + a_rise;
+	auto meets = [&](int a_cx, int a_cy, const std::pair<float, float>& a_z) {
+		if (a_z.first > a_z.second)
+			return true;
+		const double box[2][3] = { { a_cx * double(kCellSize) - grow, a_cy * double(kCellSize) - grow, a_z.first },
+			{ (a_cx + 1) * double(kCellSize) + grow, (a_cy + 1) * double(kCellSize) + grow, double(a_z.second) + a_rise } };
+		for (size_t f = 0; f < a_count; ++f) {
+			bool inside = true;
+			for (const auto& p : a_planes[f]) {
+				if (p[0] * box[p[0] >= 0.0][0] + p[1] * box[p[1] >= 0.0][1] + p[2] * box[p[2] >= 0.0][2] + p[3] < 0.0) {
+					inside = false;
+					break;
+				}
+			}
+			if (inside)
+				return true;
+		}
+		return false;
+	};
+	const int ring = a_soon ? 1 : 0;
+	for (int cy = sqMinY - ring; cy <= sqMaxY + ring; ++cy) {
+		for (int cx = sqMinX - ring; cx <= sqMaxX + ring; ++cx) {
+			const uint64_t key = keyOf(cx, cy);
+			if (shellSnowyCells.contains(key)) {
+				if (meets(cx, cy, blockRange(cx, cy)))
+					return true;
+				continue;
+			}
+			if (!a_soon || cx < sqMinX || cx > sqMaxX || cy < sqMinY || cy > sqMaxY)
+				continue;
+			if (auto it = shellCells.find(key); it != shellCells.end() && it->second.worldspaceID == worldspace)
+				continue;
+			if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == worldspace)
+				continue;
+			if (meets(cx, cy, knownRange()))
+				return true;
+		}
+	}
+	return false;
+}
+
+bool SnowDeformation::CascadeSnowSoon()
+{
+	int sqMinX, sqMinY, sqMaxX, sqMaxY;
+	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
+		return true;
+	// This frame's cascades stand in for the next frame's.
+	FootprintPlanes footprints[kMaxSunFootprints];
+	size_t footprintCount = 0;
+	if (!cascadeHeightGateOff && SunCascadeFootprints(footprints, footprintCount))
+		return SnowCellsMeetFootprints(footprints, footprintCount, LsRiseReach(), true);
 	if (CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) != kSnowGateBare)
 		return true;
 	const std::shared_lock lock(shellSnowyCellMutex);

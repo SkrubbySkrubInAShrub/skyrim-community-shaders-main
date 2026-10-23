@@ -1932,8 +1932,9 @@ void SnowDeformation::DrawShell()
 	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	const bool shellGround = shellDrawGroundGated || early;
 	// The raised sun cascades read the same object fields as the ground snow,
-	// at the next frame's shadow pass and only while ShellFootprintHasSnow
-	// holds (LandscapeSnowRefresh); an interior has no land to raise.
+	// at the next frame's shadow pass, only while ShellFootprintHasSnow holds
+	// and only in a cascade a snowy cell meets (LsCascadeMeetsSnow); an
+	// interior has no land to raise.
 	const bool cascadeReads = settings.SnowCastsShadows && !GroundShellsSuspended();
 	const bool interior = InInteriorCell();
 	cascadeSnowSoonLast = !interior && CascadeSnowSoon();
