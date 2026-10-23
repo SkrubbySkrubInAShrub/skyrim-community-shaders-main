@@ -1388,6 +1388,14 @@ float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ, fl
 #endif
 }
 
+// View depth of a value in the scene's depth buffer. GetScreenDepth assumes a
+// depth range of 1; the main pass draws to 0.999998 (TessScreen.w), which read
+// as range 1 puts a surface 0.9 units near at view depth 2600.
+float ShellSceneViewDepth(float a_rawDepth)
+{
+	return SharedData::GetScreenDepth(a_rawDepth / (TessScreen.w > 0.5 ? TessScreen.w : 1.0));
+}
+
 bool ShellFarClampWindow(float shellZ, float sceneZ)
 {
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
@@ -1450,7 +1458,7 @@ bool ShellMasksNotLand(float3 worldPosRel, float2 pixel, float shellZ, float sce
 	[branch] if (!notLand && dot(worldPosRel, worldPosRel) < kTBMaskReach * kTBMaskReach)
 	{
 		const float mask = TBMaskDepth.Load(int3(pixel, 0));
-		notLand = mask > 0.0 && SharedData::GetScreenDepth(mask) - sceneZ < 0.05;
+		notLand = mask > 0.0 && ShellSceneViewDepth(mask) - sceneZ < 0.05;
 	}
 	return notLand;
 }
@@ -1541,7 +1549,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Depth reads shared by the hidden-fragment exit, the proximity fade and
 	// the conservative depth clamp at the tail.
 	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
-	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
+	float sceneZ = ShellSceneViewDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
 	// The prepass's only derivatives.
 #ifdef SNOW_PREPASS_ATTR

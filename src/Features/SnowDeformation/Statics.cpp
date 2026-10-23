@@ -876,10 +876,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	if (!globals::state->inWorld)
 		return;
 
-	// The main pass's depth range, from the frame's first non-reflection
+	// The main pass's depth range, from the frame's first deferred-pass
 	// lighting draw: DrawShell runs after the blended decals and would
-	// otherwise inherit their viewport (see mainViewportMaxDepth).
-	if (mainViewportFrame != globals::state->frameCount &&
+	// otherwise inherit their viewport (see mainViewportMaxDepth). The water's
+	// reflection draws first, at depth range 1.
+	if (mainViewportFrame != globals::state->frameCount && globals::deferred->deferredPass &&
 		!(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) {
 		UINT count = 1;
 		D3D11_VIEWPORT vp{};
