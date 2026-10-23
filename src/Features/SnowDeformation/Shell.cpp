@@ -1925,11 +1925,13 @@ void SnowDeformation::DrawShell()
 	const bool early = shellEarlyFrame == globals::state->frameCount;
 	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	const bool shellGround = shellDrawGroundGated || early;
-	// The raised sun cascades read the same object fields as the ground snow;
-	// an interior has no land to raise.
+	// The raised sun cascades read the same object fields as the ground snow,
+	// at the next frame's shadow pass and only while ShellFootprintHasSnow
+	// holds (LandscapeSnowRefresh); an interior has no land to raise.
 	const bool cascadeReads = settings.SnowCastsShadows && !GroundShellsSuspended();
 	const bool interior = InInteriorCell();
-	const bool landscapeReads = cascadeReads && (!interior || interiorHeightGateOff);
+	cascadeSnowSoonLast = !interior && CascadeSnowSoon();
+	const bool landscapeReads = cascadeReads && (interior ? interiorHeightGateOff : (cascadeSnowSoonLast || exteriorHeightGateOff));
 	// Off the ground, the captures feed only their own skins (and the volume).
 	if (!shellGround && !landscapeReads && !settings.VolumeSnow)
 		CullUnseenCaptures(cbData);

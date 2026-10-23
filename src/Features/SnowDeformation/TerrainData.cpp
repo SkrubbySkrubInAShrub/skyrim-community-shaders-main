@@ -1535,6 +1535,24 @@ uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_max
 	return kSnowGateBare;
 }
 
+bool SnowDeformation::CascadeSnowSoon() const
+{
+	int sqMinX, sqMinY, sqMaxX, sqMaxY;
+	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
+		return true;
+	if (CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) != kSnowGateBare)
+		return true;
+	const std::shared_lock lock(shellSnowyCellMutex);
+	for (int cy = sqMinY - 1; cy <= sqMaxY + 1; ++cy) {
+		for (int cx = sqMinX - 1; cx <= sqMaxX + 1; ++cx) {
+			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			if (shellSnowyCells.contains(key))
+				return true;
+		}
+	}
+	return false;
+}
+
 uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, const ShellCB& a_cb)
 {
 	const uint32_t verdict = CellRangeSnowVerdict(a_minX, a_minY, a_maxX, a_maxY);

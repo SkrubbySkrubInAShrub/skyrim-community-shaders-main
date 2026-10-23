@@ -3586,6 +3586,10 @@ public:
 	uint64_t heightIdleFrames = 0;
 	/** @brief DevBench A/B: true keeps the interior's height maps running for the cascades, as before the interior gate. */
 	bool interiorHeightGateOff = false;
+	/** @brief DevBench A/B: true keeps a bare exterior's height maps running for the cascades, as before the exterior gate. */
+	bool exteriorHeightGateOff = false;
+	/** @brief Last CascadeSnowSoon answer DrawShell took (DevBench readout). */
+	bool cascadeSnowSoonLast = true;
 	/** @brief A window move past this many texels restarts the exclusion walk. */
 	static constexpr int kGatherJumpTexels = 32;
 
@@ -4170,6 +4174,8 @@ protected:
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
 	/** @brief WindowHasSnow over the ground snow's own footprint, which reaches far past the deformation window. False means no snow can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
+	/** @brief Superset of ShellFootprintHasSnow as the next frame's sun cascades can see it: any snowy or never-looked-at cell of the loaded square, or a snowy cell one past it (the square moves when the player crosses a cell). Land past the square never bakes, so unknown there does not count. Implemented in TerrainData.cpp. */
+	bool CascadeSnowSoon() const;
 	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
 	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
 	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square narrowed to the view), for the debug menu. */

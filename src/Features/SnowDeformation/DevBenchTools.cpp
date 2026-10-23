@@ -365,12 +365,14 @@ json SnowDeformation::DevBenchReaderGatesArgs(const json& a_args)
 			a_off = !a_args[a_key].get<bool>();
 	};
 	flag("interiorHeightGate", interiorHeightGateOff);
+	flag("exteriorHeightGate", exteriorHeightGateOff);
 	flag("masksCopyGate", masksCopyGateOff);
 	flag("marchIdle", marchIdleOff);
 	flag("bloodLatch", bloodLatchOff);
 	flag("landMaskFeatureGate", landMaskFeatureGateOff);
 	flag("recordGrowth", staticsRecordGrowOff);
-	return { { "interiorHeightGate", !interiorHeightGateOff }, { "masksCopyGate", !masksCopyGateOff }, { "marchIdle", !marchIdleOff },
+	return { { "interiorHeightGate", !interiorHeightGateOff }, { "exteriorHeightGate", !exteriorHeightGateOff }, { "cascadeSnowSoon", cascadeSnowSoonLast },
+		{ "masksCopyGate", !masksCopyGateOff }, { "marchIdle", !marchIdleOff },
 		{ "bloodLatch", !bloodLatchOff }, { "landMaskFeatureGate", !landMaskFeatureGateOff }, { "recordGrowth", !staticsRecordGrowOff },
 		{ "heightIdleFrames", heightIdleFrames }, { "heightGhostsLive", heightGhostsLive },
 		{ "heightGhostBox", { heightGhostBox.x, heightGhostBox.y, heightGhostBox.z, heightGhostBox.w } }, { "heightMapValid", heightMapValid },
@@ -415,7 +417,7 @@ void SnowDeformation::InstallDevBenchTools()
 	if (!dvb)
 		return;
 	static constexpr const char* readerGatesDesc =
-		R"({"description":"Reader-gate A/B switches (runtime-only, all default true = gate on). interiorHeightGate: indoors the cascades stop keeping the object height maps running; they idle once no ghost can be in the window (heightIdleFrames, heightGhostsLive, heightGhostBox). masksCopyGate: the pre-shell Masks copy runs only for the ground snow or a capture. marchIdle: the sun-march caches stop after 30 frames with no ground snow and no capture and rebuild whole on return (marchIdleFrames, marchIdleSkipped). bloodLatch: the shells skip the blood map while no deposit lies in the window (bloodMapWritten, bloodWrittenBox). landMaskFeatureGate: the land snow-mask lookup runs only for landscape materials (landMaskForeignHits counts hits it would drop; counted only with the gate off). recordGrowth: the statics record buffers grow past 8192 records instead of falling back to per-draw updates (recordCapacity, recordFallbacks). No args = read state.","inputSchema":{"type":"object","properties":{"interiorHeightGate":{"type":"boolean"},"masksCopyGate":{"type":"boolean"},"marchIdle":{"type":"boolean"},"bloodLatch":{"type":"boolean"},"landMaskFeatureGate":{"type":"boolean"},"recordGrowth":{"type":"boolean"}}}})";
+		R"({"description":"Reader-gate A/B switches (runtime-only, all default true = gate on). interiorHeightGate: indoors the cascades stop keeping the object height maps running; they idle once no ghost can be in the window (heightIdleFrames, heightGhostsLive, heightGhostBox). exteriorHeightGate: outdoors the cascades keep them running only while the next shadow pass can raise snow (cascadeSnowSoon: a snowy or unbaked cell in the loaded square, or a snowy cell one past it); with nothing else reading, they are skipped and rebuilt from a clear on return. masksCopyGate: the pre-shell Masks copy runs only for the ground snow or a capture. marchIdle: the sun-march caches stop after 30 frames with no ground snow and no capture and rebuild whole on return (marchIdleFrames, marchIdleSkipped). bloodLatch: the shells skip the blood map while no deposit lies in the window (bloodMapWritten, bloodWrittenBox). landMaskFeatureGate: the land snow-mask lookup runs only for landscape materials (landMaskForeignHits counts hits it would drop; counted only with the gate off). recordGrowth: the statics record buffers grow past 8192 records instead of falling back to per-draw updates (recordCapacity, recordFallbacks). No args = read state.","inputSchema":{"type":"object","properties":{"interiorHeightGate":{"type":"boolean"},"exteriorHeightGate":{"type":"boolean"},"masksCopyGate":{"type":"boolean"},"marchIdle":{"type":"boolean"},"bloodLatch":{"type":"boolean"},"landMaskFeatureGate":{"type":"boolean"},"recordGrowth":{"type":"boolean"}}}})";
 	dvb->RegisterTool("snowdeformation.readergates", readerGatesDesc, &ReaderGatesTool, nullptr);
 	static constexpr const char* shaderTypesDesc =
 		R"({"description":"The F10 performance overlay's shader-type table: per BSShader type, smoothed draw calls and CPU wall time (ms) between draw submissions attributed to that type - NOT GPU time. live=false means the overlay is hidden and the numbers are stale (toggle it with F10).","readOnly":true,"inputSchema":{"type":"object","properties":{}}})";
