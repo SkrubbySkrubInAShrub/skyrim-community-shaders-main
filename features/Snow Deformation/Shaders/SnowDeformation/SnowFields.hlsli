@@ -100,16 +100,11 @@ float ShellEdgeFade(float2 gridLocal)
 	return fade;
 }
 
-// The band's far half lays the snow's depth down onto its ground; the half at
-// the edge dissolves it (a coverage alpha the shell cuts at 0.2, solid from 0.5).
-float ShellEdgeDepthFade(float a_fade)
+// Across the band the snow's depth runs linearly down to its ground (0 at the
+// seam); bare ground's negative depth is left as it is.
+float ShellEdgeDepth(float a_depth, float a_fade)
 {
-	return saturate(2.0 * a_fade - 1.0);
-}
-
-float ShellEdgeAlpha(float a_fade)
-{
-	return a_fade >= 0.5 ? 1.0 : 0.2 + 0.6 * a_fade;
+	return min(a_depth, a_depth * a_fade);
 }
 
 // Saturates EARLY (full height once the disc is a third carved), and the old

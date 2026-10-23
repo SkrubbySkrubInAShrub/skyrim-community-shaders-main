@@ -1084,7 +1084,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// down onto the ground across the seam ramp.
 		float bare = saturate(1.0 - coverage);
 		float depth = rampDepth + (-8.0) * bare;
-		depth = lerp(-8.0, depth, ShellEdgeDepthFade(edgeFade));
+		depth = ShellEdgeDepth(depth, edgeFade);
 
 		// Deep trench floors pass unchanged; a floor set below ~9 (a low
 		// Trench Floor fraction) compresses with the toe.
@@ -1538,8 +1538,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
 	float2 gridLocal = input.GridLocal;
-	// Depth reads shared by the hidden-fragment exit, the edge dissolve, the
-	// proximity fade and the conservative depth clamp at the tail.
+	// Depth reads shared by the hidden-fragment exit, the proximity fade and
+	// the conservative depth clamp at the tail.
 	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
 	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
@@ -1565,7 +1565,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float pixelRampDepth = gDeferredRampDepth;
 	float3 pixelTerrain = 0.0;
 	float pixelCoverage = 1.0;
-	float psEdgeFade = 1.0;
 	float pixelClassDepth = 0.0;
 #else
 	float3 pixelTerrain = EndSnowAtWater(SampleTerrain(gridLocal), gridLocal);
@@ -1576,7 +1575,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float pixelClassDepth = pixelTerrain.y;
 	float pixelBare = saturate(1.0 - pixelCoverage);
 	float pixelRampDepth = pixelClassDepth + (-8.0) * pixelBare;
-	pixelRampDepth = lerp(-8.0, pixelRampDepth, ShellEdgeDepthFade(psEdgeFade));
+	pixelRampDepth = ShellEdgeDepth(pixelRampDepth, psEdgeFade);
 #endif
 
 	// Mirror of the geometry's touch-down toe, so the cut reads the sheet's
@@ -1588,16 +1587,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// Wherever the land has snow weight the pixel is a candidate; on mixed
 	// land the land's own verdict decides it below.
 	const float pixelSnowWeight = LandSnowWeight(gridLocal);
-	float coverageAlpha = pixelSnowWeight > 0.002 ? ShellEdgeAlpha(psEdgeFade) : 0.0;
+	float coverageAlpha = pixelSnowWeight > 0.002 ? 1.0 : 0.0;
 #endif
 	// Josef's border spec: the alpha may not cut geometry still standing
 	// above its ground - the sheet dives below the terrain (the descent's
 	// undershoot) and the depth test against the terrain IS the border.
 	// Keyed on the RENDERED height above the terrain data, not the ramp. The
-	// window-edge fade rides along; the overrides and the land contest below
-	// still multiply.
+	// overrides and the land contest below still multiply.
 	float sheetAboveGround = smoothstep(0.25, 1.5, input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x);
-	coverageAlpha = max(coverageAlpha, sheetAboveGround * ShellEdgeAlpha(psEdgeFade));
+	coverageAlpha = max(coverageAlpha, sheetAboveGround);
 
 	// Object blending (Terrain Blending-style depth proximity): the shell only
 	// knows terrain heights, so this is what makes it meet statics softly

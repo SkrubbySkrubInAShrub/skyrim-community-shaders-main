@@ -1251,7 +1251,7 @@ float SheetSurfaceZ(float2 gridLocal, float zFloor, out float a_depth, uniform b
 {
 	float z = -100000.0;
 	float3 st = SampleTerrainStatics(gridLocal);
-	float depth = lerp(-8.0, st.y - 8.0 * saturate(1.0 - st.z), ShellEdgeDepthFade(ShellEdgeFade(gridLocal)));
+	float depth = ShellEdgeDepth(st.y - 8.0 * saturate(1.0 - st.z), ShellEdgeFade(gridLocal));
 	a_depth = depth;
 	[branch] if (st.x > -50000.0 && depth > 4.0)
 	{
