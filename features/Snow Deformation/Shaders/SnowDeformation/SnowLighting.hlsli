@@ -87,6 +87,56 @@ namespace SnowLighting
 		worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * weight);
 	}
 
+#if defined(LANDSCAPE) || ((defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR))
+	// The shell's snow set through the shell's own anti-tiling taps
+	// (SnowParallax.hlsli ComputeSnowTapsNoGrad) at the shell's tiling, for a
+	// camera-relative position: every texel lands where the shell's would.
+	struct SnowSetTaps
+	{
+		float2 uv0, uv1, uv2;
+		float3 weights;
+		float2 dx, dy;
+	};
+
+	float2 SnowSetHash(float2 cell)
+	{
+		float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+		p3 += dot(p3, p3.yzx + 33.33);
+		return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
+	}
+
+	// worldXY: worldRelXY + CameraPosAdjust. Takes derivatives: call in
+	// uniform flow.
+	SnowSetTaps SnowSetTapsAt(float2 worldRelXY, float2 worldXY)
+	{
+		float2 uv = frac(FrameBuffer::CameraPosAdjust.xy / SnowDeformation::SnowUVTile) + worldRelXY / SnowDeformation::SnowUVTile;
+		SnowSetTaps t;
+		t.dx = ddx(uv);
+		t.dy = ddy(uv);
+		float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
+		float2 cellBase = floor(lattice);
+		float2 f = frac(lattice);
+		bool upper = f.x + f.y >= 1.0;
+		float2 v0 = cellBase + (upper ? float2(1.0, 1.0) : float2(0.0, 0.0));
+		float2 v1 = cellBase + (upper ? float2(0.0, 1.0) : float2(1.0, 0.0));
+		float2 v2 = cellBase + (upper ? float2(1.0, 0.0) : float2(0.0, 1.0));
+		float3 bary = upper ? float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y) : float3(1.0 - f.x - f.y, f.x, f.y);
+		bary = pow(bary, 4.0);
+		bary /= dot(bary, 1.0);
+		t.weights = bary;
+		t.uv0 = uv + SnowSetHash(v0);
+		t.uv1 = uv + SnowSetHash(v1);
+		t.uv2 = uv + SnowSetHash(v2);
+		return t;
+	}
+
+	float4 SnowSetSample(Texture2D<float4> tex, SnowSetTaps t)
+	{
+		return t.weights.x * tex.SampleGrad(SampColorSampler, t.uv0, t.dx, t.dy) + t.weights.y * tex.SampleGrad(SampColorSampler, t.uv1, t.dx, t.dy) +
+		       t.weights.z * tex.SampleGrad(SampColorSampler, t.uv2, t.dx, t.dy);
+	}
+#endif
+
 #if defined(LANDSCAPE)
 	// Per-tile snow detection: how much of this pixel's landscape blend is
 	// snow material. Only the terrain overlay reads it.
@@ -136,45 +186,16 @@ namespace SnowLighting
 
 	// Land Snow Recolor (DebugTerrainOverlay bit 256): the module's snow layers
 	// wear the shell's snow set texel by texel, so wherever the land shows
-	// through the shell, its snow is the shell's snow. The taps are the shell's
-	// own (SnowParallax.hlsli ComputeSnowTapsNoGrad) at the shell's tiling.
-	float2 LandSnowHash(float2 cell)
-	{
-		float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
-		p3 += dot(p3, p3.yzx + 33.33);
-		return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
-	}
-
-	float4 LandSnowSample(Texture2D<float4> tex, float2 uv0, float2 uv1, float2 uv2, float3 w, float2 dx, float2 dy)
-	{
-		return w.x * tex.SampleGrad(SampColorSampler, uv0, dx, dy) + w.y * tex.SampleGrad(SampColorSampler, uv1, dx, dy) +
-		       w.z * tex.SampleGrad(SampColorSampler, uv2, dx, dy);
-	}
-
+	// through the shell, its snow is the shell's snow.
 	void LandRecolorBegin(inout State s, float3 worldRel)
 	{
 		uint bits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 256) != 0 && bits != 0)
 		{
 			float2 worldXY = worldRel.xy + FrameBuffer::CameraPosAdjust.xy;
-			float2 uv = frac(FrameBuffer::CameraPosAdjust.xy / SnowDeformation::SnowUVTile) + worldRel.xy / SnowDeformation::SnowUVTile;
-			float2 dx = ddx(uv);
-			float2 dy = ddy(uv);
-			float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
-			float2 cellBase = floor(lattice);
-			float2 f = frac(lattice);
-			bool upper = f.x + f.y >= 1.0;
-			float2 v0 = cellBase + (upper ? float2(1.0, 1.0) : float2(0.0, 0.0));
-			float2 v1 = cellBase + (upper ? float2(0.0, 1.0) : float2(1.0, 0.0));
-			float2 v2 = cellBase + (upper ? float2(1.0, 0.0) : float2(0.0, 1.0));
-			float3 bary = upper ? float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y) : float3(1.0 - f.x - f.y, f.x, f.y);
-			bary = pow(bary, 4.0);
-			bary /= dot(bary, 1.0);
-			float2 uv0 = uv + LandSnowHash(v0);
-			float2 uv1 = uv + LandSnowHash(v1);
-			float2 uv2 = uv + LandSnowHash(v2);
+			const SnowSetTaps taps = SnowSetTapsAt(worldRel.xy, worldXY);
 
-			float3 a = LandSnowSample(SnowDeformation::HorizonSnowAlbedo, uv0, uv1, uv2, bary, dx, dy).rgb;
+			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 			// Shell albedo convention (SnowShell.hlsl kSnowAlbedo), then the layer
 			// value the land's own Color::Diffuse turns back into it.
 			float3 shellAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? a : Color::LinearToSrgb(a)) : Color::ColorToLinear(a);
@@ -211,14 +232,14 @@ namespace SnowLighting
 			s.landSnowNormal = 0.0;
 			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 			{
-				float2 n = LandSnowSample(SnowDeformation::HorizonSnowNormal, uv0, uv1, uv2, bary, dx, dy).xy * 2.0 - 1.0;
+				float2 n = SnowSetSample(SnowDeformation::HorizonSnowNormal, taps).xy * 2.0 - 1.0;
 				s.landSnowNormal = float2(n.x, -n.y);
 			}
 			// The shell's material defaults; its RMAOS map where the set has one.
 			s.landSnowRMAOS = float4(0.6, 0.0, 1.0, 0.028);
 			[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 512) != 0)
 			{
-				float4 r = LandSnowSample(SnowDeformation::HorizonSnowRmaos, uv0, uv1, uv2, bary, dx, dy);
+				float4 r = SnowSetSample(SnowDeformation::HorizonSnowRmaos, taps);
 				s.landSnowRMAOS = float4(clamp(r.x * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0), 0.0, r.z, r.w * SharedData::snowDeformationSettings.SnowSpecularLevel);
 			}
 			s.landSnowRMAOS.x *= 1.0 - max(press * (0.24 + 0.26 * wet), glaze * 0.8);
@@ -283,14 +304,14 @@ namespace SnowLighting
 
 #if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// Horizon snow: where the game's own LOD terrain bake reads as snow,
-	// wear the shell's snow material instead - same albedo, same world
-	// tiling - so the shell's geometry hands off to identically-dressed
-	// terrain beyond its reach. Classification runs on the raw (gamma)
-	// bake, matching the window fill's thresholds; LOD meshes carry
-	// model-space normals ~ world space, so normal.z gates cliffs back to
-	// rock even where the bake is pale. Shading happens at the write tail
-	// (RelightLOD, the shell's recipe on the OUTPUTS).
-	void LODRecolor(inout State s, float3 rawBaseColor, float2 worldXYRel, inout float3 normal)
+	// wear the shell's snow albedo instead, through the shell's taps, so the
+	// shell's geometry hands off to identically-dressed terrain beyond its
+	// reach. No normal map: the shell's own fades out by 2200 units.
+	// Classification runs on the raw (gamma) bake, matching the window fill's
+	// thresholds; LOD meshes carry model-space normals ~ world space, so
+	// normal.z gates cliffs back to rock even where the bake is pale. Shading
+	// happens at the write tail (RelightLOD, the shell's recipe on the OUTPUTS).
+	void LODRecolor(inout State s, float3 rawBaseColor, float2 worldXYRel, float3 normal)
 	{
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 		// Plain object-LOD batches flagged by the statics hook: their baked snow
@@ -310,30 +331,16 @@ namespace SnowLighting
 #	else
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
 #	endif
+			const SnowSetTaps taps = SnowSetTapsAt(worldXYRel, worldXYRel + FrameBuffer::CameraPosAdjust.xy);
 			[branch] if (lodReplaceW > 0.003)
 			{
-				// frac + explicit gradients: correct mip selection across the
-				// tile seam regardless of the sampler's address mode.
-				float2 snowRawUV = (worldXYRel + FrameBuffer::CameraPosAdjust.xy) / SnowDeformation::SnowUVTile;
-				float3 snowSample = SnowDeformation::HorizonSnowAlbedo.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).rgb;
+				float3 snowSample = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
 				s.lodReplaceW = lodReplaceW;
 				s.lodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowSample : Color::LinearToSrgb(snowSample)) : Color::ColorToLinear(snowSample);
 				// Classification debug (bit 4): the baked recipe's pixels in magenta too.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.lodAlbedo = float3(1.0, 0.0, 1.0);
-				// Normal-map parity with the shell: perturb the LOD normal by the
-				// snow normal at the same world tiling. LOD normals are world-
-				// space up-ish, so a world-axis tangent frame is stable here.
-				// Feeds N.L and the DALC/IBL ambient.
-				[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
-				{
-					float3 snowNormalTS = SnowDeformation::HorizonSnowNormal.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).xyz * 2.0 - 1.0;
-					float3 lodTangent = normalize(cross(float3(0.0, 1.0, 0.0), normal));
-					float3 lodBitangent = cross(normal, lodTangent);
-					float3 snowWorldNormal = normalize(snowNormalTS.x * lodTangent + snowNormalTS.y * lodBitangent + max(snowNormalTS.z, 0.05) * normal);
-					normal = normalize(lerp(normal, snowWorldNormal, lodReplaceW));
-				}
 			}
 		}
 	}
@@ -342,8 +349,8 @@ namespace SnowLighting
 #if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LANDSCAPE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels are
 	// re-evaluated through the SAME PBR functions the shell and TruePBR
-	// statics use - the context already carries this pixel's perturbed
-	// normal, view ray, and the EHF/world-shadowed sun; the compensation
+	// statics use - the context already carries this pixel's normal, view
+	// ray, and the EHF/world-shadowed sun; the compensation
 	// reconstructs the TRUE_PBR-flavoured light input this non-PBR
 	// permutation never applied (PI-CONVENTION-SPIKE.md), and GetDirect-
 	// LightInput's Lambert cancels it back out. Direct + Fresnel-weighted
