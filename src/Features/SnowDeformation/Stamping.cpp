@@ -244,6 +244,74 @@ static bool NodeAttachedTo(const RE::NiAVObject* a_node, const RE::NiAVObject* a
 	return false;
 }
 
+// A foot's print: heel to the toe extended by kFootToeExtend, kFootWidthRatio
+// of that wide, scaled by the snow depth.
+struct FootPrint
+{
+	float2 heel;
+	float2 tip;
+	float radius;
+	float length;
+};
+
+static FootPrint FootPrintOf(RE::NiAVObject* a_foot, RE::NiAVObject* a_toe, float a_depthScale, float a_radiusFloor)
+{
+	const auto& footWorld = a_foot->world;
+	const float boneScale = footWorld.scale;
+	FootPrint print{};
+	print.heel = { footWorld.translate.x, footWorld.translate.y };
+	print.tip = print.heel;
+	// Toeless feet size off the parent-bone distance: a fixed
+	// hoof radius turns mammoth feet into dots.
+	print.length = 2.0f * kHoofRadius * boneScale;
+	float radius = kHoofRadius * boneScale;
+	if (auto* parentNode = a_foot->parent) {
+		const float parentDist = footWorld.translate.GetDistance(parentNode->world.translate);
+		print.length = std::max(print.length, parentDist);
+		radius = std::max(radius, 0.2f * parentDist);
+	}
+	if (a_toe) {
+		const auto& toePos = a_toe->world.translate;
+		float2 dir = { toePos.x - print.heel.x, toePos.y - print.heel.y };
+		const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+		if (len > 2.0f) {
+			const float extend = 1.0f + kFootToeExtend;
+			print.tip = { print.heel.x + dir.x * extend, print.heel.y + dir.y * extend };
+			radius = len * extend * kFootWidthRatio;
+			print.length = len * extend;
+		}
+	}
+	print.radius = std::clamp(radius * kFootPrintScale * a_depthScale, a_radiusFloor, kMaxStampShapeRadius);
+	return print;
+}
+
+// What a foot plants against: the actor's ground, or the lowest foot when even
+// that one misses the absolute band (tall-ankle skeletons).
+struct FootPlantRef
+{
+	float z;
+	bool relative;
+};
+
+static FootPlantRef FootPlantRefOf(const SnowDeformation::StampBones& a_bones, float a_groundZ)
+{
+	float minFootZ = FLT_MAX;
+	float minFootScale = 1.0f;
+	for (const auto& foot : a_bones.feet)
+		if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f && n->world.translate.z < minFootZ) {
+			minFootZ = n->world.translate.z;
+			minFootScale = n->world.scale;
+		}
+	const bool relative = minFootZ != FLT_MAX && minFootZ - a_groundZ > kFootPlantBand * minFootScale;
+	return { relative ? minFootZ : a_groundZ, relative };
+}
+
+static float FootPlantBand(const FootPlantRef& a_ref, float a_boneScale, float a_footLength)
+{
+	return a_ref.relative ? std::max(kFootRelativeBand * a_boneScale, kFootRelativeLenFactor * a_footLength) :
+	                        kFootPlantBand * a_boneScale;
+}
+
 // Non-flesh nodes that carry body-part substrings and stamped as limbs:
 // holsters ("Weapon L Calf" matches calf, "Ankle Dagger Offhand" matches
 // hand), IED/XPMSSE "Extra*" gear slots ("ExtraLThighFlute"), and HDT-SMP
@@ -857,8 +925,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// which is what ActorIsFloating below is for.
 		auto* charController = actor->GetCharController();
 		// Impact energy, tracked before the gates below can return and stamped
-		// once the actor has passed them all.
-		float impact = 0.0f;
+		// once the actor has passed them all: what the feet strike with (speed,
+		// a landing) and a body down in the snow.
+		float footImpact = 0.0f;
+		float knockImpact = 0.0f;
+		bool landed = false;
 		RE::NiPoint3 impactFrom = position;
 		// Ground speed for Speed Spoil, 0 in the air.
 		float spoilSpeed = 0.0f;
@@ -895,7 +966,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				track.landingEnergy = inAir ? 0.0f : landing;
 				track.knockEnergy = !inAir && down ? kImpactKnockedDown : 0.0f;
 				if (!inAir) {
-					impact = std::max({ track.speedEnergy, track.landingEnergy, track.knockEnergy });
+					footImpact = std::max(track.speedEnergy, track.landingEnergy);
+					knockImpact = track.knockEnergy;
+					landed = track.landingEnergy > 0.0f;
 					spoilSpeed = track.speed;
 				}
 				track.prev = position;
@@ -929,7 +1002,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				skeletonProbe.gapToLand = position.z - landZ;
 			// The map is 2D: an impact on a walkway would churn the trenches below.
 			if (position.z - landZ > kElevatedStampCutoff) {
-				impact = 0.0f;
+				footImpact = 0.0f;
+				knockImpact = 0.0f;
 				spoilSpeed = 0.0f;
 			}
 			if (position.z - landZ > kElevatedStampCutoff && !rasterCandidate) {
@@ -1225,18 +1299,41 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// loads it (CreatureSink.cpp): the cube root, its weight over its feet.
 		// People and the unmeasured are the player's.
 		const float impactWeight = creatureWeight > 0.0f ? std::cbrt(creatureWeight) : 1.0f;
-		impact = std::min(impact * impactWeight, 1.0f);
-		// The impact as a stamp that carves nothing: its energy rides the mode
-		// over the actor's path this frame, out past its feet.
-		if (impact > kImpactStampMin && stampCount < actorCeiling) {
+		footImpact = std::min(footImpact * impactWeight, 1.0f);
+		knockImpact = std::min(knockImpact * impactWeight, 1.0f);
+		// Impact stamps carve nothing: their energy rides the mode, Impact Reach
+		// times the size of what struck. Feet strike at their own prints; a body
+		// down in the snow, or one with no feet to read, over its path this frame.
+		const float impactReach = std::clamp(settings.ImpactReach, 0.5f, 4.0f);
+		const bool footStrikes = footPath && bones;
+		const float bodyImpact = footStrikes ? knockImpact : std::max(footImpact, knockImpact);
+		if (bodyImpact > kImpactStampMin && stampCount < actorCeiling) {
 			float4 stamp{};
 			stamp.x = position.x;
 			stamp.y = position.y;
 			stamp.z = 0.0f;
-			stamp.w = std::clamp(root->worldBound.radius * 0.45f, 16.0f, 120.0f);
+			stamp.w = std::clamp(std::clamp(root->worldBound.radius * 0.45f, 16.0f, 120.0f) * impactReach, limbRadiusFloor, kMaxStampShapeRadius);
 			perFrameData.Stamps[stampCount] = stamp;
-			perFrameData.StampEnds[stampCount] = { impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * impact, 0.0f };
+			perFrameData.StampEnds[stampCount] = { impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * bodyImpact, 0.0f };
 			stampCount++;
+		}
+		// A run strikes with the feet on the ground, a landing with all of them.
+		if (footStrikes && footImpact > kImpactStampMin) {
+			const auto plantRef = FootPlantRefOf(*bones, groundZ + bodyLift);
+			for (const auto& foot : bones->feet) {
+				if (stampCount >= actorCeiling)
+					break;
+				auto* footNode = foot.node.get();
+				if (!footNode || footNode->world.scale < 0.01f)
+					continue;
+				const auto print = FootPrintOf(footNode, foot.toe.get(), depthScale, footRadiusFloor);
+				if (!landed && footNode->world.translate.z - plantRef.z > FootPlantBand(plantRef, footNode->world.scale, print.length))
+					continue;
+				perFrameData.Stamps[stampCount] = { print.tip.x, print.tip.y, 0.0f,
+					std::clamp(print.radius * impactReach, footRadiusFloor, kMaxStampShapeRadius) };
+				perFrameData.StampEnds[stampCount] = { print.heel.x, print.heel.y, kStampModeCarve + kStampImpactScale * footImpact, 0.0f };
+				stampCount++;
+			}
 		}
 		// Speed Spoil: a foot leaving its print past a run throws a wedge of
 		// impact energy back from it, carving nothing.
@@ -1349,17 +1446,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				skeletonProbe.verdict = "carving: bone path";
 			bool footStamped = false;
 			{
-				float minFootZ = FLT_MAX;
-				float minFootScale = 1.0f;
-				for (const auto& foot : bones->feet)
-					if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f && n->world.translate.z < minFootZ) {
-						minFootZ = n->world.translate.z;
-						minFootScale = n->world.scale;
-					}
 				const float footGroundZ = groundZ + bodyLift;
 				const float footReach = bodyLift > 0.0f ? std::clamp(1.0f - bodyLift / std::max(nominalDepth * GetAccumulationDepthScale(), 1.0f), 0.0f, 1.0f) : 1.0f;
-				const bool groundRefStarved =
-					minFootZ != FLT_MAX && minFootZ - footGroundZ > kFootPlantBand * minFootScale;
+				const auto plantRef = FootPlantRefOf(*bones, footGroundZ);
 
 				uint32_t footIndex = 0;
 				for (const auto& foot : bones->feet) {
@@ -1374,30 +1463,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						continue;
 					const float boneScale = footWorld.scale;
 
-					float2 heel = { footWorld.translate.x, footWorld.translate.y };
-					float2 tip = heel;
-					// Toeless feet size off the parent-bone distance: a fixed
-					// hoof radius turns mammoth feet into dots.
-					float footLen = 2.0f * kHoofRadius * boneScale;
-					float radius = kHoofRadius * boneScale;
-					if (auto* parentNode = footNode->parent) {
-						const float parentDist = footWorld.translate.GetDistance(parentNode->world.translate);
-						footLen = std::max(footLen, parentDist);
-						radius = std::max(radius, 0.2f * parentDist);
-					}
-					if (auto* toeNode = foot.toe.get()) {
-						const auto& toePos = toeNode->world.translate;
-						float2 dir = { toePos.x - heel.x, toePos.y - heel.y };
-						const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-						if (len > 2.0f) {
-							const float extend = 1.0f + kFootToeExtend;
-							tip = { heel.x + dir.x * extend, heel.y + dir.y * extend };
-							radius = len * extend * kFootWidthRatio;
-							footLen = len * extend;
-						}
-					}
-					radius = std::clamp(radius * kFootPrintScale * depthScale,
-						footRadiusFloor, kMaxStampShapeRadius);
+					const auto print = FootPrintOf(footNode, foot.toe.get(), depthScale, footRadiusFloor);
+					const float2 heel = print.heel;
+					const float2 tip = print.tip;
+					const float radius = print.radius;
 
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh
@@ -1407,17 +1476,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// stamp in and out every frame or two, and each flicker is
 					// a real map input. A swing lift clears 1.5x instantly, so
 					// the trail-break latch is unaffected.
-					const float plantRef = groundRefStarved ? minFootZ : footGroundZ;
-					const float plantBand = groundRefStarved ?
-					                            std::max(kFootRelativeBand * boneScale, kFootRelativeLenFactor * footLen) :
-					                            kFootPlantBand * boneScale;
+					const float plantBand = FootPlantBand(plantRef, boneScale, print.length);
 					const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
 					const bool wasPlanted = stampPrevPositions.find(key) != stampPrevPositions.end();
 					const float releaseBand = plantBand * (wasPlanted ? 1.5f : 1.0f);
-					const bool planted = footWorld.translate.z - plantRef <= releaseBand;
+					const bool planted = footWorld.translate.z - plantRef.z <= releaseBand;
 					if (probing && thisIndex < skeletonProbe.feet.size()) {
 						auto& row = skeletonProbe.feet[thisIndex];
-						row.zAboveRef = footWorld.translate.z - plantRef;
+						row.zAboveRef = footWorld.translate.z - plantRef.z;
 						row.band = releaseBand;
 						row.planted = planted;
 						row.radius = radius;

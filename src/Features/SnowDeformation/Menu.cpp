@@ -840,6 +840,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPrintRim = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (Detail Coverage, at twice Detail Relief) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
 
+		ImGui::SliderFloat(T(TKEY("impact_reach"), "Impact Reach"), &settings.ImpactReach, 0.5f, 4.0f, "%.2fx");
+		if (auto _ttImpactReach = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("impact_reach_tooltip"), "How far the impact detail spreads around a hard hit - a sprint, a dodge, a landing, a body knocked down - as a share of what hit the snow. At 1 a foot's impact covers its own print and a thin ring around it, and a body knocked down an area about its own size; 2 is twice as wide. The snow it throws is Speed Spoil's. Applies to new impacts."));
+
 		ImGui::Checkbox(T(TKEY("speed_spoil"), "Speed Spoil"), &settings.SpeedSpoil);
 		if (auto _ttSpoil = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads."));

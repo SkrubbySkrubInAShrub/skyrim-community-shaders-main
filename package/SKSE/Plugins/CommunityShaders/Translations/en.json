@@ -1712,6 +1712,8 @@
     "feature.snow_deformation.general_settings": "General Settings",
     "feature.snow_deformation.horizon_snow": "Horizon Snow",
     "feature.snow_deformation.horizon_snow_tooltip": "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world.",
+    "feature.snow_deformation.impact_reach": "Impact Reach",
+    "feature.snow_deformation.impact_reach_tooltip": "How far the impact detail spreads around a hard hit - a sprint, a dodge, a landing, a body knocked down - as a share of what hit the snow. At 1 a foot's impact covers its own print and a thin ring around it, and a body knocked down an area about its own size; 2 is twice as wide. The snow it throws is Speed Spoil's. Applies to new impacts.",
     "feature.snow_deformation.incorporeal_either": "Either",
     "feature.snow_deformation.incorporeal_flag": "Actors marked Ghost",
     "feature.snow_deformation.incorporeal_mode": "Ghosts Leave No Trench",

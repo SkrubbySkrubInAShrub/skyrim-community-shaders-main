@@ -123,6 +123,7 @@
 	X(TrenchDetailRelief) \
 	X(TrenchDetailRoughness) \
 	X(TrenchDetailCoverage) \
+	X(ImpactReach) \
 	X(SpeedSpoil) \
 	X(SpeedSpoilSize) \
 	X(ShellHorizonMarch) \

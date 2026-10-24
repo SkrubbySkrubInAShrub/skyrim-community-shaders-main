@@ -552,6 +552,8 @@ public:
 		float TrenchDetailRoughness = 1.0f;
 		/** @brief Trench detail: how far across the trench it reaches, 0-2.5: 0 the floor only, 1 just past the rim, 2 over the berm. Soft at every value. */
 		float TrenchDetailCoverage = 1.75f;
+		/** @brief How far a hard hit's impact energy (the trench detail's impact set) spreads, as a share of what struck (0.5-4). At 1 a foot strikes over its own print, and a body knocked down (or one with no feet to read) over 0.45 of its bound. */
+		float ImpactReach = 1.0f;
 		/** @brief A fast foot leaving its print throws a wedge of impact energy back from it (no carve), and the trench detail shows that thrown snow past the trench too. */
 		bool SpeedSpoil = true;
 		/** @brief Speed Spoil: the wedge's length and width, as a share of a kick at the actor's speed (0.1-2). */
