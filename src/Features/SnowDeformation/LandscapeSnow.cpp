@@ -62,6 +62,8 @@ namespace
 		// unit of remaining snow) and carve penalty.
 		float blendBonus = 6.0f;
 		float blendPenalty = 16.0f;
+		// Replay loaded land quads the camera passes culled while their snow reaches the view.
+		bool culledLand = true;
 	};
 
 	// Mirrors LandscapeSnowTess.hlsli LsExcl / LsExclAxis.
@@ -219,6 +221,7 @@ namespace
 		double translate[3]{};
 		float2 boundXY{};
 		float boundRadius = 0.0f;
+		uint64_t vertexDesc = 0;
 	};
 
 	struct LssShaders
@@ -254,6 +257,7 @@ namespace
 		uint32_t replayCalls = 0;
 		uint32_t replayDraws = 0;
 		uint32_t replayTess = 0;
+		uint32_t replayCulled = 0;
 		LsExclCounts replayExcl;
 		LsExclCounts raiseExcl;
 	};
@@ -403,6 +407,8 @@ namespace
 		const auto& b = a_pass->geometry->worldBound;
 		cap.boundXY = { b.center.x, b.center.y };
 		cap.boundRadius = b.radius;
+		if (auto* rendererData = triShape->GetGeometryRuntimeData().rendererData)
+			std::memcpy(&cap.vertexDesc, &rendererData->vertexDesc, sizeof(cap.vertexDesc));
 		ls.capturePending = cap.indexCount > 0;
 	}
 
@@ -429,6 +435,33 @@ namespace
 		if (a_cb.SeamRampInv > 0.0f)
 			return { std::max(spanLo.x, a_cb.SeamBounds.x), std::max(spanLo.y, a_cb.SeamBounds.y), std::min(spanHi.x, a_cb.SeamBounds.z), std::min(spanHi.y, a_cb.SeamBounds.w) };
 		return { spanLo.x, spanLo.y, spanHi.x, spanHi.y };
+	}
+
+	// LssOffView's planes with its guard band (left, right, bottom, top, near); inside where plane . (p, 1) >= 0, p absolute.
+	using LsViewPlanes = std::array<std::array<double, 4>, 5>;
+
+	LsViewPlanes LsOffViewPlanes(const SnowDeformation::ShellCB& a_cb, float a_guard)
+	{
+		const auto& m = a_cb.CameraViewProj;
+		const double k = 1.0 + double(a_guard);
+		const int rows[5] = { 0, 0, 1, 1, 2 };
+		const double signs[5] = { 1.0, -1.0, 1.0, -1.0, 1.0 };
+		const double wScale[5] = { k, k, k, k, 0.0 };
+		LsViewPlanes planes;
+		for (int i = 0; i < 5; i++) {
+			for (int c = 0; c < 4; c++)
+				planes[i][c] = wScale[i] * double(m.m[3][c]) + signs[i] * double(m.m[rows[i]][c]);
+			planes[i][3] -= planes[i][0] * a_cb.CameraPosAdjust.x + planes[i][1] * a_cb.CameraPosAdjust.y + planes[i][2] * a_cb.CameraPosAdjust.z;
+		}
+		return planes;
+	}
+
+	bool LsBoxMeetsView(const LsViewPlanes& a_planes, const double (&a_box)[2][3])
+	{
+		for (const auto& p : a_planes)
+			if (p[0] * a_box[p[0] >= 0.0][0] + p[1] * a_box[p[1] >= 0.0][1] + p[2] * a_box[p[2] >= 0.0][2] + p[3] < 0.0)
+				return false;
+		return true;
 	}
 
 	void LsDetach()
@@ -833,16 +866,118 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 	a_context->HSSetConstantBuffers(11, 1, &drawCB);
 	a_context->DSSetConstantBuffers(11, 1, &drawCB);
 
+	// Loaded quads the camera passes culled by their land (lattice outside one view
+	// plane) whose raised box still meets the view; drawn on a captured quad's layout and IB.
+	std::vector<LsCapture> culled;
+	auto* grid = cfg.culledLand && !InInteriorCell() && globals::game::tes ? globals::game::tes->gridCells : nullptr;
+	if (grid) {
+		const LsViewPlanes view = LsOffViewPlanes(a_cb, 0.0f);
+		const LsViewPlanes guarded = LsOffViewPlanes(a_cb, std::max(cfg.guard, 0.0f));
+		const double rise = double(LsRiseReach());
+		constexpr double kCell = kShellVertexSpacing * 32.0;
+		constexpr double kQuad = kCell * 0.5;
+		// A quad by the 2048-unit square holding its bound's centre.
+		const auto quadOf = [&](double a_x, double a_y) { return std::pair{ int(std::floor(a_x / kQuad)), int(std::floor(a_y / kQuad)) }; };
+		std::vector<std::pair<int, int>> drawn;
+		drawn.reserve(ls.captures.size());
+		for (const auto& c : ls.captures)
+			drawn.push_back(quadOf(c.boundXY.x, c.boundXY.y));
+		const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+		const std::shared_lock lock(shellCellMutex);
+		for (uint32_t gx = 0; gx < grid->length; gx++) {
+			for (uint32_t gy = 0; gy < grid->length; gy++) {
+				auto* cell = grid->GetCell(gx, gy);
+				auto* land = cell && cell->IsAttached() ? cell->GetRuntimeData().cellLand : nullptr;
+				const auto* coords = land ? cell->GetCoordinates() : nullptr;
+				if (!land || !land->loadedData || !coords)
+					continue;
+				const auto baked = shellCells.find((uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY));
+				if (baked == shellCells.end() || baked->second.worldspaceID != worldspace)
+					continue;
+				const auto& lattice = baked->second.height;
+				for (uint32_t q = 0; q < 4; q++) {
+					auto* geometry = LandQuadGeometry(land->loadedData, q);
+					auto* rendererData = geometry ? geometry->GetGeometryRuntimeData().rendererData : nullptr;
+					if (!rendererData || !rendererData->vertexBuffer || ls.captured.contains(geometry))
+						continue;
+					const auto& bound = geometry->worldBound;
+					const auto quad = quadOf(bound.center.x, bound.center.y);
+					const int qx = quad.first - 2 * coords->cellX;
+					const int qy = quad.second - 2 * coords->cellY;
+					if (qx < 0 || qx > 1 || qy < 0 || qy > 1 || std::find(drawn.begin(), drawn.end(), quad) != drawn.end())
+						continue;
+					const double x0 = quad.first * kQuad;
+					const double y0 = quad.second * kQuad;
+					bool placed = true;
+					for (const RE::NiAVObject* o = geometry; o && placed; o = o->parent)
+						placed = !o->GetAppCulled();
+					const auto& world = geometry->world;
+					placed = placed && std::abs(world.scale - 1.0f) <= 1e-4f;
+					for (int r = 0; r < 3 && placed; r++)
+						for (int c = 0; c < 3; c++)
+							placed = placed && std::abs(world.rotate.entry[r][c] - (r == c ? 1.0f : 0.0f)) <= 1e-4f;
+					if (!placed)
+						continue;
+					const auto latticeZ = [&](int a_ix, int a_iy) { return double(lattice[size_t(qy * 16 + a_iy) * 33 + size_t(qx * 16 + a_ix)]); };
+					bool landOut = false;
+					for (const auto& p : view) {
+						landOut = true;
+						for (int iy = 0; iy <= 16 && landOut; iy++)
+							for (int ix = 0; ix <= 16 && landOut; ix++)
+								landOut = p[0] * (x0 + ix * kShellVertexSpacing) + p[1] * (y0 + iy * kShellVertexSpacing) + p[2] * latticeZ(ix, iy) + p[3] < 0.0;
+						if (landOut)
+							break;
+					}
+					if (!landOut)
+						continue;
+					double zLo = std::numeric_limits<double>::max();
+					double zHi = std::numeric_limits<double>::lowest();
+					for (int iy = 0; iy <= 16; iy++) {
+						for (int ix = 0; ix <= 16; ix++) {
+							zLo = std::min(zLo, latticeZ(ix, iy));
+							zHi = std::max(zHi, latticeZ(ix, iy));
+						}
+					}
+					// LssOffView's prism: the submerge floor to the rise reach.
+					const double box[2][3] = { { x0, y0, zLo - 32.0 }, { x0 + kQuad, y0 + kQuad, zHi + rise } };
+					if (!LsBoxMeetsView(guarded, box))
+						continue;
+					uint64_t desc = 0;
+					std::memcpy(&desc, &rendererData->vertexDesc, sizeof(desc));
+					const UINT indexCount = UINT(geometry->GetTrishapeRuntimeData().triangleCount) * 3;
+					const auto donor = std::find_if(ls.captures.begin(), ls.captures.end(), [&](const LsCapture& c) { return c.indexCount == indexCount && c.vertexDesc == desc; });
+					if (indexCount == 0 || donor == ls.captures.end())
+						continue;
+					auto& cap = culled.emplace_back();
+					cap.geometry = geometry;
+					cap.layout = donor->layout;
+					cap.vb.copy_from(reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer));
+					cap.stride = donor->stride;
+					cap.ib = donor->ib;
+					cap.ibFormat = donor->ibFormat;
+					cap.ibOffset = donor->ibOffset;
+					cap.indexCount = indexCount;
+					cap.translate[0] = world.translate.x;
+					cap.translate[1] = world.translate.y;
+					cap.translate[2] = world.translate.z;
+					cap.boundXY = { bound.center.x, bound.center.y };
+					cap.boundRadius = bound.radius;
+					cap.vertexDesc = desc;
+				}
+			}
+		}
+	}
+
 	const float4 live = LsLiveRect(a_cb);
 	const auto& cam = a_cb.CameraPosAdjust;
 	const int gateMask = cfg.gate ? std::clamp(cfg.gateMask, 0, 31) : 0;
 	ID3D11InputLayout* boundLayout = nullptr;
 	uint32_t issued = 0;
-	for (const auto& cap : ls.captures) {
+	const auto replay = [&](const LsCapture& cap) {
 		const auto& c = cap.boundXY;
 		const float r = cap.boundRadius;
 		if (c.x + r < live.x || c.y + r < live.y || c.x - r > live.z || c.y - r > live.w)
-			continue;
+			return false;
 		const float dx = c.x - cam.x;
 		const float dy = c.y - cam.y;
 		const bool tessNear = cfg.tessellate && settings.Tessellation && std::sqrt(dx * dx + dy * dy) - r < cfg.tessReach;
@@ -864,7 +999,12 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 		a_context->DrawIndexed(cap.indexCount, 0, 0);
 		issued++;
 		counts.replayTess += tessNear ? 1 : 0;
-	}
+		return true;
+	};
+	for (const auto& cap : ls.captures)
+		replay(cap);
+	for (const auto& cap : culled)
+		counts.replayCulled += replay(cap) ? 1 : 0;
 	counts.replayDraws += issued;
 
 	a_context->IASetInputLayout(prevLayout.get());
@@ -1140,8 +1280,8 @@ std::string SnowDeformation::LandscapeSnowStatus() const
 	}
 	constexpr const char* kStates[4] = { "not started", "compiling", "ready", "FAILED" };
 	const auto& c = ls.shadeLast;
-	const std::string shade = std::format(" | Snow on Landscape: replay {}, {} draws captured, {} replayed ({} tessellated), {} main-pass draws not captured", kStates[std::clamp(ls.shadeState, 0, 3)],
-		c.captures, c.replayDraws, c.replayTess, c.mainMissed);
+	const std::string shade = std::format(" | Snow on Landscape: replay {}, {} draws captured, {} replayed ({} tessellated, {} culled by the camera passes), {} main-pass draws not captured", kStates[std::clamp(ls.shadeState, 0, 3)],
+		c.captures, c.replayDraws, c.replayTess, c.replayCulled, c.mainMissed);
 	return std::format("shader sets: {} ready, {} compiling, {} failed | draws raised so far: {} tessellated, {} vertex-only{}{}", ready, compiling, failed, tess, raise,
 		ls.cbValid ? "" : " | waiting for the shell's fields (no snow in the footprint, or not drawn yet)", shade);
 }
@@ -1169,6 +1309,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	rdf("shadowTessReach", c.shadowTessReach);
 	rdf("blendBonus", c.blendBonus);
 	rdf("blendPenalty", c.blendPenalty);
+	rdb("culledLand", c.culledLand);
 	rdb("landRecolor", landRecolor);
 	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
 		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
@@ -1207,7 +1348,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	}
 	out["config"] = { { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
 		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask },
-		{ "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty },
+		{ "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty }, { "culledLand", c.culledLand },
 		{ "landRecolor", landRecolor }, { "landRecolorActive", LandRecolorActive() } };
 	json entries = json::array();
 	for (const auto& [key, e] : ls.entries)
@@ -1219,7 +1360,7 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	const auto& sc = ls.shadeLast;
 	const auto excl = [](const LsExclCounts& a_c) { return json{ { "draws", a_c.draws }, { "rects", a_c.rects }, { "overflow", a_c.overflow } }; };
 	out["shade"] = { { "replayState", ls.shadeState }, { "compileMs", ls.shade.compileMs }, { "fallbackFrames", ls.shadeFallbacks },
-		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess },
+		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess }, { "replayCulled", sc.replayCulled },
 						   { "replaySmallExclusions", excl(sc.replayExcl) }, { "raiseSmallExclusions", excl(sc.raiseExcl) } } } };
 	// The sealed containers the gate tests: centre, half extents, facing (radians).
 	json sealed = json::array();
