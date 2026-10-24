@@ -1130,7 +1130,7 @@ float SnowHeightBlendOneSided(float w, float hSnow, float heightBlend)
 // The cell and the texel come from BloodLook3.zw (the
 // detail level sets them); the rest mirrors SnowDeformation.h.
 Texture2D<uint> BloodTileIndex : register(t66);
-Texture2D<float4> BloodTilePigment : register(t67);
+Texture2DArray<float4> BloodTilePigment : register(t67);  // a slice per row of 8 tiles
 Texture2D<float4> BloodTileClock : register(t69);
 
 static const int kBloodTileDim = 512;
@@ -1156,7 +1156,11 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 			const float2 local = (worldXY - (float2(cell) * kBloodTileCell - kBloodTileApron)) / kBloodTileTexel;
 			const float atlasDim = float(kBloodTileDim) * float(kBloodTilesAcross);
 			const float uvPerUnit = 1.0 / (kBloodTileTexel * atlasDim);
-			float4 own = BloodTilePigment.SampleGrad(ShellLinearSampler, (float2(tileTexel) + local) / atlasDim, worldDx * uvPerUnit, worldDy * uvPerUnit);
+			// A row a slice: v and its gradient span one tile, so the texel-space
+			// gradient (and the mip) is the square atlas's.
+			const float2 uvScale = float2(uvPerUnit, uvPerUnit * float(kBloodTilesAcross));
+			const float3 uvw = float3((float(tileTexel.x) + local.x) / atlasDim, local.y / float(kBloodTileDim), float(slot / kBloodTilesAcross));
+			float4 own = BloodTilePigment.SampleGrad(ShellLinearSampler, uvw, worldDx * uvScale, worldDy * uvScale);
 
 			const int2 texel = clamp((int2)local, 0, kBloodTileDim - 1);
 			const int2 blockOrigin = tileTexel >> kBloodTileBlockShift;

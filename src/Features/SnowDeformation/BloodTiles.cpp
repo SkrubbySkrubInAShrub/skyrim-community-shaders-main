@@ -59,6 +59,64 @@ void SnowDeformation::DropBloodTiles()
 	bloodTilesLive = 0;
 	bloodTileIndexDirty = true;
 	bloodTileEpoch++;
+	if (bloodTileAtlasRows > 1)
+		SizeBloodTileAtlas(1);
+}
+
+bool SnowDeformation::SizeBloodTileAtlas(uint32_t a_rows)
+{
+	auto* device = globals::d3d::device;
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = kBloodTileDim * BloodTilesAcross();
+	desc.Height = kBloodTileDim;
+	desc.MipLevels = kBloodTileMips;
+	desc.ArraySize = a_rows;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	winrt::com_ptr<ID3D11Texture2D> atlas;
+	if (FAILED(device->CreateTexture2D(&desc, nullptr, atlas.put()))) {
+		logger::error("[SNOW DEFORMATION] blood tiles: a {}-row atlas failed", a_rows);
+		return false;
+	}
+	Util::SetResourceName(atlas.get(), "SnowDeformation::BloodTileAtlas");
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+	srvDesc.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = kBloodTileMips, .FirstArraySlice = 0, .ArraySize = a_rows };
+	winrt::com_ptr<ID3D11ShaderResourceView> srv;
+	if (FAILED(device->CreateShaderResourceView(atlas.get(), &srvDesc, srv.put())))
+		return false;
+	Util::SetResourceName(srv.get(), "SnowDeformation::BloodTileAtlas SRV");
+	winrt::com_ptr<ID3D11UnorderedAccessView> uavs[kBloodTileMips];
+	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip) {
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+		uavDesc.Texture2DArray = { .MipSlice = mip, .FirstArraySlice = 0, .ArraySize = a_rows };
+		if (FAILED(device->CreateUnorderedAccessView(atlas.get(), &uavDesc, uavs[mip].put())))
+			return false;
+		Util::SetResourceName(uavs[mip].get(), "SnowDeformation::BloodTileAtlas UAV");
+	}
+	auto* context = globals::d3d::context;
+	const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
+		context->ClearUnorderedAccessViewFloat(uavs[mip].get(), zero);
+	// Live tiles keep their texels: a tile is seeded once, then only merged into.
+	const uint32_t kept = bloodTileAtlas ? std::min(bloodTileAtlasRows, a_rows) : 0u;
+	for (uint32_t row = 0; row < kept; ++row)
+		for (uint32_t mip = 0; mip < kBloodTileMips; ++mip) {
+			const UINT sub = D3D11CalcSubresource(mip, row, kBloodTileMips);
+			context->CopySubresourceRegion(atlas.get(), sub, 0, 0, 0, bloodTileAtlas.get(), sub, nullptr);
+		}
+	bloodTileAtlas = atlas;
+	bloodTileAtlasSRV = srv;
+	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
+		bloodTileAtlasUAV[mip] = uavs[mip];
+	bloodTileAtlasRows = a_rows;
+	logger::info("[SNOW DEFORMATION] blood tile atlas: {} row{} of {} tiles", a_rows, a_rows == 1 ? "" : "s", BloodTilesAcross());
+	return true;
 }
 
 bool SnowDeformation::EnsureBloodTileResources()
@@ -136,13 +194,10 @@ bool SnowDeformation::EnsureBloodTileResources()
 	constexpr UINT kCompute = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	constexpr UINT kTarget = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 	constexpr UINT kComputeTarget = kCompute | D3D11_BIND_RENDER_TARGET;
-	const uint32_t atlasDim = kBloodTileDim * BloodTilesAcross();
 	const uint32_t blocks = kBloodTileDim / kBloodTileBlock;
 
-	texture(bloodTileAtlas, atlasDim, DXGI_FORMAT_R8G8B8A8_TYPELESS, kCompute, kBloodTileMips, "SnowDeformation::BloodTileAtlas");
-	srv(bloodTileAtlasSRV, bloodTileAtlas.get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, kBloodTileMips, "SnowDeformation::BloodTileAtlas SRV");
-	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
-		uav(bloodTileAtlasUAV[mip], bloodTileAtlas.get(), DXGI_FORMAT_R8G8B8A8_UNORM, mip, "SnowDeformation::BloodTileAtlas UAV");
+	// The pigment atlas starts at one row; AllocateBloodTile adds rows.
+	ok = SizeBloodTileAtlas(1);
 
 	texture(bloodTileClock, blocks * BloodTilesAcross(), DXGI_FORMAT_R32G32B32A32_FLOAT, kCompute, 1, "SnowDeformation::BloodTileClock");
 	srv(bloodTileClockSRV, bloodTileClock.get(), DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "SnowDeformation::BloodTileClock SRV");
@@ -199,8 +254,6 @@ bool SnowDeformation::EnsureBloodTileResources()
 
 	auto* context = globals::d3d::context;
 	const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
-		context->ClearUnorderedAccessViewFloat(bloodTileAtlasUAV[mip].get(), zero);
 	context->ClearUnorderedAccessViewFloat(bloodTileClockUAV.get(), zero);
 	bloodTileIndexDirty = true;
 	bloodTileCB = cb;
@@ -297,6 +350,9 @@ int32_t SnowDeformation::AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int
 	}
 	if (slot < 0)
 		return -1;
+	const uint32_t row = uint32_t(slot) / BloodTilesAcross();
+	if (row >= bloodTileAtlasRows && !SizeBloodTileAtlas(row + 1))
+		return -1;
 	auto& tile = bloodTiles[slot];
 	if (!tile.live)
 		bloodTilesLive++;
@@ -344,7 +400,7 @@ void SnowDeformation::FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const
 	a_cb.MipTexel[0] = a_cb.TileTexel[0];
 	a_cb.MipTexel[1] = a_cb.TileTexel[1];
 	a_cb.MipDim = int32_t(kBloodTileDim);
-	a_cb.padTile = 0;
+	a_cb.TileRow = int32_t(a_slot / BloodTilesAcross());
 	a_cb.SnapTexel[0] = int32_t((a_slot % BloodTilesAcross()) * kBloodTileSnapDim);
 	a_cb.SnapTexel[1] = int32_t((a_slot / BloodTilesAcross()) * kBloodTileSnapDim);
 	a_cb.SnapLogical[0] = tile.snapLogical[0];
@@ -474,9 +530,8 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 
 	// What the tile held, copied aside for the merge to read.
 	const UINT x = UINT(tileCB.TileTexel[0]);
-	const UINT y = UINT(tileCB.TileTexel[1]);
-	const D3D11_BOX pigmentBox{ x, y, 0, x + kBloodTileDim, y + kBloodTileDim, 1 };
-	context->CopySubresourceRegion(bloodTilePrev.get(), 0, 0, 0, 0, bloodTileAtlas.get(), 0, &pigmentBox);
+	const D3D11_BOX pigmentBox{ x, 0, 0, x + kBloodTileDim, kBloodTileDim, 1 };
+	context->CopySubresourceRegion(bloodTilePrev.get(), 0, 0, 0, 0, bloodTileAtlas.get(), D3D11CalcSubresource(0, UINT(tileCB.TileRow), kBloodTileMips), &pigmentBox);
 	const UINT blocks = kBloodTileDim / kBloodTileBlock;
 	const D3D11_BOX clockBox{ UINT(tileCB.TileBlock[0]), UINT(tileCB.TileBlock[1]), 0, UINT(tileCB.TileBlock[0]) + blocks, UINT(tileCB.TileBlock[1]) + blocks, 1 };
 	context->CopySubresourceRegion(bloodTilePrevClock.get(), 0, 0, 0, 0, bloodTileClock.get(), 0, &clockBox);
@@ -526,9 +581,8 @@ void SnowDeformation::BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_
 	for (uint32_t mip = 1; mip < kBloodTileMips; ++mip) {
 		const UINT srcDim = kBloodTileDim >> (mip - 1);
 		const UINT sx = UINT(cb.TileTexel[0]) >> (mip - 1);
-		const UINT sy = UINT(cb.TileTexel[1]) >> (mip - 1);
-		const D3D11_BOX box{ sx, sy, 0, sx + srcDim, sy + srcDim, 1 };
-		context->CopySubresourceRegion(bloodTilePrev.get(), 0, 0, 0, 0, bloodTileAtlas.get(), mip - 1, &box);
+		const D3D11_BOX box{ sx, 0, 0, sx + srcDim, srcDim, 1 };
+		context->CopySubresourceRegion(bloodTilePrev.get(), 0, 0, 0, 0, bloodTileAtlas.get(), D3D11CalcSubresource(mip - 1, UINT(cb.TileRow), kBloodTileMips), &box);
 		cb.MipTexel[0] = cb.TileTexel[0] >> mip;
 		cb.MipTexel[1] = cb.TileTexel[1] >> mip;
 		cb.MipDim = int32_t(kBloodTileDim >> mip);

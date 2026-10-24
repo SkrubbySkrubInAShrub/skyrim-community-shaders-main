@@ -1133,7 +1133,7 @@ public:
 
 	// ---- Blood detail tiles (BloodTiles.cpp; BLOOD-DESIGN.md "Detail tiles") ----
 	static constexpr uint32_t kBloodTileDim = 512;
-	/** @brief 64 tiles of 512 x 512 at a quarter unit a texel: a 4096 atlas, about 90 MB with its mips and scratch, allocated when blood first appears. */
+	/** @brief 64 tiles of 512 x 512 at a quarter unit a texel: an atlas of 8 rows of 8 tiles, one array slice a row (4096 x 512, 10.7 MB with its mips), sized to the rows the live tiles reach. */
 	static constexpr uint32_t kBloodTilesAcross = 8;
 	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
 	static constexpr float kBloodTileTexel = 0.25f;
@@ -1195,7 +1195,7 @@ public:
 		float BurialRefills;
 		int32_t MipTexel[2];
 		int32_t MipDim;
-		int32_t padTile;
+		int32_t TileRow;
 		int32_t SnapTexel[2];
 		int32_t SnapLogical[2];
 	};
@@ -1245,6 +1245,9 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileAtlasUAV[kBloodTileMips];
+	uint32_t bloodTileAtlasRows = 0;
+	/** @brief Remakes the pigment atlas with a_rows rows (array slices), cleared, keeping the rows both sizes hold. False when the device refuses; the old atlas then stays. */
+	bool SizeBloodTileAtlas(uint32_t a_rows);
 	winrt::com_ptr<ID3D11Texture2D> bloodTileClock;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileClockSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileClockUAV;

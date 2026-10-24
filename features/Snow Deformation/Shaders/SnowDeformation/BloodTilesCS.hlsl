@@ -17,7 +17,7 @@
 
 cbuffer BloodTileCB : register(b0)
 {
-	int2 TileTexel;  // the tile's first texel in the atlas
+	int2 TileTexel;  // the tile's first texel on the 8x8 tile grid (the clock and pigment x)
 	int2 TileBlock;  // its first block in the clock atlas
 
 	float2 TileWorldMin;
@@ -36,7 +36,7 @@ cbuffer BloodTileCB : register(b0)
 	// MipDownCS: the tile's first texel at the level written, its size there.
 	int2 MipTexel;
 	int MipDim;
-	int padTile;
+	int TileRow;  // the pigment atlas's slice: one row of 8 tiles, from y 0
 
 	// The tile's first texel in the coarse atlases, and the map's logical
 	// texel that is the snapshot's first.
@@ -84,7 +84,7 @@ bool IsCopied(float a)
 #if defined(SEED_TILE)
 Texture2D<float4> CoarseBlood : register(t0);
 Texture2D<float2> CoarseClock : register(t1);
-RWTexture2D<float4> Pigment : register(u0);
+RWTexture2DArray<float4> Pigment : register(u0);
 RWTexture2D<float4> Clock : register(u1);
 RWTexture2D<float4> Snapshot : register(u2);
 RWTexture2D<float4> Redrawn : register(u3);
@@ -140,7 +140,7 @@ int3 CoarsePhys(int2 logical)
 	float4 o = 0.0;
 	if (acc.a > kMinAlpha)
 		o = float4(LinearToSrgb(acc.rgb), CopiedAlpha(acc.a));
-	Pigment[TileTexel + int2(dtid.xy)] = o;
+	Pigment[int3(TileTexel.x + int(dtid.x), int(dtid.y), TileRow)] = o;
 	// One thread per block dates it.
 	if (all(gtid.xy == 3u))
 		Clock[TileBlock + (int2(dtid.xy) >> kBlockShift)] = newest.y > 0.0 ? float4(newest.x, newest.y, newest.y, 0.0) : float4(0.0, 0.0, 0.0, 0.0);
@@ -259,7 +259,7 @@ Texture2D<float4> ScratchPigment : register(t0);
 Texture2D<float4> PrevPigment : register(t1);
 Texture2D<float4> ClockAtlas : register(t2);
 Texture2D<float4> Residue : register(t3);
-RWTexture2D<float4> Pigment : register(u0);
+RWTexture2DArray<float4> Pigment : register(u0);
 
 // The seed's own sampling of the map, over the residue.
 float4 CopyResidue(uint2 texel)
@@ -306,13 +306,13 @@ float4 CopyResidue(uint2 texel)
 		float a = DepositedAlpha(max(n.a, o.a));
 		o = float4(LinearToSrgb(SrgbToLinear(n.rgb) * a), a);
 	}
-	Pigment[TileTexel + int2(dtid.xy)] = o;
+	Pigment[int3(TileTexel.x + int(dtid.x), int(dtid.y), TileRow)] = o;
 }
 #endif
 
 #if defined(MIP_DOWN)
 Texture2D<float4> Src : register(t0);
-RWTexture2D<float4> Dst : register(u0);
+RWTexture2DArray<float4> Dst : register(u0);
 
 // One level of the tile's own mip chain, from a copy of the level above:
 // tiles never filter into their neighbours in the atlas.
@@ -327,6 +327,6 @@ RWTexture2D<float4> Dst : register(u0);
 		acc += float4(SrgbToLinear(s.rgb), s.a);
 	}
 	acc *= 0.25;
-	Dst[MipTexel + int2(dtid.xy)] = float4(LinearToSrgb(acc.rgb), acc.a);
+	Dst[int3(MipTexel.x + int(dtid.x), int(dtid.y), TileRow)] = float4(LinearToSrgb(acc.rgb), acc.a);
 }
 #endif
