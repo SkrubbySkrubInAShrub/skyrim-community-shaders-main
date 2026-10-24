@@ -2159,7 +2159,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomFiltered->CreateSRV(maskSrvDesc);
 	heightBottomFiltered->CreateRTV(maskRtvDesc);
 	heightBottomFiltered->CreateUAV(maskUavDesc);
-	heightScratch = makeHeightTexture("SnowDeformation::HeightConeScratch");
 	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
 	// The peeled second layer: the layer-1 cone seed's plane-continuation test.
 	heightTop2Raw[0] = makeHeightTexture("SnowDeformation::HeightTop2Raw0");
@@ -2171,20 +2170,13 @@ void SnowDeformation::CreateHeightFieldResources()
 	// Far road level: the road captures alone over the loaded-cell square.
 	// Same grid, so a texel is 12 units at uGridsToLoad 5 and 16 at 7.
 	heightTopRawFar = makeHeightTexture("SnowDeformation::HeightTopRawFar");
-	// P3: the sky-openness field at half the raster's resolution - a soft
-	// field, and half res quarters the bake cost. No RTV: compute-written.
+	// The tile grid below starts from the sky-openness field's shape (P3: half
+	// the raster's resolution, compute-written; made on Volume Snow's first run).
 	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
 	openDesc.Width = kHeightMapDim / 2;
 	openDesc.Height = kHeightMapDim / 2;
 	openDesc.Format = DXGI_FORMAT_R8_UNORM;
 	openDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SHADER_RESOURCE_VIEW_DESC openSrvDesc = heightSrvDesc;
-	openSrvDesc.Format = openDesc.Format;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC openUavDesc = heightUavDesc;
-	openUavDesc.Format = openDesc.Format;
-	objectSkyOpen = new Texture2D(openDesc, "SnowDeformation::ObjectSkyOpen");
-	objectSkyOpen->CreateSRV(openSrvDesc);
-	objectSkyOpen->CreateUAV(openUavDesc);
 	static_assert(kHeightMapDim % 8 == 0, "HeightMapProcessCS clamps tiles to dims / 8");
 	D3D11_TEXTURE2D_DESC tileDesc = openDesc;
 	tileDesc.Width = kHeightMapDim / 8;
@@ -3304,10 +3296,19 @@ void SnowDeformation::RenderObjectHeightMap()
 		// Same merge for the peeled layer, before the next peel reads it;
 		// tops only, nothing reads a peeled layer's bottoms.
 		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel Merge"));
-		if (heightScrollTopCS)
+		if (heightScrollTopCS) {
 			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr, nullptr);
-		else
+		} else {
+			// Without the tops-only merge the bottoms need an output of their own.
+			if (!heightScratch) {
+				const DXGI_FORMAT format = heightBottomRaw[0]->desc.Format;
+				heightScratch = new Texture2D(heightBottomRaw[0]->desc, "SnowDeformation::HeightPeelScratch");
+				heightScratch->CreateSRV({ .Format = format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+				heightScratch->CreateRTV({ .Format = format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+				heightScratch->CreateUAV({ .Format = format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+			}
 			mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch, nullptr);
+		}
 		globals::profiler->EndPass();
 	}
 
@@ -3315,6 +3316,17 @@ void SnowDeformation::RenderObjectHeightMap()
 	// bilinear it). Only Volume Snow reads it, and the volume below reads the
 	// last run's: a run that turns the bake back on first bakes that one from
 	// the previous top, which this run has only read.
+	// Made on Volume Snow's first run: nothing else reads it.
+	if (settings.VolumeSnow && objectSkyOpenCS && !objectSkyOpen) {
+		D3D11_TEXTURE2D_DESC openDesc = heightTopRaw[0]->desc;
+		openDesc.Width = kHeightMapDim / 2;
+		openDesc.Height = kHeightMapDim / 2;
+		openDesc.Format = DXGI_FORMAT_R8_UNORM;
+		openDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		objectSkyOpen = new Texture2D(openDesc, "SnowDeformation::ObjectSkyOpen");
+		objectSkyOpen->CreateSRV({ .Format = openDesc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+		objectSkyOpen->CreateUAV({ .Format = openDesc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+	}
 	const bool skyWanted = settings.VolumeSnow && objectSkyOpenCS && objectSkyOpen;
 	auto bakeSkyOpen = [&](Texture2D* a_top) {
 		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Sky"));
@@ -3390,7 +3402,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 
 	// Angle of repose for the object cones: multi-scale min-plus passes
-	// (large steps first), ping-ponging with heightScratch. Steps are texels:
+	// (large steps first), ping-ponging with the previous bottoms, dead once
+	// the layer-1 merge has run. Steps are texels:
 	// the leading 64 is the cone's world reach at the 4-unit texel; the
 	// trailing repeat keeps the pass count even.
 	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
@@ -3450,7 +3463,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// The repose chain over a seeded cone; it lands back in a_cone.
 		auto repose = [&](Texture2D* a_cone, Texture2D* a_seeded, HeightProcessCB& a_data, const std::vector<uint>& a_steps) {
 			Texture2D* in = a_seeded;
-			Texture2D* out = a_seeded == a_cone ? heightScratch : a_cone;
+			Texture2D* out = a_seeded == a_cone ? heightBottomRaw[previous] : a_cone;
 			context->CSSetShader(objectConeCS, nullptr, 0);
 			for (uint step : a_steps) {
 				a_data.ConeStep = step;
@@ -3472,7 +3485,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// settles included: an odd count seeds the scratch. b0 is bound again
 		// per chain, the verify's compare unbinds it.
 		auto chainCone = [&](Texture2D* a_cone, ID3D11ComputeShader* a_seedCS, const auto& a_bindSeed) {
-			Texture2D* seeded = (coarseSteps.size() % 2) ? heightScratch : a_cone;
+			Texture2D* seeded = (coarseSteps.size() % 2) ? heightBottomRaw[previous] : a_cone;
 			heightProcessCB->Update(processData);
 			context->CSSetConstantBuffers(0, 1, &processCB);
 			context->CSSetShader(a_seedCS, nullptr, 0);
