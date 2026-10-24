@@ -149,19 +149,10 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	}
 	trenchRollRow = 0;
 
-	// Honest debug copy of the map's depth. See the header for why the map
-	// itself cannot simply be handed to ImGui.
+	// The debug copy is made at the new size on the next Show Map tick.
 	trenchDebugTexture = nullptr;
 	trenchDebugSRV = nullptr;
 	trenchDebugUAV = nullptr;
-	D3D11_TEXTURE2D_DESC debugDesc = injectDesc;
-	debugDesc.Format = DXGI_FORMAT_R8_UNORM;
-	debugDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	if (SUCCEEDED(device->CreateTexture2D(&debugDesc, nullptr, trenchDebugTexture.put()))) {
-		Util::SetResourceName(trenchDebugTexture.get(), "SnowDeformation::TrenchDebugDepth");
-		device->CreateShaderResourceView(trenchDebugTexture.get(), nullptr, trenchDebugSRV.put());
-		device->CreateUnorderedAccessView(trenchDebugTexture.get(), nullptr, trenchDebugUAV.put());
-	}
 
 	trenchInjectScratch.assign((size_t)deformMapDim * deformMapDim * 2, 0);
 	trenchMapPrimed = false;
@@ -178,8 +169,29 @@ ID3D11ComputeShader* SnowDeformation::GetTrenchDebugCS()
 
 void SnowDeformation::UpdateTrenchDebugTexture()
 {
-	if (!showDebugTexture || !trenchDebugUAV)
+	if (!showDebugTexture)
 		return;
+	if (!trenchDebugUAV) {
+		// Honest debug copy of the map's depth. See the header for why the map
+		// itself cannot simply be handed to ImGui.
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = deformMapDim;
+		desc.Height = deformMapDim;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R8_UNORM;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		auto device = globals::d3d::device;
+		if (FAILED(device->CreateTexture2D(&desc, nullptr, trenchDebugTexture.put())))
+			return;
+		Util::SetResourceName(trenchDebugTexture.get(), "SnowDeformation::TrenchDebugDepth");
+		device->CreateShaderResourceView(trenchDebugTexture.get(), nullptr, trenchDebugSRV.put());
+		device->CreateUnorderedAccessView(trenchDebugTexture.get(), nullptr, trenchDebugUAV.put());
+		if (!trenchDebugUAV)
+			return;
+	}
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 
