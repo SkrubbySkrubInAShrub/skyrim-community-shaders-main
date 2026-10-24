@@ -2478,7 +2478,7 @@ public:
 
 	/** @brief Queries adapter VRAM usage/budget in MB via IDXGIAdapter3 (zeros when unavailable). Usage above budget = driver demotion to system RAM = the large persistent FPS-loss mode that survives disabling features. */
 	void QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB = nullptr);
-	/** @brief Sums this feature's tracked GPU textures (approximate, from descriptors) and fills a per-category breakdown line. */
+	/** @brief Sums every live resource named "SnowDeformation::" (Util::SumNamedResources, from descriptors) and fills a line with the largest by name. */
 	uint64_t SumFeatureTextureBytes(std::string& a_breakdown);
 	/** @brief Periodic VRAM log from Prepass: fires on a ~90 s cadence, on large usage deltas, and immediately (as a warning) when usage exceeds budget. */
 	void TickVRAMLog();

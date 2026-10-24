@@ -2270,6 +2270,7 @@ bool SnowDeformation::EnsureHeightRasterVerify()
 		winrt::com_ptr<ID3D11UnorderedAccessView> allUAV, slotUAVs[kHeightVerifySlots];
 		if (FAILED(device->CreateBuffer(&countDesc, nullptr, count.put())))
 			return false;
+		Util::SetResourceName(count.get(), "SnowDeformation::HeightVerifyCount");
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
@@ -2425,6 +2426,7 @@ bool SnowDeformation::EnsurePatchVerify(ID3D11DepthStencilView* a_dsv)
 		winrt::com_ptr<ID3D11Buffer> count;
 		if (FAILED(device->CreateBuffer(&countDesc, nullptr, count.put())))
 			return false;
+		Util::SetResourceName(count.get(), "SnowDeformation::TrenchPatchVerifyCount");
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;

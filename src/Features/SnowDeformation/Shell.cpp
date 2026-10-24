@@ -113,6 +113,11 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 		if (dot == std::string::npos || (sep != std::string::npos && dot < sep))
 			path += ".dds";
 	}
+	auto nameLoaded = [&a_srv, &path] {
+		winrt::com_ptr<ID3D11Resource> texture;
+		a_srv->GetResource(texture.put());
+		Util::SetResourceName(texture.get(), "SnowDeformation::%s", path.c_str());
+	};
 
 	RE::BSResourceNiBinaryStream stream(path);
 	if (stream.good() && stream.stream) {
@@ -126,6 +131,7 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 				SUCCEEDED(DirectX::CreateDDSTextureFromMemory(globals::d3d::device, bytes.data(), bytes.size(),
 					nullptr, a_srv.put()))) {
 				logger::debug("SnowDeformation: loaded {} through the game ({} bytes)", a_dataRelativePath, total);
+				nameLoaded();
 				return true;
 			}
 		}
@@ -139,6 +145,7 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 	const std::wstring wide(diskPath.begin(), diskPath.end());
 	if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()))) {
 		logger::debug("SnowDeformation: loaded {} off disk", path);
+		nameLoaded();
 		return true;
 	}
 	a_srv = nullptr;

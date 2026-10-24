@@ -97,6 +97,136 @@ namespace Util
 
 	GUID WKPDID_D3DDebugObjectNameT = { 0x429b8c22, 0x9188, 0x4b0c, 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00 };
 
+	namespace
+	{
+		// The private-data slot holding a named resource's tally tracker; the
+		// resource releases the tracker when it is destroyed.
+		constexpr GUID kNamedResourceTrackerGuid = { 0x4815308f, 0xe7e9, 0x40c6, { 0xb4, 0xb6, 0x61, 0xf4, 0xe8, 0xc4, 0x0a, 0x3b } };
+
+		struct NamedResourceEntry
+		{
+			std::string name;
+			uint64_t bytes = 0;
+			bool staging = false;
+		};
+
+		struct NamedResourceTally
+		{
+			std::mutex lock;
+			std::unordered_map<uint64_t, NamedResourceEntry> live;
+			uint64_t nextId = 1;
+		};
+
+		// Never freed: resources still die during shutdown, after statics.
+		NamedResourceTally& Tally()
+		{
+			static auto* tally = new NamedResourceTally();
+			return *tally;
+		}
+
+		class NamedResourceTracker final : public IUnknown
+		{
+		public:
+			explicit NamedResourceTracker(uint64_t a_id) :
+				id(a_id) {}
+
+			HRESULT STDMETHODCALLTYPE QueryInterface(REFIID a_riid, void** a_object) override
+			{
+				if (!a_object)
+					return E_POINTER;
+				if (a_riid != __uuidof(IUnknown)) {
+					*a_object = nullptr;
+					return E_NOINTERFACE;
+				}
+				*a_object = static_cast<IUnknown*>(this);
+				AddRef();
+				return S_OK;
+			}
+
+			ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+
+			ULONG STDMETHODCALLTYPE Release() override
+			{
+				const ULONG left = --refs;
+				if (left == 0) {
+					{
+						auto& tally = Tally();
+						std::scoped_lock guard(tally.lock);
+						tally.live.erase(id);
+					}
+					delete this;
+				}
+				return left;
+			}
+
+		private:
+			std::atomic<ULONG> refs{ 1 };
+			const uint64_t id;
+		};
+
+		uint64_t MipChainBytes(DXGI_FORMAT a_format, uint32_t a_width, uint32_t a_height, uint32_t a_depth, uint32_t a_mips)
+		{
+			uint64_t bytes = 0;
+			for (uint32_t mip = 0; mip < std::max(a_mips, 1u); mip++) {
+				size_t rowPitch = 0, slicePitch = 0;
+				if (FAILED(DirectX::ComputePitch(a_format, std::max(a_width >> mip, 1u), std::max(a_height >> mip, 1u), rowPitch, slicePitch)))
+					return 0;
+				bytes += uint64_t(slicePitch) * std::max(a_depth >> mip, 1u);
+			}
+			return bytes;
+		}
+
+		uint64_t MeasureResource(ID3D11Resource* a_resource, D3D11_USAGE& a_usage)
+		{
+			a_usage = D3D11_USAGE_DEFAULT;
+			if (winrt::com_ptr<ID3D11Buffer> buffer; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Buffer), buffer.put_void()))) {
+				D3D11_BUFFER_DESC desc;
+				buffer->GetDesc(&desc);
+				a_usage = desc.Usage;
+				return desc.ByteWidth;
+			}
+			if (winrt::com_ptr<ID3D11Texture2D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
+				D3D11_TEXTURE2D_DESC desc;
+				texture->GetDesc(&desc);
+				a_usage = desc.Usage;
+				return MipChainBytes(desc.Format, desc.Width, desc.Height, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u) * std::max(desc.SampleDesc.Count, 1u);
+			}
+			if (winrt::com_ptr<ID3D11Texture3D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture3D), texture.put_void()))) {
+				D3D11_TEXTURE3D_DESC desc;
+				texture->GetDesc(&desc);
+				a_usage = desc.Usage;
+				return MipChainBytes(desc.Format, desc.Width, desc.Height, desc.Depth, desc.MipLevels);
+			}
+			if (winrt::com_ptr<ID3D11Texture1D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture1D), texture.put_void()))) {
+				D3D11_TEXTURE1D_DESC desc;
+				texture->GetDesc(&desc);
+				a_usage = desc.Usage;
+				return MipChainBytes(desc.Format, desc.Width, 1, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u);
+			}
+			return 0;
+		}
+
+		void TrackNamedResource(ID3D11DeviceChild* a_child, std::string_view a_name)
+		{
+			winrt::com_ptr<ID3D11Resource> resource;
+			if (FAILED(a_child->QueryInterface(__uuidof(ID3D11Resource), resource.put_void())))
+				return;
+			D3D11_USAGE usage;
+			const uint64_t bytes = MeasureResource(resource.get(), usage);
+			auto& tally = Tally();
+			uint64_t id;
+			{
+				std::scoped_lock guard(tally.lock);
+				id = tally.nextId++;
+				tally.live.emplace(id, NamedResourceEntry{ std::string(a_name), bytes, usage == D3D11_USAGE_STAGING });
+			}
+			// A rename replaces the older tracker, whose release drops its entry.
+			auto* tracker = new NamedResourceTracker(id);
+			resource->SetPrivateDataInterface(kNamedResourceTrackerGuid, tracker);
+			tracker->Release();
+		}
+	}
+
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...)
 	{
 		if (!Resource)
@@ -110,6 +240,45 @@ namespace Util
 		va_end(va);
 
 		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, len, buffer);
+		TrackNamedResource(Resource, std::string_view(buffer, len < 0 ? strlen(buffer) : size_t(len)));
+	}
+
+	uint64_t SumNamedResources(std::string_view a_prefix, std::vector<NamedResourceUse>* a_byName)
+	{
+		std::unordered_map<std::string, NamedResourceUse> groups;
+		uint64_t total = 0;
+		{
+			auto& tally = Tally();
+			std::scoped_lock guard(tally.lock);
+			for (const auto& entry : tally.live | std::views::values) {
+				if (entry.staging || !entry.name.starts_with(a_prefix))
+					continue;
+				total += entry.bytes;
+				if (a_byName) {
+					auto& use = groups[entry.name];
+					use.bytes += entry.bytes;
+					use.count++;
+				}
+			}
+		}
+		if (a_byName) {
+			a_byName->clear();
+			a_byName->reserve(groups.size());
+			for (auto& [name, use] : groups) {
+				use.name = name;
+				a_byName->push_back(std::move(use));
+			}
+			std::ranges::sort(*a_byName, std::ranges::greater{}, &NamedResourceUse::bytes);
+		}
+		return total;
+	}
+
+	uint64_t ResourceBytes(ID3D11Resource* a_resource)
+	{
+		if (!a_resource)
+			return 0;
+		D3D11_USAGE usage;
+		return MeasureResource(a_resource, usage);
 	}
 
 	struct CustomInclude : public ID3DInclude

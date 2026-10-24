@@ -35,10 +35,34 @@ namespace Util
 
 	/**
 	 * @brief Set a debug name on a D3D11 resource for RenderDoc debuggability.
+	 * A named texture or buffer also joins the live tally SumNamedResources reads, and leaves it when destroyed.
 	 * @param Resource The D3D11 device child to name.
 	 * @param Format A printf-style format string for the name.
 	 */
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...);
+
+	/** @brief One debug name's share of the live named resources. */
+	struct NamedResourceUse
+	{
+		std::string name;
+		uint64_t bytes = 0;
+		uint32_t count = 0;
+	};
+
+	/**
+	 * @brief Sum the GPU memory of every live texture and buffer whose debug name starts with a prefix.
+	 * @param a_prefix The name prefix, e.g. "SnowDeformation::".
+	 * @param a_byName When non-null, receives one entry per distinct name, largest first.
+	 * @return Bytes by descriptor, staging resources left out; driver padding is not counted.
+	 */
+	uint64_t SumNamedResources(std::string_view a_prefix, std::vector<NamedResourceUse>* a_byName = nullptr);
+
+	/**
+	 * @brief A texture's or buffer's size from its descriptor: every mip, array slice and sample.
+	 * @param a_resource The resource to measure.
+	 * @return Bytes, or 0 for a null resource or an unknown format.
+	 */
+	uint64_t ResourceBytes(ID3D11Resource* a_resource);
 
 	/**
 	 * @brief Compile an HLSL shader from file and create the appropriate D3D11 shader object.

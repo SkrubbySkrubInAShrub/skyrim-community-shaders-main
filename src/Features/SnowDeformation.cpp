@@ -2528,79 +2528,6 @@ void SnowDeformation::RestoreDefaultSettings()
 	shellDataDirty.store(true, std::memory_order_release);
 }
 
-namespace
-{
-	// Approximate GPU bytes of a texture from its descriptor. bpp16 = bytes
-	// per pixel x16 so block-compressed half-byte formats stay integral.
-	uint64_t TextureBytes(ID3D11Texture2D* a_tex)
-	{
-		if (!a_tex)
-			return 0;
-		D3D11_TEXTURE2D_DESC desc;
-		a_tex->GetDesc(&desc);
-		uint64_t bpp16 = 64;
-		switch (desc.Format) {
-		case DXGI_FORMAT_R8_TYPELESS:
-		case DXGI_FORMAT_R8_UNORM:
-			bpp16 = 16;
-			break;
-		case DXGI_FORMAT_R16_TYPELESS:
-		case DXGI_FORMAT_R16_UNORM:
-		case DXGI_FORMAT_R16_FLOAT:
-		case DXGI_FORMAT_D16_UNORM:
-		case DXGI_FORMAT_R8G8_UNORM:
-			bpp16 = 32;
-			break;
-		case DXGI_FORMAT_R16G16B16A16_TYPELESS:
-		case DXGI_FORMAT_R16G16B16A16_FLOAT:
-		case DXGI_FORMAT_R32G32_TYPELESS:
-		case DXGI_FORMAT_R32G32_FLOAT:
-			bpp16 = 128;
-			break;
-		case DXGI_FORMAT_R32G32B32A32_TYPELESS:
-		case DXGI_FORMAT_R32G32B32A32_FLOAT:
-			bpp16 = 256;
-			break;
-		case DXGI_FORMAT_BC1_TYPELESS:
-		case DXGI_FORMAT_BC1_UNORM:
-		case DXGI_FORMAT_BC1_UNORM_SRGB:
-		case DXGI_FORMAT_BC4_TYPELESS:
-		case DXGI_FORMAT_BC4_UNORM:
-		case DXGI_FORMAT_BC4_SNORM:
-			bpp16 = 8;
-			break;
-		case DXGI_FORMAT_BC2_UNORM:
-		case DXGI_FORMAT_BC3_TYPELESS:
-		case DXGI_FORMAT_BC3_UNORM:
-		case DXGI_FORMAT_BC3_UNORM_SRGB:
-		case DXGI_FORMAT_BC5_TYPELESS:
-		case DXGI_FORMAT_BC5_UNORM:
-		case DXGI_FORMAT_BC6H_UF16:
-		case DXGI_FORMAT_BC7_TYPELESS:
-		case DXGI_FORMAT_BC7_UNORM:
-		case DXGI_FORMAT_BC7_UNORM_SRGB:
-			bpp16 = 16;
-			break;
-		default:
-			break;  // 4-byte default (R32/R24G8/R8G8B8A8/R16G16 families)
-		}
-		uint64_t bytes = (uint64_t)desc.Width * desc.Height * std::max(desc.ArraySize, 1u) * bpp16 / 16;
-		if (desc.MipLevels != 1)
-			bytes = bytes * 4 / 3;
-		return bytes;
-	}
-
-	uint64_t SRVBytes(ID3D11ShaderResourceView* a_srv)
-	{
-		if (!a_srv)
-			return 0;
-		winrt::com_ptr<ID3D11Resource> res;
-		a_srv->GetResource(res.put());
-		auto tex = res.try_as<ID3D11Texture2D>();
-		return tex ? TextureBytes(tex.get()) : 0;
-	}
-}
-
 void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB)
 {
 	a_usageMB = 0;
@@ -2629,39 +2556,25 @@ void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB
 
 uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 {
-	auto texOf = [](Texture2D* a_wrap) -> ID3D11Texture2D* {
-		return a_wrap ? a_wrap->resource.get() : nullptr;
-	};
+	static constexpr std::string_view kPrefix = "SnowDeformation::";
+	static constexpr size_t kShown = 8;
+	std::vector<Util::NamedResourceUse> byName;
+	const uint64_t total = Util::SumNamedResources(kPrefix, &byName);
 
-	const uint64_t deform = TextureBytes(texOf(deformationTextures[0])) + TextureBytes(texOf(deformationTextures[1]));
-	const uint64_t terrain = TextureBytes(texOf(shellTerrainTexture));
-	const uint64_t heights = TextureBytes(texOf(heightTopRaw[0])) + TextureBytes(texOf(heightTopRaw[1])) +
-	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +
-	                         TextureBytes(texOf(heightBottomFiltered)) +
-	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
-	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +
-	                         SRVBytes(shellSnowRmaosSRV.get()) + SRVBytes(shellSnowHeightSRV.get());
-
-	// R8 volumes: one byte per voxel.
-	auto tex3Bytes = [](Texture3D* a_wrap) -> uint64_t {
-		return a_wrap ? uint64_t(a_wrap->desc.Width) * a_wrap->desc.Height * a_wrap->desc.Depth : 0;
-	};
-	// The heightmap: four bytes per sub-pixel, sixteen a voxel column, per slice.
-	auto heightMapBytes = [](Texture2D* a_wrap) -> uint64_t {
-		return a_wrap ? uint64_t(a_wrap->desc.Width) * a_wrap->desc.Height * 4 * std::max(1u, a_wrap->desc.ArraySize) : 0;
-	};
-	uint64_t voxel = 0;
-	for (const auto& lv : voxelLevels)
-		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field) + heightMapBytes(lv.heightMap) + heightMapBytes(lv.heightMapUnder);
-	voxel += tex3Bytes(voxelSupport);
-
-	const uint64_t total = deform + terrain + heights + snowTex + voxel;
-
-	char line[256];
-	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, snowTex %llu, voxel %llu (MB)",
-		(unsigned long long)(deform >> 20), (unsigned long long)(terrain >> 20), (unsigned long long)(heights >> 20),
-		(unsigned long long)(snowTex >> 20), (unsigned long long)(voxel >> 20));
-	a_breakdown = line;
+	uint32_t resources = 0;
+	for (const auto& use : byName)
+		resources += use.count;
+	std::string line = std::format("{} resources", resources);
+	uint64_t shownBytes = 0;
+	for (size_t i = 0; i < std::min(byName.size(), kShown); i++) {
+		const auto& use = byName[i];
+		shownBytes += use.bytes;
+		line += std::format("{}{}{} {:.1f}", i ? ", " : " | largest (MB): ", use.name.substr(kPrefix.size()),
+			use.count > 1 ? std::format(" x{}", use.count) : std::string(), double(use.bytes) / (1 << 20));
+	}
+	if (byName.size() > kShown)
+		line += std::format(", the other {} {:.1f}", byName.size() - kShown, double(total - shownBytes) / (1 << 20));
+	a_breakdown = std::move(line);
 	return total;
 }
 
@@ -2676,7 +2589,7 @@ void SnowDeformation::TickVRAMLog()
 	if (settings.VRAMAwareTrenchMap && !deformMapVramCap && deformMapDim > 2048u) {
 		uint64_t nowMB = 0, nowBudgetMB = 0;
 		QueryAdapterVRAM(nowMB, nowBudgetMB);
-		auto bytes = [](Texture2D* a_wrap) { return a_wrap ? TextureBytes(a_wrap->resource.get()) : uint64_t(0); };
+		auto bytes = [](Texture2D* a_wrap) { return a_wrap ? Util::ResourceBytes(a_wrap->resource.get()) : uint64_t(0); };
 		const uint64_t deformMB = (bytes(deformationTextures[0]) + bytes(deformationTextures[1])) >> 20;
 		const uint64_t freesMB = deformMB - deformMB / 4;
 		if (nowBudgetMB && nowMB + freesMB > nowBudgetMB) {

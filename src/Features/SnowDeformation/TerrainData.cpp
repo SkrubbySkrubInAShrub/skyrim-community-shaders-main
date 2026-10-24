@@ -1114,6 +1114,9 @@ ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_world
 		return nullptr;
 	}
 	logger::debug("[SNOW DEFORMATION] LOD tile loaded: {}", path);
+	winrt::com_ptr<ID3D11Resource> tile;
+	srv->GetResource(tile.put());
+	Util::SetResourceName(tile.get(), "SnowDeformation::LODTile");
 	lodTileCache[key] = srv;
 	return srv.get();
 }
