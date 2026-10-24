@@ -24,13 +24,15 @@ namespace Skylighting
 	const static uint3 ARRAY_DIM = uint3(256, 256, 128);
 	const static float3 ARRAY_SIZE = 10000.f * float3(1, 1, 0.5);
 	const static float3 CELL_SIZE = ARRAY_SIZE / ARRAY_DIM;
+	/** @brief Fraction of the volume at each edge that is faded out, covering cells still fading in after the volume scrolls. */
+	const static float FADE_MARGIN = 0.05;
 
 	float GetFadeOutFactor(float3 positionMS)
 	{
 		float3 uvw = saturate((positionMS - SharedData::skylightingSettings.PosOffset.xyz) / ARRAY_SIZE + .5);
 		float3 dists = min(uvw, 1 - uvw);
 		float edgeDist = min(dists.x, min(dists.y, dists.z));
-		return saturate(edgeDist * 20);
+		return saturate(edgeDist / FADE_MARGIN);
 	}
 
 	/** @brief Fade-out over the probe volume's horizontal edges only, for samples whose height is clamped by ClampToArrayHeight. */
@@ -39,10 +41,10 @@ namespace Skylighting
 		return GetFadeOutFactor(float3(positionMS.xy, SharedData::skylightingSettings.PosOffset.z));
 	}
 
-	/** @brief Clamps the height to one cell inside the probe volume, so geometry above or below it reuses the outermost layer instead of reading as unoccluded. */
+	/** @brief Clamps the height inside the fade margin, so geometry above or below the probe volume reuses converged layers instead of reading as unoccluded. */
 	float3 ClampToArrayHeight(float3 positionMS)
 	{
-		const float halfHeight = ARRAY_SIZE.z * 0.5 - CELL_SIZE.z;
+		const float halfHeight = ARRAY_SIZE.z * (0.5 - FADE_MARGIN);
 		const float centreZ = SharedData::skylightingSettings.PosOffset.z;
 		positionMS.z = clamp(positionMS.z, centreZ - halfHeight, centreZ + halfHeight);
 		return positionMS;
