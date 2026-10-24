@@ -1598,6 +1598,8 @@ void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 	if (rc.right <= rc.left || rc.bottom <= rc.top)
 		return;
 	const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
+	// The rect moves every frame; the copies are sized once, to the viewport.
+	const D3D11_BOX extent = ScreenRectBox(&bloodViewport, UINT32_MAX, UINT32_MAX, 0);
 	ID3D11RenderTargetView* rtvs[8]{};
 	ID3D11DepthStencilView* dsv = nullptr;
 	context->OMGetRenderTargets(8, rtvs, &dsv);
@@ -1609,13 +1611,13 @@ void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 			ok = false;
 			break;
 		}
-		CopySRVResource(srv, kNames[a_preDecal ? 1 : 0][i], texs[i], srvs[i], &box);
+		CopySRVResource(srv, kNames[a_preDecal ? 1 : 0][i], texs[i], srvs[i], &box, &extent);
 		ok = ok && srvs[i];
 	}
 	if (a_preDecal && ok) {
 		auto* masksSRV = rtData.renderTargets[MASKS].SRV;
 		if (masksSRV)
-			CopySRVResource(masksSRV, "SnowDeformation::BloodPreDecalMasks", bloodPreDecalMasksTex, bloodPreDecalMasksSRV, &box);
+			CopySRVResource(masksSRV, "SnowDeformation::BloodPreDecalMasks", bloodPreDecalMasksTex, bloodPreDecalMasksSRV, &box, &extent);
 		ok = masksSRV && bloodPreDecalMasksSRV;
 	}
 	context->OMSetRenderTargets(8, rtvs, dsv);
@@ -2034,8 +2036,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	if (auto* mainTexture = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture) {
 		D3D11_TEXTURE2D_DESC mainDesc{};
 		mainTexture->GetDesc(&mainDesc);
-		width = mainDesc.Width;
-		height = mainDesc.Height;
+		const D3D11_BOX extent = ScreenRectBox(&bloodViewport, mainDesc.Width, mainDesc.Height, 0);
+		width = std::max(extent.right, 1u);
+		height = std::max(extent.bottom, 1u);
 	}
 	if (EnsureDecalMask(width, height)) {
 		ID3D11RenderTargetView* savedRTVs[8]{};

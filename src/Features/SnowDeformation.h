@@ -1226,6 +1226,8 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodPreSkinDepthUAV;
 	bool bloodPreSkinDepthThisFrame = false;
+	/** @brief bloodPreSkinDepth at a_width x a_height (the skins' viewport extent), recreated when that changes. */
+	bool EnsureBloodPreSkinDepth(UINT a_width, UINT a_height);
 	/** @brief Per tile, kBloodTileSnapDim a side on the blood map's own texel grid: the map's texels as the tile was seeded (sRGB view), and the highest concentration every mark redrawn into the tile since has deposited there (the map's own shader and blend). */
 	winrt::com_ptr<ID3D11Texture2D> bloodTileSnapshot;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileSnapshotSRV;
@@ -2037,10 +2039,10 @@ public:
 	uint32_t skinSssMarchFrame = UINT32_MAX;
 	/** @brief DrawShell's ground marks as DepthSync reads them (the early marks or the raster depth; null when the ground drew no prepass), set before DrawCapturedStatics. */
 	ID3D11ShaderResourceView* shellGroundMarksSRV = nullptr;
-	/** @brief The blended depth MarchSkinSss replaced, until its restore (R32F, the blended depth's size). */
+	/** @brief The blended depth MarchSkinSss replaced, until its restore (R32F, over the skins' viewport extent). */
 	Texture2D* skinSssSaved = nullptr;
-	/** @brief The conditions under which ScreenSpaceShadows::PostPrepass marches, plus this pass's resources and shaders. */
-	bool SkinSssMarchReady();
+	/** @brief The conditions under which ScreenSpaceShadows::PostPrepass marches, plus this pass's resources (skinSssSaved over a_viewport's extent) and shaders. */
+	bool SkinSssMarchReady(const D3D11_VIEWPORT* a_viewport);
 	/** @brief Skin and ground-snow pixels (a_skinDepthSRV, the skins' private depth, against the pre-snow copy and shellGroundMarksSRV) into the 32-bit blended depth over a_viewport's rect, ScreenSpaceShadows::DrawShadows, the blended depth back; rebinds PS t3 (a_sceneDepthSRV) and t45 for the skin shading. */
 	void MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3D11ShaderResourceView* a_sceneDepthSRV, const D3D11_VIEWPORT* a_viewport);
 	ID3D11ComputeShader* skinSssSyncCS = nullptr;
@@ -2049,9 +2051,11 @@ public:
 	ID3D11ComputeShader* GetSkinSssSyncCS();
 	/** @brief DepthSyncCS's SkinSssRestoreCS entry, compiled on first use. */
 	ID3D11ComputeShader* GetSkinSssRestoreCS();
-	/** @brief The blended depth ScreenSpaceShadows::PostPrepass marched, copied before RestoreSssDepth (sssFirstMarchFrame the frame). */
+	/** @brief The blended depth ScreenSpaceShadows::PostPrepass marched, copied before RestoreSssDepth (sssFirstMarchFrame the frame) up to last frame's march rect's far corner. */
 	Texture2D* sssFirstMarchDepth = nullptr;
 	uint32_t sssFirstMarchFrame = UINT32_MAX;
+	/** @brief MarchSkinSss's rect, kept for the next frame's first-march copy. */
+	D3D11_BOX skinSssRectLast{};
 	/** @brief One texel per 8x8 depth texels, set where MarchSkinSss's depth differs from sssFirstMarchDepth (each with its neighbours). */
 	Texture2D* sssChangedTiles = nullptr;
 	ID3D11ComputeShader* skinSssSyncMarkCS = nullptr;
@@ -2430,9 +2434,9 @@ public:
 	uint32_t preDecalMasksFrame = UINT32_MAX;
 	void CapturePreDecalMasks();
 
-	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
+	/** @brief Copies a_box (all of it when null) of the resource behind a_srcSRV into an owned SRV-only texture sized to a_extent's far corner (a_box's when null, the source's when both are), recreating it when that size or the format changes. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
-		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box = nullptr);
+		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box = nullptr, const D3D11_BOX* a_extent = nullptr);
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 

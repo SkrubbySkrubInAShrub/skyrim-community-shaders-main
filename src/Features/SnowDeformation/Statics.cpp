@@ -4918,7 +4918,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// Every skin's block, filled once for both loops; the view taken here is
 	// the one bound, so HasSmoothedNormals and the view never disagree.
 	// Decided before the records: SkinSssSeen tells each skin which mask it reads.
-	const bool skinSssMarch = prepass && !skinDraws.empty() && (fillPreSnow || preSnowDepthThisFrame) && SkinSssMarchReady();
+	const bool skinSssMarch = prepass && !skinDraws.empty() && (fillPreSnow || preSnowDepthThisFrame) && SkinSssMarchReady(vpCount ? &vps[0] : nullptr);
 	if (!skinSssMarch) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Snow Depth Sync");
 	}
@@ -5080,7 +5080,9 @@ void SnowDeformation::DrawCapturedStatics()
 		// The decal overlay leaves the landscape shell's pixels to the blood
 		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
-		if (BloodTilesLive() && !bloodOverlays.empty() && bloodPreSkinDepthUAV && bloodPreSkinDepthSRV && GetPreSnowCopyCS() && depthSyncRectCB) {
+		const D3D11_BOX skinExtent = ScreenRectBox(vpCount ? &vps[0] : nullptr, shellRasterDepth->desc.Width, shellRasterDepth->desc.Height, 0);
+		if (BloodTilesLive() && !bloodOverlays.empty() && GetPreSnowCopyCS() && depthSyncRectCB &&
+			EnsureBloodPreSkinDepth(std::max(skinExtent.right, 1u), std::max(skinExtent.bottom, 1u))) {
 			statsRow(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Depth Copy"));
 			// The composite reads it inside the decals' rectangle only.
 			const RECT& rc = bloodCopyRect;

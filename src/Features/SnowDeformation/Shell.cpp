@@ -22,7 +22,7 @@
 #include "Utils/Game.h"
 
 void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
-	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box)
+	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box, const D3D11_BOX* a_extent)
 {
 	winrt::com_ptr<ID3D11Resource> srcRes;
 	a_srcSRV->GetResource(srcRes.put());
@@ -32,12 +32,17 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 
 	D3D11_TEXTURE2D_DESC srcDesc;
 	srcTex->GetDesc(&srcDesc);
+	// Under dynamic resolution only the rendered corner of the full-size
+	// target is ever copied or read.
+	const D3D11_BOX* hold = a_extent ? a_extent : a_box;
+	const UINT width = hold ? std::clamp(hold->right, 1u, srcDesc.Width) : srcDesc.Width;
+	const UINT height = hold ? std::clamp(hold->bottom, 1u, srcDesc.Height) : srcDesc.Height;
 
 	bool recreate = !a_tex || !a_srv;
 	if (a_tex) {
 		D3D11_TEXTURE2D_DESC haveDesc;
 		a_tex->GetDesc(&haveDesc);
-		recreate |= haveDesc.Width != srcDesc.Width || haveDesc.Height != srcDesc.Height ||
+		recreate |= haveDesc.Width != width || haveDesc.Height != height ||
 		            haveDesc.ArraySize != srcDesc.ArraySize || haveDesc.Format != srcDesc.Format;
 	}
 	if (recreate) {
@@ -45,6 +50,8 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 		a_tex = nullptr;
 
 		D3D11_TEXTURE2D_DESC copyDesc = srcDesc;
+		copyDesc.Width = width;
+		copyDesc.Height = height;
 		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		copyDesc.MiscFlags = 0;
 		copyDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -63,10 +70,11 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 		}
 	}
 
-	if (a_box)
-		globals::d3d::context->CopySubresourceRegion(a_tex.get(), 0, a_box->left, a_box->top, 0, srcTex.get(), 0, a_box);
-	else
-		globals::d3d::context->CopyResource(a_tex.get(), srcTex.get());
+	D3D11_BOX box = a_box ? *a_box : D3D11_BOX{ 0, 0, 0, width, height, 1 };
+	box.right = std::min(box.right, width);
+	box.bottom = std::min(box.bottom, height);
+	if (box.right > box.left && box.bottom > box.top)
+		globals::d3d::context->CopySubresourceRegion(a_tex.get(), 0, box.left, box.top, 0, srcTex.get(), 0, &box);
 }
 
 /**
@@ -541,6 +549,44 @@ void SnowDeformation::UpdateTerrainWet()
 	shellTerrainWetValid = true;
 }
 
+// The main depth between the landscape shell and the skins, over the decals'
+// rectangle (PreSnowCopyCS, R32F like the pre-snow copy).
+bool SnowDeformation::EnsureBloodPreSkinDepth(UINT a_width, UINT a_height)
+{
+	if (bloodPreSkinDepth) {
+		D3D11_TEXTURE2D_DESC have{};
+		bloodPreSkinDepth->GetDesc(&have);
+		if (have.Width == a_width && have.Height == a_height)
+			return bloodPreSkinDepthSRV && bloodPreSkinDepthUAV;
+	}
+	bloodPreSkinDepth = nullptr;
+	bloodPreSkinDepthSRV = nullptr;
+	bloodPreSkinDepthUAV = nullptr;
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = a_width;
+	desc.Height = a_height;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R32_FLOAT;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	auto device = globals::d3d::device;
+	if (FAILED(device->CreateTexture2D(&desc, nullptr, bloodPreSkinDepth.put())))
+		return false;
+	Util::SetResourceName(bloodPreSkinDepth.get(), "SnowDeformation::BloodPreSkinDepth");
+	if (FAILED(device->CreateShaderResourceView(bloodPreSkinDepth.get(), nullptr, bloodPreSkinDepthSRV.put())) ||
+		FAILED(device->CreateUnorderedAccessView(bloodPreSkinDepth.get(), nullptr, bloodPreSkinDepthUAV.put()))) {
+		bloodPreSkinDepth = nullptr;
+		bloodPreSkinDepthSRV = nullptr;
+		bloodPreSkinDepthUAV = nullptr;
+		return false;
+	}
+	Util::SetResourceName(bloodPreSkinDepthSRV.get(), "SnowDeformation::BloodPreSkinDepth SRV");
+	Util::SetResourceName(bloodPreSkinDepthUAV.get(), "SnowDeformation::BloodPreSkinDepth UAV");
+	return true;
+}
+
 bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV)
 {
 	if (!a_mainDepthSRV)
@@ -635,25 +681,6 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
 				Util::SetResourceName(preSnowDepthUAV.get(), "SnowDeformation::PreSnowDepth UAV");
 				Util::SetResourceName(preSnowDepthRTV.get(), "SnowDeformation::PreSnowDepth RTV");
-			}
-		}
-		// The main depth between the landscape shell and the skins, over the
-		// decals' rectangle (PreSnowCopyCS, R32F like the pre-snow copy).
-		D3D11_TEXTURE2D_DESC skinCopyDesc = desc;
-		skinCopyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		bloodPreSkinDepth = nullptr;
-		bloodPreSkinDepthSRV = nullptr;
-		bloodPreSkinDepthUAV = nullptr;
-		if (SUCCEEDED(device->CreateTexture2D(&skinCopyDesc, nullptr, bloodPreSkinDepth.put()))) {
-			Util::SetResourceName(bloodPreSkinDepth.get(), "SnowDeformation::BloodPreSkinDepth");
-			if (FAILED(device->CreateShaderResourceView(bloodPreSkinDepth.get(), &srvDesc, bloodPreSkinDepthSRV.put())) ||
-				FAILED(device->CreateUnorderedAccessView(bloodPreSkinDepth.get(), &copyUavDesc, bloodPreSkinDepthUAV.put()))) {
-				bloodPreSkinDepth = nullptr;
-				bloodPreSkinDepthSRV = nullptr;
-				bloodPreSkinDepthUAV = nullptr;
-			} else {
-				Util::SetResourceName(bloodPreSkinDepthSRV.get(), "SnowDeformation::BloodPreSkinDepth SRV");
-				Util::SetResourceName(bloodPreSkinDepthUAV.get(), "SnowDeformation::BloodPreSkinDepth UAV");
 			}
 		}
 	}
@@ -1470,13 +1497,19 @@ void SnowDeformation::CopyFirstMarchDepth()
 	if (!settings.EnableSnowDeformation || !globals::state->inWorld || skinSssMarchFrame + 1 != frame || ss.marchFrame != frame || !blended ||
 		!blended->resource || !blended->srv || ss.marchDepthSRV != blended->srv.get())
 		return;
-	if (sssFirstMarchDepth && (sssFirstMarchDepth->desc.Width != blended->desc.Width || sssFirstMarchDepth->desc.Height != blended->desc.Height ||
+	// The mark pass compares inside the march's rect only; MarchSkinSss marks
+	// only when this frame's rect lies inside the copy.
+	const UINT width = std::clamp(skinSssRectLast.right, 1u, blended->desc.Width);
+	const UINT height = std::clamp(skinSssRectLast.bottom, 1u, blended->desc.Height);
+	if (sssFirstMarchDepth && (sssFirstMarchDepth->desc.Width != width || sssFirstMarchDepth->desc.Height != height ||
 								  sssFirstMarchDepth->desc.Format != blended->desc.Format)) {
 		delete sssFirstMarchDepth;
 		sssFirstMarchDepth = nullptr;
 	}
 	if (!sssFirstMarchDepth) {
 		D3D11_TEXTURE2D_DESC desc = blended->desc;
+		desc.Width = width;
+		desc.Height = height;
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		desc.CPUAccessFlags = 0;
 		desc.MiscFlags = 0;
@@ -1490,7 +1523,8 @@ void SnowDeformation::CopyFirstMarchDepth()
 		if (!sssFirstMarchDepth->srv)
 			return;
 	}
-	globals::d3d::context->CopyResource(sssFirstMarchDepth->resource.get(), blended->resource.get());
+	const D3D11_BOX box{ 0, 0, 0, width, height, 1 };
+	globals::d3d::context->CopySubresourceRegion(sssFirstMarchDepth->resource.get(), 0, 0, 0, 0, blended->resource.get(), 0, &box);
 	sssFirstMarchFrame = frame;
 }
 
@@ -1572,7 +1606,7 @@ void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_
 		prevCB->Release();
 }
 
-bool SnowDeformation::SkinSssMarchReady()
+bool SnowDeformation::SkinSssMarchReady(const D3D11_VIEWPORT* a_viewport)
 {
 	auto& ss = globals::features::screenSpaceShadows;
 	auto& tb = globals::features::terrainBlending;
@@ -1581,12 +1615,18 @@ bool SnowDeformation::SkinSssMarchReady()
 	if (!settings.SnowScreenSpaceShadows || !ss.loaded || !ss.screenSpaceShadowsTexture || !ss.screenSpaceShadowsTexture->srv || !ss.bendSettings.Enable ||
 		!sky || sky->mode.get() != RE::Sky::Mode::kFull || !tb.loaded || !tb.settings.Enabled || !blended || !blended->uav || !preSnowDepthSRV)
 		return false;
-	if (skinSssSaved && (skinSssSaved->desc.Width != blended->desc.Width || skinSssSaved->desc.Height != blended->desc.Height)) {
+	// Written and restored inside the march's rect, which this viewport bounds.
+	const D3D11_BOX extent = ScreenRectBox(a_viewport, blended->desc.Width, blended->desc.Height, 0);
+	const UINT width = std::max(extent.right, 1u);
+	const UINT height = std::max(extent.bottom, 1u);
+	if (skinSssSaved && (skinSssSaved->desc.Width != width || skinSssSaved->desc.Height != height)) {
 		delete skinSssSaved;
 		skinSssSaved = nullptr;
 	}
 	if (!skinSssSaved) {
 		D3D11_TEXTURE2D_DESC desc = blended->desc;
+		desc.Width = width;
+		desc.Height = height;
 		desc.Format = DXGI_FORMAT_R32_FLOAT;
 		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		skinSssSaved = new Texture2D(desc, "SnowDeformation::SkinSssSaved");
@@ -1616,6 +1656,7 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	const bool restoreInside = shellSssSyncFrame != globals::state->frameCount ||
 	                           (shellSssRect.left >= rect.left && shellSssRect.top >= rect.top && shellSssRect.right <= rect.right && shellSssRect.bottom <= rect.bottom);
 	const bool mark = !sssChangedMarchOff && restoreInside && sssFirstMarchFrame == globals::state->frameCount && sssFirstMarchDepth && sssFirstMarchDepth->srv &&
+	                  sssFirstMarchDepth->desc.Width >= rect.right && sssFirstMarchDepth->desc.Height >= rect.bottom &&
 	                  ss.marchFrame == globals::state->frameCount && ss.marchDepthSRV == tb.blendedDepthTexture->srv.get() &&
 	                  Util::GetCurrentSceneDepthSRV(false) == ss.marchDepthSRV && GetSkinSssSyncMarkCS() && GetSssChangedRaymarchCS() &&
 	                  EnsureSssChangedTiles(blendedDesc.Width, blendedDesc.Height);
@@ -1655,6 +1696,7 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	context->PSSetShaderResources(3, 1, &a_sceneDepthSRV);
 	context->PSSetShaderResources(45, 1, &maskSRV);
 	skinSssMarchFrame = globals::state->frameCount;
+	skinSssRectLast = rect;
 }
 
 void SnowDeformation::DrawShell()
