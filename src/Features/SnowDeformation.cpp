@@ -240,12 +240,22 @@ void SnowDeformation::CreateDeformationTextures()
 		.Texture2D = { .MipSlice = 0 }
 	};
 
-	// [0] is THE map; [1] is EvolveCS's snapshot scratch (the retired
-	// ping-pong partner, kept at identical spec for the pre-evolve copy).
-	for (uint i = 0; i < 2; i++) {
-		deformationTextures[i] = new Texture2D(texDesc, i == 0 ? "SnowDeformation::DeformationMap" : "SnowDeformation::EvolveScratch");
-		deformationTextures[i]->CreateSRV(srvDesc);
-		deformationTextures[i]->CreateUAV(uavDesc);
+	// [0] is THE map; [1] is EvolveCS's snapshot scratch. Its neighbour taps
+	// read depth and surface state only (the texel's own four come from the
+	// map), so the snapshot keeps those two.
+	deformationTextures[0] = new Texture2D(texDesc, "SnowDeformation::DeformationMap");
+	deformationTextures[0]->CreateSRV(srvDesc);
+	deformationTextures[0]->CreateUAV(uavDesc);
+	{
+		D3D11_TEXTURE2D_DESC snapDesc = texDesc;
+		snapDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC snapSrv = srvDesc;
+		snapSrv.Format = snapDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC snapUav = uavDesc;
+		snapUav.Format = snapDesc.Format;
+		deformationTextures[1] = new Texture2D(snapDesc, "SnowDeformation::EvolveScratch");
+		deformationTextures[1]->CreateSRV(snapSrv);
+		deformationTextures[1]->CreateUAV(snapUav);
 	}
 
 	// The tile store's window-sized companions follow the map's dimension.
@@ -1631,8 +1641,16 @@ void SnowDeformation::PrepassSimulation()
 					context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 					ID3D11ShaderResourceView* nullSRV = nullptr;
 					context->CSSetShaderResources(0, 1, &nullSRV);
-				} else {
-					context->CopyResource(scratch->resource.get(), map->resource.get());
+				} else if (auto* fullSnapshotCS = GetDeformationSnapshotFullCS()) {
+					ID3D11ShaderResourceView* mapSRV = map->srv.get();
+					ID3D11UnorderedAccessView* scratchUAV = scratch->uav.get();
+					context->CSSetShaderResources(0, 1, &mapSRV);
+					context->CSSetUnorderedAccessViews(0, 1, &scratchUAV, nullptr);
+					context->CSSetShader(fullSnapshotCS, nullptr, 0);
+					context->Dispatch(tilesPerAxis, tilesPerAxis, 1);
+					context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+					ID3D11ShaderResourceView* nullSRV = nullptr;
+					context->CSSetShaderResources(0, 1, &nullSRV);
 				}
 				globals::profiler->EndPass();
 
@@ -1998,6 +2016,15 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationSnapshotCS()
 	return deformationSnapshotCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetDeformationSnapshotFullCS()
+{
+	if (!deformationSnapshotFullCS) {
+		logger::debug("Compiling DeformationUpdateCS:SnapshotFullCS");
+		deformationSnapshotFullCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "SnapshotFullCS"));
+	}
+	return deformationSnapshotFullCS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetDeformationScanBermCS()
 {
 	if (!deformationScanBermCS) {
@@ -2252,6 +2279,9 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationSnapshotCS)
 		deformationSnapshotCS->Release();
 	deformationSnapshotCS = nullptr;
+	if (deformationSnapshotFullCS)
+		deformationSnapshotFullCS->Release();
+	deformationSnapshotFullCS = nullptr;
 	if (deformationScanBermCS)
 		deformationScanBermCS->Release();
 	deformationScanBermCS = nullptr;

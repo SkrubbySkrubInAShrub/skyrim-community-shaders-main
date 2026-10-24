@@ -316,6 +316,8 @@ Texture2D<float4> PreviousDeformation : register(t0);
 // GrassCollision's CollisionUpdateCS already relies on for the same RGBA16F
 // format).
 RWTexture2D<float4> CurrentDeformation : register(u0);
+// SnapshotCS's destination, evolve's scratch: depth and surface state.
+RWTexture2D<float2> EvolveSnapshot : register(u0);
 // Tile-store memory for the arriving ring, resampled on the CPU: x = depth,
 // y = freshness (1 just cut, 0 at TRACK_AGE_HORIZON or never). LOGICAL
 // layout - RingCS translates when it writes the map.
@@ -644,7 +646,7 @@ bool EvolveTexel(uint2 phys)
 
 	// What this texel would hold if the pass had not run - the activity
 	// comparison baseline.
-	const float4 carried = PreviousDeformation[phys];
+	const float4 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
 	// Melted portion of `deformation`, carried so the shells can tell a
 	// melt basin from a dug trench.
@@ -911,7 +913,13 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 		return;
 	const uint packed = EvolveTilesIn[1 + listIndex];
 	const uint2 texel = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
-	CurrentDeformation[texel] = PreviousDeformation[texel];
+	EvolveSnapshot[texel] = PreviousDeformation[texel].xy;
+}
+
+// The whole map into evolve's snapshot, for evolveSnapshotOff.
+[numthreads(8, 8, 1)] void SnapshotFullCS(uint3 DTid
+										  : SV_DispatchThreadID) {
+	EvolveSnapshot[DTid.xy] = PreviousDeformation[DTid.xy].xy;
 }
 
 // Lists the tiles the berm bake must rebuild: the map changed within the

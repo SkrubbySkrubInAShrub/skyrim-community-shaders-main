@@ -1538,8 +1538,11 @@ public:
 	ID3D11ComputeShader* GetDeformationScanSnapshotCS();
 	/** @brief Returns the snapshot copy (indirect over the snapshot list, map -> evolve's scratch), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationSnapshotCS();
+	/** @brief Returns the whole-map snapshot copy (evolveSnapshotOff, or the listed copy unavailable), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationSnapshotFullCS();
 	ID3D11ComputeShader* deformationScanSnapshotCS = nullptr;
 	ID3D11ComputeShader* deformationSnapshotCS = nullptr;
+	ID3D11ComputeShader* deformationSnapshotFullCS = nullptr;
 	ID3D11ComputeShader* deformationScanBermCS = nullptr;
 	ID3D11ComputeShader* bermFieldTiledCS = nullptr;
 

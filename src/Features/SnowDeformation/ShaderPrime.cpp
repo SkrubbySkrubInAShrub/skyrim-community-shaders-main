@@ -253,6 +253,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetDeformationScanEvolveCS(); },
 		[&] { GetDeformationScanSnapshotCS(); },
 		[&] { GetDeformationSnapshotCS(); },
+		[&] { GetDeformationSnapshotFullCS(); },
 		[&] { GetDeformationScanBermCS(); },
 		[&] { GetPrintStampCS(); },
 		[&] { GetPrintRingCS(); },
