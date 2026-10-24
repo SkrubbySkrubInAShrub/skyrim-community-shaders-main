@@ -1500,7 +1500,7 @@ float3 ShellLuminanceBump(float3 normalWS, float2 worldXY, float bumpFade)
 // the main buffer under LESS_EQUAL, so a pixel something drew in front of
 // since the claim loses. The marks are DepthSync's and the private fill's.
 Texture2D<float> EarlyRasterDepth : register(t61);
-Texture2D<float4> EarlyPending : register(t62);
+Texture2D<float2> EarlyPending : register(t62);  // x landSide, y the flags x2
 
 struct S1_RESOLVE_OUTPUT
 {
@@ -1517,13 +1517,13 @@ S1_RESOLVE_OUTPUT main(float4 pos : SV_Position)
 	float depth = abs(raster);
 	[branch] if (raster < 0.0)
 	{
-		const float4 pending = EarlyPending.Load(px);
-		const uint flags = (uint)(pending.w * 0.5);
+		const float2 pending = EarlyPending.Load(px);
+		const uint flags = (uint)(pending.y * 0.5);
 		const float hLandRaw = LandMasksCopy.Load(px).y;
 		// The land's own verdict against the snow's side.
 		[branch] if ((flags & 4) != 0)
 		{
-			if (LandSnowOdds(hLandRaw) + pending.y < 0.0)
+			if (LandSnowOdds(hLandRaw) + pending.x < 0.0)
 				discard;
 		}
 		if ((flags & 1) != 0 && hLandRaw < 1.5)
@@ -1739,7 +1739,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (clampPending || landContest || markPending)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
-		prepassOut.Pending = float4(0.0, landSide, 0.0, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0));
+		prepassOut.Pending = float4(landSide, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0), 0.0, 0.0);
 	}
 #	endif
 	return prepassOut;

@@ -865,7 +865,7 @@ bool SnowDeformation::EnsureEarlyPrepassResources()
 		return a_tex->srv && a_tex->rtv;
 	};
 	// The marks also hold the blended depth SyncSssDepth replaced, until PostPrepass; S1 itself needs no UAV.
-	return ensure(shellEarlyPending, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::ShellEarlyPending", false) &&
+	return ensure(shellEarlyPending, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::ShellEarlyPending", false) &&
 	       ensure(shellEarlyMarks, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::ShellEarlyMarks", true);
 }
 
