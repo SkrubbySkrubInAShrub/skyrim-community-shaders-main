@@ -5780,9 +5780,12 @@ void SnowDeformation::RenderWaterCapture()
 				.Texture2D = { .MipSlice = 0 }
 			};
 			waterVisibleTexture->CreateUAV(uavDesc);
-			waterNearTexture = new Texture2D(visDesc, "SnowDeformation::WaterNear");
-			waterNearTexture->CreateSRV(srvDesc);
-			waterNearTexture->CreateUAV(uavDesc);
+			// Squared texels, 0-9 and 10 for none in reach: one byte.
+			D3D11_TEXTURE2D_DESC nearDesc = visDesc;
+			nearDesc.Format = DXGI_FORMAT_R8_UINT;
+			waterNearTexture = new Texture2D(nearDesc, "SnowDeformation::WaterNear");
+			waterNearTexture->CreateSRV({ .Format = nearDesc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+			waterNearTexture->CreateUAV({ .Format = nearDesc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
 			waterCoverDirty = true;
 		}
 		desc.Width = kWaterFineDim;
@@ -5956,8 +5959,8 @@ void SnowDeformation::CoverWaterWindow()
 	auto context = globals::d3d::context;
 	if (!heightWaterCoverCS || !shellTerrainTexture || !shellTerrainTexture->srv || !heightProcessCB) {
 		context->CopyResource(waterVisibleTexture->resource.get(), waterHeightTexture->resource.get());
-		const float farNear[4] = { 3.0f, 3.0f, 3.0f, 3.0f };
-		context->ClearUnorderedAccessViewFloat(waterNearTexture->uav.get(), farNear);
+		const UINT farNear[4] = { 10, 10, 10, 10 };
+		context->ClearUnorderedAccessViewUint(waterNearTexture->uav.get(), farNear);
 		return;
 	}
 	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");

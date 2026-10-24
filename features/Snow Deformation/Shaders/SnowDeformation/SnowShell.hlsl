@@ -278,7 +278,7 @@ Texture2D<float4> TerrainWindow : register(t0);
 // object maps, so its row is (TerrainDim - 1) - the terrain row.
 Texture2D<float> WaterWindow : register(t27);  // data route: lone wet texels dropped
 Texture2D<float> WaterRawWindow : register(t28);  // the shore cap: every rasterised body
-Texture2D<float> WaterNear : register(t19);  // texels to the nearest vertex under the water (WaterCoverCS)
+Texture2D<uint> WaterNear : register(t19);  // squared texels to the nearest vertex under the water (WaterCoverCS)
 // Water this shallow over the ground is not water: a placed pond plane's
 // rectangle skims the land around its shore. Also where the shore cap's
 // zero lands, so keep it small or the toe ends under the surface.
@@ -883,6 +883,13 @@ float2 SampleWaterHeight(float2 gridLocal)
 	return float2(max(max(w00, w10), max(w01, w11)), lerp(lerp(present.x, present.y, f.x), lerp(present.z, present.w, f.x), f.y));
 }
 
+// One near-field texel in texels, capped at WaterCoverCS's kWaterNearMax.
+float WaterNearTexels(int3 a_t)
+{
+	const uint sq = WaterNear.Load(a_t);
+	return sq > 9u ? 3.0 : sqrt((float)sq);
+}
+
 // Texels from a point to the nearest vertex under the water, bilinear over
 // the near field (rows flipped like the water window).
 float SampleWaterNear(float2 gridLocal)
@@ -894,10 +901,10 @@ float SampleWaterNear(float2 gridLocal)
 	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
 	int r0 = (int)TerrainDim - 1 - t0.y;
 	int r1 = (int)TerrainDim - 1 - t1.y;
-	float n00 = WaterNear.Load(int3(t0.x, r0, 0));
-	float n10 = WaterNear.Load(int3(t1.x, r0, 0));
-	float n01 = WaterNear.Load(int3(t0.x, r1, 0));
-	float n11 = WaterNear.Load(int3(t1.x, r1, 0));
+	float n00 = WaterNearTexels(int3(t0.x, r0, 0));
+	float n10 = WaterNearTexels(int3(t1.x, r0, 0));
+	float n01 = WaterNearTexels(int3(t0.x, r1, 0));
+	float n11 = WaterNearTexels(int3(t1.x, r1, 0));
 	return lerp(lerp(n00, n10, f.x), lerp(n01, n11, f.x), f.y);
 }
 

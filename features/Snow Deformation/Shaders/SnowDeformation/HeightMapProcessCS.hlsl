@@ -95,6 +95,8 @@ Texture2D<float4> TerrainWindow : register(t2);
 Texture2D<float> InC : register(t3);
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
+// WaterCoverCS's near field: squared texels, 10 for none in reach.
+RWTexture2D<uint> WaterNearOut : register(u1);
 // CombineCS only: the shelter mask, TWO independent channels (R = door
 // suppression, G = melt fraction). A single winner-takes-all channel
 // discarded melt wherever a door's faint influence tail reached - a ring
@@ -733,7 +735,7 @@ float WaterUnderTexel(int2 w)
 
 static const float kWaterNearMax = 3.0;
 
-// OutB = texels to the nearest vertex under the water, capped at
+// WaterNearOut = texels to the nearest vertex under the water, capped at
 // kWaterNearMax: the cap's horizontal term. Runs only when the water raster
 // or the terrain window changed.
 [numthreads(8, 8, 1)] void WaterCoverCS(uint3 dtid : SV_DispatchThreadID)
@@ -749,12 +751,14 @@ static const float kWaterNearMax = 3.0;
 			water = -100000.0;
 	}
 	OutA[dtid.xy] = water;
-	float near = kWaterNearMax;
+	// The squared distance: its sqrt is the length the reader takes, and
+	// anything past kWaterNearMax reads as it.
+	uint nearSq = 10u;
 	[loop] for (int j = -3; j <= 3; j++)
 		[loop] for (int i = -3; i <= 3; i++)
 			[flatten] if (WaterUnderTexel(w + int2(i, j)) > 0.5)
-				near = min(near, length(float2(i, j)));
-	OutB[dtid.xy] = near;
+				nearSq = min(nearSq, (uint)(i * i + j * j));
+	WaterNearOut[dtid.xy] = nearSq;
 }
 
 #ifdef RASTER_COMPARE
