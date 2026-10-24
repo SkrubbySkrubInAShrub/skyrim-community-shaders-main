@@ -1093,7 +1093,7 @@ void SnowDeformation::PrepassSimulation()
 
 	// Bare must hold kShellGateBareFrames before suspending: the resume clears
 	// the map, so a cell flickering at the square's edge must not cost it.
-	deformGateBareFrames = DeformationWindowHasSnow() ? 0 : std::min(deformGateBareFrames + 1, kShellGateBareFrames);
+	deformGateBareFrames = DeformationWindowHasReaders() ? 0 : std::min(deformGateBareFrames + 1, kShellGateBareFrames);
 	if (deformGateBareFrames >= kShellGateBareFrames) {
 		if (!deformSuspended) {
 			deformSuspended = true;

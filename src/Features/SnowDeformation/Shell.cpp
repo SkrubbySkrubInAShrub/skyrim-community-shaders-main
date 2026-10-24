@@ -1954,7 +1954,27 @@ void SnowDeformation::DrawShell()
 	// Every reader of these fields (shell, skins, trench patch, caster,
 	// volume) is off in a bare square with nothing captured.
 	spanClock.Lap(CpuCensus::kSpanShellSetup);
-	const bool nothingDraws = !shellGround && !landscapeReads && capturedStatics.empty() && !settings.VolumeSnow;
+	// LOD batches never enter the object raster, and their skins read it only
+	// inside its window: the one this frame would build, or the one a skip leaves.
+	bool rasterReaders = capturedLoaded > 0;
+	if (!rasterReaders && !lodRasterGateOff) {
+		const auto& eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+		const float reach = ObjectRasterHalfExtent() + 2.0f * ObjectRasterHalfExtent() / kHeightMapDim;
+		auto inWindow = [&](const RE::NiBound& a_b, float a_x, float a_y) {
+			return std::abs(a_b.center.x - a_x) <= reach + a_b.radius && std::abs(a_b.center.y - a_y) <= reach + a_b.radius;
+		};
+		for (const auto& cap : capturedStatics) {
+			const auto& b = cap.geometry->worldBound;
+			if (inWindow(b, eye.x, eye.y) || inWindow(b, heightWindowCenter.x, heightWindowCenter.y)) {
+				rasterReaders = true;
+				break;
+			}
+		}
+	} else if (!rasterReaders) {
+		rasterReaders = !capturedStatics.empty();
+	}
+	lodCapturesIgnoredLast = !rasterReaders && !capturedStatics.empty();
+	const bool nothingDraws = !shellGround && !landscapeReads && !rasterReaders && !settings.VolumeSnow;
 	// An interior idles once no ghost can be in the window; until then it runs.
 	const bool idleInterior = nothingDraws && cascadeReads && interior;
 	if (idleInterior && HeightMapIdleReady())

@@ -1482,6 +1482,22 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 	return false;
 }
 
+bool SnowDeformation::DeformationWindowHasReaders() const
+{
+	if (!GroundShellsSuspended())
+		return DeformationWindowHasSnow();
+	deformSnowVerdict = kSnowGateBare;
+	const float minX = windowOrigin.x, minY = windowOrigin.y;
+	const float maxX = minX + deformWorldSize, maxY = minY + deformWorldSize;
+	for (const auto& b : coatReachBounds[1]) {
+		if (b.x + b.z >= minX && b.x - b.z <= maxX && b.y + b.z >= minY && b.y - b.z <= maxY) {
+			deformSnowVerdict = kSnowGateSnowy;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool SnowDeformation::LoadedCellSquare(int& a_minX, int& a_minY, int& a_maxX, int& a_maxY) const
 {
 	auto* player = globals::game::player;

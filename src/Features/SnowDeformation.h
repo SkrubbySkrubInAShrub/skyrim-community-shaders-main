@@ -3619,6 +3619,10 @@ public:
 	bool cascadeSnowSoonLast = true;
 	/** @brief DevBench A/B: true gives the height maps the whole loaded square's verdict again, with no cascade footprint test. */
 	bool cascadeHeightGateOff = false;
+	/** @brief DevBench A/B: true lets any capture, LOD batches with no skin in the raster's window included, keep the height maps running. */
+	bool lodRasterGateOff = false;
+	/** @brief The last DrawShell's captures were LOD batches with no skin in the raster's window, so they did not keep the height maps (DevBench readout). */
+	bool lodCapturesIgnoredLast = false;
 	/** @brief DevBench A/B: true raises every sun cascade while the shell footprint holds snow, as before the per-cascade test. */
 	bool cascadeRaiseGateOff = false;
 	/** @brief The cascade camera the last raise verdict was taken for (per-frame buffer), and the verdict. */
@@ -4214,6 +4218,8 @@ protected:
 	bool groundSnowSquareValid = false;
 	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. Never-baked ground counts as possibly snowy, and the verdict lands in deformSnowVerdict for the debug readout. */
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
+	/** @brief Whether anything can read the deformation map: the ground's snow in the window, or, in a walled city with its ground off, a loaded capture (object snow takes prints) whose bound last frame met the window. Implemented in TerrainData.cpp. */
+	bool DeformationWindowHasReaders() const;
 	/** @brief WindowHasSnow over the ground snow's own footprint, which reaches far past the deformation window. False means no snow can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
 	/** @brief Whether the next frame's sun cascades may raise snow: a snowy or never-looked-at cell of the loaded square, or a snowy cell one past it (the square moves when the player crosses a cell), that meets one of this frame's cascade footprints. Land past the square never bakes, so unknown there does not count. Without sun descriptors, any such cell. Implemented in TerrainData.cpp. */
