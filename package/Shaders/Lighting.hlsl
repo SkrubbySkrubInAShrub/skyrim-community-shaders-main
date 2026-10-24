@@ -2162,7 +2162,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(SKYLIGHTING_SHADOW_VIS)
 		,
 		skylightingShadowVisibility,
-		UseSkylightingShadowVisibility()
+		false
 #			endif
 	);
 #		else
@@ -2170,10 +2170,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(SKYLIGHTING_SHADOW_VIS)
 									  ,
 									  skylightingShadowVisibility,
-									  UseSkylightingShadowVisibility()
+									  false
 #			endif
-										  ) :
+									  ) :
 	                              Skylighting::UNIT_SH;
+#		endif
+#		if defined(SKYLIGHTING_SHADOW_VIS)
+	// Height clamped so shadow visibility stays valid above the volume, unlike the diffuse SH fade
+	[branch] if (inWorld && UseSkylightingShadowVisibility())
+		Skylighting::Sample(Skylighting::ClampToArrayHeight(positionMSSkylight), worldNormal, skylightingShadowVisibility);
 #		endif
 	sh2 skylightingSpecularSH = inWorld ? Skylighting::SampleSpecular(skylightingSH, positionMSSkylight) : skylightingSH;
 	float skylightingSpecularFadeOut = Skylighting::GetHorizontalFadeOutFactor(positionMSSkylight);
