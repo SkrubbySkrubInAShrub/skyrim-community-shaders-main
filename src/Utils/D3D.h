@@ -45,6 +45,7 @@ namespace Util
 	struct NamedResourceUse
 	{
 		std::string name;
+		std::string shape;  ///< e.g. "1920x1080 R16G16B16A16_FLOAT" or "buffer"; "various" when same-named resources differ.
 		uint64_t bytes = 0;
 		uint32_t count = 0;
 	};

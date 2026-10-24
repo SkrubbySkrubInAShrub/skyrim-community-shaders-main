@@ -106,6 +106,7 @@ namespace Util
 		struct NamedResourceEntry
 		{
 			std::string name;
+			std::string shape;
 			uint64_t bytes = 0;
 			bool staging = false;
 		};
@@ -176,31 +177,62 @@ namespace Util
 			return bytes;
 		}
 
-		uint64_t MeasureResource(ID3D11Resource* a_resource, D3D11_USAGE& a_usage)
+		std::string FormatName(DXGI_FORMAT a_format)
+		{
+			constexpr std::string_view kPrefix = "DXGI_FORMAT_";
+			std::string_view name = magic_enum::enum_name(a_format);
+			if (name.starts_with(kPrefix))
+				name.remove_prefix(kPrefix.size());
+			return name.empty() ? std::to_string(int(a_format)) : std::string(name);
+		}
+
+		std::string TextureShape(std::string a_extent, DXGI_FORMAT a_format, uint32_t a_layers, uint32_t a_mips, uint32_t a_samples, D3D11_USAGE a_usage)
+		{
+			std::string shape = std::move(a_extent) + " " + FormatName(a_format);
+			if (a_layers > 1)
+				shape += std::format(" [{}]", a_layers);
+			if (a_mips > 1)
+				shape += std::format(" {} mips", a_mips);
+			if (a_samples > 1)
+				shape += std::format(" {}x MSAA", a_samples);
+			if (a_usage == D3D11_USAGE_DYNAMIC)
+				shape += " dynamic";
+			return shape;
+		}
+
+		uint64_t MeasureResource(ID3D11Resource* a_resource, D3D11_USAGE& a_usage, std::string* a_shape = nullptr)
 		{
 			a_usage = D3D11_USAGE_DEFAULT;
 			if (winrt::com_ptr<ID3D11Buffer> buffer; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Buffer), buffer.put_void()))) {
 				D3D11_BUFFER_DESC desc;
 				buffer->GetDesc(&desc);
 				a_usage = desc.Usage;
+				if (a_shape)
+					*a_shape = desc.Usage == D3D11_USAGE_DYNAMIC ? "buffer dynamic" : "buffer";
 				return desc.ByteWidth;
 			}
 			if (winrt::com_ptr<ID3D11Texture2D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
 				D3D11_TEXTURE2D_DESC desc;
 				texture->GetDesc(&desc);
 				a_usage = desc.Usage;
+				if (a_shape)
+					*a_shape = TextureShape(std::format("{}x{}", desc.Width, desc.Height), desc.Format, desc.ArraySize, desc.MipLevels, desc.SampleDesc.Count, desc.Usage);
 				return MipChainBytes(desc.Format, desc.Width, desc.Height, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u) * std::max(desc.SampleDesc.Count, 1u);
 			}
 			if (winrt::com_ptr<ID3D11Texture3D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture3D), texture.put_void()))) {
 				D3D11_TEXTURE3D_DESC desc;
 				texture->GetDesc(&desc);
 				a_usage = desc.Usage;
+				if (a_shape)
+					*a_shape = TextureShape(std::format("{}x{}x{}", desc.Width, desc.Height, desc.Depth), desc.Format, 1, desc.MipLevels, 1, desc.Usage);
 				return MipChainBytes(desc.Format, desc.Width, desc.Height, desc.Depth, desc.MipLevels);
 			}
 			if (winrt::com_ptr<ID3D11Texture1D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture1D), texture.put_void()))) {
 				D3D11_TEXTURE1D_DESC desc;
 				texture->GetDesc(&desc);
 				a_usage = desc.Usage;
+				if (a_shape)
+					*a_shape = TextureShape(std::to_string(desc.Width), desc.Format, desc.ArraySize, desc.MipLevels, 1, desc.Usage);
 				return MipChainBytes(desc.Format, desc.Width, 1, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u);
 			}
 			return 0;
@@ -212,13 +244,14 @@ namespace Util
 			if (FAILED(a_child->QueryInterface(__uuidof(ID3D11Resource), resource.put_void())))
 				return;
 			D3D11_USAGE usage;
-			const uint64_t bytes = MeasureResource(resource.get(), usage);
+			std::string shape;
+			const uint64_t bytes = MeasureResource(resource.get(), usage, &shape);
 			auto& tally = Tally();
 			uint64_t id;
 			{
 				std::scoped_lock guard(tally.lock);
 				id = tally.nextId++;
-				tally.live.emplace(id, NamedResourceEntry{ std::string(a_name), bytes, usage == D3D11_USAGE_STAGING });
+				tally.live.emplace(id, NamedResourceEntry{ std::string(a_name), std::move(shape), bytes, usage == D3D11_USAGE_STAGING });
 			}
 			// A rename replaces the older tracker, whose release drops its entry.
 			auto* tracker = new NamedResourceTracker(id);
@@ -256,6 +289,10 @@ namespace Util
 				total += entry.bytes;
 				if (a_byName) {
 					auto& use = groups[entry.name];
+					if (!use.count)
+						use.shape = entry.shape;
+					else if (use.shape != entry.shape)
+						use.shape = "various";
 					use.bytes += entry.bytes;
 					use.count++;
 				}

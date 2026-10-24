@@ -2480,11 +2480,14 @@ public:
 	void QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB = nullptr);
 	/** @brief Sums every live resource named "SnowDeformation::" (Util::SumNamedResources, from descriptors) and fills a line with the largest by name. */
 	uint64_t SumFeatureTextureBytes(std::string& a_breakdown);
-	/** @brief Periodic VRAM log from Prepass: fires on a ~90 s cadence, on large usage deltas, and immediately (as a warning) when usage exceeds budget. */
+	/** @brief Periodic VRAM log from Prepass: fires on a ~90 s cadence, on large usage deltas, and immediately (as a warning) when usage exceeds budget; lists every snow resource when the set changed, at most once a cadence. */
 	void TickVRAMLog();
 	uint64_t vramTickCounter = 0;
 	uint64_t vramLastLoggedMB = 0;
 	uint64_t vramLastLogTick = 0;
+	uint64_t vramListedBytes = 0;
+	uint32_t vramListedResources = 0;
+	uint64_t vramListedTick = 0;
 	/** @brief Logs a snow profiler row far over its usual cost, with the adapter's memory and the frame's heaviest rows. */
 	void TickRowSpikeLog();
 	uint64_t rowSpikeQuietUntil = 0;

@@ -2554,12 +2554,16 @@ void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB
 	}
 }
 
+namespace
+{
+	constexpr std::string_view kSnowResourcePrefix = "SnowDeformation::";
+}
+
 uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 {
-	static constexpr std::string_view kPrefix = "SnowDeformation::";
 	static constexpr size_t kShown = 8;
 	std::vector<Util::NamedResourceUse> byName;
-	const uint64_t total = Util::SumNamedResources(kPrefix, &byName);
+	const uint64_t total = Util::SumNamedResources(kSnowResourcePrefix, &byName);
 
 	uint32_t resources = 0;
 	for (const auto& use : byName)
@@ -2569,7 +2573,7 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	for (size_t i = 0; i < std::min(byName.size(), kShown); i++) {
 		const auto& use = byName[i];
 		shownBytes += use.bytes;
-		line += std::format("{}{}{} {:.1f}", i ? ", " : " | largest (MB): ", use.name.substr(kPrefix.size()),
+		line += std::format("{}{}{} {:.1f}", i ? ", " : " | largest (MB): ", use.name.substr(kSnowResourcePrefix.size()),
 			use.count > 1 ? std::format(" x{}", use.count) : std::string(), double(use.bytes) / (1 << 20));
 	}
 	if (byName.size() > kShown)
@@ -2607,9 +2611,10 @@ void SnowDeformation::TickVRAMLog()
 	if (budgetMB == 0)
 		return;
 
+	constexpr uint64_t kCadenceTicks = 5400;
 	const bool overBudget = usageMB > budgetMB;
 	const bool bigDelta = usageMB > vramLastLoggedMB + 256 || vramLastLoggedMB > usageMB + 512;
-	const bool cadence = vramTickCounter - vramLastLogTick >= 5400;
+	const bool cadence = vramTickCounter - vramLastLogTick >= kCadenceTicks;
 	if (!overBudget && !bigDelta && !cadence)
 		return;
 	vramLastLoggedMB = usageMB;
@@ -2623,6 +2628,24 @@ void SnowDeformation::TickVRAMLog()
 	else
 		logger::info("[SNOW DEFORMATION] VRAM: adapter {}/{} MB ({}%), feature ~{} MB | {}",
 			usageMB, budgetMB, budgetMB ? usageMB * 100 / budgetMB : 0, featureMB, breakdown);
+
+	// Every resource, when the set changed since the last list; at most once a cadence.
+	std::vector<Util::NamedResourceUse> byName;
+	const uint64_t listBytes = Util::SumNamedResources(kSnowResourcePrefix, &byName);
+	uint32_t resources = 0;
+	for (const auto& use : byName)
+		resources += use.count;
+	if ((listBytes == vramListedBytes && resources == vramListedResources) || (vramListedTick && vramTickCounter - vramListedTick < kCadenceTicks))
+		return;
+	vramListedBytes = listBytes;
+	vramListedResources = resources;
+	vramListedTick = vramTickCounter;
+	logger::info("[SNOW DEFORMATION] VRAM by resource: {:.1f} MB over {} resources", double(listBytes) / (1 << 20), resources);
+	for (const auto& use : byName) {
+		const std::string size = use.bytes >= (1u << 20) ? std::format("{:7.1f} MB", double(use.bytes) / (1 << 20)) : std::format("{:7.1f} KB", double(use.bytes) / (1 << 10));
+		logger::info("[SNOW DEFORMATION]   {}  {}{}  ({})", size, use.name.substr(kSnowResourcePrefix.size()),
+			use.count > 1 ? std::format(" x{}", use.count) : std::string(), use.shape);
+	}
 }
 
 // A pass's GPU time is a timestamp pair, so paging and GPU idle (the CPU late
