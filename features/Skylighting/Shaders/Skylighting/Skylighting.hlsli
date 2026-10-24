@@ -33,6 +33,21 @@ namespace Skylighting
 		return saturate(edgeDist * 20);
 	}
 
+	/** @brief Fade-out over the probe volume's horizontal edges only, for samples whose height is clamped by ClampToArrayHeight. */
+	float GetHorizontalFadeOutFactor(float3 positionMS)
+	{
+		return GetFadeOutFactor(float3(positionMS.xy, SharedData::skylightingSettings.PosOffset.z));
+	}
+
+	/** @brief Clamps the height to one cell inside the probe volume, so geometry above or below it reuses the outermost layer instead of reading as unoccluded. */
+	float3 ClampToArrayHeight(float3 positionMS)
+	{
+		const float halfHeight = ARRAY_SIZE.z * 0.5 - CELL_SIZE.z;
+		const float centreZ = SharedData::skylightingSettings.PosOffset.z;
+		positionMS.z = clamp(positionMS.z, centreZ - halfHeight, centreZ + halfHeight);
+		return positionMS;
+	}
+
 	float MixDiffuse(float visibility)
 	{
 		return lerp(SharedData::skylightingSettings.MinDiffuseVisibility, 1.0, visibility);
@@ -54,9 +69,9 @@ namespace Skylighting
 		return MixDiffuse(CosineLobeVisibility(skylightingSH, normal, fadeOutFactor));
 	}
 
-	float EvaluateVisibility(sh2 skylightingSH)
+	float EvaluateVisibility(sh2 skylightingSH, float fadeOutFactor = 1.0)
 	{
-		return MixSpecular(CosineLobeVisibility(skylightingSH, float3(0, 0, 1), 1.0));
+		return MixSpecular(CosineLobeVisibility(skylightingSH, float3(0, 0, 1), fadeOutFactor));
 	}
 
 	float EvaluateSpecular(sh2 skylightingSH, sh2 specularLobe, float fadeOutFactor = 1.0)
@@ -214,6 +229,14 @@ namespace Skylighting
 		}
 
 		return SphericalHarmonics::Scale(sum, rcp(wsum + EPSILON_WEIGHT_SUM));
+	}
+
+	/** @brief Returns skylightingSH, re-sampled at the clamped height when positionMS lies above or below the probe volume. */
+	sh2 SampleSpecular(sh2 skylightingSH, float3 positionMS)
+	{
+		const float3 clampedMS = ClampToArrayHeight(positionMS);
+		[branch] if (clampedMS.z != positionMS.z) return SampleNoBias(clampedMS);
+		return skylightingSH;
 	}
 #endif
 }
