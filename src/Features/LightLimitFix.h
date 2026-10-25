@@ -106,13 +106,15 @@ public:
 	static constexpr uint32_t ENGINE_SHADOW_MAP_SLICES = 8;
 	static constexpr uint32_t MIN_LOCAL_SHADOW_SLOTS = 4;
 	static constexpr uint32_t MAX_LOCAL_SHADOW_SLOTS = 64;
-	static constexpr uint64_t LOCAL_SHADOW_MAX_CACHE_BYTES = 512ull * 1024ull * 1024ull;
 	/** @brief Frames to wait before retrying a cache allocation that failed. */
 	static constexpr uint32_t LOCAL_SHADOW_ALLOC_RETRY_FRAMES = 600;
 	static constexpr uint32_t LOCAL_SHADOW_SWEEP_INTERVAL = 30;
 	static constexpr uint32_t LOCAL_SHADOW_EVICT_AGE = 120;
 	static constexpr uint32_t LOCAL_SHADOW_REJECT_MAX_FRAMES = 120;
 	static constexpr uint32_t LOCAL_SHADOW_CAMERA_HOLD_FRAMES = 60;
+	/** @brief Frames a caster stays on screen after its light sphere leaves the view frustum. */
+	static constexpr uint32_t LOCAL_SHADOW_SCREEN_HOLD_FRAMES = 30;
+	static constexpr float LOCAL_SHADOW_FADE_IN_FRAMES = 10.0f;
 	static constexpr uint32_t LOCAL_SHADOW_STATIC_STARVE_FRAMES = 60;
 	static constexpr float LOCAL_SHADOW_AGE_URGENCY = 64.0f;
 	static constexpr float LOCAL_SHADOW_ACTOR_SCORE = 1000.0f;
@@ -183,6 +185,11 @@ public:
 		uint32_t lastEvaluatedFrame = 0;
 		uint32_t lastEligibleFrame = 0;
 		uint32_t lastRenderedFrame = 0;
+		uint32_t lastOnScreenFrame = 0;
+		/** @brief First render into the current slice, which starts the light's fade-in. */
+		uint32_t shadowReadyFrame = 0;
+		/** @brief Frame the engine rendered this caster but no cache slice was available, which is not an engine rejection. */
+		uint32_t slotDeniedFrame = 0;
 		uint32_t rejectUntilFrame = 0;
 		uint32_t rejectStreak = 0;
 		RE::NiPoint3 position{};
@@ -393,8 +400,10 @@ public:
 	bool EnsureLocalShadowCopyShader();
 	/** @brief True when the engine found the caster in range within the camera hold window. */
 	static bool IsLocalShadowCasterInView(const LocalShadowCaster& a_caster, uint32_t a_frame);
-	/** @brief Texel size of the cache format, which is always R16_UNORM or R32_FLOAT. */
-	static uint32_t GetLocalShadowBytesPerTexel(DXGI_FORMAT a_format) { return a_format == DXGI_FORMAT_R16_UNORM ? 2 : 4; }
+	/** @brief True when the caster's light sphere touched the view frustum within the screen hold window. */
+	static bool IsLocalShadowCasterOnScreen(const LocalShadowCaster& a_caster, uint32_t a_frame) { return a_frame - a_caster.lastOnScreenFrame <= LOCAL_SHADOW_SCREEN_HOLD_FRAMES; }
+	/** @brief Video memory of one cache slice; the cache format is always R16_UNORM or R32_FLOAT. */
+	static uint64_t GetLocalShadowSlotBytes(uint32_t a_resolution, DXGI_FORMAT a_format) { return static_cast<uint64_t>(a_resolution) * a_resolution * (a_format == DXGI_FORMAT_R16_UNORM ? 2 : 4); }
 
 	/**
 	 * @brief Picks which shadow casters the engine may render this frame so the cache covers every caster over time.
