@@ -43,8 +43,9 @@ namespace
 			return;
 
 		const auto message = std::format(
-			"{} file(s) in CommunityShaders/Overrides are no longer read. Move them into the Baseline folder of a "
-			"preset pack (Presets/<Name>/Baseline/) and enable that pack on the Presets page.",
+			"{} old-format override file(s) in CommunityShaders/Overrides are not compatible anymore and are no longer read. "
+			"Update them to the new Baseline format: move them into the Baseline folder of a preset pack "
+			"(Presets/<Name>/Baseline/) and enable that pack on the Presets page.",
 			count);
 		logger::warn("{}", message);
 		FeatureIssues::FeatureFileInfo fileInfo;
