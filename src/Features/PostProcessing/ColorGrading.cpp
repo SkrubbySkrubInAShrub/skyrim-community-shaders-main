@@ -684,11 +684,23 @@ void ColorGrading::LoadSettings(json& o_json)
 		if (auto it = std::ranges::find_if(tonemappers, [&](TonemapperInfo& x) { return settings.currentTonemapper == x.name; });
 			it != tonemappers.end()) {
 			tonemapperType = (int)(it - tonemappers.begin());
-			// PsychoV 17 saves only carried exposure; PsychoV 30 divides by contrast.
-			if (it->name == "PsychoV"sv && settings.tonemapParams[0].w <= 0.f) {
-				const float exposure = settings.tonemapParams[0].x;
-				settings.tonemapParams = it->default_settings;
-				settings.tonemapParams[0].x = exposure;
+			if (it->name == "PsychoV"sv) {
+				auto& params = settings.tonemapParams;
+				// PsychoV 17 saves only carried exposure; PsychoV 30 divides by contrast.
+				if (params[0].w <= 0.f) {
+					const float exposure = params[0].x;
+					params = it->default_settings;
+					params[0].x = exposure;
+				}
+				// The shader trusts its inputs: hand-edited values past the slider ranges (e.g. Shadows > 2
+				// flips a pow() exponent negative) blow up near black, so clamp to the slider ranges.
+				params[0].y = std::clamp(params[0].y, 0.f, 2.f);
+				params[0].z = std::clamp(params[0].z, 0.f, 2.f);
+				params[0].w = std::clamp(params[0].w, 0.01f, 2.f);
+				params[1].x = std::clamp(params[1].x, 0.f, 2.f);
+				params[1].y = std::clamp(params[1].y, 0.f, 2.f);
+				params[1].z = std::clamp(params[1].z, 0.f, 1.f);
+				params[1].w = std::clamp(params[1].w, 0.f, 2.f);
 			}
 		} else {
 			TonemapperInfo::GetDefaultParams(tonemapperType, settings.tonemapParams);
