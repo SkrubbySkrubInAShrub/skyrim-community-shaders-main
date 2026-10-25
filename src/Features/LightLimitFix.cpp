@@ -650,7 +650,13 @@ void LightLimitFix::UpdateLights()
 					auto light = ProcessLight(bsLight, niLight);
 
 					light.lightFlags.reset(LightFlags::Shadow, LightFlags::ShadowCaster, LightFlags::LocalShadow);
-					light.fade *= bsLight->lodDimmer;
+					// A shadow light's lodDimmer is zeroed past the shadow distance, which would drop demoted lights; use the light LOD fade instead.
+					if (bsLight->IsShadowLight() && IsLocalShadowCacheActive()) {
+						const float radius = niLight->GetLightRuntimeData().radius.x;
+						light.fade *= GetLightLODDimmer(niLight->world.translate.GetSquaredDistance(eyePositionCached) - radius * radius);
+					} else {
+						light.fade *= bsLight->lodDimmer;
+					}
 
 					auto& effects11 = globals::features::effects11;
 					if (effects11.enableEffect)
@@ -676,13 +682,15 @@ void LightLimitFix::UpdateLights()
 						} else if (const auto* caster = FindLocalShadowCaster(shadowLight); caster && caster->slice >= 0 && caster->lastRenderedFrame != 0) {
 							light.localShadowIndex = static_cast<uint32_t>(caster->slice);
 							light.lightFlags.set(LightFlags::LocalShadow);
-							light.fade *= std::min(static_cast<float>(localShadowFrame - caster->shadowReadyFrame + 1) / LOCAL_SHADOW_FADE_IN_FRAMES, 1.0f);
+							// Shadowless spots were dropped, so they fade in whole; other casters fade in their shadow instead.
+							if (shadowLight->GetIsFrustumLight())
+								light.fade *= GetLocalShadowFadeIn(*caster, localShadowFrame);
 						} else if (IsShadowMapRendered(shadowSceneNode, shadowLight)) {
 							// Lights without a cached slice (cache full or not yet copied) fall back to the engine shadow mask.
 							TryAssignShadowMask(light, shadowLight);
 						}
-						// Drop shadowless lights rather than leak light through walls.
-						if (light.lightFlags.none(LightFlags::LocalShadow, LightFlags::Shadow))
+						// Shadowless spots would light their whole radius, so drop them; with the cache, other casters render unshadowed.
+						if (light.lightFlags.none(LightFlags::LocalShadow, LightFlags::Shadow) && (!IsLocalShadowCacheActive() || shadowLight->GetIsFrustumLight()))
 							return;
 					}
 
@@ -1092,9 +1100,6 @@ void LightLimitFix::AddParticleLightsToBuffer(eastl::vector<LightData>& a_lights
 	if (!settings.EnableParticleLights)
 		return;
 
-	static float& lightFadeStart = *reinterpret_cast<float*>(REL::RelocationID(527668, 414582).address());
-	static float& lightFadeEnd = *reinterpret_cast<float*>(REL::RelocationID(527669, 414583).address());
-
 	std::unique_lock lock{ particleLightsMutex };
 
 	currentParticleLights.clear();
@@ -1127,13 +1132,7 @@ void LightLimitFix::AddParticleLightsToBuffer(eastl::vector<LightData>& a_lights
 		                 (light.positionWS.data.z * light.positionWS.data.z) -
 		                 (light.radius * light.radius);
 
-		float dimmer = 0.0f;
-		if (distance < lightFadeStart || lightFadeEnd == 0.0f || lightFadeEnd <= lightFadeStart)
-			dimmer = 1.0f;
-		else if (distance <= lightFadeEnd)
-			dimmer = 1.0f - ((distance - lightFadeStart) / (lightFadeEnd - lightFadeStart));
-
-		light.fade = dimmer;
+		light.fade = GetLightLODDimmer(distance);
 		if ((light.color.x + light.color.y + light.color.z) * light.fade > 1e-4 && light.radius > 1e-4) {
 			light.invRadius = 1.f / light.radius;
 			a_lightsData.push_back(light);
@@ -1206,6 +1205,16 @@ uint32_t LightLimitFix::GetShadowMaskIndex(RE::BSShadowLight* a_shadowLight)
 	return a_shadowLight ? a_shadowLight->GetRuntimeData().maskIndex : NO_SHADOW_MASK_INDEX;
 }
 
+float LightLimitFix::GetLightLODDimmer(float a_distanceSquared)
+{
+	static float& lightFadeStart = *reinterpret_cast<float*>(REL::RelocationID(527668, 414582).address());
+	static float& lightFadeEnd = *reinterpret_cast<float*>(REL::RelocationID(527669, 414583).address());
+
+	if (a_distanceSquared < lightFadeStart || lightFadeEnd == 0.0f || lightFadeEnd <= lightFadeStart)
+		return 1.0f;
+	return a_distanceSquared <= lightFadeEnd ? 1.0f - (a_distanceSquared - lightFadeStart) / (lightFadeEnd - lightFadeStart) : 0.0f;
+}
+
 bool LightLimitFix::IsShadowMapRendered(RE::ShadowSceneNode* a_shadowSceneNode, RE::BSShadowLight* a_shadowLight)
 {
 	if (GetShadowMaskIndex(a_shadowLight) >= SHADOW_MASK_CHANNEL_COUNT)
@@ -1237,26 +1246,6 @@ uint32_t LightLimitFix::GetEngineLocalShadowBudget()
 	return sunShadowSkipped ? SHADOW_MASK_CHANNEL_COUNT : SHADOW_MASK_CHANNEL_COUNT - 1;
 }
 
-void LightLimitFix::MatchShadowDistanceToLightFade(bool a_enable)
-{
-	static float& shadowDistance = *reinterpret_cast<float*>(REL::RelocationID(528314, 415263).address());
-	static float& shadowDistanceSquared = *reinterpret_cast<float*>(REL::RelocationID(528316, 415264).address());
-	static float& lightFadeEndSquared = *reinterpret_cast<float*>(REL::RelocationID(527669, 414583).address());
-
-	const float baseSquared = shadowDistance * shadowDistance;
-	if (!a_enable) {
-		if (shadowDistanceRaised && std::isfinite(baseSquared))
-			shadowDistanceSquared = baseSquared;
-		shadowDistanceRaised = false;
-		return;
-	}
-	if (!std::isfinite(baseSquared) || !std::isfinite(lightFadeEndSquared) || lightFadeEndSquared <= 0.0f)
-		return;
-	// Lights past the shadow distance would otherwise drop out of the rotation and render unshadowed.
-	shadowDistanceSquared = std::max(baseSquared, lightFadeEndSquared);
-	shadowDistanceRaised = true;
-}
-
 void LightLimitFix::ScheduleLocalShadowCasters()
 {
 	localShadowAllowed.clear();
@@ -1265,9 +1254,7 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 	if (!loaded)
 		return;
 
-	const bool cacheActive = IsLocalShadowCacheActive();
-	MatchShadowDistanceToLightFade(cacheActive && Util::IsInterior());
-	if (!cacheActive)
+	if (!IsLocalShadowCacheActive())
 		return;
 
 	auto smState = globals::game::smState;
@@ -1912,6 +1899,8 @@ void LightLimitFix::CopyLocalShadowMaps()
 		for (int column = 0; column < 4; column++)
 			data.ShadowProj.m[3][column] = static_cast<float>(static_cast<double>(eye.x) * caster.shadowProj.m[0][column] + static_cast<double>(eye.y) * caster.shadowProj.m[1][column] + static_cast<double>(eye.z) * caster.shadowProj.m[2][column] + static_cast<double>(caster.shadowProj.m[3][column]));
 		data.Params = caster.shadowParams;
+		if (static_cast<uint32_t>(caster.shadowParams.x) != LOCAL_SHADOW_TYPE_SPOT)
+			data.Params.w = GetLocalShadowFadeIn(caster, frame);
 		data.Params2 = caster.shadowParams2;
 		if (caster.dynamic) {
 			const float expectedInterval = std::max(caster.intervalEma, static_cast<float>(frame - caster.lastRenderedFrame) + 1.0f);
