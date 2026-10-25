@@ -1934,7 +1934,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		const float buriedDepth = max(viewPosition.z - visibleDepth - depthStep, 0.0);
 		[branch] if (buriedDepth > 0.0)
 		{
-			worldNormal = normalize(lerp(worldNormal, float3(0, 0, 1), saturate(buriedDepth / 10.0)));
+			// A downward normal passes through zero halfway, so fall back to up there instead of normalizing it
+			const float3 blendedNormal = lerp(worldNormal, float3(0, 0, 1), saturate(buriedDepth / 10.0));
+			worldNormal = dot(blendedNormal, blendedNormal) > 1e-6 ? normalize(blendedNormal) : float3(0, 0, 1);
 			localShadowPosition *= 1.0 - buriedDepth / viewPosition.z;
 		}
 	}
