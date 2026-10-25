@@ -1083,10 +1083,8 @@ bool StampTexel(uint2 phys)
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 	// The deepest a body reaches into the layer here this frame, before Snow
-	// Resistance; the pass rule below turns it into carve. The wide reach is
-	// what a repeat pass deepens by.
+	// Resistance; the pass rule below turns it into carve.
 	float bodyReach = 0.0;
-	float bodyReachWide = 0.0;
 	// The deepest this frame's cuts reach here, bodies by their reach: where
 	// it meets the floor the track is fresh again (TrackClock).
 	float cutNow = 0.0;
@@ -1186,7 +1184,6 @@ bool StampTexel(uint2 phys)
 				[flatten] if (isBody)
 				{
 					bodyReach = max(bodyReach, reach);
-					bodyReachWide = max(bodyReachWide, reach);
 				}
 				else
 				{
@@ -1304,7 +1301,6 @@ bool StampTexel(uint2 phys)
 		{
 			int dim = (int)ContactDim;
 			const float2 cf = float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim;
-			int2 ct = int2(cf);
 			// Half this texel's width in contact texels; the contact texels it overlaps.
 			const float span = TexelSize * ContactDim / (4.0 * ContactHalfExtent);
 			const int2 k0 = int2(floor(cf - span));
@@ -1336,27 +1332,6 @@ bool StampTexel(uint2 phys)
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
 				propPrinted = saturate(1.0 - ContactAboveDrawn(worldPos, contact.y, dune)) * crustDepth * cover.y;
 			bodyReach = max(bodyReach, bodyContact);
-			// A repeat pass deepens by the reach a map texel either side,
-			// tent-weighted: a channel walked into a packed floor eases in over
-			// texels instead of stepping one (square shadows on the floor).
-			[branch] if (bodyContact > 0.0)
-			{
-				const float k = TexelSize * ContactDim / (2.0 * ContactHalfExtent);
-				float tent = 4.0 * bodyContact;
-				[unroll] for (int ny = -1; ny <= 1; ny++)
-				{
-					[unroll] for (int nx = -1; nx <= 1; nx++)
-					{
-						if (nx != 0 || ny != 0)
-						{
-							const float c = ContactHeight.Load(int3(clamp(ct + int2(round(float2(nx, -ny) * k)), 0, dim - 1), 0)).x;
-							const float r = c < CONTACT_NONE * 0.5 ? saturate(1.0 - ContactAboveDrawn(worldPos + float2(nx, ny) * TexelSize, c, dune)) * crustDepth : 0.0;
-							tent += (nx == 0 || ny == 0 ? 2.0 : 1.0) * r;
-						}
-					}
-				}
-				bodyReachWide = max(bodyReachWide, tent / 16.0);
-			}
 			carve = max(carve, propPrinted);
 			cutNow = max(cutNow, propPrinted);
 			crustBreak = max(crustBreak, saturate(max(bodyContact * BodyPrint, propPrinted) * CrustBreakOnCarve));
@@ -1373,8 +1348,7 @@ bool StampTexel(uint2 phys)
 		float passStart = float(state & 63u) / 63.0;
 		[flatten] if (((PassClock - (state >> 6)) & 1023u) > PassGap || passStart > deformation + 1.0 / 63.0)
 			passStart = floor(saturate(deformation) * 63.0) / 63.0;
-		const float passReach = passStart > 0.0 ? bodyReachWide : bodyReach;
-		carve = max(carve, passStart + BodyPrint * max(passReach - passStart, 0.0));
+		carve = max(carve, passStart + BodyPrint * max(bodyReach - passStart, 0.0));
 		PassState[phys] = ((PassClock & 1023u) << 6) | uint(passStart * 63.0 + 0.5);
 	}
 	cutNow = max(cutNow, max(bodyReach, meltTarget));
