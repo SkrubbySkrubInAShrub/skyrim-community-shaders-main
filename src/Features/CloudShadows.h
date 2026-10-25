@@ -13,7 +13,8 @@ public:
 	struct alignas(16) Settings
 	{
 		float Opacity = 0.5f;
-		float pad[3];
+		float Scattering = 0.4f;
+		float pad[2];
 	};
 
 	Settings settings;

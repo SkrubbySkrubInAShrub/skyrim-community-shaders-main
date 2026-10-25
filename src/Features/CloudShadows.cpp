@@ -11,17 +11,26 @@
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudShadows::Settings,
-	Opacity)
+	Opacity,
+	Scattering)
 
 void CloudShadows::DrawSettings()
 {
-	const Util::LockedSection enbLock(globals::features::effects11.OwnsFeature(E11Handoff::Feature::CloudShadows),
-		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
+	{
+		const Util::LockedSection enbLock(globals::features::effects11.OwnsFeature(E11Handoff::Feature::CloudShadows),
+			T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
-	ImGui::SliderFloat(T(TKEY("opacity"), "Opacity"), &settings.Opacity, 0.0f, 4.0f, "%.1f");
+		ImGui::SliderFloat(T(TKEY("opacity"), "Opacity"), &settings.Opacity, 0.0f, 4.0f, "%.1f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("opacity_tooltip"),
+								  "Higher values make cloud shadows darker."));
+		}
+	}
+
+	ImGui::SliderFloat(T(TKEY("scattering"), "Scattering"), &settings.Scattering, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("opacity_tooltip"),
-							  "Higher values make cloud shadows darker."));
+		ImGui::Text("%s", T(TKEY("scattering_tooltip"),
+							  "Share of the sunlight a cloud blocks that it scatters back down as soft skylight.\nKeeps shading and ambient occlusion readable under cloud shadows."));
 	}
 }
 

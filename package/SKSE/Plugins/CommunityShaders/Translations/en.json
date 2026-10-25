@@ -740,6 +740,8 @@
     "feature.cloud_shadows.name": "Cloud Shadows",
     "feature.cloud_shadows.opacity": "Opacity",
     "feature.cloud_shadows.opacity_tooltip": "Higher values make cloud shadows darker.",
+    "feature.cloud_shadows.scattering": "Scattering",
+    "feature.cloud_shadows.scattering_tooltip": "Share of the sunlight a cloud blocks that it scatters back down as soft skylight.\nKeeps shading and ambient occlusion readable under cloud shadows.",
     "feature.cs_editor.accelerate": "Accelerate",
     "feature.cs_editor.accelerate_weather_change_tooltip": "When enabled, weather changes instantly",
     "feature.cs_editor.aurora": "Aurora",

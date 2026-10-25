@@ -2346,6 +2346,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+	float3 cloudScatterColor = dirLightColor;
+	float cloudScatter = 0.0;
+
 #	if defined(WATER_EFFECTS)
 	if (inWorld || inReflection)
 		dirLightColor *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz);
@@ -2353,7 +2356,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (inWorld || inReflection)
-		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, cloudScatter);
 
 	float dirLightAngle = dot(worldNormal.xyz, DirLightDirection.xyz);
 
@@ -2829,6 +2832,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 	}
 #	endif
+
+	directionalAmbientColor += ShadowSampling::GetCloudScatterLighting(cloudScatterColor, cloudScatter, ambientNormal);
 
 	float3 reflectionDiffuseColor = diffuseColor + directionalAmbientColor;
 

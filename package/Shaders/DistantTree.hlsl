@@ -215,15 +215,17 @@ PS_OUTPUT main(PS_INPUT input)
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 
 	float dirShadow = 1;
+	float cloudScatter = 0.0;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
 	dirShadow = lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, screenUV, screenNoise), 0.8);
 #			endif
 
 	if (dirShadow != 0.0)
-		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, cloudScatter);
 
-	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * Color::BRDFScale;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
+	float3 diffuseColor = dirLightColor * dirShadow * 0.5 * Color::BRDFScale + ShadowSampling::GetCloudScatterLighting(dirLightColor, cloudScatter, normal);
 
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
@@ -250,9 +252,11 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Albedo = float4(baseColor.xyz, 1);
 	psout.Masks = float4(0, 0, 1, 0);
 #		else
-	float dirShadow = ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+	float cloudScatter;
+	float dirShadow = ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, cloudScatter);
 
-	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * Color::BRDFScale;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
+	float3 diffuseColor = dirLightColor * dirShadow * 0.5 * Color::BRDFScale + ShadowSampling::GetCloudScatterLighting(dirLightColor, cloudScatter, normal);
 
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
