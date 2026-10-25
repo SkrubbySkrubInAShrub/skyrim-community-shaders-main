@@ -364,6 +364,10 @@ Texture2D<float2> ObjectSkinDepth : register(t9);
 // started from in 63rds, bits 6-15 the PassClock of its last contact.
 // Physical layout, like the map.
 RWTexture2D<uint> PassState : register(u7);
+// The deepest a body has reached into the layer at each texel (StampCS),
+// which the shells measure trampled ground against; RingCS clears what it
+// reassigns. Physical layout, like the map.
+RWTexture2D<unorm float> BodyReachMax : register(u5);
 #define CONTACT_NONE 1.0e30
 static const float kNoRoadTop = -1000000.0;
 // A scan's indirect args (bytes 0-11), its append counter (12) and its
@@ -569,6 +573,7 @@ float SlumpTap(int2 p, int2 dims)
 	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
 	CurrentDeformation[phys] = float4(depth, 0.0, 0.0, 0.0);
 	TrackClock[phys] = stored.y > 0.0 ? AgeingClock - (1.0 - stored.y) * TRACK_AGE_HORIZON : 0.0;
+	BodyReachMax[phys] = 0.0;
 	// Injected ground occupies its tile; zeroed ground leaves any stale mark
 	// for the next evolve visit to heal (writes here are unordered across the
 	// band, so an absolute 0 could clobber a neighbour texel's 1).
@@ -1350,6 +1355,8 @@ bool StampTexel(uint2 phys)
 			passStart = floor(saturate(deformation) * 63.0) / 63.0;
 		carve = max(carve, passStart + BodyPrint * max(bodyReach - passStart, 0.0));
 		PassState[phys] = ((PassClock & 1023u) << 6) | uint(passStart * 63.0 + 0.5);
+		[branch] if (bodyReach > BodyReachMax[phys] + 0.5 / 255.0)
+			BodyReachMax[phys] = bodyReach;
 	}
 	cutNow = max(cutNow, max(bodyReach, meltTarget));
 

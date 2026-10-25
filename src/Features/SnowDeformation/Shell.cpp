@@ -2296,6 +2296,9 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(kNoiseHashSlot, 1, &noiseSRV);
 	ID3D11ShaderResourceView* trenchDetailSRVs[] = { trenchDetailNormalSRV.get(), trenchDetailHeightSRV.get() };
 	context->PSSetShaderResources(kTrenchDetailSlot, ARRAYSIZE(trenchDetailSRVs), trenchDetailSRVs);
+	// The trampled floor's measure, for the same two passes.
+	ID3D11ShaderResourceView* bodyReachSRV = bodyReachTexture ? bodyReachTexture->srv.get() : nullptr;
+	context->PSSetShaderResources(kBodyReachSlot, 1, &bodyReachSRV);
 	// Wide exclusion field (t15): read by the surface evaluation and by the
 	// pixel-side melt overrides, so the same stages as the berm.
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
@@ -2573,8 +2576,9 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);
 	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
-	// The untouched mask is a compute target next Prepass.
+	// The untouched mask and the body reach are compute targets next Prepass.
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullFinePS[0]);
+	context->PSSetShaderResources(kBodyReachSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
 	UnbindMarchCaches();
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };

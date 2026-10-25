@@ -642,17 +642,38 @@ float SampleSpellMark(float2 gridLocal)
 	return smoothstep(kSpellMarkStart, 0.15, lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y));
 }
 
-// Trampled ground: snow walked deeper than one pass (TrampleStyle.z) is
-// packed, and the detail's relief on its floor scales toward TrampleStyle.y
-// (1 = off) by how far INTO the trench a point is; the berm outside it keeps
-// its own. Melted depth is not packing.
+// The deepest a body has reached into the layer at each map texel (StampCS),
+// 0 where none has since the ground arrived. Physical layout, like the map.
+Texture2D<float> BodyReachMax : register(t56);
+
+// Trampled ground: snow walked deeper than one pass is packed, and the
+// detail's relief on its floor scales toward TrampleStyle.y (1 = off) by how
+// far. One pass leaves TrampleStyle.z of the deepest reach bodies have had at
+// a texel, which holds for prints narrower than a texel; ground with none on
+// record measures against the whole layer. Shallow reach is the trench's
+// edge, and the berm outside it keeps its own. Melted depth is not packing.
 float TrampleDetailScale(float2 worldXY, float deformation)
 {
 	float scale = 1.0;
-	[branch] if (TrampleStyle.y < 0.999 && deformation > TrampleStyle.z + 0.001)
+	const float2 uv = (GridToDeformOffset + worldXY - GridOrigin) * DeformInvWorldSize;
+	[branch] if (TrampleStyle.y < 0.999 && deformation > 0.001 && all(uv >= 0.0) && all(uv <= 1.0))
 	{
-		const float packed = saturate((deformation - SampleMelted(worldXY - GridOrigin) - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3));
-		scale = lerp(1.0, saturate(TrampleStyle.y), packed * smoothstep(0.05, 0.5, deformation));
+		SNOW_DEFORM_DIMS(dims);
+		const float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+		const int2 t0 = (int2)t;
+		const float2 f = t - t0;
+		const int2 t1 = min(t0 + 1, int2(dims) - 1);
+		float4 packed;
+		[unroll] for (int i = 0; i < 4; i++)
+		{
+			const int3 texel = DeformTexel(int2((i & 1) ? t1.x : t0.x, (i & 2) ? t1.y : t0.y), int2(dims));
+			const float2 carve = saturate(DeformationMap.Load(texel).xy);
+			const float reach = BodyReachMax.Load(texel);
+			const float layer = reach > 0.0 ? reach : 1.0;
+			const float pressed = max(carve.x - carve.y, 0.0) / layer;
+			packed[i] = saturate((pressed - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3)) * smoothstep(0.05, 0.5, layer);
+		}
+		scale = lerp(1.0, saturate(TrampleStyle.y), lerp(lerp(packed.x, packed.y, f.x), lerp(packed.z, packed.w, f.x), f.y));
 	}
 	return scale;
 }

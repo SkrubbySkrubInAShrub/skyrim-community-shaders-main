@@ -897,6 +897,8 @@ public:
 
 	/** @brief The body pass each map texel last took (R16_UINT, physical layout): the carve it started from and when bodies last touched it. StampCS u7 only. */
 	Texture2D* passStateTexture = nullptr;
+	/** @brief The deepest a body has reached into the layer at each map texel (R8_UNORM, physical layout; 0 = none since the ground arrived). StampCS raises it and RingCS clears what it reassigns (u5); the shells measure trampled ground against it (kBodyReachSlot). */
+	Texture2D* bodyReachTexture = nullptr;
 	/** @brief When each map texel was last cut, on the ageing clock (R16_FLOAT, physical layout; 0 = never). StampCS dates cuts that reach the floor and RingCS arriving ground from the store (u4); the berm bake turns it into the field's dates (t2); TrackRebaseCS moves it with the clock. */
 	Texture2D* trackClockTexture = nullptr;
 	ID3D11ComputeShader* trackRebaseCS = nullptr;
@@ -915,6 +917,8 @@ public:
 	double passClockSeconds = 256.0;
 	/** @brief PS slot of the untouched-tile mask (BermFieldCS UntouchedCS), read by the shell PS's skip. */
 	static constexpr UINT kUntouchedTilesSlot = 57;
+	/** @brief PS slot of the body reach (TrampleDetailScale), bound by DrawShell for the shell and the trench patch. */
+	static constexpr UINT kBodyReachSlot = 56;
 	/** @brief SampleTerrain's terrain window (TerrainWetSRV), bound wherever the shell's t0 is. */
 	static constexpr UINT kTerrainWetSlot = 58;
 

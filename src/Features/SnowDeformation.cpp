@@ -297,6 +297,23 @@ void SnowDeformation::CreateDeformationTextures()
 		globals::d3d::context->ClearUnorderedAccessViewUint(passStateTexture->uav.get(), zero);
 	}
 
+	// Body reach: per map texel, the deepest a body has reached into the
+	// layer (StampCS), which the shells measure trampled ground against.
+	{
+		D3D11_TEXTURE2D_DESC reachDesc = texDesc;
+		reachDesc.Format = DXGI_FORMAT_R8_UNORM;
+		D3D11_SHADER_RESOURCE_VIEW_DESC reachSrvDesc = srvDesc;
+		reachSrvDesc.Format = reachDesc.Format;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC reachUavDesc = uavDesc;
+		reachUavDesc.Format = reachDesc.Format;
+		delete bodyReachTexture;
+		bodyReachTexture = new Texture2D(reachDesc, "SnowDeformation::BodyReach");
+		bodyReachTexture->CreateSRV(reachSrvDesc);
+		bodyReachTexture->CreateUAV(reachUavDesc);
+		const FLOAT zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		globals::d3d::context->ClearUnorderedAccessViewFloat(bodyReachTexture->uav.get(), zero);
+	}
+
 	// Track dates: when each texel was last cut, on the ageing clock. Starts
 	// never-cut; the clear's full-map ring dates what the store brings back.
 	{
@@ -1575,6 +1592,8 @@ void SnowDeformation::PrepassSimulation()
 			// The ring and the stamps date texels; the scans own u4 between them.
 			ID3D11UnorderedAccessView* clockUAV = trackClockTexture ? trackClockTexture->uav.get() : nullptr;
 			ID3D11UnorderedAccessView* nullClockUAV = nullptr;
+			// Both keep the body reach too (u5, the scans' args between them).
+			ID3D11UnorderedAccessView* reachUAV = bodyReachTexture ? bodyReachTexture->uav.get() : nullptr;
 
 			// Ring: rewrite only the texels the scroll (or clear) reassigned.
 			// This is the whole scroll cost now - a walking-speed frame is a
@@ -1583,11 +1602,13 @@ void SnowDeformation::PrepassSimulation()
 				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
 				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
+				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
 				context->CSSetShader(GetDeformationRingCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
 				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
+				context->CSSetUnorderedAccessViews(5, 1, &nullClockUAV, nullptr);
 				// The blood map shares the origin, so the same ring is cleared.
 				// Its targets take u0/u1 for this dispatch; the map table goes
 				// back afterwards for the passes that inherit it.
@@ -1697,6 +1718,7 @@ void SnowDeformation::PrepassSimulation()
 				ID3D11UnorderedAccessView* passUAV = passStateTexture ? passStateTexture->uav.get() : nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &passUAV, nullptr);
 				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
+				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
 			}
 			if (stampRan) {
 				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
@@ -1752,6 +1774,7 @@ void SnowDeformation::PrepassSimulation()
 				ID3D11UnorderedAccessView* nullPass = nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &nullPass, nullptr);
 				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
+				context->CSSetUnorderedAccessViews(5, 1, &nullClockUAV, nullptr);
 			}
 		}
 
