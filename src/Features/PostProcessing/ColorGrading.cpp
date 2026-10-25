@@ -235,13 +235,26 @@ struct TonemapperInfo
 				{ f4{ 1.f, 0.f, 1000.f, 0.f } } },
 
 			{ "PsychoV"sv, "PsychoVTonemap"sv,
-				T(TKEY("tonemapper.psychov.description"), "PsychoV 17 tonemapper by Carlos Lopez, from RenoDX."),
+				T(TKEY("tonemapper.psychov.description"), "PsychoV 30 tonemapper by Carlos Lopez, from RenoDX."),
 				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
+					ImGui::SliderFloat(T(TKEY("highlights"), "Highlights"), &params[0].y, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("shadows"), "Shadows"), &params[0].z, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("contrast"), "Contrast"), &params[0].w, 0.01f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("saturation"), "Saturation"), &params[1].x, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("cone_response"), "Cone Response"), &params[1].y, 0.f, 2.f, "%.2f");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(T(TKEY("cone_response_tooltip"), "Scales the per-cone response contrast."));
+					ImGui::SliderFloat(T(TKEY("gamut_compression"), "Gamut Compression"), &params[1].z, 0.f, 1.f, "%.2f");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(T(TKEY("gamut_compression_tooltip"), "0 bypasses gamut mapping; 1 applies the full display-gamut projection."));
+					ImGui::SliderFloat(T(TKEY("compression"), "Compression"), &params[1].w, 0.f, 2.f, "%.2f");
+					if (auto _tt = Util::HoverTooltipWrapper())
+						ImGui::Text(T(TKEY("compression_tooltip"), "Finite-response compression power. 0 selects automatic compression; positive values select a manual power."));
 					drawHDRStatus();
 				},
-				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
+				{ f4{ 1.f, 1.f, 1.f, 1.f }, f4{ 1.f, 1.f, 1.f, 1.f } } },
 
 			{ "Neutwo"sv, "NeutwoTonemap"sv,
 				T(TKEY("tonemapper.neutwo.description"), "Neutwo tonemapper by Carlos Lopez, from RenoDX."),
@@ -671,6 +684,12 @@ void ColorGrading::LoadSettings(json& o_json)
 		if (auto it = std::ranges::find_if(tonemappers, [&](TonemapperInfo& x) { return settings.currentTonemapper == x.name; });
 			it != tonemappers.end()) {
 			tonemapperType = (int)(it - tonemappers.begin());
+			// PsychoV 17 saves only carried exposure; PsychoV 30 divides by contrast.
+			if (it->name == "PsychoV"sv && settings.tonemapParams[0].w <= 0.f) {
+				const float exposure = settings.tonemapParams[0].x;
+				settings.tonemapParams = it->default_settings;
+				settings.tonemapParams[0].x = exposure;
+			}
 		} else {
 			TonemapperInfo::GetDefaultParams(tonemapperType, settings.tonemapParams);
 		}
