@@ -301,9 +301,7 @@ cbuffer PerFrame : register(b0)
 	float UndulationAmp;
 	float UndulationScale;
 	float AccumulationScale;
-	// Refrozen meltwater at the player (Wet Snow and Ice): packed snow bears
-	// new prints as a crust does. Was DrawnPad.
-	float ClimateIce;
+	float DrawnPad;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -1115,9 +1113,8 @@ bool StampTexel(uint2 phys)
 	// How much of the standing crust gets smashed through this frame.
 	float crustBreak = 0.0;
 	// Crust as it stands BEFORE this frame's stamps, which is what a boot
-	// landing on it has to get through; packed snow's refrozen meltwater
-	// counts, never stored.
-	const float standingCrust = max(crust, ClimateIce * smoothstep(0.1, 0.5, deformation) * (1.0 - smoothstep(0.1, 0.4, max(melted, 0.0))));
+	// landing on it has to get through.
+	const float standingCrust = crust;
 
 	// Gate reach in stamp radii: pit arc legs and melt edge noise both extend past the radius.
 	const float gateScale = max(PIT_LOBE_MAX + PIT_LOBE_WIDTH, 1.0 + MeltEdgeNoise);

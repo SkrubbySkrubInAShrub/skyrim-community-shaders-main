@@ -1178,7 +1178,6 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	perFrameData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
 	perFrameData.AccumulationScale = GetAccumulationDepthScale();
-	perFrameData.ClimateIce = SnowWetIceStrength() * SnowIceShown(1);
 
 	float deltaTime = *globals::game::deltaTime;
 	// Taken here rather than beside the trench work below because the refill is

@@ -830,8 +830,7 @@ public:
 		float UndulationAmp;
 		float UndulationScale;
 		float AccumulationScale;
-		/** @brief Ice at the player (SnowIceShown, row 1): packed snow bears new prints as a crust does. Was DrawnPad. Mirror in DeformationUpdateCS.hlsl. */
-		float ClimateIce;
+		float DrawnPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, ContactCenter) == 12432, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");

@@ -890,7 +890,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("wet_snow_ice"), "Wet Snow and Ice"), &settings.WetSnowAndIce);
 		if (auto _ttWetIce = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, and new prints barely mark them until a thaw or fresh snow ends the ice. The rest of the snow takes a faint crust of the same glaze. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
+			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, until a thaw or fresh snow ends the ice. The rest of the snow takes a faint crust of the same glaze. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
