@@ -44,8 +44,10 @@ namespace
 
 		const auto message = std::format(
 			"{} old-format override file(s) in CommunityShaders/Overrides are not compatible anymore and are no longer read. "
-			"Update them to the new Baseline format: move them into the Baseline folder of a preset pack "
-			"(Presets/<Name>/Baseline/) and enable that pack on the Presets page.",
+			"Update them to the new Baseline format: move feature files into the Baseline folder of a preset pack "
+			"(Presets/<Name>/Baseline/) and enable that pack on the Presets page. "
+			"Global files (*_Global.json) cannot be moved, as Baseline packs only hold feature settings; "
+			"set those values again in the menu.",
 			count);
 		logger::warn("{}", message);
 		FeatureIssues::FeatureFileInfo fileInfo;

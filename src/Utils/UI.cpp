@@ -762,7 +762,7 @@ namespace Util
 			return;
 		if (StatusBanner(ICON_TI_REFRESH,
 				T("ui.recache_banner",
-					"All shaders have been cleared. A full shader recache will occur on the next game restart. Click to dismiss."),
+					"A full shader recache is pending and will run on the next game restart. Click to dismiss."),
 				Colors::GetWarning()))
 			shaderCache->SetRecachePending(false);
 		ImGui::Spacing();
