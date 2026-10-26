@@ -28,6 +28,7 @@
 // Stochastic anti-tiling sampler (same include the terrain shell uses); the
 // frost crystal pattern scatters with it.
 #include "TerrainVariation/TerrainVariation.hlsli"
+#include "SnowDeformation/SnowColor.hlsli"
 
 #ifdef PSHADER
 // Same shadow stack as the terrain shell (see SnowShell.hlsl).
@@ -3156,7 +3157,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	[branch] if (HasSnowTexture != 0)
 	{
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
-		kSnowAlbedo = SnowTextureIsLinear != 0.0 ? (ENABLE_LL ? kSnowAlbedo : Color::LinearToSrgb(kSnowAlbedo)) : Color::ColorToLinear(kSnowAlbedo);
+		kSnowAlbedo = SnowColor::SetAlbedo(kSnowAlbedo, SnowTextureIsLinear != 0.0);
 	}
 #ifdef SNOW_RUNE_GLYPHS
 	[branch] if (rune.colour.a > 0.004)
@@ -3468,14 +3469,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// on a rock in a dark grove shares the grove's baked shade, and using the
 	// same source as the terrain shell keeps the seam flat.
 	float2 terrainLocal = (shadePos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
-	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
+	float landVertexAO = ColorManagement::SRGBToWorking(SampleTerrainVertexAO(terrainLocal));
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	// Skylighting parity; same path as the terrain shell.
 	[branch] if (SkylightingActive > 0.5)
 	{
 		sh2 skylightingSH = Skylighting::Sample(shadePos, normalWS);
 		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, shadePos, normalWS, landVertexAO);
-		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
+		ambientPart = ColorManagement::SceneColor::ScaleByLinear(ambientPart, MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
 	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance

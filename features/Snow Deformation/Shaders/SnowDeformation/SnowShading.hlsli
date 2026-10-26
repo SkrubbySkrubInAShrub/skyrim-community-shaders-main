@@ -75,7 +75,7 @@ struct SnowSunLighting
 float3 SnowVanillaSpecular(float3 normalWS, float3 V, float3 L, float3 lightColor, float shadow, float4 specular)
 {
 	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, lightColor, shadow, shadow);
-	return VanillaSpecular(context, specular.w, true, 0.0, 0.0, 0.0) * specular.rgb * lightColor * shadow * Color::VanillaNormalization();
+	return VanillaSpecular(context, specular.w, true, 0.0, 0.0, 0.0) * specular.rgb * lightColor * shadow * Color::BRDFScale;
 }
 
 // The material + glint frame, built ONCE per pixel and shared by the sun and
@@ -136,7 +136,7 @@ SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 
 	float3 markLit = 0.0;
 	[branch] if (sunShadow != 0.0)
 	{
-		// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
+		// x pi (Linear Lighting uploads it in working space): exactly what
 		// Lighting.hlsl feeds its dir light context.
 		float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
 

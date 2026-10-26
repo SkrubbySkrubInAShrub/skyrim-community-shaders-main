@@ -6,6 +6,7 @@
 #include "Features/SnowDeformation/DevSwitches.h"
 
 #include "Deferred.h"
+#include "Features/LinearLighting.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -684,11 +685,16 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDec
 	// The material as BSLightingShader loads it for the decal's own draw:
 	// EmitColor = emissive colour x multiplier, the glow map of a Glowmap
 	// material, SpecularColor x scale and the power under the Specular flag.
+	// Linear Lighting uploads both colours in working space (LinearLighting.cpp).
+	const auto& linearLighting = globals::features::linearLighting;
 	if (auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property)) {
 		const float mult = lighting->emissiveMult;
 		capture.emissiveMult = mult;
-		if (lighting->emissiveColor)
-			capture.emissive = { lighting->emissiveColor->red * mult, lighting->emissiveColor->green * mult, lighting->emissiveColor->blue * mult };
+		if (lighting->emissiveColor) {
+			const RE::NiColor color = linearLighting.SRGBToWorking(*lighting->emissiveColor);
+			const float scale = linearLighting.IsLinearLightingActive() ? mult * linearLighting.settings.emitColorMult : mult;
+			capture.emissive = { color.red * scale, color.green * scale, color.blue * scale };
+		}
 	}
 	if (material->GetFeature() == RE::BSShaderMaterial::Feature::kGlowMap) {
 		capture.glowMap = true;
@@ -698,7 +704,8 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDec
 	}
 	if (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kSpecular)) {
 		const float scale = material->specularColorScale;
-		capture.specular = { material->specularColor.red * scale, material->specularColor.green * scale, material->specularColor.blue * scale, material->specularPower };
+		const RE::NiColor color = linearLighting.SRGBToWorking(material->specularColor);
+		capture.specular = { color.red * scale, color.green * scale, color.blue * scale, material->specularPower };
 	}
 	capture.centre = geometry->worldBound.center;
 	capture.radius = geometry->worldBound.radius;

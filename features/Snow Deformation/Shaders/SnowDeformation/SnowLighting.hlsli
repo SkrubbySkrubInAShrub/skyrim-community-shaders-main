@@ -21,6 +21,7 @@
 #if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
 #	include "SnowDeformation/SnowParallaxFollow.hlsli"
 #endif
+#include "SnowDeformation/SnowColor.hlsli"
 
 namespace SnowLighting
 {
@@ -57,21 +58,47 @@ namespace SnowLighting
 		float landSnowFrac;
 	};
 
-	// How much a texel reads as snow: bright and grey. A snowy rocks, grass
-	// snow or path layer keeps its rock, grass and dirt texels. Shared by the
-	// land and snow-textured recolors.
-	float LandSnowTexel(float3 layerColor)
+	// How much a texel reads as snow: bright and grey, on the texture's own
+	// encoded values. A snowy rocks, grass snow or path layer keeps its rock,
+	// grass and dirt texels. Shared by the land and snow-textured recolors.
+	float LandSnowTexel(float3 g)
 	{
-#if defined(TRUE_PBR)
-		float3 g = Color::LinearToSrgb(max(layerColor, 0.0));
-#else
-		float3 g = layerColor;
-#endif
 		float lum = dot(g, float3(0.2126, 0.7152, 0.0722));
 		float sat = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
 		float lo = SharedData::snowDeformationSettings.LandRecolorLumLo;
 		return smoothstep(lo, lo + 0.18, lum) * (1.0 - smoothstep(0.10, 0.22, sat));
 	}
+
+	// A raw base texture sample as encoded: TRUE_PBR decodes it to linear.
+	float3 SampleEncoded(float3 sampled)
+	{
+#if defined(TRUE_PBR)
+		return TransferFunctions::LinearToGamma22(max(sampled, 0.0));
+#else
+		return sampled;
+#endif
+	}
+
+#if defined(LANDSCAPE)
+	// A land layer as encoded. The layers arrive converted: TRUE_PBR's linear,
+	// otherwise ColorManagement::DiffuseToWorking's, inverted here.
+	float3 LayerEncoded(float3 layerColor)
+	{
+#	if defined(TRUE_PBR)
+		return TransferFunctions::LinearToGamma22(max(layerColor, 0.0));
+#	elif defined(ENABLE_LL)
+#		if defined(ENABLE_ACESCG)
+		layerColor = AP1TosRGB(layerColor);
+#		endif
+		const float white = SharedData::linearLightingSettings.diffuseWhiteReflectance;
+		const float k = SharedData::linearLightingSettings.diffuseCurve;
+		const float3 y = clamp(layerColor, 0.0, white * 0.999);
+		return pow(saturate(y / max(white * k - y * (k - 1.0), 1e-6)), 1.0 / SharedData::linearLightingSettings.diffuseGamma);
+#	else
+		return layerColor;
+#	endif
+	}
+#endif
 
 	// Snow grain on a recolored surface, in the drape's frame. texN: the snow
 	// normal map through the plane SampleStochastic took with triWeights
@@ -214,8 +241,8 @@ namespace SnowLighting
 
 			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 			// Shell albedo convention (SnowShell.hlsl kSnowAlbedo), then the layer
-			// value the land's own Color::Diffuse turns back into it.
-			float3 shellAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? a : Color::LinearToSrgb(a)) : Color::ColorToLinear(a);
+			// value the land's own Color::Albedo turns back into it.
+			float3 shellAlbedo = SnowColor::SetAlbedo(a, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 			// Wet snow (Snow Climate): a print through to the land's snow presses
 			// dark and glossy like the shell's thin print beside it. The tint is
 			// in the shell's albedo convention; a linear set takes it linearised.
@@ -234,10 +261,12 @@ namespace SnowLighting
 			}
 			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
 			shellAlbedo *= printTint;
+			// The layers arrive converted (Common/LightingLandscape.hlsli): TRUE_PBR's
+			// linear, otherwise already the albedo.
 #	if defined(TRUE_PBR)
-			s.landSnowRaw = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? a * (ENABLE_LL ? printTint : pow(abs(printTint), 2.2)) : (ENABLE_LL ? shellAlbedo : pow(abs(shellAlbedo), 2.2));
+			s.landSnowRaw = Color::PBRMaterialToLinear(shellAlbedo);
 #	else
-			s.landSnowRaw = ENABLE_LL ? pow(abs(shellAlbedo / max(SharedData::linearLightingSettings.vanillaDiffuseColorMult, 1e-3)), 1.0 / SharedData::linearLightingSettings.colorGamma) : shellAlbedo;
+			s.landSnowRaw = shellAlbedo;
 			s.lodAlbedo = shellAlbedo;
 #	endif
 			// Classification debug (bit 4): the recolored texels in magenta too.
@@ -266,7 +295,7 @@ namespace SnowLighting
 	{
 		[branch] if (s.landRecolor && ((s.landSnowBits >> tile) & 1) != 0)
 		{
-			float w = LandSnowTexel(layerColor);
+			float w = LandSnowTexel(LayerEncoded(layerColor));
 			layerColor = lerp(layerColor, s.landSnowRaw, w);
 			layerNormal = lerp(layerNormal, float3(0.5, 0.5, 1.0), w);
 			layerRMAOS = lerp(layerRMAOS, s.landSnowRMAOS, w);
@@ -278,7 +307,7 @@ namespace SnowLighting
 	{
 		[branch] if (s.landRecolor && ((s.landSnowBits >> tile) & 1) != 0)
 		{
-			float w = LandSnowTexel(layerColor);
+			float w = LandSnowTexel(LayerEncoded(layerColor));
 			layerColor = lerp(layerColor, s.landSnowRaw, w);
 			layerNormal = lerp(layerNormal, float3(0.5, 0.5, 1.0), w);
 			s.landSnowFrac += weight * w;
@@ -351,7 +380,7 @@ namespace SnowLighting
 				float3 snowSample = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
 				s.lodReplaceW = lodReplaceW;
-				s.lodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowSample : Color::LinearToSrgb(snowSample)) : Color::ColorToLinear(snowSample);
+				s.lodAlbedo = SnowColor::SetAlbedo(snowSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 				// Classification debug (bit 4): the baked recipe's pixels in magenta too.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.lodAlbedo = float3(1.0, 0.0, 1.0);
@@ -577,7 +606,7 @@ namespace SnowLighting
 				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 #		endif
 				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
-				s.projAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowProjSample : Color::LinearToSrgb(snowProjSample)) : Color::ColorToLinear(snowProjSample);
+				s.projAlbedo = SnowColor::SetAlbedo(snowProjSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 				// Classification debug: everything this block replaces, in magenta.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.projAlbedo = float3(1.0, 0.0, 1.0);
@@ -611,7 +640,7 @@ namespace SnowLighting
 #		else
 				// Vanilla pixels get the albedo here; the write tail re-lights
 				// the snow fraction through the PBR evaluators (hue+brightness).
-				baseColor = lerp(baseColor, s.projAlbedo * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
+				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
 #		endif
 				}
 			}
@@ -676,7 +705,7 @@ namespace SnowLighting
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
 		{
 			s.texMatch = true;
-			float texel = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowTexturedGround) != 0 ? 1.0 : LandSnowTexel(rawBaseColor);
+			float texel = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowTexturedGround) != 0 ? 1.0 : LandSnowTexel(SampleEncoded(rawBaseColor));
 			s.texWeight = texel * smoothstep(0.35, 0.65, vertexNormal.z);
 			[branch] if (s.texWeight > 0.003)
 			{
@@ -690,7 +719,7 @@ namespace SnowLighting
 					SnowGrain(worldNormal, texN, snowTexWeights, screenNoise, s.texWeight);
 				}
 				float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-				float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? (ENABLE_LL ? snowTexSample : Color::LinearToSrgb(snowTexSample)) : Color::ColorToLinear(snowTexSample);
+				float3 snowTexAlbedo = SnowColor::SetAlbedo(snowTexSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					snowTexAlbedo = float3(1.0, 0.0, 1.0);
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
@@ -702,7 +731,7 @@ namespace SnowLighting
 					snowTexRMAOS = ShellRMAOS(Triplanar::SampleStochastic(SnowDeformation::HorizonSnowRmaos, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise));
 				rawRMAOS = lerp(rawRMAOS, snowTexRMAOS, s.texWeight);
 #	else
-				baseColor = lerp(baseColor, snowTexAlbedo * Color::VanillaDiffuseColorMult(), s.texWeight);
+				baseColor = lerp(baseColor, snowTexAlbedo, s.texWeight);
 #	endif
 			}
 		}

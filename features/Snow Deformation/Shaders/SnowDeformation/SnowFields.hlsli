@@ -1278,8 +1278,7 @@ bool MarkReaches(float base, float2 span)
 // Lighting's glow over the material's EmitColor (Lighting.hlsl, the vanilla branch).
 float3 MarkGlow(float3 emit, float3 glow)
 {
-	glow = Color::Glowmap(glow);
-	return ENABLE_LL ? emit * glow : Color::LinearToSrgb(Color::SrgbToLinear(emit) * Color::SrgbToLinear(glow));
+	return emit * ColorManagement::TextureToWorking(glow) * SharedData::linearLightingSettings.glowmapMult;
 }
 
 float3 SampleRuneGlow(uint i, float2 uv, float2 gradX, float2 gradY)
@@ -1374,7 +1373,7 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy, float
 						const float3 bitangent = normalize(float3(-slope.z, slope.x, 0.0) / det);
 						nw = normalize(tangent * nts.x + bitangent * nts.y + float3(0.0, 0.0, nts.z));
 					}
-					float3 emit = Color::EmitColor(FrostTints[slot].rgb, FrostEmissiveMults[slot]);
+					float3 emit = FrostTints[slot].rgb;
 					[branch] if (FrostTints[slot].w > 0.5)
 					{
 						float3 glow;
@@ -1398,7 +1397,7 @@ RuneGlyph SampleFrostMarks(float2 worldXY, float2 worldDx, float2 worldDy, float
 					// Lighting's own diffuse conversion, without the
 					// PBRLightingScale the shells' write tail applies; the glow
 					// lights the texture's colour, as Lighting adds it to the light.
-					const float3 albedo = Color::Diffuse(d.rgb);
+					const float3 albedo = Color::Albedo(ColorManagement::DiffuseToWorking(d.rgb));
 					colour += float4(albedo / Color::PBRLightingScale, 1.0) * a;
 					emission += emit * albedo * a;
 					specular += float4(FrostSpecular[slot].rgb * n.a, FrostSpecular[slot].w) * a;
@@ -1459,9 +1458,9 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy, float base
 					float a = d.a * c.a;
 					[branch] if (a > g.colour.a)
 					{
-						const float3 albedo = Color::Diffuse(d.rgb);
+						const float3 albedo = Color::Albedo(ColorManagement::DiffuseToWorking(d.rgb));
 						g.colour = float4(albedo / Color::PBRLightingScale, a);
-						float3 emit = Color::EmitColor(RuneTints[i].rgb, RuneReach[i].z);
+						float3 emit = RuneTints[i].rgb;
 						[branch] if (RuneRects[i].w > 0.5)
 							emit = MarkGlow(emit, SampleRuneGlow(i, uv, gradX, gradY));
 						g.emission = emit * albedo * a;

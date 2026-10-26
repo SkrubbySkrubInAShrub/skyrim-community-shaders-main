@@ -75,8 +75,7 @@ namespace SnowLights
 			if (attenuation < 1e-5)
 				continue;
 
-			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * attenuation * light.fade;
+			float3 lightColor = Color::PointLight(light.color.xyz) * attenuation * light.fade;
 
 			float lightShadow = 1.0;
 			[branch] if (light.lightFlags & LightLimitFix::LightFlags::Shadow)

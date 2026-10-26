@@ -1311,12 +1311,12 @@ public:
 		winrt::com_ptr<ID3D11ShaderResourceView> normal;
 		/** @brief The glow map of a Glowmap material; null without one. */
 		winrt::com_ptr<ID3D11ShaderResourceView> glow;
-		/** @brief EmitColor as the game sets it: emissive colour x emissive multiplier. */
+		/** @brief EmitColor as Lighting receives it: emissive colour x emissive multiplier, in working space under Linear Lighting. */
 		float3 emissive{ 0.0f, 0.0f, 0.0f };
 		float emissiveMult = 1.0f;
 		/** @brief A Glowmap material: its EmitColor lights through the glow map. */
 		bool glowMap = false;
-		/** @brief SpecularColor x its scale (0 without the Specular flag), w = specular power. */
+		/** @brief SpecularColor x its scale (0 without the Specular flag), in working space under Linear Lighting; w = specular power. */
 		float4 specular{ 0.0f, 0.0f, 0.0f, 0.0f };
 		RE::NiPoint3 centre;
 		float radius = 0.0f;

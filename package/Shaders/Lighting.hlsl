@@ -1653,7 +1653,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // MODELSPACENORMALS
 
 #	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	SnowLighting::LODRecolor(snowState, rawBaseColor.rgb, input.WorldPosition.xy, normal.xyz);
+	SnowLighting::LODRecolor(snowState, sampledBaseColor.rgb, input.WorldPosition.xy, normal.xyz);
 #	endif
 
 #	if defined(WORLD_MAP)
@@ -1964,7 +1964,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // SNOW
 
 #	if defined(SNOW_DEFORMATION) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-	SnowLighting::SnowTexturedRecolor(snowState, rawBaseColor.rgb, tbnTr[2], input.WorldPosition.xyz, screenNoise, baseColor.xyz, rawRMAOS, worldNormal);
+	SnowLighting::SnowTexturedRecolor(snowState, sampledBaseColor.rgb, tbnTr[2], input.WorldPosition.xyz, screenNoise, baseColor.xyz, rawRMAOS, worldNormal);
 #	endif
 
 #	if defined(WORLD_MAP)

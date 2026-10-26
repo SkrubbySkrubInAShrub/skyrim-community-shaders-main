@@ -18,6 +18,7 @@
 // Reused rather than rewritten: a frost sheet laid by Blizzard or a breath
 // covers hundreds of units, and a plain tiled normal map would grid it.
 #include "TerrainVariation/TerrainVariation.hlsli"
+#include "SnowDeformation/SnowColor.hlsli"
 
 #ifdef PSHADER
 // Shadows: terrain/cloud via GetWorldShadow, actors via the game's raw cascade
@@ -2032,9 +2033,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (HasSnowTexture != 0)
 	{
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
-		// The colour space the ground reads this texture in: TRUE_PBR's
-		// Color::Diffuse for a PBR set, ColorToLinear for a vanilla one.
-		kSnowAlbedo = SnowTextureIsLinear != 0.0 ? (ENABLE_LL ? kSnowAlbedo : Color::LinearToSrgb(kSnowAlbedo)) : Color::ColorToLinear(kSnowAlbedo);
+		// The colour space the ground reads this texture in.
+		kSnowAlbedo = SnowColor::SetAlbedo(kSnowAlbedo, SnowTextureIsLinear != 0.0);
 	}
 	// Scorch: a shock discharge leaves the snow burnt where it struck. Darkened
 	// rather than recoloured, and biased slightly warm, so it reads as fouled
@@ -2056,7 +2056,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	blood += bloodPaint;
 	[branch] if (blood.a > 0.002)
 	{
-		float3 paintRgb = Color::LinearToSrgb(blood.rgb);
+		float3 paintRgb = SnowColor::SetAlbedo(blood.rgb, true);
 		paintRgb = lerp(paintRgb, paintRgb * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
 		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(blood.a * BloodLook.x));
 	}
@@ -2360,7 +2360,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// the composite's SSGI reads its complement from Masks2.
 	[branch] if (pixelVertexAO < 0.0)
 		pixelVertexAO = SampleTerrainVertexAO(gridLocal);
-	float landVertexAO = Color::ColorToLinear(pixelVertexAO.xxx).x;
+	float landVertexAO = ColorManagement::SRGBToWorking(pixelVertexAO);
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	// Skylighting parity with Lighting.hlsl's deferred tail: the ambient is
 	// darkened by the probe volume with the same multi-bounce term terrain
@@ -2369,7 +2369,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		sh2 skylightingSH = Skylighting::Sample(shadePos, normalWS);
 		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, shadePos, normalWS, landVertexAO);
-		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
+		ambientPart = ColorManagement::SceneColor::ScaleByLinear(ambientPart, MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
 	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance
