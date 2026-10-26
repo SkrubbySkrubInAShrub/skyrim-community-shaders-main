@@ -4,6 +4,11 @@
 
 -   **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 -   **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
+-   **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass (Remote Control, `NVPERF_SUPPORT`)
+
+## Subsystems
+
+-   **[Scene Settings Framework](./scene-settings-framework.md)** - Interior/time-of-day/weather/location setting overrides, the generated catalog, and what the port left out
 
 ## Quick Links
 

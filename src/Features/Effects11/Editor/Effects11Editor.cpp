@@ -6,6 +6,7 @@
 #include <format>
 #include <imgui_stdlib.h>
 
+#include "CSEditor/Browser/BrowserWidgets.h"
 #include "EditorWidgets.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/EffectManager.h"
@@ -15,9 +16,12 @@
 #include "Features/Effects11/ShaderPatches.h"
 #include "Features/Effects11/UITree.h"
 #include "Features/Effects11/WeatherManager.h"
+#include "Features/RainRefraction.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/PresetsPageRenderer.h"
+#include "PostProcessingMode.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.effects11.editor."
@@ -67,14 +71,18 @@ namespace
 		{ "PARTICLE", Group::Lighting },
 		{ "LIGHTSPRITE", Group::Lighting },
 		{ "FIRE", Group::Lighting },
+		{ "WATER", Group::Lighting },
 		{ "SKY", Group::Sky },
+		{ "SKYSCATTERING", Group::Sky },
 		{ "PROCEDURALSUN", Group::Sky },
 		{ "SUNGLARE", Group::Sky },
 		{ "CLOUDSHADOWS", Group::Sky },
 		{ "VOLUMETRICFOG", Group::Atmosphere },
 		{ "VOLUMETRICRAYS", Group::Atmosphere },
+		{ "RAYS", Group::Atmosphere },
 		{ "GAMEVOLUMETRICRAYS", Group::Atmosphere },
 		{ "ADAPTATION", Group::Camera },
+		{ "DEPTHOFFIELD", Group::Camera },
 		{ "BLOOM", Group::Camera },
 		{ "LENS", Group::Camera },
 		{ "RAIN", Group::Rain },
@@ -135,8 +143,12 @@ namespace
 			return { T("feature.effects11.category.lightsprite", "Light Sprites"), T("feature.effects11.category.lightsprite_desc", "Brightness of glow sprites around light sources.") };
 		if (a_category == "FIRE")
 			return { T("feature.effects11.category.fire", "Fire"), T("feature.effects11.category.fire_desc", "Brightness and contrast of fire.") };
+		if (a_category == "WATER")
+			return { T("feature.effects11.category.water", "Water"), T("feature.effects11.category.water_desc", "Water color, waves, fresnel, sun response and reflections.") };
 		if (a_category == "SKY")
 			return { T("feature.effects11.category.sky", "Sky"), T("feature.effects11.category.sky_desc", "Sky gradient, clouds, sun, moon and stars.") };
+		if (a_category == "SKYSCATTERING")
+			return { T("feature.effects11.category.skyscattering", "Sky Scattering"), T("feature.effects11.category.skyscattering_desc", "Atmospheric scattering for the sky and cloud lighting.") };
 		if (a_category == "PROCEDURALSUN")
 			return { T("feature.effects11.category.proceduralsun", "Procedural Sun"), T("feature.effects11.category.proceduralsun_desc", "Size, edge and glow of the procedural sun disk.") };
 		if (a_category == "SUNGLARE")
@@ -144,13 +156,17 @@ namespace
 		if (a_category == "CLOUDSHADOWS")
 			return { T("feature.effects11.category.cloudshadows", "Cloud Shadows"), T("feature.effects11.category.cloudshadows_desc", "Strength of the shadows clouds cast on the ground.") };
 		if (a_category == "VOLUMETRICFOG")
-			return { T("feature.effects11.category.volumetricfog", "Volumetric Fog"), T("feature.effects11.category.volumetricfog_desc", "Brightness and color of volumetric fog.") };
+			return { T("feature.effects11.category.volumetricfog", "Volumetric Fog"), T("feature.effects11.category.volumetricfog_desc", "Brightness, color, opacity and shadowing of fog volume effects.") };
 		if (a_category == "VOLUMETRICRAYS")
 			return { T("feature.effects11.category.volumetricrays", "Volumetric Rays"), T("feature.effects11.category.volumetricrays_desc", "Effects 11 sun rays.") };
+		if (a_category == "RAYS")
+			return { T("feature.effects11.category.rays", "Sun Rays"), T("feature.effects11.category.rays_desc", "Screen-space light shafts streaming from the sun, or from a moon at night.") };
 		if (a_category == "GAMEVOLUMETRICRAYS")
 			return { T("feature.effects11.category.gamevolumetricrays", "Game Volumetric Rays"), T("feature.effects11.category.gamevolumetricrays_desc", "Adjustments to the game's own god rays.") };
 		if (a_category == "ADAPTATION")
 			return { T("feature.effects11.category.adaptation", "Adaptation"), T("feature.effects11.category.adaptation_desc", "Eye adaptation: how fast and how far exposure follows scene brightness.") };
+		if (a_category == "DEPTHOFFIELD")
+			return { T("feature.effects11.category.depthoffield", "Depth of Field"), T("feature.effects11.category.depthoffield_desc", "How fast focus and aperture follow the scene.") };
 		if (a_category == "BLOOM")
 			return { T("feature.effects11.category.bloom", "Bloom"), T("feature.effects11.category.bloom_desc", "Overall bloom amount handed to the shaders.") };
 		if (a_category == "LENS")
@@ -220,6 +236,8 @@ namespace
 		if (a_setting.category != "EFFECT")
 			return nullptr;
 		auto& effectManager = EffectManager::GetSingleton();
+		if (a_setting.key == "EnableDepthOfField")
+			return &effectManager.enbDepthOfField;
 		if (a_setting.key == "EnableBloom")
 			return &effectManager.enbBloom;
 		if (a_setting.key == "EnableLens")
@@ -245,6 +263,7 @@ namespace
 		const auto& ids = effectManager.ids;
 		return {
 			{ &effectManager.enbEffect, kInvalidSettingID, T("feature.effects11.editor.file_effect", "Main Effect") },
+			{ &effectManager.enbDepthOfField, ids.useDepthOfField, T("feature.effects11.editor.file_depthoffield", "Depth of Field") },
 			{ &effectManager.enbBloom, ids.useBloom, T("feature.effects11.editor.file_bloom", "Bloom") },
 			{ &effectManager.enbLens, ids.useLens, T("feature.effects11.editor.file_lens", "Lens") },
 			{ &effectManager.enbAdaptation, ids.useAdaptation, T("feature.effects11.editor.file_adaptation", "Adaptation") },
@@ -285,13 +304,7 @@ namespace
 		ImGui::SetNextWindowSize(ImVec2(width, height), cond);
 	}
 
-	/** Puts the next item on the current line if it fits, otherwise on a new line. */
-	void SameLineIfFits(float a_width)
-	{
-		ImGui::SameLine();
-		if (ImGui::GetContentRegionAvail().x < a_width)
-			ImGui::NewLine();
-	}
+	using BrowserUI::SameLineIfFits;
 
 	bool MenuItemResetFloat(float& a_value, float a_default, int a_decimals)
 	{
@@ -444,7 +457,10 @@ void Effects11Editor::DrawNoPreset()
 			"enbseries folder (containing at least enbeffect.fx) are in the game folder or in Data, "
 			"then click Reload Shaders."));
 	}
+	ImGui::PopTextWrapPos();
+
 	ImGui::Spacing();
+	ImGui::PushTextWrapPos(0.0f);
 	Util::TextUnformattedDisabled(T(TKEY("looking_for"), "Looking for:"));
 	ImGui::TextUnformatted(presetPaths.mainEffect.c_str());
 	ImGui::PopTextWrapPos();
@@ -486,9 +502,19 @@ void Effects11Editor::DrawToolbar()
 	Util::AddTooltip(T(TKEY("shader_panel_tip"), "Show or hide the panel with the .fx shader parameters."));
 
 	const char* saveLabel = T(TKEY("save"), "Save");
-	if (dirty ? Util::SuccessButton(saveLabel) : ImGui::Button(saveLabel))
+	const char* saveTip = dirty ?
+	                          T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+	                          T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S");
+	if (dirty) {
+		auto color = globals::menu->GetTheme().StatusPalette.Error;
+		color.w = 0.75f;
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+	}
+	if (ImGui::Button(saveLabel))
 		Save();
-	Util::AddTooltip(T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S"));
+	if (dirty)
+		ImGui::PopStyleColor();
+	Util::AddTooltip(saveTip);
 
 	ImGui::SameLine();
 	if (ImGui::Button(T(TKEY("revert"), "Revert")))
@@ -502,14 +528,6 @@ void Effects11Editor::DrawToolbar()
 	Util::AddTooltip(T(TKEY("reload_shaders_tip"),
 		"Recompile the .fx files and reload everything from disk.\n"
 		"Use this after changing a compile-time option or editing a shader file."));
-
-	const char* stateText = dirty ? T(TKEY("unsaved_changes"), "Unsaved changes") : T(TKEY("all_saved"), "All changes saved");
-	SameLineIfFits(ImGui::CalcTextSize(stateText).x);
-	ImGui::AlignTextToFramePadding();
-	if (dirty)
-		Util::Text::Warning("%s", stateText);
-	else
-		Util::TextUnformattedDisabled(stateText);
 
 	if (shaderReloadNeeded)
 		Util::Text::WrappedWarning("%s", T(TKEY("reload_needed"), "Compile-time options changed. Save, then click Reload Shaders to apply them."));
@@ -544,6 +562,12 @@ void Effects11Editor::DrawStatus()
 			Util::Text::Error("%s", text.c_str());
 			Util::AddTooltip(T(TKEY("status_failed_files_tip"), "See the Shader Parameters panel for the compiler errors."));
 		}
+		// Switching presets happens on the Presets page; this leaves the editor for it.
+		ImGui::SameLine();
+		if (const float slack = ImGui::GetContentRegionAvail().x - PresetsPageRenderer::MeasureOpenButton(); slack > 0.0f)
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + slack);
+		PresetsPageRenderer::DrawOpenButton("##Effects11EditorOpenPresets",
+			T("feature.effects11.open_presets_tooltip", "Load and switch Effects 11 presets on the Presets page."));
 	}
 
 	// Time of day
@@ -740,6 +764,7 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const bool active = settingManager.IsCategoryEnabled(a_category);
 	const bool exteriorOnly = settingManager.IsCategoryExteriorOnly(a_category);
 	const bool weatherAware = settingManager.IsWeatherSystemEnabled() && settingManager.CategoryHasWeatherSupport(a_category);
+	const bool handedOff = E11Handoff::IsE11SettingHandedOff(a_category);
 
 	if (!settingsFilter.empty())
 		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -749,7 +774,9 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const std::string weatherTag = weatherAware ? EditTargetFile(a_category) : std::string();
 	const char* exteriorTag = exteriorOnly && IsInterior() ? T(TKEY("tag_exterior_only"), "Exterior only") : nullptr;
 	const char* offTag = active ? nullptr : T(TKEY("tag_off"), "Off");
-	Effects11UI::HeaderTags({ { weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
+	const char* sceneTag = handedOff ? T(TKEY("tag_scene"), "Scene") : nullptr;
+	Effects11UI::HeaderTags({ { sceneTag, Util::Colors::GetInfo() },
+		{ weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
 		{ exteriorTag, Util::Colors::GetWarning() },
 		{ offTag, Util::Colors::GetDisabled() } });
 
@@ -771,9 +798,11 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 		Util::TextUnformattedDisabled(a_description);
 	if (exteriorOnly && IsInterior())
 		Util::Text::WrappedWarning("%s", T(TKEY("exterior_only_note"), "These values only apply outdoors."));
+	if (handedOff)
+		Util::Text::WrappedWarning("%s", T(TKEY("handed_off_note"), "This preset hands this feature to Community Shaders scene settings, so these values have no effect."));
 	ImGui::PopTextWrapPos();
 
-	if (!active) {
+	if (!active && !handedOff) {
 		const auto [dependencyKey, dependencyCategory] = settingManager.GetCategoryDependency(a_category);
 		const uint32_t dependencyID = settingManager.GetSettingID(dependencyKey, dependencyCategory);
 		Util::Text::WrappedWarning("%s", T(TKEY("section_off"), "This section is switched off, so its values have no effect."));
@@ -787,12 +816,16 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 		}
 	}
 
-	// Rain needs enbraindrops.png; without it the section cannot do anything
-	const auto& raindropStatus = globals::features::effects11.raindropStatus;
-	const bool usable = a_category != "RAIN" || raindropStatus.empty();
+	// Rain is drawn by Rain Refraction, which needs a raindrop texture from the preset or its own default
+	const auto& rainRefraction = globals::features::rainRefraction;
+	const bool usable = a_category != "RAIN" || (rainRefraction.loaded && rainRefraction.GetRaindropSRV());
 	if (!usable) {
-		const auto unavailable = I18n::GetSingleton()->Format(TKEY("rain_unavailable"), { { "reason", raindropStatus } }, "Rain is unavailable: {reason}");
+		const std::string reason = rainRefraction.loaded ? rainRefraction.defaultRaindrops.status : T(TKEY("rain_refraction_disabled"), "Rain Refraction is disabled");
+		const auto unavailable = I18n::GetSingleton()->Format(TKEY("rain_unavailable"), { { "reason", reason } }, "Rain is unavailable: {reason}");
 		Util::Text::WrappedWarning("%s", unavailable.c_str());
+	} else if (a_category == "RAIN" && !rainRefraction.presetRaindrops.status.empty()) {
+		const auto fallback = I18n::GetSingleton()->Format(TKEY("rain_bundled_texture"), { { "reason", rainRefraction.presetRaindrops.status } }, "Using the bundled raindrop texture: {reason}");
+		Util::Text::WrappedInfo("%s", fallback.c_str());
 	}
 
 	if (weatherAware)
@@ -800,7 +833,7 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 
 	if (Effects11UI::BeginPropertyTable("##rows")) {
 		for (const auto* setting : a_rows)
-			DrawSettingRow(*setting, active && usable);
+			DrawSettingRow(*setting, active && usable && !handedOff);
 		Effects11UI::EndPropertyTable();
 	}
 
@@ -896,7 +929,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	auto& settingManager = SettingManager::GetSingleton();
 	const std::string name = Effects11UI::PrettifyName(a_setting.key);
 	const bool dependencyMet = a_setting.dependsOnKey.empty() || settingManager.GetValue<bool>(a_setting.dependsOnKey, a_setting.dependsOnCategory);
-	const bool editable = a_categoryActive && dependencyMet;
+	const bool editable = a_categoryActive && dependencyMet && !E11Handoff::IsE11SettingHandedOff(a_setting.category, a_setting.key);
 
 	ImGui::PushID(static_cast<int>(a_setting.id));
 	bool labelHovered = false;
@@ -1392,6 +1425,7 @@ void Effects11Editor::Revert()
 	}
 	EffectManager::GetSingleton().Load();
 	dirty = false;
+	shaderReloadNeeded = false;
 }
 
 void Effects11Editor::ReloadShaders()
@@ -1466,7 +1500,7 @@ void Effects11Editor::DrawLauncher()
 {
 	auto& effectManager = EffectManager::GetSingleton();
 	auto& settingManager = SettingManager::GetSingleton();
-	const auto& menuSettings = globals::menu->GetSettings();
+	auto& menuSettings = globals::menu->GetSettings();
 	const bool presetLoaded = effectManager.IsPresetLoaded();
 
 	if (presetLoaded)
@@ -1478,50 +1512,56 @@ void Effects11Editor::DrawLauncher()
 		RefreshPresetPaths();
 	Util::TextUnformattedDisabled(presetPaths.iniDisplay.c_str());
 	Util::AddTooltip(presetPaths.iniFull.c_str());
+	PresetsPageRenderer::DrawOpenButton("##Effects11OpenPresets",
+		T("feature.effects11.open_presets_tooltip", "Load and switch Effects 11 presets on the Presets page."));
 
 	ImGui::Spacing();
-	const float scale = Util::GetUIScale();
-	const ImVec2 buttonSize((std::min)(ImGui::GetContentRegionAvail().x, 320.0f * scale), ImGui::GetFrameHeight() * 1.6f);
-	if (ImGui::Button(T(TKEY("open_editor"), "Open Effects 11 Editor"), buttonSize))
-		Open(true);
-	if (!menuSettings.Effects11EditorKey.empty()) {
-		ImGui::SameLine();
-		ImGui::AlignTextToFramePadding();
-		const auto hotkey = I18n::GetSingleton()->Format(TKEY("editor_hotkey"),
-			{ { "key", Util::Input::KeyIdToString(menuSettings.Effects11EditorKey) } }, "Hotkey: {key}");
-		Util::TextUnformattedDisabled(hotkey.c_str());
+
+	// The shared selector drives UseEffect, which is saved to enbseries.ini with the rest of the preset
+	const bool wasEnabled = globals::features::effects11.IsPresetEnabled();
+	PostProcessingMode::DrawSelector();
+	dirty |= globals::features::effects11.IsPresetEnabled() != wasEnabled;
+	if (dirty) {
+		SameLineIfFits(ImGui::CalcTextSize(T(TKEY("save"), "Save")).x);
+		auto color = globals::menu->GetTheme().StatusPalette.Error;
+		color.w = 0.75f;
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+		if (ImGui::Button(T(TKEY("save"), "Save")))
+			Save();
+		ImGui::PopStyleColor();
+		Util::AddTooltip(T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save."));
 	}
-	ImGui::PushTextWrapPos(0.0f);
-	Util::TextUnformattedDisabled(T(TKEY("launcher_body"),
-		"The editor opens over the game, like the ENB editor, so every change shows live. "
-		"Close it or press Esc to come back here."));
-	ImGui::PopTextWrapPos();
 
 	ImGui::Spacing();
 	ImGui::Separator();
 
-	const uint32_t useEffectID = settingManager.GetSettingID("UseEffect", "GLOBAL");
-	bool enabled = presetLoaded && settingManager.GetValue<bool>(useEffectID);
-	ImGui::BeginDisabled(!presetLoaded);
-	if (ImGui::Checkbox(T(TKEY("enable_effects"), "Enable Effects 11"), &enabled)) {
-		settingManager.SetValue<bool>(useEffectID, enabled);
-		dirty = true;
-	}
-	ImGui::EndDisabled();
 	{
-		const auto tip = I18n::GetSingleton()->Format(TKEY("enable_effects_tip"),
-			{ { "key", Util::Input::KeyIdToString(menuSettings.Effects11ToggleKey) } },
-			"Master switch for the whole preset.\nHotkey: {key}");
-		Util::AddTooltip(tip.c_str(), ImGuiHoveredFlags_AllowWhenDisabled);
+		// Without a preset Effects 11 cannot be selected, so the editor stays open to explain how to get one.
+		const Util::LockedSection modeLock(presetLoaded && PostProcessingMode::Get() != PostProcessingMode::Mode::Effects11,
+			T(TKEY("not_active_mode"), "Effects 11 is not the active mode, so the editor shows no changes. Select Effects 11 above to use it."));
+		const float scale = Util::GetUIScale();
+		const ImVec2 buttonSize((std::min)(ImGui::GetContentRegionAvail().x, 320.0f * scale), ImGui::GetFrameHeight() * 1.6f);
+		if (ImGui::Button(T(TKEY("open_editor"), "Open Effects 11 Editor"), buttonSize))
+			Open(true);
+		if (!menuSettings.Effects11EditorKey.empty()) {
+			ImGui::SameLine();
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (buttonSize.y - ImGui::GetTextLineHeight()) * 0.5f);
+			const auto hotkey = I18n::GetSingleton()->Format(TKEY("editor_hotkey"),
+				{ { "key", Util::Input::KeyIdToString(menuSettings.Effects11EditorKey) } }, "Hotkey: {key}");
+			Util::TextUnformattedDisabled(hotkey.c_str());
+		}
+		ImGui::PushTextWrapPos(0.0f);
+		Util::TextUnformattedDisabled(T(TKEY("launcher_body"),
+			"The editor opens over the game, like the ENB editor, so every change shows live. "
+			"Close it or press Esc to come back here."));
+		ImGui::PopTextWrapPos();
 	}
-	if (dirty) {
-		SameLineIfFits(ImGui::CalcTextSize(T(TKEY("unsaved_changes"), "Unsaved changes")).x);
-		ImGui::AlignTextToFramePadding();
-		Util::Text::Warning("%s", T(TKEY("unsaved_changes"), "Unsaved changes"));
-		ImGui::SameLine();
-		if (Util::SuccessButton(T(TKEY("save"), "Save")))
-			Save();
-	}
+
+	ImGui::SeparatorText(T("menu.settings.tab_keybindings", "Keybindings"));
+	Util::InputComboWidget(T("menu.settings.effects11_editor_key", "Effects 11 Editor Key:"), menuSettings.Effects11EditorKey,
+		globals::menu->settingEffects11EditorKey, "Change##Effects11EditorKey");
+	Util::InputComboWidget(T("menu.settings.effects11_toggle_key", "Effects 11 Toggle Key:"), menuSettings.Effects11ToggleKey,
+		globals::menu->settingEffects11ToggleKey, "Change##Effects11ToggleKey");
 
 	if (!effectManager.enbEffect.IsFilePresent())
 		return;

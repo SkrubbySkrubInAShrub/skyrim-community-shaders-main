@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <d3d11.h>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <winrt/base.h>
@@ -17,7 +19,7 @@ class Profiler
 {
 public:
 	static constexpr uint32_t kMaxTimers = 128;
-	static constexpr uint32_t kFrameLatency = 3;
+	static constexpr uint32_t kFrameLatency = 6;
 	static constexpr uint32_t kHistorySize = 300;
 	// Must exceed the longest legitimate gap between samples of a still-running pass;
 	// the DynamicCubemaps state machine spreads its passes over 6 frames.
@@ -41,6 +43,7 @@ public:
 			if (count < kHistorySize)
 				count++;
 			lastMs = ms;
+			sortedDirty = true;
 		}
 
 		/** @brief Gets the arithmetic mean of all buffered samples. */
@@ -52,12 +55,10 @@ public:
 		 */
 		float GetPercentile(float p) const;
 
-		/**
-		 * @brief Gets the 95th and 99th percentiles together, the values GetPercentile returns.
-		 * @details Selects the order statistics each interpolates between instead of sorting
-		 * a copy per call: CollectResults asks for four per pass every frame.
-		 */
-		void GetPercentiles95And99(float& a_p95, float& a_p99) const;
+	private:
+		// Reuse one sorted snapshot for every percentile until the next sample arrives.
+		mutable std::array<float, kHistorySize> sorted{};
+		mutable bool sortedDirty = true;
 	};
 
 	/** @brief Snapshot of GPU/CPU timing data for a single named pass. */
@@ -65,6 +66,7 @@ public:
 	{
 		std::string name;
 		float gpuTimeMs = 0.0f;
+		// Rolling statistics, filled in only by GetStatistics.
 		float avgMs = 0.0f;
 		float p95Ms = 0.0f;
 		float p99Ms = 0.0f;
@@ -111,7 +113,7 @@ public:
 		endPerfEvent = std::move(endCb);
 	}
 
-	/** @brief Begins a new profiling frame; collects results from the oldest in-flight frame. */
+	/** @brief Collects resolved frames; begins one unless the ring is full. */
 	void BeginFrame();
 
 	/**
@@ -140,8 +142,16 @@ public:
 	/** @brief Ends the current profiling frame and advances the ring buffer write cursor. */
 	void EndFrame();
 
-	/** @brief Gets the per-pass timing results from the last collected frame. */
+	/** @brief Gets the live timings and history from the last collected frame. Rolling statistics are left at zero; see GetStatistics. */
 	const std::vector<TimerResult>& GetResults() const { return results; }
+
+	/**
+	 * @brief Computes the rolling CPU and GPU statistics of every tracked pass.
+	 * Re-sorts every history that gained samples since the last call, so callers should throttle it.
+	 * Not synchronized: call it only on the thread that calls EndFrame, like GetResults.
+	 * @param timerPrefix Includes only passes starting with this prefix, or all passes when empty.
+	 */
+	std::vector<TimerResult> GetStatistics(std::string_view timerPrefix = {}) const;
 
 	/** @brief Gets the total GPU time in milliseconds for the last collected frame. */
 	float GetTotalTimeMs() const { return totalTimeMs; }
@@ -189,7 +199,6 @@ private:
 		/** @brief Names marked skipped while this frame was written. */
 		std::vector<std::string> skipped;
 		uint32_t activeCount = 0;
-		bool inFlight = false;
 	};
 
 	ID3D11DeviceContext* context = nullptr;
@@ -197,9 +206,12 @@ private:
 	FrameQueries frames[kFrameLatency];
 	uint32_t writeFrame = 0;
 	uint32_t readFrame = 0;
-	uint32_t framesSinceInit = 0;
+	// Ended frames awaiting collection, oldest at readFrame.
+	uint32_t pendingFrames = 0;
 	bool initialized = false;
 	bool frameActive = false;
+	// Ring was full at BeginFrame; the whole frame is unprofiled.
+	bool frameSkipped = false;
 	double cpuTicksToMs = 0.0;
 
 	PerfEventCallback beginPerfEvent;
