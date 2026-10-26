@@ -201,8 +201,8 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(ENVCUBE) && defined(RAIN) && defined(RAIN_REFRACTION)
-	// Corner offsets are +-particle size; their sign is the UV within the quad's atlas cell, so one drop fills each particle
-	vsout.RaindropData.xy = step(0, input.TexCoord1.xy);
+	// Corner offsets are +-particle size; their sign picks the corner of the drop's covered area in the raindrop texture, so one drop fills each particle
+	vsout.RaindropData.xy = lerp(SharedData::rainRefractionSettings.TextureBounds.xy, SharedData::rainRefractionSettings.TextureBounds.zw, step(0, input.TexCoord1.xy));
 #	endif
 
 	return vsout;
@@ -373,7 +373,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		raindropNormal.y = 1.0 - raindropNormal.y;
 
 		// Reconstruct camera-relative worldspace position (camera at origin).
-		float2 uv = input.Position.xy * SharedData::BufferDim.zw;
+		float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(input.Position.xy * SharedData::BufferDim.zw);
 		float4 posCS = float4(2.0 * float2(uv.x, 1.0 - uv.y) - 1.0, input.Position.z, 1.0);
 		float4 posWS = mul(FrameBuffer::CameraViewProjInverse, posCS);
 		posWS.xyz /= posWS.w;
@@ -387,6 +387,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 		float3 normalTS = normalize(raindropNormal.xyz * 2.0 - 1.0);
 		float3 normalWS = normalize(mul(normalTS, TBN));
+
+		// Antialias the edges of the drop's covered area, which the billboard now ends at
+		float2 dropUV = (input.RaindropData.xy - SharedData::rainRefractionSettings.TextureBounds.xy) /
+		                (SharedData::rainRefractionSettings.TextureBounds.zw - SharedData::rainRefractionSettings.TextureBounds.xy);
+		float2 edgeCoverage = saturate(min(dropUV, 1.0 - dropUV) / max(fwidth(dropUV), EPSILON_DIVISION));
+		alpha *= edgeCoverage.x * edgeCoverage.y;
+		if (alpha <= 0.0)
+			discard;
 
 		if (frontFace)
 			normalWS = -normalWS;
@@ -436,7 +444,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 propertyColor = 0.0;
 
-	float2 uv = input.Position.xy * SharedData::BufferDim.zw;
+	float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(input.Position.xy * SharedData::BufferDim.zw);
 
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, input.Position.z, 1);
 	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
