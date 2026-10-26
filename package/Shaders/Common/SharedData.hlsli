@@ -498,18 +498,18 @@ namespace SharedData
 		// LOD snow classification sensitivity, shared with the window fill.
 		float LODSnowSensitivity;
 
-		// Snow albedo (t102) color space + material response for the recolor.
+		// Snow albedo (t33) color space + material response for the recolor.
 		float SnowIsLinear;
 		float SnowRoughnessScale;
 		float LODReplaceEnable;
-		// Snow normal map bound at t103 (0 = legacy set without one).
+		// Snow normal map bound at t23 (0 = legacy set without one).
 		float SnowHasNormal;
 		// Snow-textured mesh recolor (statics hook flags unprojected snow-named
 		// shapes as SnowLODBakedIsSnow); the old LODReplaceLegacy slot. Mirror
 		// in SnowDeformation.h.
 		float SnowTexturedEnable;
 		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
-		// snow set is bound at t102.
+		// snow set is bound at t33.
 		float ProjSnowEnable;
 		// was BakedSnowEnable (glacier match, retired); slot kept for layout.
 		float LODObjectEnable;
@@ -530,7 +530,7 @@ namespace SharedData
 		// SnowDeformation.h.
 		float PrintFullDepth;
 
-		// Water raster (t104) frame: world xy of texel (0,0), texel size;
+		// Water raster (t63) frame: world xy of texel (0,0), texel size;
 		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;

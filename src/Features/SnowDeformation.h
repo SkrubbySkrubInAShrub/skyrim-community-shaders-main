@@ -690,7 +690,7 @@ public:
 		float SnowIsLinear;
 		float SnowRoughnessScale;
 		float LODReplaceEnable;
-		/** @brief Snow normal map bound at t103 (0 = legacy set without one). */
+		/** @brief Snow normal map bound at t23 (0 = legacy set without one). */
 		float SnowHasNormal;
 
 		/** @brief Snow-textured mesh recolor (Settings::SnowTexturedRecolor) enabled and the snow set is bound; the old LODReplaceLegacy slot. Mirror in SharedData.hlsli. */
@@ -709,7 +709,7 @@ public:
 		/** @brief Snow Trenches on Objects: the stored depth of a full print, BodyPrintScale(); 0 = no print goes bare. Was a pad. Mirror in SharedData.hlsli. */
 		float PrintFullDepth;
 
-		/** @brief Water raster (t104) frame for Lighting's underwater veto: world xy of texel (0,0) and the texel size; Dim 0 = no raster this frame. Mirror in SharedData.hlsli. */
+		/** @brief Water raster (t63) frame for Lighting's underwater veto: world xy of texel (0,0) and the texel size; Dim 0 = no raster this frame. Mirror in SharedData.hlsli. */
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;
 		float WaterWindowDim;
@@ -2396,7 +2396,7 @@ public:
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, uint32_t a_rawTechnique);
 
-	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit, classified from the pass technique (currentRawTechnique), and re-binds t102/t103 for classified draws. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
+	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit, classified from the pass technique (currentRawTechnique), and re-binds the snow set for classified draws. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
 	void SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass);
 
 	/** @brief Lists this frame's captured statics whose bounds cover a world position, largest first: what the object snow is skinning there. Implemented in SnowDeformation/Statics.cpp. */
@@ -3046,7 +3046,7 @@ public:
 	winrt::com_ptr<ID3D11BlendState> heightRasterBlendState;
 	/** @brief Drawn water's height per terrain-window texel (kShellWindowDim^2, R32F, the terrain window's own frame): MAX of the bodies touching the texel, kShellMissingHeight where none. Rebuilt every frame from last frame's planes (a kept plane poisoned the area until the next cell crossing). Bound at t27 for the landscape shell. */
 	Texture2D* waterHeightTexture = nullptr;
-	/** @brief The same planes at object-raster resolution (kWaterFineDim over ObjectRasterHalfExtent) for Lighting's underwater veto (t104); rebuilt whenever the list or the height window moves. */
+	/** @brief The same planes at object-raster resolution (kWaterFineDim over ObjectRasterHalfExtent) for Lighting's underwater veto (t63); rebuilt whenever the list or the height window moves. */
 	Texture2D* waterFineTexture = nullptr;
 	/** @brief The water window the shell's data route reads (t27): waterHeightTexture minus its lone wet texels (WaterCoverCS), so a single vertex dipping under a cell plane inside a cliff mesh cannot bare a whole texel. The shore cap reads the raw window at t28. */
 	Texture2D* waterVisibleTexture = nullptr;
@@ -5035,6 +5035,15 @@ protected:
 	static constexpr uint32_t kPrintRecordVersion = 1;
 	/** @brief PS slots of the print readers (SnowPrints.hlsli): t114 the print map, t115 its tile mask, t116 the rim (the drapes' twin). */
 	static constexpr UINT kPrintReaderSlot = 114;
+	/**
+	 * @brief PS slots of Lighting's snow set and water raster (SnowDeformation.hlsli).
+	 * Albedo and water stay bound across draws (LOD recolor, every object's underwater
+	 * test), so no other code binds their slots; normal and RMAOS are bound per draw.
+	 */
+	static constexpr UINT kHorizonSnowAlbedoSlot = 33;
+	static constexpr UINT kHorizonSnowNormalSlot = 23;
+	static constexpr UINT kWaterWindowSlot = 63;
+	static constexpr UINT kHorizonSnowRmaosSlot = 68;
 	/** @brief Print texels a rim reaches past its print at most. Mirrors PRINT_RIM_APRON and kRimApron. */
 	static constexpr int kPrintRimApron = 5;
 

@@ -757,7 +757,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
 	                           (LandBlendActive() ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (shellSnowRmaosSRV ? 512u : 0u);
-	// Water raster frame (t104): the window's min corner, texel size, dim.
+	// Water raster frame (kWaterWindowSlot): the window's min corner, texel size, dim.
 	data.WaterWindowDim = 0.0f;
 	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {
 		data.WaterWindowOrigin = { waterFineCenter.x - waterFineHalf, waterFineCenter.y - waterFineHalf };
@@ -1040,17 +1040,19 @@ void SnowDeformation::PrepassSimulation()
 	// samples it whenever the feature is compiled in.
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
-	// Water raster (t104) for Lighting's underwater veto; null until captured.
+	// Water raster for Lighting's underwater veto; null until captured.
 	ID3D11ShaderResourceView* waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
-	context->PSSetShaderResources(104, 1, &waterSRV);
+	context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
 	BindPrintReaders(context);
-	// Horizon snow albedo (t102) + normals (t103) for the LOD terrain
-	// recolor; the shader gates on LODReplaceEnable/SnowHasNormal, which
-	// require these SRVs to exist.
+	// Horizon snow albedo + normals for the LOD terrain recolor; the shader
+	// gates on LODReplaceEnable/SnowHasNormal, which require these SRVs to
+	// exist.
 	EnsureShellSnowTextures();
 	if (shellSnowDiffuseSRV) {
-		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
-		context->PSSetShaderResources(102, 2, horizonSnowSRVs);
+		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
+		ID3D11ShaderResourceView* normalSRV = shellSnowNormalSRV.get();
+		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
+		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 	}
 
 	// Child worldspace = walled city (WhiterunWorld etc. parent Tamriel).
@@ -1921,7 +1923,7 @@ void SnowDeformation::PrepassSimulation()
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
-	context->PSSetShaderResources(104, 1, &waterSRV);
+	context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
 	BindPrintReaders(context);
 	spanClock.Lap(CpuCensus::kSpanPrepassTail);
 }

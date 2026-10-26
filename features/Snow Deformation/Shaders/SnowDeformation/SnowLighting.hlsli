@@ -124,7 +124,7 @@ namespace SnowLighting
 	}
 
 	// Its defaults (kSnowRoughness, kSnowF0) where the set has no RMAOS map:
-	// DebugTerrainOverlay bit 512 says t105 is bound with the set.
+	// DebugTerrainOverlay bit 512 says HorizonSnowRmaos is bound with the set.
 	bool ShellHasRMAOS()
 	{
 		return (uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 512) != 0;

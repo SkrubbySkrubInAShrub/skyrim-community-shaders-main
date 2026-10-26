@@ -847,14 +847,20 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		}
 	}
 	if (bindSnowSet) {
-		// The Prepass-time t102/t103 bind does NOT survive to the Lighting
+		// The Prepass-time snow set bind does NOT survive to the Lighting
 		// draws (frame7075: null at every player-view draw — stomped around
 		// the cubemap pass; t101 only survives via its later re-bind).
-		// Re-bind per classified draw, where it is actually sampled. t104 =
-		// the water raster for the underwater veto, same fate.
-		ID3D11ShaderResourceView* horizonSnowSRVs[4] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get(),
-			waterFineTexture ? waterFineTexture->srv.get() : nullptr, shellSnowRmaosSRV.get() };
-		globals::d3d::context->PSSetShaderResources(102, 4, horizonSnowSRVs);
+		// Re-bind per classified draw, where it is actually sampled, with the
+		// water raster for the underwater veto, same fate.
+		auto* context = globals::d3d::context;
+		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
+		ID3D11ShaderResourceView* normalSRV = shellSnowNormalSRV.get();
+		ID3D11ShaderResourceView* waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
+		ID3D11ShaderResourceView* rmaosSRV = shellSnowRmaosSRV.get();
+		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
+		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
+		context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
+		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
 		// The print readers (t114-t115), same fate; only projected snow reads them.
 		if (projectedSnow && printRectPublished.z > printRectPublished.x)
 			BindPrintReaders(globals::d3d::context);
@@ -5855,9 +5861,9 @@ void SnowDeformation::RenderWaterCapture()
 	}
 
 	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");
-	// The fine raster is Lighting's t104; off the PS before it becomes a target.
+	// The fine raster is Lighting's water raster; off the PS before it becomes a target.
 	ID3D11ShaderResourceView* nullWaterSRV = nullptr;
-	context->PSSetShaderResources(104, 1, &nullWaterSRV);
+	context->PSSetShaderResources(kWaterWindowSlot, 1, &nullWaterSRV);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	context->VSSetShader(waterCaptureVS, nullptr, 0);

@@ -1288,14 +1288,14 @@ void SnowDeformation::DrawShellEarlyPrepass()
 		context->IAGetVertexBuffers(0, 1, &prevVB, &prevVBStride, &prevVBOffset);
 		context->IAGetIndexBuffer(&prevIB, &prevIBFormat, &prevIBOffset);
 		context->VSGetConstantBuffers(1, 1, &prevVSCB1);
-		context->PSGetShaderResources(104, 1, &prevWaterFineSRV);
+		context->PSGetShaderResources(kWaterWindowSlot, 1, &prevWaterFineSRV);
 		context->CSGetUnorderedAccessViews(0, 1, &prevCSUAV0);
 		RenderWaterCapture();
 		CoverWaterWindow();
 		context->IASetVertexBuffers(0, 1, &prevVB, &prevVBStride, &prevVBOffset);
 		context->IASetIndexBuffer(prevIB, prevIBFormat, prevIBOffset);
 		context->VSSetConstantBuffers(1, 1, &prevVSCB1);
-		context->PSSetShaderResources(104, 1, &prevWaterFineSRV);
+		context->PSSetShaderResources(kWaterWindowSlot, 1, &prevWaterFineSRV);
 		const UINT keepCount = UINT(-1);
 		context->CSSetUnorderedAccessViews(0, 1, &prevCSUAV0, &keepCount);
 		const auto release = [](IUnknown* a_held) {

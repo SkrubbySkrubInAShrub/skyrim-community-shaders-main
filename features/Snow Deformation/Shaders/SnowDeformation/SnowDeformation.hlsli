@@ -13,15 +13,16 @@
 
 namespace SnowDeformation
 {
+	// Slots: SnowDeformation.h kHorizonSnowAlbedoSlot and its neighbours.
 	Texture2D<float4> DeformationMap : register(t101);
 	// Shell snow albedo + tangent normals for the horizon LOD-terrain recolor.
-	Texture2D<float4> HorizonSnowAlbedo : register(t102);
-	Texture2D<float4> HorizonSnowNormal : register(t103);
+	Texture2D<float4> HorizonSnowAlbedo : register(t33);
+	Texture2D<float4> HorizonSnowNormal : register(t23);
 	// Drawn water top-down in the terrain window's frame (RenderWaterCapture),
 	// kShellMissingHeight where none drew; rows grow with -Y.
-	Texture2D<float> WaterWindow : register(t104);
+	Texture2D<float> WaterWindow : register(t63);
 	// Shell snow RMAOS, for the land recolor (bound with the set on land draws).
-	Texture2D<float4> HorizonSnowRmaos : register(t105);
+	Texture2D<float4> HorizonSnowRmaos : register(t68);
 
 	// Ground under drawn water: the shell's WaterBareTexel test (2 u skim).
 	// Bilinear over the four texels: a sloped plane is linear, so this
