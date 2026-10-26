@@ -116,6 +116,7 @@ namespace PBR
 		return color;
 	}
 
+#if defined(TRUE_PBR)
 	struct ThinSurface
 	{
 		float3 reflectionAlbedo;
@@ -214,10 +215,12 @@ namespace PBR
 		lobeWeights.specular = surface.specularAlbedo * (1.0f - surface.fuzzAlbedo) *
 		                       SpecularOcclusion(NdotV, material.Roughness * material.Roughness, material.AO);
 	}
+#endif
 
 	void GetDirectLightInput(out DirectLightingOutput lightingOutput, DirectContext context, MaterialProperties material, float3x3 tbnTr, float2 uv)
 	{
 		lightingOutput = (DirectLightingOutput)0;
+#if defined(TRUE_PBR)
 		if (IsThinSurfaceMaterial(PBRFlags)) {
 			// Direct diffuse receives BaseColor at the call site.
 			ThinSurface surface = CreateThinSurface(material, saturate(abs(dot(context.worldNormal, context.viewDir))), true, false);
@@ -230,6 +233,7 @@ namespace PBR
 			}
 			return;
 		}
+#endif
 		const float3 detailedLightColor = context.lightColor * context.detailedShadow;
 		const float3 softLightColor = context.lightColor * context.softShadow;
 
@@ -349,11 +353,13 @@ namespace PBR
 	void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext context, MaterialProperties material)
 	{
 		lobeWeights = (IndirectLobeWeights)0;
+#if defined(TRUE_PBR)
 		if (IsThinSurfaceMaterial(PBRFlags)) {
 			ThinSurface surface = CreateThinSurface(material, saturate(abs(dot(context.worldNormal, context.viewDir))), true);
 			GetIndirectLobeWeightsThinSurface(lobeWeights, context, material, surface);
 			return;
 		}
+#endif
 
 		const float3 N = context.worldNormal;
 		const float3 V = context.viewDir;
