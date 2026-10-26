@@ -4947,13 +4947,17 @@ public:
 		/** @brief The slot's texel box: lo inclusive, hi exclusive. */
 		float4 AtlasLo;
 		float4 AtlasHi;
-		/** @brief The debug view (debugBodyCoatView), the slot, and the frame: 0 the body, 1 and up its components. */
+		/** @brief The debug view (debugBodyCoatView, 0 the look), the slot, the frame (0 the body, 1 and up its components), and kBodyCoatFlag bits. */
 		uint View;
 		uint Slot;
 		uint Component;
-		uint Pad;
+		uint Flags;
+		/** @brief The shell's glint, as Lighting's glintParameters: screen-space scale, 40 - log density, microfacet roughness, density randomization. */
+		float4 Glint;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
+	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
+	static constexpr uint32_t kBodyCoatFlagLiving = 2;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
@@ -4993,6 +4997,12 @@ public:
 	bool debugBodyCoatDrawProbe = false;
 	/** @brief Runtime-only: 0 off (the store is empty and nothing binds), 1 bands in each skin's canonical frame, 2 each slot's pattern read from the atlas, 3 each skin's slot and frame. */
 	int debugBodyCoatView = 0;
+	/** @brief Runtime-only, S2: a synthetic coat in every slot until a writer exists: 0 off, 1 legs to the knee, 2 snowfall from above, 3 the left side, 4 everything. */
+	int debugBodyCoatForce = 0;
+	/** @brief Runtime-only, S2: the forced coat's strength, 0 to 1. */
+	float debugBodyCoatAmount = 1.0f;
+	/** @brief Runtime-only, S2's A/B: 0 the crust (opacity from thickness and clumps), 1 flat paint (opacity = coverage). */
+	int debugBodyCoatLook = 0;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */

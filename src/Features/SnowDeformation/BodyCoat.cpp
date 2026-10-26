@@ -255,6 +255,7 @@ struct SnowDeformation::BodyCoatStore
 		uint32_t lastWalked = 0;
 		bool walk = true;
 		bool refused = false;
+		bool dead = false;
 	};
 	struct Pick
 	{
@@ -277,6 +278,12 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t pickFrame = 0;
 	int view = 0;
 	bool live = false;
+	/** @brief What the slots hold: S1's checks for the slot pattern view, otherwise the forced coat at this amount. */
+	bool checks = false;
+	int force = -1;
+	float amount = -1.0f;
+	uint32_t lookFlags = 0;
+	float glint[4] = {};
 
 	winrt::com_ptr<ID3D11Texture3D> atlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> atlasSRV;
@@ -724,31 +731,87 @@ struct SnowDeformation::BodyCoatStore
 		return true;
 	}
 
-	// S1 has no writer: a slot holds a pattern, so view 2 shows what the
-	// record maps where. Two-voxel checks in the slot's colour, its border
-	// white.
-	void FillSlot(int a_slot, int a_half)
+	// The knee joint's height in a frame: its calf bones' bind origin. A
+	// skeleton without them (a creature, a bow) takes its bound's lower 30
+	// percent, an estimate.
+	static float KneeHeight(const Frame& a_frame)
 	{
-		const uint32_t w = a_half < 0 ? kBodyCoatSlotDim[0] : kBodyCoatSlotDim[0] / 2;
+		float sum = 0.0f;
+		int count = 0;
+		for (const char* name : { "NPC L Calf [LClf]", "NPC R Calf [RClf]" })
+			if (auto it = a_frame.bind.find(name); it != a_frame.bind.end()) {
+				sum += it->second.translate.z;
+				count++;
+			}
+		return count ? sum / float(count) : a_frame.boundsMin[2] + 0.3f * (a_frame.boundsMax[2] - a_frame.boundsMin[2]);
+	}
+
+	// No writer before S3: a slot holds a pattern. The slot pattern view gets
+	// S1's checks (two voxels, the slot's colour, a white border); otherwise the
+	// forced coat in the atlas's own channels: R contact, G snowfall, B/A the
+	// deposit direction, octahedral (straight up). Each voxel's pattern is taken
+	// at its canonical centre, over a one-voxel ramp.
+	void FillSlot(const Frame& a_frame)
+	{
+		const int slot = a_frame.slot, half = a_frame.half;
+		const uint32_t w = half < 0 ? kBodyCoatSlotDim[0] : kBodyCoatSlotDim[0] / 2;
 		const uint32_t h = kBodyCoatSlotDim[1];
 		const uint32_t d = kBodyCoatSlotDim[2];
-		const uint32_t x0 = a_half < 0 ? 0u : w * uint32_t(a_half);
-		const uint32_t z0 = d * uint32_t(a_slot);
-		const RE::NiPoint3 colour = SlotColour(a_slot, a_half);
-		auto pack = [](float a_r, float a_g, float a_b) {
-			auto byte = [](float a_v) { return uint32_t(std::clamp(a_v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-			return byte(a_r) | (byte(a_g) << 8) | (byte(a_b) << 16) | (255u << 24);
-		};
+		const uint32_t x0 = half < 0 ? 0u : w * uint32_t(half);
+		const uint32_t z0 = d * uint32_t(slot);
+		auto byte = [](float a_v) { return uint32_t(std::clamp(a_v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+		auto pack = [&](float a_r, float a_g, float a_b, float a_a) { return byte(a_r) | (byte(a_g) << 8) | (byte(a_b) << 16) | (byte(a_a) << 24); };
+		auto ramp = [](float a_inside) { return std::clamp(0.5f + a_inside / kBodyCoatVoxel, 0.0f, 1.0f); };
+		const RE::NiPoint3 colour = SlotColour(slot, half);
+		const float knee = KneeHeight(a_frame);
+		const float midX = 0.5f * (a_frame.boundsMin[0] + a_frame.boundsMax[0]);
 		std::vector<uint32_t> texels(size_t(w) * h * d);
 		for (uint32_t z = 0; z < d; ++z)
 			for (uint32_t y = 0; y < h; ++y)
 				for (uint32_t x = 0; x < w; ++x) {
-					const bool edge = x == 0 || y == 0 || z == 0 || x == w - 1 || y == h - 1 || z == d - 1;
-					const float k = (((x >> 1) + (y >> 1) + (z >> 1)) & 1) ? 1.0f : 0.35f;
-					texels[(size_t(z) * h + y) * w + x] = edge ? pack(1.0f, 1.0f, 1.0f) : pack(colour.x * k, colour.y * k, colour.z * k);
+					uint32_t& texel = texels[(size_t(z) * h + y) * w + x];
+					if (checks) {
+						const bool edge = x == 0 || y == 0 || z == 0 || x == w - 1 || y == h - 1 || z == d - 1;
+						const float k = (((x >> 1) + (y >> 1) + (z >> 1)) & 1) ? 1.0f : 0.35f;
+						texel = edge ? pack(1.0f, 1.0f, 1.0f, 1.0f) : pack(colour.x * k, colour.y * k, colour.z * k, 1.0f);
+						continue;
+					}
+					const float at[3] = { float(x0 + x), float(y), float(z0 + z) };
+					float canonical[3];
+					for (int a = 0; a < 3; ++a)
+						canonical[a_frame.axisOf[a]] = (at[a] + 0.5f - a_frame.offset[a]) / a_frame.scale[a];
+					float contact = 0.0f, fall = 0.0f;
+					switch (force) {
+					case 1:
+						contact = ramp(knee - canonical[2]);
+						break;
+					case 2:
+						fall = 1.0f;
+						break;
+					case 3:
+						contact = ramp(midX - canonical[0]);
+						break;
+					case 4:
+						contact = 1.0f;
+						break;
+					default:
+						break;
+					}
+					texel = pack(contact * amount, fall * amount, 0.5f, 0.5f);
 				}
 		const D3D11_BOX box{ x0, 0, z0, x0 + w, h, z0 + d };
 		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &box, texels.data(), w * 4, w * h * 4);
+	}
+
+	void RefillAll()
+	{
+		for (auto& entry : actors) {
+			if (entry.second.body.slot >= 0)
+				FillSlot(entry.second.body);
+			for (const auto& part : entry.second.parts)
+				if (part.slot >= 0)
+					FillSlot(part);
+		}
 	}
 
 	// Bounds fixed at the slot's birth (section 2.1), then the slot and its pattern.
@@ -772,7 +835,7 @@ struct SnowDeformation::BodyCoatStore
 			return;
 		}
 		Place(a_frame, slot, half);
-		FillSlot(slot, half);
+		FillSlot(a_frame);
 	}
 
 	void BuildRecords()
@@ -802,6 +865,8 @@ struct SnowDeformation::BodyCoatStore
 				r.View = uint(view);
 				r.Slot = uint(f.slot * 2 + std::max(f.half, 0));
 				r.Component = shape.frame;
+				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving);
+				r.Glint = float4(glint[0], glint[1], glint[2], glint[3]);
 				recordOf[shape.geometry] = uint32_t(records.size());
 				records.push_back(r);
 				recordSkin.push_back(shape.skin);
@@ -853,7 +918,8 @@ void SnowDeformation::TickBodyCoatStore()
 	auto* context = globals::d3d::context;
 	bodyCoatLive = false;
 	const int view = std::clamp(debugBodyCoatView, 0, 3);
-	if (view == 0 || !settings.EnableSnowDeformation) {
+	const int force = std::clamp(debugBodyCoatForce, 0, 4);
+	if ((view == 0 && force == 0) || !settings.EnableSnowDeformation) {
 		if (bodyCoatStore) {
 			if (bodyCoatStore->live && !bodyCoatProbeBound) {
 				ID3D11ShaderResourceView* none = nullptr;
@@ -874,6 +940,24 @@ void SnowDeformation::TickBodyCoatStore()
 	store.coatedLast = std::exchange(store.coatedBuilding, 0u);
 	if (store.view != view) {
 		store.view = view;
+		store.recordsDirty = true;
+	}
+	const bool checks = view == 2;
+	const float amount = std::clamp(debugBodyCoatAmount, 0.0f, 1.0f);
+	if (store.checks != checks || store.force != force || store.amount != amount) {
+		store.checks = checks;
+		store.force = force;
+		store.amount = amount;
+		store.RefillAll();
+	}
+	// The record's look: the A/B, and the shell's sparkle as Lighting's
+	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
+	const uint32_t lookFlags = debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u;
+	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
+	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
+	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0) {
+		store.lookFlags = lookFlags;
+		memcpy(store.glint, glint, sizeof(glint));
 		store.recordsDirty = true;
 	}
 	auto* player = globals::game::player;
@@ -909,6 +993,10 @@ void SnowDeformation::TickBodyCoatStore()
 		RE::NiPointer<RE::Actor> actor = a.player ? RE::NiPointer<RE::Actor>(player) : a.handle.get();
 		if (!actor || !actor->Is3DLoaded())
 			continue;
+		if (const bool dead = actor->IsDead(); dead != a.dead) {
+			a.dead = dead;
+			store.recordsDirty = true;
+		}
 		const RE::NiAVObject* root = actor->Get3D(false);
 		const RE::NiAVObject* first = a.player ? actor->Get3D(true) : nullptr;
 		const RE::TESRace* race = actor->GetRace();
@@ -1005,6 +1093,16 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		ID3D11ShaderResourceView* srv = store->atlasSRV.get();
 		context->PSSetShaderResources(kBodyCoatAtlasSlot, 1, &srv);
 		store->atlasBoundFrame = frame;
+	}
+	// The look wears the shell's set, bound per draw as projected snow binds it
+	// (a Prepass bind does not survive to the Lighting draws).
+	if (store->view == 0) {
+		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
+		ID3D11ShaderResourceView* normalSRV = shellSnowNormalSRV.get();
+		ID3D11ShaderResourceView* rmaosSRV = shellSnowRmaosSRV.get();
+		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
+		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
+		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
 	}
 	if (store->context1) {
 		ID3D11Buffer* buffer = store->recordCB[store->parity & 1].get();
@@ -1256,9 +1354,10 @@ void SnowDeformation::ProbeBodyCoatDraw(RE::BSRenderPass* a_pass)
 std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 {
 	std::vector<std::string> lines;
-	static constexpr const char* kViews[] = { "off", "canonical bands", "slot pattern from the atlas", "slots and frames" };
+	static constexpr const char* kViews[] = { "the look", "canonical bands", "slot pattern from the atlas", "slots and frames" };
+	static constexpr const char* kForces[] = { "off", "legs to the knee", "snowfall from above", "left half", "everything" };
 	if (!bodyCoatStore) {
-		lines.push_back("Body Coat View: off. The store is empty and nothing is bound.");
+		lines.push_back("Body coat: off (Force Coat and Body Coat View are both off). The store is empty and nothing is bound.");
 	} else {
 		const auto& store = *bodyCoatStore;
 		uint32_t full = 0, halves = 0, refused = 0, components = 0;
@@ -1272,7 +1371,8 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		lines.push_back(std::format("Body Coat View: {}. {}", kViews[std::clamp(store.view, 0, 3)],
+		lines.push_back(std::format("Body coat: {}; forced coat {} at {:.2f}, {}. {}", kViews[std::clamp(store.view, 0, 3)], kForces[std::clamp(store.force, 0, 4)],
+			std::max(store.amount, 0.0f), (store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
 			store.gpuFailed ? "The atlas could not be made; see CommunityShaders.log." : ""));
 		lines.push_back(std::format("Store: {} actors ({} refused as incorporeal), {} components; slots {} bodies + {} halves of {}; {} records ({}). Last frame: {} coated draws, {} draws found no record, {} walks.",
 			store.actors.size(), refused, components, full, halves, kBodyCoatSlots, store.records.size(), store.context1 ? "bound by offset" : "written per draw",

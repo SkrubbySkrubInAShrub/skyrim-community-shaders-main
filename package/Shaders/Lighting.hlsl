@@ -1968,7 +1968,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
-	SnowLighting::BodyCoat(input.ModelPosition, baseColor.xyz);
+	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz, tbnTr[2], frontFace, screenNoise,
+		projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
+#		if defined(TRUE_PBR)
+	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);
+#		endif
 #	endif
 
 #	if defined(WORLD_MAP)
@@ -2961,7 +2965,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz += diffuseColor * material.BaseColor;
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+#	if defined(SNOW_DEFORMATION) && (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
 	snowState.projLightTotal = diffuseColor;
 #	endif
 
@@ -3040,7 +3044,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+#	if defined(SNOW_DEFORMATION) && (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
 	SnowLighting::RelightProjected(snowState, projectedMaterialWeight, dirLightContext, indirectContext, directionalAmbientColor,
 		dirLightColor, worldNormal.xyz, dirDetailedShadow,
 		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
@@ -3314,6 +3318,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
+#			if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
+	// Subsurface scattering would blur the coat as skin.
+	psout.Masks.x *= 1.0 - snowState.coatAlpha;
+#			endif
 #		elif defined(LANDSCAPE) && defined(SNOW_DEFORMATION)
 	// Masks.y is dead for landscape (SSS reads it only where Masks.x > 0):
 	// carry the EM-resolved grain height (the terrain POM hit, 0.5-neutral in

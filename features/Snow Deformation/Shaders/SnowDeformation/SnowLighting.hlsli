@@ -9,10 +9,10 @@
 #ifndef __SNOW_LIGHTING_HLSLI__
 #define __SNOW_LIGHTING_HLSLI__
 
-#if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV) || defined(LANDSCAPE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+#if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV) || defined(LANDSCAPE) || defined(SNOW_BODY_COAT)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 // Non-TRUE_PBR permutations that re-light snow through the PBR evaluators:
-// the LOD terrain family (horizon snow), the land's recolored snow layers and
-// projected-snow statics. The
+// the LOD terrain family (horizon snow), the land's recolored snow layers,
+// projected-snow statics and the body coat. The
 // optional-lobe branches inside are TRUE_PBR-gated, so these permutations
 // compile the coatless diffuse/lobe core against the vanilla
 // MaterialProperties.
@@ -56,6 +56,10 @@ namespace SnowLighting
 		float2 landSnowNormal;
 		float4 landSnowRMAOS;
 		float landSnowFrac;
+#if defined(SNOW_BODY_COAT)
+		// The body coat's opacity here, for the skin's SSS mask.
+		float coatAlpha;
+#endif
 	};
 
 	// How much a texel reads as snow: bright and grey, on the texture's own
@@ -651,8 +655,9 @@ namespace SnowLighting
 			baseColor = float3(1.0, 0.0, 0.0);
 	}
 #	endif
+#endif  // PROJECTED_UV
 
-#	if !defined(TRUE_PBR) && !defined(WORLD_MAP)
+#if (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
 	// SNOW-MATCH Phase 2 round 3: the projected-snow fraction of non-PBR
 	// statics re-lit through the SAME PBR evaluators as the shell and the
 	// horizon snow. frame7075 measured the fence's snow pass (vanilla
@@ -661,7 +666,8 @@ namespace SnowLighting
 	// ambient rebuilt on the snow albedo saved at the swap; the point-light
 	// share is carried over from the vanilla accumulation (the sun's vanilla
 	// term subtracted out), scaled into the same units. The wood fraction
-	// keeps the vanilla output untouched.
+	// keeps the vanilla output untouched. The body coat hands its snow
+	// fraction over the same way (BodyCoat below).
 	void RelightProjected(State s, float projectedMaterialWeight, DirectContext dirLightContext, IndirectContext indirectContext, float3 directionalAmbientColor,
 		float3 dirLightColor, float3 worldNormal, float dirDetailedShadow,
 		inout float3 color, inout float3 outputAlbedo, inout float3 specularColor, inout float3 lobeSpecular, inout float roughness)
@@ -689,8 +695,7 @@ namespace SnowLighting
 			roughness = lerp(roughness, snowMaterial.Roughness, projectedMaterialWeight);
 		}
 	}
-#	endif
-#endif  // PROJECTED_UV
+#endif
 
 #if !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
 	// Snow-textured shapes without projection (dirt cliff snow tops, rock pile
@@ -805,12 +810,24 @@ namespace SnowLighting
 		uint CoatView;
 		uint CoatSlot;
 		uint CoatComponent;
-		uint CoatPad;
+		uint CoatFlags;
+		float4 CoatGlint;
 	};
 	Texture3D<float4> CoatAtlas : register(t41);
 	// State.h ExtraFeatureDescriptors::SnowBodyCoat. Declared here rather than
 	// in Permutation.hlsli, so permutations without SNOW_BODY_COAT keep their text.
 	static const uint kSnowBodyCoatBit = (1u << 25);
+	// SnowDeformation.h kBodyCoatFlag bits, and the atlas (kBodyCoatSlotDim x kBodyCoatSlots).
+	static const uint kCoatFlatPaint = 1u;
+	static const uint kCoatLiving = 2u;
+	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
+	// The crust's estimates (section 2.6), for Josef to judge in S2: clumps
+	// about 4 units across standing up to 1 unit, opacity 1 - exp(-2.5 t), and
+	// living skin capped at 0.35, since it melts what lands on it (D4).
+	static const float kCoatClumpScale = 0.25;
+	static const float kCoatReliefUnits = 1.0;
+	static const float kCoatOpacityK = 2.5;
+	static const float kCoatSkinCap = 0.35;
 
 	float3 CoatDebugHue(float h)
 	{
@@ -818,32 +835,113 @@ namespace SnowLighting
 		return 0.25 + 0.75 * k;
 	}
 
-	// S1 has no coat, only Body Coat View: 1 bands every 8 units of the frame's
-	// height and lines every 16 across, which must run unbroken from body to
-	// armour to boots; 2 the slot's pattern read back from the atlas, magenta
-	// past the slot; 3 each slot's colour, a component's striped.
-	void BodyCoat(float3 modelPosition, inout float3 baseColor)
+	// S1's Body Coat View: 1 bands every 8 units of the frame's height and lines
+	// every 16 across, which must run unbroken from body to armour to boots; 2
+	// the slot's pattern read back from the atlas, magenta past the slot; 3 each
+	// slot's colour, a component's striped.
+	float3 CoatDebugView(float4 p, float3 c)
 	{
+		float3 colour;
+		[branch] if (CoatView == 2)
+		{
+			float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
+			bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
+			colour = inside ? CoatAtlas.Load(int4(int3(t), 0)).rgb : float3(1.0, 0.0, 1.0);
+		}
+		else
+		{
+			colour = CoatDebugHue(CoatView == 3 ? 0.618034 * CoatSlot : floor(c.z / 8.0) * 0.17);
+			colour *= abs(frac(c.z / 8.0) - 0.5) > 0.45 ? 0.15 : 1.0;
+			colour = frac(c.x / 16.0) < 0.06 ? float3(1.0, 1.0, 1.0) : colour;
+			colour *= (CoatView == 3 && CoatComponent > 0 && frac((c.x + c.y + c.z) / 6.0) < 0.5) ? 0.4 : 1.0;
+		}
+		return colour;
+	}
+
+	// S2's crust (section 2.6). Coverage is the atlas's contact, or its snowfall
+	// on faces turned to the deposit. Thickness adds CS's Perlin clumps in rest
+	// space, and opacity is 1 - exp(-k t): a thin coat lets the armour show, and
+	// only clumps go solid. The material is the shell's own set, sampled in rest
+	// space so it stays on the body: its albedo convention, grain and RMAOS,
+	// taken as projected snow takes them. TruePBR pixels blend the material.
+	// Vanilla pixels hand the snow fraction to RelightProjected, which lights it
+	// as the ground's. Returns the opacity, for the glint and the SSS mask.
+	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3 vertexNormal, bool frontFace, float screenNoise,
+		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
+	{
+		float alpha = 0.0;
 		[branch] if ((Permutation::ExtraFeatureDescriptor & kSnowBodyCoatBit) != 0)
 		{
 			float4 p = float4(modelPosition, 1.0);
-			float3 colour;
-			[branch] if (CoatView == 2)
+			float3 c = float3(dot(CoatModelToCanonical[0], p), dot(CoatModelToCanonical[1], p), dot(CoatModelToCanonical[2], p));
+			[branch] if (CoatView != 0)
 			{
-				float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
-				bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
-				colour = inside ? CoatAtlas.Load(int4(int3(t), 0)).rgb : float3(1.0, 0.0, 1.0);
+				baseColor = CoatDebugView(p, c);
 			}
 			else
 			{
-				float3 c = float3(dot(CoatModelToCanonical[0], p), dot(CoatModelToCanonical[1], p), dot(CoatModelToCanonical[2], p));
-				colour = CoatDebugHue(CoatView == 3 ? 0.618034 * CoatSlot : floor(c.z / 8.0) * 0.17);
-				colour *= abs(frac(c.z / 8.0) - 0.5) > 0.45 ? 0.15 : 1.0;
-				colour = frac(c.x / 16.0) < 0.06 ? float3(1.0, 1.0, 1.0) : colour;
-				colour *= (CoatView == 3 && CoatComponent > 0 && frac((c.x + c.y + c.z) / 6.0) < 0.5) ? 0.4 : 1.0;
+				// Every derivative before the per-pixel branch.
+				const float3 dcdx = ddx(c);
+				const float3 dcdy = ddy(c);
+				const float3 faceNormal = normalize(-cross(dcdx, dcdy)) * (frontFace ? 1.0 : -1.0);
+				const float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
+				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
+				// Half a texel inside the slot, so the filter never reads a neighbour.
+				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5) / kCoatAtlasSize, 0);
+				const float side = smoothstep(0.0, 0.5, dot(faceNormal, GBuffer::DecodeNormal(voxel.ba)));
+				const float coverage = inside ? max(voxel.r, voxel.g * side) : 0.0;
+				const float clumps = saturate(0.5 + 0.5 * Random::perlinNoise(c * kCoatClumpScale));
+				const float thickness = coverage * (0.5 + 0.5 * clumps);
+				const float relief = thickness * kCoatReliefUnits;
+				const float reliefDx = ddx(relief);
+				const float reliefDy = ddy(relief);
+				const float3 worldDx = ddx(worldPos);
+				const float3 worldDy = ddy(worldPos);
+				const float3 setDx = dcdx / SnowDeformation::SnowUVTile;
+				const float3 setDy = dcdy / SnowDeformation::SnowUVTile;
+				[branch] if (coverage > 0.003)
+				{
+					alpha = (CoatFlags & kCoatFlatPaint) != 0 ? coverage : 1.0 - exp(-kCoatOpacityK * thickness);
+#	if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
+					alpha = (CoatFlags & kCoatLiving) != 0 ? min(alpha, kCoatSkinCap) : alpha;
+#	endif
+					const float3 weights = Triplanar::GetWeights(faceNormal, faceNormal);
+					// A thin layer keeps half the bump beneath it; the set's grain and the clumps go on top.
+					worldNormal = normalize(lerp(worldNormal, vertexNormal, 0.5 * alpha));
+					[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+					{
+						float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampColorSampler, c, weights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, setDx, setDy).xyz * 2.0 - 1.0;
+						SnowGrain(worldNormal, texN, weights, screenNoise, alpha);
+					}
+					// The clumps' relief by its surface gradient (Mikkelsen 2010): from screen
+					// derivatives, so it does not depend on the mesh's uv layout.
+					const float3 r1 = cross(worldDy, vertexNormal);
+					const float3 r2 = cross(vertexNormal, worldDx);
+					const float det = dot(worldDx, r1);
+					const float3 surfaceGradient = (reliefDx * r1 + reliefDy * r2) * (det < 0.0 ? -1.0 : 1.0) / max(abs(det), 1e-8);
+					worldNormal = normalize(worldNormal - surfaceGradient * alpha);
+					const float3 setSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, c, weights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, setDx, setDy).xyz;
+					const float3 coatAlbedo = SnowColor::SetAlbedo(setSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
+					float4 coatRMAOS = kShellRMAOSDefault;
+					[branch] if (ShellHasRMAOS())
+						coatRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SampColorSampler, c, weights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, setDx, setDy));
+#	if defined(TRUE_PBR)
+					baseColor = lerp(baseColor, coatAlbedo, alpha);
+					rawRMAOS = lerp(rawRMAOS, coatRMAOS, alpha);
+					// Its clearcoat, fuzz and subsurface fade under the snow, as under projected snow.
+					projectedMaterialWeight = max(projectedMaterialWeight, alpha);
+#	else
+					// The armour's own albedo stays: the write tail blends the re-lit snow over it.
+					s.projMatch = true;
+					s.projAlbedo = coatAlbedo;
+					s.projRMAOS = coatRMAOS;
+					projectedMaterialWeight = 1.0 - (1.0 - projectedMaterialWeight) * (1.0 - alpha);
+#	endif
+				}
 			}
-			baseColor = colour;
 		}
+		s.coatAlpha = alpha;
+		return alpha;
 	}
 #endif
 }
