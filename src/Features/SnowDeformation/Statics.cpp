@@ -1389,6 +1389,7 @@ struct SD_BSLightingShader_SetupGeometry
 		if (snowDeformation.loaded) {
 			snowDeformation.BSLightingShader_SetupGeometry(a_pass, shader ? shader->currentRawTechnique : 0);
 			snowDeformation.LandscapeSnowSetup(a_pass, true);
+			snowDeformation.ProbeBodyCoatDraw(a_pass);
 		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;

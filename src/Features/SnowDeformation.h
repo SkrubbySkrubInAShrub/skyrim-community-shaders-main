@@ -4865,6 +4865,104 @@ protected:
 	CoatAging ComputeCoatAging(RE::Actor* a_actor) const;
 	std::vector<std::string> CoatAgingLines() const;
 
+public:
+	// ---- Snow on bodies: stage R0 probes (MD plans/BODY-SNOW-PLAN.md) ----
+	// What the body coat rests on, measured before any of it is built: one
+	// rest frame per actor once each skin's rootParentToSkin is undone, the
+	// actor every draw's GetUserData() names, and whether a bind made once a
+	// frame reaches the actor draws. Debugging Options only, runtime-only
+	// switches; nothing here changes a pixel. Implemented in
+	// SnowDeformation/BodyCoat.cpp.
+
+	/** @brief One actor as the coat would see it. Lengths in game units. */
+	struct BodyCoatActorCensus
+	{
+		std::string name;
+		uint32_t formID = 0;
+		float distance = 0.0f;
+		bool corpse = false;
+		bool weaponDrawn = false;
+		uint32_t skinned = 0;
+		uint32_t dynamic = 0;
+		uint32_t noNormals = 0;
+		uint32_t skinShapes = 0;
+		uint32_t eyeShapes = 0;
+		/** @brief Skins whose rootParentToSkin rotates or scales rather than only translating. */
+		uint32_t transformed = 0;
+		/** @brief Skins sharing no bone with the skins before them, so their frame went unchecked. */
+		uint32_t unchecked = 0;
+		/** @brief Skins whose bones land more than a coat voxel from the actor's frame. */
+		uint32_t offFrame = 0;
+		float worstDeviation = 0.0f;
+		std::string worstShape;
+		/** @brief The largest rootParentToSkin translation: how far the raw vertex frames sit apart. */
+		float rawOffsetMax = 0.0f;
+		uint32_t triangles = 0;
+		uint32_t gear = 0;
+		uint32_t gearTriangles = 0;
+		float gearRadiusMax = 0.0f;
+		/** @brief Lit geometries whose GetUserData() is this actor, and those whose is not. */
+		uint32_t owned = 0;
+		uint32_t unowned = 0;
+		/** @brief The skins' bone spheres in the canonical frame. */
+		RE::NiPoint3 boundsMin{ 1e30f, 1e30f, 1e30f };
+		RE::NiPoint3 boundsMax{ -1e30f, -1e30f, -1e30f };
+		/** @brief The player's first-person meshes: skins, the worst distance to the third-person frame (-1 = no bone shared), owners. */
+		uint32_t firstSkinned = 0;
+		float firstDeviation = -1.0f;
+		uint32_t firstOwned = 0;
+		uint32_t firstUnowned = 0;
+	};
+	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
+	struct BodyCoatDrawTally
+	{
+		uint64_t frames = 0;
+		uint64_t lightingDraws = 0;
+		uint64_t skinnedDraws = 0;
+		uint64_t skinnedOwned = 0;
+		uint64_t skinnedNoOwner = 0;
+		uint64_t skinnedOtherOwner = 0;
+		uint64_t rigidOwned = 0;
+		uint64_t ownedDeferred = 0;
+		uint64_t ownedForward = 0;
+		uint64_t ownedReflection = 0;
+		uint64_t lostDeferred = 0;
+		uint64_t lostForward = 0;
+		uint64_t lostReflection = 0;
+		uint64_t framesWithLoss = 0;
+	};
+	/** @brief Per frame, from PrepassSimulation: the census on its cadence, and the probe unbound once it is switched off. */
+	void TickBodyCoatProbes();
+	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the probe bind still holds. */
+	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
+	std::vector<std::string> BodyCoatProbeLines() const;
+	/** @brief Runtime-only: run the census every kBodyCoatCensusFrames. */
+	bool debugBodyCoatCensus = false;
+	/** @brief Runtime-only: the next census writes every shape to CommunityShaders.log. */
+	bool debugBodyCoatCensusDump = false;
+	/** @brief Runtime-only: bind a probe texture once a frame and count the actor draws it reaches. */
+	bool debugBodyCoatDrawProbe = false;
+	static constexpr uint32_t kBodyCoatCensusFrames = 120;
+	static constexpr uint32_t kBodyCoatDrawWindow = 300;
+	/** @brief The probe's slot: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */
+	static constexpr UINT kBodyCoatProbeSlot = 41;
+	/** @brief A coat voxel's planned size: 32 x 16 x 48 over a human's ~80 x 50 x 150 units. */
+	static constexpr float kBodyCoatVoxel = 2.5f;
+
+protected:
+	void RunBodyCoatCensus(bool a_dump);
+	std::vector<BodyCoatActorCensus> bodyCoatCensus;
+	uint32_t bodyCoatCensusFrame = 0;
+	bool bodyCoatCensusRan = false;
+	double bodyCoatCensusMs = 0.0;
+	BodyCoatDrawTally bodyCoatDrawBuilding;
+	BodyCoatDrawTally bodyCoatDrawLast;
+	uint32_t bodyCoatDrawFrame = UINT32_MAX;
+	bool bodyCoatDrawLostThisFrame = false;
+	winrt::com_ptr<ID3D11Texture3D> bodyCoatProbeTexture;
+	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatProbeSRV;
+	bool bodyCoatProbeBound = false;
+
 	// ---- Load trace: what a save load spends its time on ----
 	// Begins at the first co-save read, aggregates instrumented phases and
 	// render-frame gaps, logs every event >= 100 ms live, and writes

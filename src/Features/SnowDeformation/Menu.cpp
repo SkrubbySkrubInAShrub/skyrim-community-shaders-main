@@ -2037,6 +2037,23 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx("Snow on Bodies (R0 Probes)")) {
+			ImGui::Checkbox("Run Body Census", &debugBodyCoatCensus);
+			if (auto _ttCensus = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Every 2 s, measures the actors a body coat would cover (MD plans/BODY-SNOW-PLAN.md, stage R0): each mesh's rest frame once its skin offset is undone, carried gear, first-person meshes, and whether each mesh names its actor. Reads only; nothing changes on screen.");
+			ImGui::SameLine();
+			if (ImGui::Button("Write Body Census to Log"))
+				debugBodyCoatCensusDump = true;
+			if (auto _ttDump = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Runs the census once now and writes every actor, mesh and carried item to CommunityShaders.log ('body coat census:').");
+			ImGui::Checkbox("Probe Lighting Binds", &debugBodyCoatDrawProbe);
+			if (auto _ttProbe = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Binds a 1-texel probe texture to a slot no shader reads, once a frame, and counts the actor draws it still reaches, by pass. Also counts which draws name their actor. One log line per 300 frames ('body coat draw probe').");
+			for (const auto& line : BodyCoatProbeLines())
+				WrapTextF("%s", line.c_str());
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
 			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
 				// Diagnostics use plain text by existing convention (no i18n).
