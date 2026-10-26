@@ -16,7 +16,7 @@
 
 namespace
 {
-	constexpr uint32_t kDumpLinesMax = 600;
+	constexpr uint32_t kDumpLinesMax = 900;
 
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
@@ -27,15 +27,6 @@ namespace
 	{
 		auto* material = a_property ? static_cast<RE::BSLightingShaderMaterialBase*>(a_property->material) : nullptr;
 		return material ? material->GetFeature() : RE::BSShaderMaterial::Feature::kDefault;
-	}
-
-	float RotationDeviation(const RE::NiMatrix3& a_m)
-	{
-		float worst = 0.0f;
-		for (int r = 0; r < 3; ++r)
-			for (int c = 0; c < 3; ++c)
-				worst = std::max(worst, std::abs(a_m.entry[r][c] - (r == c ? 1.0f : 0.0f)));
-		return worst;
 	}
 
 	bool HiddenByGame(const RE::NiAVObject* a_geometry, const RE::NiAVObject* a_root, bool a_firstPersonPlayer)
@@ -49,6 +40,102 @@ namespace
 	const char* NameOf(const RE::NiAVObject* a_object)
 	{
 		return a_object && a_object->name.c_str() ? a_object->name.c_str() : "";
+	}
+
+	struct SkinBone
+	{
+		std::string name;
+		const RE::NiAVObject* node;
+		RE::NiTransform skinToBone;
+		/** @brief The bone's bind pose in the skin's own space; its translate is the bone's origin there. */
+		RE::NiTransform boneToSkin;
+		RE::NiBound bound;
+	};
+
+	std::vector<SkinBone> BonesOf(const RE::NiSkinInstance* a_skin, const RE::NiSkinData* a_data)
+	{
+		std::vector<SkinBone> bones;
+		const uint32_t count = a_data->GetBoneCount();
+		bones.reserve(count);
+		for (uint32_t b = 0; b < count; ++b) {
+			const RE::NiAVObject* node = a_skin->bones[b];
+			if (!node)
+				continue;
+			const RE::NiTransform& skinToBone = a_data->GetBoneDataSkinToBone(b);
+			bones.push_back({ NameOf(node), node, skinToBone, skinToBone.Invert(), a_data->GetBoneDataBound(b) });
+		}
+		return bones;
+	}
+
+	/** @brief Each bone's bind pose in the anchor bone's space, by name. */
+	using BindMap = std::unordered_map<std::string, RE::NiTransform>;
+
+	struct SkinMap
+	{
+		bool chained = false;
+		/** @brief The skin's space into the anchor's: bind(via) x skinToBone(via). */
+		RE::NiTransform toAnchor;
+		std::string via;
+		uint32_t shared = 0;
+		uint32_t agree = 0;
+		float residual = 0.0f;
+		/** @brief Shared bones the chosen map puts more than a voxel off: name, distance, bone-sphere radius. */
+		std::vector<std::tuple<std::string, float, float>> outliers;
+	};
+
+	// The transform skinning itself applies: a vertex bound to bone b lands at
+	// bone world x skinToBone(b) x v, so bind(b) x skinToBone(b) maps the skin
+	// into the anchor's space whatever its rootParentToSkin claims. Every
+	// shared bone proposes one; the proposal most of them agree with wins, so
+	// a bone a skin lists but never weights cannot pull it off.
+	SkinMap MapSkin(const std::vector<SkinBone>& a_bones, const BindMap& a_bind, float a_voxel)
+	{
+		SkinMap best;
+		std::vector<std::pair<const SkinBone*, const RE::NiTransform*>> known;
+		for (const auto& bone : a_bones)
+			if (auto it = a_bind.find(bone.name); it != a_bind.end())
+				known.emplace_back(&bone, &it->second);
+		best.shared = uint32_t(known.size());
+		if (known.empty())
+			return best;
+		int bestAgree = -1;
+		float bestResidual = 0.0f;
+		for (const auto& [candidate, candidateBind] : known) {
+			const RE::NiTransform map = *candidateBind * candidate->skinToBone;
+			int agree = 0;
+			float residual = 0.0f;
+			for (const auto& [bone, bind] : known) {
+				const float r = (map * bone->boneToSkin.translate).GetDistance(bind->translate);
+				if (r <= a_voxel) {
+					agree++;
+					residual = std::max(residual, r);
+				}
+			}
+			const bool better = agree > bestAgree || (agree == bestAgree && (residual < bestResidual || (residual == bestResidual && candidate->name < best.via)));
+			if (better) {
+				bestAgree = agree;
+				bestResidual = residual;
+				best.toAnchor = map;
+				best.via = candidate->name;
+			}
+		}
+		best.chained = true;
+		best.agree = uint32_t(bestAgree);
+		best.residual = bestResidual;
+		for (const auto& [bone, bind] : known) {
+			const float r = (best.toAnchor * bone->boneToSkin.translate).GetDistance(bind->translate);
+			if (r > a_voxel)
+				best.outliers.emplace_back(bone->name, r, bone->bound.radius);
+		}
+		return best;
+	}
+
+	std::string OutlierText(const SkinMap& a_map)
+	{
+		std::string text;
+		for (const auto& [name, distance, radius] : a_map.outliers)
+			text += std::format("{}'{}' {:.1f} off (bone sphere {:.1f})", text.empty() ? "" : ", ", name, distance, radius);
+		return text;
 	}
 }
 
@@ -123,30 +210,6 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 	};
 	const bool firstPerson = RE::PlayerCamera::GetSingleton() && RE::PlayerCamera::GetSingleton()->IsInFirstPerson();
 
-	struct Skin
-	{
-		RE::BSGeometry* geometry;
-		RE::NiSkinInstance* skin;
-		RE::NiSkinData* data;
-		uint32_t bones;
-	};
-	// Every bone a skin names, at its bind position in the canonical frame:
-	// rootParentToSkin undone, so the frames of all an actor's meshes line up.
-	auto forEachBone = [](const Skin& a_skin, auto&& a_visit) {
-		const RE::NiTransform toCanonical = a_skin.data->rootParentToSkin.Invert();
-		const uint32_t count = std::min(a_skin.data->GetBoneCount(), a_skin.bones);
-		for (uint32_t b = 0; b < count; ++b) {
-			const auto* node = a_skin.skin->bones[b];
-			if (!node)
-				continue;
-			const RE::NiTransform boneToSkin = a_skin.data->GetBoneDataSkinToBone(b).Invert();
-			const RE::NiPoint3 bind = toCanonical * boneToSkin.translate;
-			const auto& bound = a_skin.data->GetBoneDataBound(b);
-			const RE::NiPoint3 centre = toCanonical * (boneToSkin * bound.center);
-			a_visit(NameOf(node), bind, centre, bound.radius * boneToSkin.scale * toCanonical.scale);
-		}
-	};
-
 	auto censusOf = [&](RE::Actor* a_actor, float a_d2, bool a_corpse) {
 		BodyCoatActorCensus c;
 		const char* display = a_actor->GetDisplayFullName();
@@ -158,8 +221,40 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 			c.weaponDrawn = state->IsWeaponDrawn();
 		auto* root = a_actor->Get3D(false);
 		const bool firstPersonPlayer = firstPerson && a_actor == player;
+
+		// What the actor has equipped, by biped slot: each item's attached 3D.
+		// Gear is what hangs below a weapon, shield or quiver slot; a rigid mesh
+		// below no equipped slot at all is something stuck on the body.
+		std::vector<std::pair<const RE::NiAVObject*, uint32_t>> parts;
+		auto addBiped = [&](const RE::BSTSmartPointer<RE::BipedAnim>& a_biped) {
+			if (!a_biped)
+				return;
+			for (uint32_t i = 0; i < RE::BIPED_OBJECTS::kTotal; ++i)
+				if (const RE::NiAVObject* part = a_biped->objects[i].partClone.get())
+					parts.emplace_back(part, i);
+		};
+		addBiped(a_actor->GetActorRuntimeData().biped);
+		if (a_actor == player)
+			addBiped(player->GetInfoRuntimeData().largeBiped);
+		auto slotOf = [&](const RE::NiAVObject* a_object) -> int {
+			for (const RE::NiAVObject* n = a_object; n; n = n->parent)
+				for (const auto& [part, slot] : parts)
+					if (part == n)
+						return int(slot);
+			return -1;
+		};
+		auto carried = [](int a_slot) { return a_slot >= int(RE::BIPED_OBJECTS::kEditorTotal) || a_slot == int(RE::BIPED_OBJECTS::kShield); };
+
+		struct Skin
+		{
+			RE::BSGeometry* geometry;
+			std::vector<SkinBone> bones;
+			RE::NiTransform rootParentToSkin;
+			bool dynamic;
+			int feature;
+		};
 		std::vector<Skin> skins;
-		std::vector<std::string> shapeLines;
+		std::vector<std::string> gearLines;
 		auto visit = [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 			auto& runtime = a_geometry->GetGeometryRuntimeData();
 			auto* property = runtime.shaderProperty.get();
@@ -169,27 +264,41 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 				c.owned++;
 			else
 				c.unowned++;
+			if (IsEngineDecalName(NameOf(a_geometry))) {
+				c.decals++;
+				return RE::BSVisit::BSVisitControl::kContinue;
+			}
 			auto* triShape = a_geometry->AsTriShape();
 			const uint32_t triangles = triShape ? uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) : 0u;
 			auto* skin = runtime.skinInstance.get();
 			auto* data = skin ? skin->skinData.get() : nullptr;
-			if (!skin || !data || !skin->bones) {
-				if (skin)
-					return RE::BSVisit::BSVisitControl::kContinue;
-				c.gear++;
-				c.gearTriangles += triangles;
-				c.gearRadiusMax = std::max(c.gearRadiusMax, a_geometry->worldBound.radius);
+			if (skin && (!data || !skin->bones))
+				return RE::BSVisit::BSVisitControl::kContinue;
+			const int slot = slotOf(a_geometry);
+			if (!skin || carried(slot)) {
+				const char* kind = "attached, not equipped";
+				if (carried(slot)) {
+					(skin ? c.gearSkinned : c.gear)++;
+					c.gearTriangles += triangles;
+					c.gearRadiusMax = std::max(c.gearRadiusMax, a_geometry->worldBound.radius);
+					kind = skin ? "skinned gear" : "gear";
+				} else if (slot >= 0) {
+					c.rigidWorn++;
+					kind = "rigid worn";
+				} else {
+					c.attached++;
+				}
 				if (a_dump)
-					shapeLines.push_back(std::format("  gear '{}' under '{}': radius {:.0f}, {} triangles, owner {}", NameOf(a_geometry),
-						NameOf(a_geometry->parent), a_geometry->worldBound.radius, triangles, a_geometry->GetUserData() == a_actor ? "this actor" : "NOT this actor"));
+					gearLines.push_back(std::format("  {} '{}' under '{}', slot {}: radius {:.0f}, {} triangles{}, owner {}", kind, NameOf(a_geometry), NameOf(a_geometry->parent), slot,
+						a_geometry->worldBound.radius, triangles, skin ? std::format(", {} bones of its own", data->GetBoneCount()) : std::string(),
+						a_geometry->GetUserData() == a_actor ? "this actor" : "NOT this actor"));
 				return RE::BSVisit::BSVisitControl::kContinue;
 			}
-			skins.push_back({ a_geometry, skin, data, data->GetBoneCount() });
+			const auto feature = FeatureOf(property);
+			skins.push_back({ a_geometry, BonesOf(skin, data), data->rootParentToSkin, a_geometry->AsDynamicTriShape() != nullptr, int(feature) });
 			c.skinned++;
 			c.triangles += triangles;
-			if (a_geometry->AsDynamicTriShape())
-				c.dynamic++;
-			const auto feature = FeatureOf(property);
+			c.dynamic += skins.back().dynamic ? 1u : 0u;
 			if (feature == RE::BSShaderMaterial::Feature::kFaceGen || feature == RE::BSShaderMaterial::Feature::kFaceGenRGBTint)
 				c.skinShapes++;
 			if (feature == RE::BSShaderMaterial::Feature::kEye)
@@ -198,65 +307,93 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 			const RE::BSGraphics::TriShape* buffer = partition && partition->numPartitions > 0 && partition->partitions.data() ? partition->partitions[0].buffData : nullptr;
 			if (buffer && !buffer->vertexDesc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
 				c.noNormals++;
+			c.rawOffsetMax = std::max(c.rawOffsetMax, data->rootParentToSkin.translate.Length());
 			return RE::BSVisit::BSVisitControl::kContinue;
 		};
 		RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visit));
 
-		// The skin with the most bones (the body, as a rule) sets the frame;
-		// each later skin is measured against the bones set before it.
-		std::sort(skins.begin(), skins.end(), [](const Skin& a_a, const Skin& a_b) { return a_a.bones > a_b.bones; });
-		std::unordered_map<std::string, RE::NiPoint3> frame;
-		for (const auto& s : skins) {
-			const auto& rps = s.data->rootParentToSkin;
-			c.rawOffsetMax = std::max(c.rawOffsetMax, rps.translate.Length());
-			const bool transformed = RotationDeviation(rps.rotate) > 1e-3f || std::abs(rps.scale - 1.0f) > 1e-3f;
-			c.transformed += transformed ? 1u : 0u;
-			float deviation = 0.0f;
-			std::string worstBone;
-			uint32_t shared = 0;
-			std::vector<std::pair<std::string, RE::NiPoint3>> added;
-			forEachBone(s, [&](const char* a_name, const RE::NiPoint3& a_bind, const RE::NiPoint3& a_centre, float a_radius) {
-				c.boundsMin = { std::min(c.boundsMin.x, a_centre.x - a_radius), std::min(c.boundsMin.y, a_centre.y - a_radius), std::min(c.boundsMin.z, a_centre.z - a_radius) };
-				c.boundsMax = { std::max(c.boundsMax.x, a_centre.x + a_radius), std::max(c.boundsMax.y, a_centre.y + a_radius), std::max(c.boundsMax.z, a_centre.z + a_radius) };
-				if (auto it = frame.find(a_name); it != frame.end()) {
-					shared++;
-					const float d = it->second.GetDistance(a_bind);
-					if (d > deviation) {
-						deviation = d;
-						worstBone = a_name;
-					}
-				} else {
-					added.emplace_back(a_name, a_bind);
+		// The anchor: the root-most bone any body skin names, so the frame is
+		// the skeleton's own and does not hang on which mesh came first.
+		auto depthOf = [&](const RE::NiAVObject* a_node) {
+			uint32_t depth = 0;
+			for (const RE::NiAVObject* n = a_node; n && n != root; n = n->parent)
+				depth++;
+			return depth;
+		};
+		c.anchorDepth = UINT32_MAX;
+		for (const auto& s : skins)
+			for (const auto& bone : s.bones) {
+				const uint32_t depth = depthOf(bone.node);
+				if (depth < c.anchorDepth || (depth == c.anchorDepth && bone.name < c.anchor)) {
+					c.anchorDepth = depth;
+					c.anchor = bone.name;
 				}
-			});
-			for (auto& [name, bind] : added)
-				frame.emplace(std::move(name), bind);
-			if (&s != &skins.front() && shared == 0)
-				c.unchecked++;
-			if (deviation > kBodyCoatVoxel)
-				c.offFrame++;
-			if (deviation > c.worstDeviation) {
-				c.worstDeviation = deviation;
-				c.worstShape = NameOf(s.geometry);
 			}
-			if (a_dump) {
-				const auto feature = FeatureOf(s.geometry->GetGeometryRuntimeData().shaderProperty.get());
-				shapeLines.push_back(std::format("  skin '{}': {} bones, {} shared, off frame by {:.2f}{}; rootParentToSkin ({:.1f}, {:.1f}, {:.1f}) rotation off {:.3f} scale {:.3f}; feature {}{}",
-					NameOf(s.geometry), s.bones, shared, deviation, worstBone.empty() ? "" : std::format(" at '{}'", worstBone),
-					rps.translate.x, rps.translate.y, rps.translate.z, RotationDeviation(rps.rotate), rps.scale, int(feature),
-					s.geometry->AsDynamicTriShape() ? ", dynamic" : ""));
+		if (skins.empty())
+			c.anchorDepth = 0;
+
+		// Bind poses chained outward from the anchor, the biggest skins first:
+		// each skin that reaches the chain adds the bones it alone names.
+		BindMap bind;
+		if (!c.anchor.empty())
+			bind.emplace(c.anchor, RE::NiTransform());
+		std::sort(skins.begin(), skins.end(), [](const Skin& a_a, const Skin& a_b) { return a_a.bones.size() > a_b.bones.size(); });
+		std::vector<SkinMap> maps(skins.size());
+		for (bool progress = true; progress;) {
+			progress = false;
+			for (size_t i = 0; i < skins.size(); ++i) {
+				if (maps[i].chained)
+					continue;
+				SkinMap map = MapSkin(skins[i].bones, bind, kBodyCoatVoxel);
+				if (!map.chained)
+					continue;
+				progress = true;
+				for (const auto& bone : skins[i].bones) {
+					if (!bind.contains(bone.name))
+						bind.emplace(bone.name, map.toAnchor * bone.boneToSkin);
+					const RE::NiPoint3 centre = map.toAnchor * (bone.boneToSkin * bone.bound.center);
+					const float radius = bone.bound.radius * bone.boneToSkin.scale * map.toAnchor.scale;
+					c.boundsMin = { std::min(c.boundsMin.x, centre.x - radius), std::min(c.boundsMin.y, centre.y - radius), std::min(c.boundsMin.z, centre.z - radius) };
+					c.boundsMax = { std::max(c.boundsMax.x, centre.x + radius), std::max(c.boundsMax.y, centre.y + radius), std::max(c.boundsMax.z, centre.z + radius) };
+				}
+				maps[i] = std::move(map);
 			}
 		}
+		c.bindBones = uint32_t(bind.size());
+		std::vector<std::string> skinLines;
+		for (size_t i = 0; i < skins.size(); ++i) {
+			const auto& s = skins[i];
+			const auto& map = maps[i];
+			const auto& rps = s.rootParentToSkin.translate;
+			if (!map.chained) {
+				c.unchained++;
+				if (a_dump)
+					skinLines.push_back(std::format("  skin '{}': {} bones, NOT CHAINED (no bone reaches the bind); rootParentToSkin ({:.1f}, {:.1f}, {:.1f}); feature {}{}",
+						NameOf(s.geometry), s.bones.size(), rps.x, rps.y, rps.z, s.feature, s.dynamic ? ", dynamic" : ""));
+				continue;
+			}
+			c.chained++;
+			c.outlierBones += uint32_t(map.outliers.size());
+			if (map.residual > c.worstResidual) {
+				c.worstResidual = map.residual;
+				c.worstShape = NameOf(s.geometry);
+			}
+			if (a_dump)
+				skinLines.push_back(std::format("  skin '{}': {} bones, via '{}' ({} of {} shared agree), residual {:.2f}{}; rootParentToSkin ({:.1f}, {:.1f}, {:.1f}); feature {}{}",
+					NameOf(s.geometry), s.bones.size(), map.via, map.agree, map.shared, map.residual,
+					map.outliers.empty() ? "" : std::format(", outliers {}", OutlierText(map)), rps.x, rps.y, rps.z, s.feature, s.dynamic ? ", dynamic" : ""));
+		}
 
-		// First person: separate meshes on the first-person skeleton, matched
-		// to the third-person frame by bone name.
+		// First person: the same bones on the first-person skeleton, mapped by
+		// name through the third-person bind.
+		std::vector<std::string> firstLines;
 		if (a_actor == player) {
 			auto* first = player->Get3D(true);
 			if (first && first != root) {
 				auto visitFirst = [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 					auto& runtime = a_geometry->GetGeometryRuntimeData();
 					auto* property = runtime.shaderProperty.get();
-					if (!IsLit(property) || IsProxyOrOverlayGeometry(a_geometry, property))
+					if (!IsLit(property) || IsProxyOrOverlayGeometry(a_geometry, property) || IsEngineDecalName(NameOf(a_geometry)))
 						return RE::BSVisit::BSVisitControl::kContinue;
 					if (a_geometry->GetUserData() == a_actor)
 						c.firstOwned++;
@@ -267,31 +404,40 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 					if (!skin || !data || !skin->bones)
 						return RE::BSVisit::BSVisitControl::kContinue;
 					c.firstSkinned++;
-					float deviation = -1.0f;
-					forEachBone({ a_geometry, skin, data, data->GetBoneCount() }, [&](const char* a_name, const RE::NiPoint3& a_bind, const RE::NiPoint3&, float) {
-						if (auto it = frame.find(a_name); it != frame.end())
-							deviation = std::max(deviation, it->second.GetDistance(a_bind));
-					});
-					c.firstDeviation = std::max(c.firstDeviation, deviation);
+					const SkinMap map = MapSkin(BonesOf(skin, data), bind, kBodyCoatVoxel);
+					if (map.chained) {
+						c.firstChained++;
+						c.firstResidual = std::max(c.firstResidual, map.residual);
+					}
 					if (a_dump)
-						shapeLines.push_back(std::format("  first-person skin '{}': off the third-person frame by {}, owner {}", NameOf(a_geometry),
-							deviation < 0.0f ? std::string("(no bone shared)") : std::format("{:.2f}", deviation), a_geometry->GetUserData() == a_actor ? "the player" : "NOT the player"));
+						firstLines.push_back(std::format("  first-person skin '{}': {}, owner {}", NameOf(a_geometry),
+							map.chained ? std::format("via '{}' ({} of {} shared agree), residual {:.2f}{}", map.via, map.agree, map.shared, map.residual,
+											  map.outliers.empty() ? "" : std::format(", outliers {}", OutlierText(map))) :
+										  std::string("NOT CHAINED"),
+							a_geometry->GetUserData() == a_actor ? "the player" : "NOT the player"));
 					return RE::BSVisit::BSVisitControl::kContinue;
 				};
 				RE::BSVisit::TraverseScenegraphGeometries(first, std::ref(visitFirst));
 			}
 		}
+
 		if (a_dump) {
-			dumpLine(std::format("{:08X} '{}' {:.1f} m{}{}: {} skins, worst {:.2f} off frame, {} gear, {} lit geometries owned / {} not", c.formID, c.name,
-				c.distance / kUnitsPerMeter, c.corpse ? " corpse" : "", c.weaponDrawn ? " weapon drawn" : "", c.skinned, c.worstDeviation, c.gear, c.owned, c.unowned));
-			for (const auto& line : shapeLines)
+			dumpLine(std::format("{:08X} '{}' {:.1f} m{}{}: anchor '{}' (depth {}, {} bind bones); {} skins, {} chained, {} not, worst residual {:.2f}{}, {} outlier bones; {} decals left out; gear {} (+{} skinned), rigid worn {}, attached {}; {} lit geometries owned / {} not",
+				c.formID, c.name, c.distance / kUnitsPerMeter, c.corpse ? " corpse" : "", c.weaponDrawn ? " weapon drawn" : "", c.anchor, c.anchorDepth, c.bindBones,
+				c.skinned, c.chained, c.unchained, c.worstResidual, c.worstShape.empty() ? "" : std::format(" ('{}')", c.worstShape), c.outlierBones,
+				c.decals, c.gear, c.gearSkinned, c.rigidWorn, c.attached, c.owned, c.unowned));
+			for (const auto& line : skinLines)
+				dumpLine(line);
+			for (const auto& line : firstLines)
+				dumpLine(line);
+			for (const auto& line : gearLines)
 				dumpLine(line);
 		}
 		return c;
 	};
 
 	if (a_dump)
-		logger::info("[SNOW DEFORMATION] body coat census: {} living, {} corpses inside the contact window; each actor's line is followed by its shapes", living.size(), dead.size());
+		logger::info("[SNOW DEFORMATION] body coat census (frames through the bones): {} living, {} corpses inside the contact window; each actor's line is followed by its shapes", living.size(), dead.size());
 	for (const auto& pick : living)
 		bodyCoatCensus.push_back(censusOf(pick.actor.get(), pick.d2, false));
 	for (const auto& pick : dead)
@@ -379,40 +525,44 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 	if (!bodyCoatCensusRan) {
 		lines.push_back("Census: not run yet.");
 	} else {
-		uint32_t skins = 0, offFrame = 0, transformed = 0, unchecked = 0, noNormals = 0, dynamic = 0, gear = 0, owned = 0, unowned = 0;
+		uint32_t skins = 0, chained = 0, unchained = 0, outliers = 0, decals = 0, noNormals = 0, dynamic = 0, gear = 0, gearSkinned = 0, rigidWorn = 0, attached = 0, owned = 0, unowned = 0;
 		uint64_t triangles = 0;
 		float worst = 0.0f, rawOffset = 0.0f;
 		for (const auto& c : bodyCoatCensus) {
 			skins += c.skinned;
-			offFrame += c.offFrame;
-			transformed += c.transformed;
-			unchecked += c.unchecked;
+			chained += c.chained;
+			unchained += c.unchained;
+			outliers += c.outlierBones;
+			decals += c.decals;
 			noNormals += c.noNormals;
 			dynamic += c.dynamic;
 			gear += c.gear;
+			gearSkinned += c.gearSkinned;
+			rigidWorn += c.rigidWorn;
+			attached += c.attached;
 			owned += c.owned;
 			unowned += c.unowned;
 			triangles += c.triangles + c.gearTriangles;
-			worst = std::max(worst, c.worstDeviation);
+			worst = std::max(worst, c.worstResidual);
 			rawOffset = std::max(rawOffset, c.rawOffsetMax);
 		}
-		lines.push_back(std::format("Census {:.0f} frames ago, {:.2f} ms: {} actors, {} skins, {} carried meshes, {} triangles in all.",
-			double(globals::state->frameCount - bodyCoatCensusFrame), bodyCoatCensusMs, bodyCoatCensus.size(), skins, gear, triangles));
-		lines.push_back(std::format("Frames: raw skin frames up to {:.1f} units apart; once undone, the worst skin lies {:.2f} from its actor's frame; {} skins past a voxel ({:.1f}), {} rotate or scale, {} share no bone (unchecked).",
-			rawOffset, worst, offFrame, kBodyCoatVoxel, transformed, unchecked));
-		lines.push_back(std::format("Skins without vertex normals {}, dynamic (morphed bodies, facegen) {}. Owners: {} lit geometries name their actor, {} do not.", noNormals, dynamic, owned, unowned));
+		lines.push_back(std::format("Census {:.0f} frames ago, {:.2f} ms: {} actors, {} skins, {} triangles in all; {} engine decals left out.",
+			double(globals::state->frameCount - bodyCoatCensusFrame), bodyCoatCensusMs, bodyCoatCensus.size(), skins, triangles, decals));
+		lines.push_back(std::format("Frames through the bones: {} skins chained to their actor's anchor, {} not; worst residual {:.2f} (a voxel is {:.1f}); {} outlier bones dropped by the vote. Raw skin frames sit up to {:.1f} units apart.",
+			chained, unchained, worst, kBodyCoatVoxel, outliers, rawOffset));
+		lines.push_back(std::format("Gear: {} rigid and {} skinned under weapon, shield or quiver slots; {} rigid worn pieces; {} attached to no equipped slot (stuck arrows). Skins without vertex normals {}, dynamic {}. Owners: {} lit geometries name their actor, {} do not.",
+			gear, gearSkinned, rigidWorn, attached, noNormals, dynamic, owned, unowned));
 		for (const auto& c : bodyCoatCensus) {
 			const RE::NiPoint3 size = c.boundsMax - c.boundsMin;
-			const bool sized = c.skinned > 0 && size.x > 0.0f;
-			lines.push_back(std::format("{} ({:.0f} m{}{}): {} skins ({} skin, {} eyes, {} dynamic, {} no normals), worst {:.2f}{}; frame {} ; {} triangles; gear {} ({} tris, radius up to {:.0f}); owners {}/{}",
+			const bool sized = c.chained > 0 && size.x > 0.0f;
+			lines.push_back(std::format("{} ({:.0f} m{}{}): anchor '{}' (depth {}), {} skins, {} chained / {} not, worst residual {:.2f}{}, {} outliers; frame {}; {} triangles; gear {} (+{} skinned, radius up to {:.0f}), worn {}, attached {}, decals {}; owners {}/{}",
 				c.name.empty() ? std::format("{:08X}", c.formID) : c.name, c.distance / kUnitsPerMeter, c.corpse ? ", corpse" : "", c.weaponDrawn ? ", weapon drawn" : "",
-				c.skinned, c.skinShapes, c.eyeShapes, c.dynamic, c.noNormals, c.worstDeviation, c.worstShape.empty() ? "" : std::format(" ('{}')", c.worstShape),
-				sized ? std::format("{:.0f} x {:.0f} x {:.0f} units, voxels {:.1f} / {:.1f} / {:.1f}", size.x, size.y, size.z, size.x / 32.0f, size.y / 16.0f, size.z / 48.0f) : std::string("(no skins)"),
-				c.triangles, c.gear, c.gearTriangles, c.gearRadiusMax, c.owned, c.owned + c.unowned));
+				c.anchor, c.anchorDepth, c.skinned, c.chained, c.unchained, c.worstResidual, c.worstShape.empty() ? "" : std::format(" ('{}')", c.worstShape), c.outlierBones,
+				sized ? std::format("{:.0f} x {:.0f} x {:.0f} in the anchor's axes", size.x, size.y, size.z) : std::string("(none chained)"),
+				c.triangles, c.gear, c.gearSkinned, c.gearRadiusMax, c.rigidWorn, c.attached, c.decals, c.owned, c.owned + c.unowned));
 			if (c.firstSkinned > 0 || c.firstOwned + c.firstUnowned > 0)
-				lines.push_back(std::format("  first person: {} skins, {}, owners {}/{}", c.firstSkinned,
-					c.firstDeviation < 0.0f ? std::string("no bone shared with the third-person frame") : std::format("worst {:.2f} from the third-person frame", c.firstDeviation),
-					c.firstOwned, c.firstOwned + c.firstUnowned));
+				lines.push_back(std::format("  first person: {} skins, {} chained to the third-person bind, worst residual {:.2f}; owners {}/{}", c.firstSkinned, c.firstChained,
+					c.firstResidual, c.firstOwned, c.firstOwned + c.firstUnowned));
 		}
 	}
 

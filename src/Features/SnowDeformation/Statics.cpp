@@ -224,6 +224,11 @@ private:
 // File scope: a function-local static pays the thread-safe init check on every call.
 static SD_InlinePointerTable<GeometryNameFacts> sNameFactsCache;
 
+bool SnowDeformation::IsEngineDecalName(const char* a_name)
+{
+	return a_name && (_stricmp(a_name, "Decal") == 0 || _stricmp(a_name, "Permanent Decal") == 0 || _stricmp(a_name, "SkinnedDecal") == 0);
+}
+
 static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 {
 	auto& cache = sNameFactsCache;
@@ -259,7 +264,7 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
 		f.bloodPool = _strnicmp(name, "Decal:", 6) == 0 || _strnicmp(name, "DecalExt:", 9) == 0;
-		f.engineDecal = _stricmp(name, "Decal") == 0 || _stricmp(name, "Permanent Decal") == 0 || _stricmp(name, "SkinnedDecal") == 0;
+		f.engineDecal = SnowDeformation::IsEngineDecalName(name);
 		f.lodNotSnow = false;
 		if (length > 3 && std::tolower((unsigned char)name[0]) == 'o' && std::tolower((unsigned char)name[1]) == 'b' && std::tolower((unsigned char)name[2]) == 'j') {
 			for (const auto* keyword : kNotSnowKeywords)

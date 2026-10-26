@@ -4878,7 +4878,7 @@ public:
 	// switches; nothing here changes a pixel. Implemented in
 	// SnowDeformation/BodyCoat.cpp.
 
-	/** @brief One actor as the coat would see it. Lengths in game units. */
+	/** @brief One actor as the coat would see it. Lengths in game units. Frames through the bones: every skin maps into its anchor bone's bind space through the bones it shares (BODY-SNOW-PLAN.md section 5.2). */
 	struct BodyCoatActorCensus
 	{
 		std::string name;
@@ -4891,29 +4891,40 @@ public:
 		uint32_t noNormals = 0;
 		uint32_t skinShapes = 0;
 		uint32_t eyeShapes = 0;
-		/** @brief Skins whose rootParentToSkin rotates or scales rather than only translating. */
-		uint32_t transformed = 0;
-		/** @brief Skins sharing no bone with the skins before them, so their frame went unchecked. */
-		uint32_t unchecked = 0;
-		/** @brief Skins whose bones land more than a coat voxel from the actor's frame. */
-		uint32_t offFrame = 0;
-		float worstDeviation = 0.0f;
+		/** @brief Engine decals (Decal, Permanent Decal, SkinnedDecal) left out. */
+		uint32_t decals = 0;
+		/** @brief The root-most bone any skin names, and its depth below the actor's root. */
+		std::string anchor;
+		uint32_t anchorDepth = 0;
+		uint32_t bindBones = 0;
+		/** @brief Skins mapped into the anchor's space, and skins no bone chain reached. */
+		uint32_t chained = 0;
+		uint32_t unchained = 0;
+		/** @brief Over chained skins: the worst distance between a bone and where the skin's chosen map puts it, among the bones that agree. */
+		float worstResidual = 0.0f;
 		std::string worstShape;
-		/** @brief The largest rootParentToSkin translation: how far the raw vertex frames sit apart. */
+		/** @brief Bones a skin lists that disagree with its chosen map by more than a voxel (listed but unweighted, or a different bind pose). */
+		uint32_t outlierBones = 0;
+		/** @brief The largest rootParentToSkin translation: how far the raw vertex frames sit apart (the engine never reads it). */
 		float rawOffsetMax = 0.0f;
 		uint32_t triangles = 0;
+		/** @brief Rigid meshes under an equipped weapon, shield or quiver slot; skinned ones there (bows); rigid ones under other worn slots; rigid ones under no equipped slot (stuck arrows). */
 		uint32_t gear = 0;
+		uint32_t gearSkinned = 0;
+		uint32_t rigidWorn = 0;
+		uint32_t attached = 0;
 		uint32_t gearTriangles = 0;
 		float gearRadiusMax = 0.0f;
 		/** @brief Lit geometries whose GetUserData() is this actor, and those whose is not. */
 		uint32_t owned = 0;
 		uint32_t unowned = 0;
-		/** @brief The skins' bone spheres in the canonical frame. */
+		/** @brief The chained skins' bone spheres in the anchor's space. */
 		RE::NiPoint3 boundsMin{ 1e30f, 1e30f, 1e30f };
 		RE::NiPoint3 boundsMax{ -1e30f, -1e30f, -1e30f };
-		/** @brief The player's first-person meshes: skins, the worst distance to the third-person frame (-1 = no bone shared), owners. */
+		/** @brief The player's first-person meshes: skins, those chained to the third-person bind, their worst residual, owners. */
 		uint32_t firstSkinned = 0;
-		float firstDeviation = -1.0f;
+		uint32_t firstChained = 0;
+		float firstResidual = 0.0f;
 		uint32_t firstOwned = 0;
 		uint32_t firstUnowned = 0;
 	};
@@ -4940,6 +4951,8 @@ public:
 	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the probe bind still holds. */
 	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
 	std::vector<std::string> BodyCoatProbeLines() const;
+	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
+	static bool IsEngineDecalName(const char* a_name);
 	/** @brief Runtime-only: run the census every kBodyCoatCensusFrames. */
 	bool debugBodyCoatCensus = false;
 	/** @brief Runtime-only: the next census writes every shape to CommunityShaders.log. */

@@ -2039,7 +2039,7 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx("Snow on Bodies (R0 Probes)")) {
 			ImGui::Checkbox("Run Body Census", &debugBodyCoatCensus);
 			if (auto _ttCensus = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Every 2 s, measures the actors a body coat would cover (MD plans/BODY-SNOW-PLAN.md, stage R0): each mesh's rest frame once its skin offset is undone, carried gear, first-person meshes, and whether each mesh names its actor. Reads only; nothing changes on screen.");
+				ImGui::Text("%s", "Not saved. Every 2 s, measures the actors a body coat would cover (MD plans/BODY-SNOW-PLAN.md, stage R0): each mesh mapped into its actor's rest frame through the bones it shares, carried gear by equipped slot, first-person meshes, and whether each mesh names its actor. Engine decals are left out. Reads only; nothing changes on screen.");
 			ImGui::SameLine();
 			if (ImGui::Button("Write Body Census to Log"))
 				debugBodyCoatCensusDump = true;
