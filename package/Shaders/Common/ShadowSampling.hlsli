@@ -78,15 +78,17 @@ namespace ShadowSampling
 	float3 GetCloudScatterLighting(float3 dirLightColor, float cloudScatter, float3 normal)
 	{
 		// Callers add this unconditionally, so skip the work (and a NaN from a downward light) when nothing is scattered.
-		[branch] if (cloudScatter <= 0.0) return 0.0;
-
-		float3 deckDirection = SharedData::DirLightDirection.xyz + float3(0, 0, 1);
-		deckDirection *= rsqrt(max(dot(deckDirection, deckDirection), EPSILON_DIVISION));
-		float wrap = saturate(dot(normal, deckDirection) * 0.5 + 0.5);
-		float3 scatterColor = dirLightColor * (cloudScatter * wrap * wrap * Color::BRDFScale);
+		float3 scatterColor = 0.0;
+		[branch] if (cloudScatter > 0.0)
+		{
+			float3 deckDirection = SharedData::DirLightDirection.xyz + float3(0, 0, 1);
+			deckDirection *= rsqrt(max(dot(deckDirection, deckDirection), EPSILON_DIVISION));
+			float wrap = saturate(dot(normal, deckDirection) * 0.5 + 0.5);
+			scatterColor = dirLightColor * (cloudScatter * wrap * wrap * Color::BRDFScale);
 #if defined(TRUE_PBR)
-		scatterColor /= Color::PBRLightingCompensation;
+			scatterColor /= Color::PBRLightingCompensation;
 #endif
+		}
 		return scatterColor;
 	}
 
