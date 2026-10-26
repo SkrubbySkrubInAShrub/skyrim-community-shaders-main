@@ -1967,7 +1967,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	SnowLighting::SnowTexturedRecolor(snowState, sampledBaseColor.rgb, tbnTr[2], input.WorldPosition.xyz, screenNoise, baseColor.xyz, rawRMAOS, worldNormal);
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && defined(SKINNED) && !defined(EYE)
+#	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
 	SnowLighting::BodyCoat(input.ModelPosition, baseColor.xyz);
 #	endif
 

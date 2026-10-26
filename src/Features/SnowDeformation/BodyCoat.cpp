@@ -7,6 +7,7 @@
 #include "Deferred.h"
 #include "Features/Skylighting.h"
 #include "Globals.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -850,6 +851,7 @@ void SnowDeformation::TickBodyCoatStore()
 {
 	using Store = BodyCoatStore;
 	auto* context = globals::d3d::context;
+	bodyCoatLive = false;
 	const int view = std::clamp(debugBodyCoatView, 0, 3);
 	if (view == 0 || !settings.EnableSnowDeformation) {
 		if (bodyCoatStore) {
@@ -961,6 +963,15 @@ void SnowDeformation::TickBodyCoatStore()
 		store.BuildRecords();
 	}
 	store.live = !store.records.empty();
+	bodyCoatLive = store.live;
+}
+
+bool SnowDeformation::BodyCoatPixelKey(uint32_t a_rawTechnique) const
+{
+	using Flags = SIE::ShaderCache::LightingShaderFlags;
+	using Technique = SIE::ShaderCache::LightingShaderTechniques;
+	return bodyCoatLive && (a_rawTechnique & uint32_t(Flags::Skinned)) != 0 &&
+	       static_cast<Technique>(0x3F & (a_rawTechnique >> 24)) != Technique::Eye;
 }
 
 void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)

@@ -790,9 +790,11 @@ namespace SnowLighting
 	}
 #endif
 
-#if defined(SKINNED) && !defined(EYE)
+#if defined(SNOW_BODY_COAT) && !defined(EYE)
 	// Snow on bodies (BODY-SNOW-PLAN.md): the draw's record and the coat atlas,
-	// bound by the body coat hook with bit 25. Mirror: SnowDeformation.h
+	// bound by the body coat hook with bit 25. SNOW_BODY_COAT is the pixel key
+	// skinned draws take while the coat is live (TruePBR.cpp GetPixelTechnique):
+	// SKINNED reaches only model-space-normal skin. Mirror: SnowDeformation.h
 	// BodyCoatRecordCB, kBodyCoatRecordSlot, kBodyCoatAtlasSlot.
 	cbuffer BodyCoatRecord : register(b8)
 	{
@@ -807,7 +809,7 @@ namespace SnowLighting
 	};
 	Texture3D<float4> CoatAtlas : register(t41);
 	// State.h ExtraFeatureDescriptors::SnowBodyCoat. Declared here rather than
-	// in Permutation.hlsli, so permutations without SKINNED keep their text.
+	// in Permutation.hlsli, so permutations without SNOW_BODY_COAT keep their text.
 	static const uint kSnowBodyCoatBit = (1u << 25);
 
 	float3 CoatDebugHue(float h)

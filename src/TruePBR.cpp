@@ -5,6 +5,7 @@
 
 #include "Features/InteriorSun.h"
 #include "Features/LinearLighting.h"
+#include "Features/SnowDeformation.h"
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -1250,6 +1251,10 @@ struct BSLightingShader_GetPixelTechnique
 		uint32_t pixelTechnique = rawTechnique;
 
 		pixelTechnique &= ~0b111000000u;
+		// Snow on bodies: tangent-space skins lose Skinned below, so the coat keys skinned draws itself.
+		if (globals::features::snowDeformation.BodyCoatPixelKey(rawTechnique)) {
+			pixelTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::SnowBodyCoat);
+		}
 		if ((pixelTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
 			pixelTechnique &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Skinned);
 		}

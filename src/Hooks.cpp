@@ -185,6 +185,18 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		}
 	}
 
+	// Snow on bodies: draw the plain pixel permutation while the coat one is compiling or failed.
+	constexpr auto bodyCoatFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::SnowBodyCoat);
+	if (shader->shaderType.get() == RE::BSShader::Type::Lighting && (pixelDescriptor & bodyCoatFlag) != 0) {
+		auto probeVertexDescriptor = vertexDescriptor;
+		auto probePixelDescriptor = pixelDescriptor;
+		state->ModifyShaderLookup(*shader, probeVertexDescriptor, probePixelDescriptor);
+		if (shaderCache->GetVertexShader(*shader, probeVertexDescriptor) == nullptr ||
+			shaderCache->GetPixelShader(*shader, probePixelDescriptor) == nullptr) {
+			pixelDescriptor &= ~bodyCoatFlag;
+		}
+	}
+
 	state->updateShader = true;
 	state->currentShader = shader;
 

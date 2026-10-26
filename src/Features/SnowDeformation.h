@@ -4978,6 +4978,8 @@ public:
 	void TickBodyCoat();
 	/** @brief Per Lighting pass, before the game's SetupGeometry: bit 25 and the record of a mapped skin's draw, the atlas once a frame. */
 	void SetBodyCoatBit(RE::BSRenderPass* a_pass);
+	/** @brief Per Lighting technique, from TruePBR's GetPixelTechnique: whether its pixel key takes SnowBodyCoat (skinned, not eyes, the coat live). The pixel key keeps Skinned only with model-space normals, so armour, clothing and hair otherwise share a static object's pixel shader. */
+	[[nodiscard]] bool BodyCoatPixelKey(uint32_t a_rawTechnique) const;
 	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the t41 bind still holds. */
 	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
 	std::vector<std::string> BodyCoatProbeLines() const;
@@ -5010,6 +5012,8 @@ protected:
 	void RunBodyCoatCensus(bool a_dump);
 	void TickBodyCoatStore();
 	std::shared_ptr<BodyCoatStore> bodyCoatStore;
+	/** @brief The store holds records this frame: skinned Lighting techniques take the coat's pixel key. */
+	bool bodyCoatLive = false;
 	std::vector<BodyCoatActorCensus> bodyCoatCensus;
 	uint32_t bodyCoatCensusFrame = 0;
 	bool bodyCoatCensusRan = false;
