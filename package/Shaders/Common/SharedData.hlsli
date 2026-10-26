@@ -480,6 +480,8 @@ namespace SharedData
 		float MotionTransparency;
 		float pad0;
 		float4 TextureBounds;
+		float2 TextureRadiusScale;
+		float2 pad1;
 	};
 
 	cbuffer FeatureData : register(b6)

@@ -195,6 +195,7 @@ RainRefraction::PerFrame RainRefraction::GetCommonBufferData()
 	data.Enable = data.Enable && GetRaindropSRV() && alphaBlendState;
 	const auto& footprint = IsManagedByENB() && presetRaindrops.srv ? presetRaindrops.footprint : defaultRaindrops.footprint;
 	data.TextureBounds = float4{ footprint.uvBounds[0], footprint.uvBounds[1], footprint.uvBounds[2], footprint.uvBounds[3] };
+	data.TextureRadiusScale = float2{ footprint.radiusScale[0], footprint.radiusScale[1] };
 
 	perFrameCache = data;
 	return data;

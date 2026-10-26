@@ -11,6 +11,7 @@ namespace RainRefractionTexture
 	struct Footprint
 	{
 		std::array<float, 4> uvBounds{ 0, 0, 1, 1 };
+		std::array<float, 2> radiusScale{ 1, 1 };  ///< Billboard half-extents relative to the covered width, so the drop keeps its aspect
 	};
 
 	/** @brief Fits a billboard to RGBA8 alpha coverage, keeping a one-texel filter border. */
@@ -36,6 +37,7 @@ namespace RainRefractionTexture
 		if (left >= right)
 			return {};
 
+		const auto coverageWidth = static_cast<float>(right - left);
 		left -= std::min(left, kFilterBorder);
 		top -= std::min(top, kFilterBorder);
 		right += std::min(a_width - right, kFilterBorder);
@@ -44,7 +46,8 @@ namespace RainRefractionTexture
 		const auto imageHeight = static_cast<float>(a_height);
 		return {
 			.uvBounds = { static_cast<float>(left) / imageWidth, static_cast<float>(top) / imageHeight,
-				static_cast<float>(right) / imageWidth, static_cast<float>(bottom) / imageHeight }
+				static_cast<float>(right) / imageWidth, static_cast<float>(bottom) / imageHeight },
+			.radiusScale = { static_cast<float>(right - left) / coverageWidth, static_cast<float>(bottom - top) / coverageWidth }
 		};
 	}
 }

@@ -47,6 +47,8 @@ public:
 		float MotionTransparency;
 		float pad0;
 		float4 TextureBounds{ 0, 0, 1, 1 };  ///< UV rectangle of the raindrop texture's alpha coverage
+		float2 TextureRadiusScale{ 1, 1 };   ///< Billboard half-extents per unit drop radius
+		float2 pad1{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
