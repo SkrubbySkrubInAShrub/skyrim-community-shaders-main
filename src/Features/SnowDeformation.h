@@ -4870,15 +4870,14 @@ protected:
 	std::vector<std::string> CoatAgingLines() const;
 
 public:
-	// ---- Snow on bodies: stage R0 probes (MD plans/BODY-SNOW-PLAN.md) ----
-	// What the body coat rests on, measured before any of it is built: one
-	// rest frame per actor once each skin's rootParentToSkin is undone, the
-	// actor every draw's GetUserData() names, and whether a bind made once a
-	// frame reaches the actor draws. Debugging Options only, runtime-only
-	// switches; nothing here changes a pixel. Implemented in
+	// ---- Snow on bodies (MD plans/BODY-SNOW-PLAN.md) ----
+	// R0's probes and S1's store and mapping. S1 draws no coat yet: Body Coat
+	// View (Debugging Options) paints each mapped skin's canonical frame, or
+	// its slot's pattern read back from the atlas, so the frames can be judged
+	// before anything writes snow. Runtime-only switches. Implemented in
 	// SnowDeformation/BodyCoat.cpp.
 
-	/** @brief One actor as the coat would see it. Lengths in game units. Frames through the bones: every skin maps into its anchor bone's bind space through the bones it shares (BODY-SNOW-PLAN.md section 5.2). */
+	/** @brief One actor as the coat sees it. Lengths in game units. Frames through the bones (BODY-SNOW-PLAN.md sections 5.2 and 5.4). */
 	struct BodyCoatActorCensus
 	{
 		std::string name;
@@ -4890,17 +4889,20 @@ public:
 		uint32_t dynamic = 0;
 		uint32_t noNormals = 0;
 		uint32_t skinShapes = 0;
+		/** @brief Left out: eye shapes, refraction FX and engine decals (Decal, Permanent Decal, SkinnedDecal). */
 		uint32_t eyeShapes = 0;
-		/** @brief Engine decals (Decal, Permanent Decal, SkinnedDecal) left out. */
+		uint32_t fx = 0;
 		uint32_t decals = 0;
-		/** @brief The root-most bone any skin names, and its depth below the actor's root. */
+		/** @brief The body frame: the skin whose own space it is, that skin's root-most bone, and the bones it holds. Sticky: kept from the coat store rather than made by this census. */
+		std::string seed;
 		std::string anchor;
-		uint32_t anchorDepth = 0;
 		uint32_t bindBones = 0;
-		/** @brief Skins mapped into the anchor's space, and skins no bone chain reached. */
+		bool sticky = false;
+		/** @brief Skins in the body frame, and frames of their own (skins that share no bone with the body: bows, tails). */
 		uint32_t chained = 0;
-		uint32_t unchained = 0;
-		/** @brief Over chained skins: the worst distance between a bone and where the skin's chosen map puts it, among the bones that agree. */
+		uint32_t components = 0;
+		uint32_t componentSkins = 0;
+		/** @brief Over mapped skins: the worst distance between a bone and where the skin's chosen map puts it, among the bones that agree. */
 		float worstResidual = 0.0f;
 		std::string worstShape;
 		/** @brief Bones a skin lists that disagree with its chosen map by more than a voxel (listed but unweighted, or a different bind pose). */
@@ -4908,26 +4910,52 @@ public:
 		/** @brief The largest rootParentToSkin translation: how far the raw vertex frames sit apart (the engine never reads it). */
 		float rawOffsetMax = 0.0f;
 		uint32_t triangles = 0;
-		/** @brief Rigid meshes under an equipped weapon, shield or quiver slot; skinned ones there (bows); rigid ones under other worn slots; rigid ones under no equipped slot (stuck arrows). */
+		/** @brief Rigid meshes: under an equipped weapon, shield or quiver slot; under another worn slot; sheaths (Scb); under no equipped slot. */
 		uint32_t gear = 0;
 		uint32_t gearSkinned = 0;
 		uint32_t rigidWorn = 0;
+		uint32_t sheaths = 0;
 		uint32_t attached = 0;
 		uint32_t gearTriangles = 0;
 		float gearRadiusMax = 0.0f;
 		/** @brief Lit geometries whose GetUserData() is this actor, and those whose is not. */
 		uint32_t owned = 0;
 		uint32_t unowned = 0;
-		/** @brief The chained skins' bone spheres in the anchor's space. */
+		/** @brief The body frame's bounds: its skins' bone spheres, fixed when its slot was made. */
 		RE::NiPoint3 boundsMin{ 1e30f, 1e30f, 1e30f };
 		RE::NiPoint3 boundsMax{ -1e30f, -1e30f, -1e30f };
-		/** @brief The player's first-person meshes: skins, those chained to the third-person bind, their worst residual, owners. */
+		/** @brief Skins whose bone spheres reach more than a voxel past their frame's fixed bounds. */
+		uint32_t outside = 0;
+		/** @brief The body's atlas slot (-1 none), component half slots held, and draw records. */
+		int slot = -1;
+		uint32_t halves = 0;
+		uint32_t records = 0;
+		/** @brief The player's first-person meshes: skins, those mapped through the third-person bind, their worst residual, owners. */
 		uint32_t firstSkinned = 0;
 		uint32_t firstChained = 0;
 		float firstResidual = 0.0f;
 		uint32_t firstOwned = 0;
 		uint32_t firstUnowned = 0;
 	};
+	/** @brief One mapped skin's block at Lighting PS b8, bound per draw by offset. Mirror: SnowLighting.hlsli BodyCoatRecord. */
+	struct alignas(16) BodyCoatRecordCB
+	{
+		/** @brief Rows of the skin's own space into its frame: bind(b) x skinToBone(b). */
+		float4 ModelToCanonical[3];
+		/** @brief Rows of the skin's own space into atlas texels: the frame's axes, scaled over its slot. */
+		float4 ModelToAtlas[3];
+		/** @brief The slot's texel box: lo inclusive, hi exclusive. */
+		float4 AtlasLo;
+		float4 AtlasHi;
+		/** @brief The debug view (debugBodyCoatView), the slot, and the frame: 0 the body, 1 and up its components. */
+		uint View;
+		uint Slot;
+		uint Component;
+		uint Pad;
+	};
+	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
+	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
+	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
 	struct BodyCoatDrawTally
 	{
@@ -4946,9 +4974,11 @@ public:
 		uint64_t lostReflection = 0;
 		uint64_t framesWithLoss = 0;
 	};
-	/** @brief Per frame, from PrepassSimulation: the census on its cadence, and the probe unbound once it is switched off. */
-	void TickBodyCoatProbes();
-	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the probe bind still holds. */
+	/** @brief Per frame, from PrepassSimulation: the census on its cadence, the probe unbound once it is switched off, and the coat store (near tier, frames, slots, records). */
+	void TickBodyCoat();
+	/** @brief Per Lighting pass, before the game's SetupGeometry: bit 25 and the record of a mapped skin's draw, the atlas once a frame. */
+	void SetBodyCoatBit(RE::BSRenderPass* a_pass);
+	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the t41 bind still holds. */
 	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
 	std::vector<std::string> BodyCoatProbeLines() const;
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
@@ -4959,15 +4989,27 @@ public:
 	bool debugBodyCoatCensusDump = false;
 	/** @brief Runtime-only: bind a probe texture once a frame and count the actor draws it reaches. */
 	bool debugBodyCoatDrawProbe = false;
+	/** @brief Runtime-only: 0 off (the store is empty and nothing binds), 1 bands in each skin's canonical frame, 2 each slot's pattern read from the atlas, 3 each skin's slot and frame. */
+	int debugBodyCoatView = 0;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
-	/** @brief The probe's slot: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */
-	static constexpr UINT kBodyCoatProbeSlot = 41;
+	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */
+	static constexpr UINT kBodyCoatAtlasSlot = 41;
+	/** @brief The record's slot: free in every Lighting PS (b0-b7 and b9-b12 are taken). */
+	static constexpr UINT kBodyCoatRecordSlot = 8;
+	/** @brief 16 constants, the D3D11.1 offset granularity. */
+	static constexpr uint32_t kBodyCoatRecordStride = 256;
+	static constexpr uint32_t kBodyCoatRecordsMax = 1024;
+	/** @brief The atlas: kBodyCoatSlots slots of kBodyCoatSlotDim voxels (across, front-back, up) stacked in z. A body takes a slot; a component takes half of one, 16 across. */
+	static constexpr uint32_t kBodyCoatSlots = 32;
+	static constexpr uint32_t kBodyCoatSlotDim[3] = { 32, 16, 48 };
 	/** @brief A coat voxel's planned size: 32 x 16 x 48 over a human's ~80 x 50 x 150 units. */
 	static constexpr float kBodyCoatVoxel = 2.5f;
 
 protected:
 	void RunBodyCoatCensus(bool a_dump);
+	void TickBodyCoatStore();
+	std::shared_ptr<BodyCoatStore> bodyCoatStore;
 	std::vector<BodyCoatActorCensus> bodyCoatCensus;
 	uint32_t bodyCoatCensusFrame = 0;
 	bool bodyCoatCensusRan = false;

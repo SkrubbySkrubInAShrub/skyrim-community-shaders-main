@@ -789,6 +789,61 @@ namespace SnowLighting
 #	endif
 	}
 #endif
+
+#if defined(SKINNED) && !defined(EYE)
+	// Snow on bodies (BODY-SNOW-PLAN.md): the draw's record and the coat atlas,
+	// bound by the body coat hook with bit 25. Mirror: SnowDeformation.h
+	// BodyCoatRecordCB, kBodyCoatRecordSlot, kBodyCoatAtlasSlot.
+	cbuffer BodyCoatRecord : register(b8)
+	{
+		float4 CoatModelToCanonical[3];
+		float4 CoatModelToAtlas[3];
+		float4 CoatAtlasLo;
+		float4 CoatAtlasHi;
+		uint CoatView;
+		uint CoatSlot;
+		uint CoatComponent;
+		uint CoatPad;
+	};
+	Texture3D<float4> CoatAtlas : register(t41);
+	// State.h ExtraFeatureDescriptors::SnowBodyCoat. Declared here rather than
+	// in Permutation.hlsli, so permutations without SKINNED keep their text.
+	static const uint kSnowBodyCoatBit = (1u << 25);
+
+	float3 CoatDebugHue(float h)
+	{
+		float3 k = saturate(abs(frac(h + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+		return 0.25 + 0.75 * k;
+	}
+
+	// S1 has no coat, only Body Coat View: 1 bands every 8 units of the frame's
+	// height and lines every 16 across, which must run unbroken from body to
+	// armour to boots; 2 the slot's pattern read back from the atlas, magenta
+	// past the slot; 3 each slot's colour, a component's striped.
+	void BodyCoat(float3 modelPosition, inout float3 baseColor)
+	{
+		[branch] if ((Permutation::ExtraFeatureDescriptor & kSnowBodyCoatBit) != 0)
+		{
+			float4 p = float4(modelPosition, 1.0);
+			float3 colour;
+			[branch] if (CoatView == 2)
+			{
+				float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
+				bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
+				colour = inside ? CoatAtlas.Load(int4(int3(t), 0)).rgb : float3(1.0, 0.0, 1.0);
+			}
+			else
+			{
+				float3 c = float3(dot(CoatModelToCanonical[0], p), dot(CoatModelToCanonical[1], p), dot(CoatModelToCanonical[2], p));
+				colour = CoatDebugHue(CoatView == 3 ? 0.618034 * CoatSlot : floor(c.z / 8.0) * 0.17);
+				colour *= abs(frac(c.z / 8.0) - 0.5) > 0.45 ? 0.15 : 1.0;
+				colour = frac(c.x / 16.0) < 0.06 ? float3(1.0, 1.0, 1.0) : colour;
+				colour *= (CoatView == 3 && CoatComponent > 0 && frac((c.x + c.y + c.z) / 6.0) < 0.5) ? 0.4 : 1.0;
+			}
+			baseColor = colour;
+		}
+	}
+#endif
 }
 
 // Land Snow Recolor's per-layer step (Common/LightingLandscape.hlsli hook),

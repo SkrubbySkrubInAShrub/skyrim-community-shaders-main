@@ -2036,10 +2036,13 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNodeEx("Snow on Bodies (R0 Probes)")) {
+		if (ImGui::TreeNodeEx("Snow on Bodies (S1 Mapping)")) {
+			ImGui::Combo("Body Coat View", &debugBodyCoatView, "Off\0Canonical Bands\0Slot Pattern\0Slots and Frames\0");
+			if (auto _ttView = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Stage S1 of MD plans/BODY-SNOW-PLAN.md: paints every mapped skin of the player and the actors near them, so the coat's frames can be judged before any snow is written. Canonical Bands: coloured bands every 8 units of height and white lines every 16 across, in each actor's own rest frame; they must stay glued to the body and run unbroken from body to armour, boots, gloves and first person. Slot Pattern: the checks each actor's atlas slot holds, read back as the coat will read it; magenta means past the slot's bounds. Slots and Frames: one colour per slot, striped on a skin in a frame of its own (a bow, a tail). Off empties the store.");
 			ImGui::Checkbox("Run Body Census", &debugBodyCoatCensus);
 			if (auto _ttCensus = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Every 2 s, measures the actors a body coat would cover (MD plans/BODY-SNOW-PLAN.md, stage R0): each mesh mapped into its actor's rest frame through the bones it shares, carried gear by equipped slot, first-person meshes, and whether each mesh names its actor. Engine decals are left out. Reads only; nothing changes on screen.");
+				ImGui::Text("%s", "Not saved. Every 2 s, measures the actors the body coat covers: each skin mapped into its actor's frame through the bones it shares, frames of their own for skins that share none, carried gear, first-person meshes, and whether each mesh names its actor. Eyes, refraction effects and engine decals are left out. With Body Coat View on, it reports the frames, slots and records the coat uses. Reads only.");
 			ImGui::SameLine();
 			if (ImGui::Button("Write Body Census to Log"))
 				debugBodyCoatCensusDump = true;
@@ -2047,7 +2050,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", "Runs the census once now and writes every actor, mesh and carried item to CommunityShaders.log ('body coat census:').");
 			ImGui::Checkbox("Probe Lighting Binds", &debugBodyCoatDrawProbe);
 			if (auto _ttProbe = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Binds a 1-texel probe texture to a slot no shader reads, once a frame, and counts the actor draws it still reaches, by pass. Also counts which draws name their actor. One log line per 300 frames ('body coat draw probe').");
+				ImGui::Text("%s", "Not saved. Once a frame, binds a 1-texel probe texture at t41 (the coat atlas itself while Body Coat View is on) and counts the actor draws it still reaches, by pass: deferred, forward, reflections. Also counts which draws name their actor. One log line per 300 frames ('body coat draw probe').");
 			for (const auto& line : BodyCoatProbeLines())
 				WrapTextF("%s", line.c_str());
 			ImGui::TreePop();

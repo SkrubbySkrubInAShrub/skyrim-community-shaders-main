@@ -419,7 +419,11 @@ public:
 		// With SnowLODBakedIsSnow on a snow-textured shape: its diffuse is a
 		// plain landscape snow set (snow01, snowrocks01), so the recolor takes
 		// every texel where the shape lies flat, rocks and dirt included.
-		SnowTexturedGround = 1 << 24
+		SnowTexturedGround = 1 << 24,
+		// Set per pass by SnowDeformation's body coat: this skinned draw has a
+		// record at PS b8 and the coat atlas at t41. Read only in SKINNED
+		// permutations (SnowLighting.hlsli, kSnowBodyCoatBit).
+		SnowBodyCoat = 1 << 25
 	};
 
 	bool inWorld = false;

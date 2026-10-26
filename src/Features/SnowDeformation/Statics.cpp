@@ -1395,6 +1395,7 @@ struct SD_BSLightingShader_SetupGeometry
 		if (snowDeformation.loaded) {
 			snowDeformation.OnLightingDraw(a_pass);
 			snowDeformation.SetProjectedSnowBit(shader, a_pass);
+			snowDeformation.SetBodyCoatBit(a_pass);
 		}
 
 		func(shader, a_pass, a_flags);

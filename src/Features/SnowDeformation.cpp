@@ -1139,8 +1139,8 @@ void SnowDeformation::PrepassSimulation()
 	statProjVetoedPrev = std::exchange(statProjVetoed, 0u);
 
 	UpdateActiveWorldspace();
-	// Above every early return: the probes read actors, not the snow.
-	TickBodyCoatProbes();
+	// Above every early return: the body coat reads actors, not the snow.
+	TickBodyCoat();
 
 	// While the prime owns a group's shader members, its render paths skip;
 	// groups unlock as the worker publishes them (SnowShadersPending), so
