@@ -848,10 +848,14 @@ public:
 	/** @brief Intensity ceiling; keeps extreme weather-mod densities from erasing trails outright. */
 	static constexpr float kMaxSnowfallIntensity = 4.0f;
 
-	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions. 1.0 = reference-density snowfall. */
+	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions. 1.0 = reference-density snowfall; 0 for ash and in a No Sky worldspace. */
 	float ComputeSnowfallIntensity() const;
 	/** @brief The same transition-faded precipitation density for any weather class (snow, rain). */
 	float ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const;
+	/** @brief The player's worldspace when it is flagged No Sky (Blackreach), else null. Outdoor weather state holds there as it does indoors. */
+	static RE::TESWorldSpace* NoSkyWorldspace();
+	/** @brief The first kNotSnowKeywords entry (the MATO and LOD batch vetoes' list) found in a name, case-insensitive, or null. */
+	static const char* NotSnowKeywordIn(const char* a_name);
 	/** @brief Last computed snowfall intensity, for the debug readout. */
 	float snowfallIntensity = 0.0f;
 

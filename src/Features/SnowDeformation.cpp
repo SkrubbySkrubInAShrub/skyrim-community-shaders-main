@@ -963,8 +963,63 @@ void SnowDeformation::TickGameClock()
 	gameClock.elapsedHours = std::max(delta, 0.0f);
 }
 
+RE::TESWorldSpace* SnowDeformation::NoSkyWorldspace()
+{
+	auto* tes = globals::game::tes;
+	auto* worldSpace = tes && !tes->interiorCell ? tes->GetRuntimeData2().worldSpace : nullptr;
+	return worldSpace && worldSpace->flags.any(RE::TESWorldSpace::Flag::kNoSky) ? worldSpace : nullptr;
+}
+
+// Snow-flagged precipitation that is not snow (Solstheim's ash storm), read as
+// ClassifyProjectedMato reads a MATO; redone when the record or texture changes.
+static bool FallsAsSnow(RE::TESWeather* a_weather)
+{
+	struct Verdict
+	{
+		const RE::BGSShaderParticleGeometryData* precipitation = nullptr;
+		const char* texture = nullptr;
+		bool snow = true;
+	};
+	static std::unordered_map<RE::FormID, Verdict> verdicts;
+
+	auto* precipitation = a_weather->precipitationData;
+	const char* texture = precipitation ? precipitation->GetRuntimeData().particleTexture.textureName.c_str() : nullptr;
+	auto [it, inserted] = verdicts.try_emplace(a_weather->GetFormID());
+	Verdict& verdict = it->second;
+	if (!inserted && verdict.precipitation == precipitation && verdict.texture == texture)
+		return verdict.snow;
+
+	verdict.precipitation = precipitation;
+	verdict.texture = texture;
+	const char* veto = nullptr;
+	if (precipitation) {
+		std::string name;
+		if (const char* edid = precipitation->GetFormEditorID())
+			name = edid;
+		name += '|';
+		name += texture ? texture : "";
+		std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+		if (name.find("snow") == std::string::npos)
+			veto = SnowDeformation::NotSnowKeywordIn(name.c_str());
+	}
+	verdict.snow = veto == nullptr;
+	logger::info("[SNOW DEFORMATION] Snow-flagged weather {:08X} '{}': precipitation {:08X} '{}', texture '{}' -> {}",
+		a_weather->GetFormID(), a_weather->GetFormEditorID() ? a_weather->GetFormEditorID() : "",
+		precipitation ? precipitation->GetFormID() : 0, precipitation && precipitation->GetFormEditorID() ? precipitation->GetFormEditorID() : "",
+		texture ? texture : "", veto ? std::format("NOT snow ('{}'), no snowfall", veto) : std::string("snow"));
+	return verdict.snow;
+}
+
 float SnowDeformation::ComputeSnowfallIntensity() const
 {
+	// Blackreach's weather is snow-flagged.
+	if (auto* worldSpace = NoSkyWorldspace()) {
+		static RE::FormID logged = 0;
+		if (std::exchange(logged, worldSpace->GetFormID()) != worldSpace->GetFormID())
+			logger::info("[SNOW DEFORMATION] Worldspace {:08X} '{}' has No Sky: no snowfall, outdoor weather held as indoors",
+				worldSpace->GetFormID(), worldSpace->GetFormEditorID() ? worldSpace->GetFormEditorID() : "");
+		return 0.0f;
+	}
 	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow);
 }
 
@@ -975,9 +1030,12 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 		return 0.0f;
 
 	// Normalized precipitation density of a weather of this class; flagged
-	// weathers without particle data count as baseline precipitation.
+	// weathers without particle data count as baseline precipitation, and a
+	// snow-flagged one whose particles are not snow (ash) counts as none.
 	auto snowDensity = [a_flag](RE::TESWeather* weather) -> float {
 		if (!weather || !weather->data.flags.any(a_flag))
+			return 0.0f;
+		if (a_flag == RE::TESWeather::WeatherDataFlag::kSnow && !FallsAsSnow(weather))
 			return 0.0f;
 		if (auto* precipitation = weather->precipitationData) {
 			float density = precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f;

@@ -1872,15 +1872,14 @@ void SnowDeformation::DrawSettings()
 				const float rate = growth - melt - fade;
 
 				auto* tes = globals::game::tes;
-				const bool indoors = tes && tes->interiorCell;
+				const char* held = !tes ? "" : tes->interiorCell ? " (held, indoors)" : NoSkyWorldspace() ? " (held, no sky)" : "";
 
 				// The scale the shells are actually handed, not what the peak would
 				// give: with the toggle off it reads x1.000, which is the other
 				// half of the A/B saying so.
 				WrapTextF("Accumulation: %.3f (depth x%.3f%s), snowfall %.2f%s",
 					accum, GetAccumulationDepthScale(),
-					settings.EnableSnowAccumulation ? "" : ", not applied", intensity,
-					indoors ? " (held, indoors)" : "");
+					settings.EnableSnowAccumulation ? "" : ", not applied", intensity, held);
 				WrapTextF("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
 					rate, growth, melt, fade);
 				WrapTextF("Clock: %.2f game hours, timescale %.0f",
@@ -1914,7 +1913,7 @@ void SnowDeformation::DrawSettings()
 			const SnowCondition condition = GetSnowCondition();
 			const auto& climate = snowClimate;
 			auto* tes = globals::game::tes;
-			const bool indoors = !tes || tes->interiorCell;
+			const bool indoors = !tes || tes->interiorCell || NoSkyWorldspace();
 			static const char* kHardness[] = { "F", "4F", "1F", "P", "K" };
 			static const char* kWetClass[] = { "dry", "moist", "wet", "very wet", "slush" };
 			const char* hardness = kHardness[(condition.density >= 120.0f) + (condition.density >= 220.0f) + (condition.density >= 320.0f) + (condition.density >= 420.0f)];

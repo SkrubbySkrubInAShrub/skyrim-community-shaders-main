@@ -120,9 +120,17 @@ static bool ContainsNoCase(const char* a_text, const char* a_needle)
 	return false;
 }
 
-// Non-snow projected materials, matched on MATO editor IDs and on DynDOLOD's
-// LOD batch names (objAsh on Solstheim).
+// Non-snow materials, matched on MATO editor IDs, on DynDOLOD's LOD batch names
+// (objAsh on Solstheim) and on precipitation records (the ash storm).
 static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast" };
+
+const char* SnowDeformation::NotSnowKeywordIn(const char* a_name)
+{
+	for (const auto* keyword : kNotSnowKeywords)
+		if (ContainsNoCase(a_name, keyword))
+			return keyword;
+	return nullptr;
+}
 
 // Every name-derived fact the capture hook needs, computed once per interned
 // geometry name (BSFixedString: equal content, equal pointer). Validated by

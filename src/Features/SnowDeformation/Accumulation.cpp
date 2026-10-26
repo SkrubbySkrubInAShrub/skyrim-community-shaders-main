@@ -25,12 +25,12 @@ void SnowDeformation::TickAccumulation()
 	if (elapsed <= 0.0f)
 		return;
 
-	// Indoors holds the last exterior intensity rather than reading live: no
-	// interior weather snows, so a live reading would melt the exterior while
-	// the player sleeps. TES::interiorCell is the test the rest of CS uses; its
-	// few-frame lag through a load transition is immaterial at these rates.
+	// Indoors and in a No Sky worldspace the last exterior intensity holds
+	// rather than reading live: nothing snows there, so a live reading would
+	// melt the exterior while the player sleeps. TES::interiorCell's few-frame
+	// lag through a load transition is immaterial at these rates.
 	auto* tes = globals::game::tes;
-	if (!tes || !tes->interiorCell)
+	if (!tes || (!tes->interiorCell && !NoSkyWorldspace()))
 		accumWeatherIntensity.store(std::clamp(snowfallIntensity, 0.0f, 1.0f), std::memory_order_relaxed);
 
 	// One signed rate. Melt is weighted by (1 - intensity) rather than gated on
@@ -283,7 +283,7 @@ void SnowDeformation::TickSnowClimate()
 	}
 	const float elapsed = gameClock.elapsedHours;
 	auto* tes = globals::game::tes;
-	const bool indoors = !tes || tes->interiorCell;
+	const bool indoors = !tes || tes->interiorCell || NoSkyWorldspace();
 	auto* sky = globals::game::sky;
 	auto* player = RE::PlayerCharacter::GetSingleton();
 
@@ -548,7 +548,7 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	}
 
 	auto* tes = globals::game::tes;
-	aging.interior = tes && tes->interiorCell;
+	aging.interior = tes && (tes->interiorCell || NoSkyWorldspace());
 	aging.interiorSnow = aging.interior && capturedLoadedPrev > 0;
 	const SnowCondition condition = GetSnowCondition();
 	aging.temperature = condition.temperature;
