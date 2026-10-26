@@ -25,6 +25,8 @@ namespace
 	constexpr uint32_t kKeepFrames = 120;
 	constexpr uint32_t kRewalkFrames = 300;
 	constexpr uint32_t kWalksPerFrame = 4;
+	// A draw without a record walks its actor again, at most this often.
+	constexpr uint32_t kMissFrames = 10;
 
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
@@ -223,6 +225,8 @@ struct SnowDeformation::BodyCoatStore
 		std::vector<std::string> gearLines;
 		/** @brief Component halves a walk dropped: slot, half. */
 		std::vector<std::pair<int, int>> freed;
+		/** @brief Skinned geometry left out (overlays, proxies, decals, FX, eyes), so its draws are not taken for new gear. */
+		std::vector<const RE::BSGeometry*> skipped;
 		uint32_t owned = 0, unowned = 0, firstOwned = 0, firstUnowned = 0;
 		uint32_t decals = 0, fx = 0, eyes = 0, noNormals = 0;
 		uint32_t gear = 0, gearSkinned = 0, rigidWorn = 0, sheaths = 0, attached = 0, gearTriangles = 0;
@@ -245,7 +249,9 @@ struct SnowDeformation::BodyCoatStore
 		Frame body;
 		std::vector<Frame> parts;
 		std::vector<Shape> shapes;
+		std::vector<const RE::BSGeometry*> skipped;
 		uint32_t lastPicked = 0;
+		uint32_t lastWalked = 0;
 		bool walk = true;
 		bool refused = false;
 	};
@@ -260,6 +266,7 @@ struct SnowDeformation::BodyCoatStore
 	std::unordered_map<uint32_t, Actor> actors;
 	std::unordered_set<uint32_t> missed;
 	std::unordered_map<const RE::BSGeometry*, uint32_t> recordOf;
+	std::unordered_set<const RE::BSGeometry*> skippedOf;
 	std::vector<BodyCoatRecordCB> records;
 	std::vector<const RE::NiSkinInstance*> recordSkin;
 	bool recordsDirty = true;
@@ -353,8 +360,15 @@ struct SnowDeformation::BodyCoatStore
 		auto visit = [&](RE::BSGeometry* a_geometry, bool a_first) {
 			auto& runtime = a_geometry->GetGeometryRuntimeData();
 			auto* property = runtime.shaderProperty.get();
-			if (!IsLit(property) || IsProxyOrOverlayGeometry(a_geometry, property))
+			auto* skin = runtime.skinInstance.get();
+			auto skip = [&]() {
+				if (skin)
+					a_out.skipped.push_back(a_geometry);
+			};
+			if (!IsLit(property) || IsProxyOrOverlayGeometry(a_geometry, property)) {
+				skip();
 				return;
+			}
 			const bool owned = a_geometry->GetUserData() == a_actor;
 			if (a_first)
 				(owned ? a_out.firstOwned : a_out.firstUnowned)++;
@@ -362,12 +376,14 @@ struct SnowDeformation::BodyCoatStore
 				(owned ? a_out.owned : a_out.unowned)++;
 			if (IsEngineDecalName(NameOf(a_geometry))) {
 				a_out.decals++;
+				skip();
 				return;
 			}
-			auto* skin = runtime.skinInstance.get();
 			auto* data = skin ? skin->skinData.get() : nullptr;
-			if (skin && (!data || !skin->bones))
+			if (skin && (!data || !skin->bones)) {
+				skip();
 				return;
+			}
 			const uint32_t triangles = TrianglesOf(a_geometry);
 			const int slot = a_first ? -1 : slotOf(a_geometry);
 			// Heat haze and spell planes: refraction, never a coat (section 2.6).
@@ -376,6 +392,7 @@ struct SnowDeformation::BodyCoatStore
 				if (a_dump)
 					a_out.gearLines.push_back(std::format("  FX left out '{}' under '{}'{}: shader flags {:016X}", NameOf(a_geometry), NameOf(a_geometry->parent),
 						skin ? ", skinned" : "", uint64_t(property->flags.underlying())));
+				skip();
 				return;
 			}
 			if (!skin) {
@@ -406,6 +423,7 @@ struct SnowDeformation::BodyCoatStore
 			const auto feature = FeatureOf(property);
 			if (feature == RE::BSShaderMaterial::Feature::kEye) {
 				a_out.eyes++;
+				skip();
 				return;
 			}
 			if (!a_first && carried(slot)) {
@@ -761,6 +779,9 @@ struct SnowDeformation::BodyCoatStore
 		records.clear();
 		recordSkin.clear();
 		recordOf.clear();
+		skippedOf.clear();
+		for (const auto& entry : actors)
+			skippedOf.insert(entry.second.skipped.begin(), entry.second.skipped.end());
 		for (const auto& entry : actors)
 			for (const auto& shape : entry.second.shapes) {
 				const Actor& actor = entry.second;
@@ -899,12 +920,14 @@ void SnowDeformation::TickBodyCoatStore()
 			a.walk = true;
 			store.recordsDirty = true;
 		}
-		if (root != a.root3D || first != a.first3D || store.missed.contains(formID) || (frame + formID) % kRewalkFrames == 0)
+		if (root != a.root3D || first != a.first3D || (frame + formID) % kRewalkFrames == 0 ||
+			(store.missed.contains(formID) && !a.refused && frame - a.lastWalked >= kMissFrames))
 			a.walk = true;
 		if (!a.walk || walks >= kWalksPerFrame || !root)
 			continue;
 		walks++;
 		a.walk = false;
+		a.lastWalked = frame;
 		a.root3D = root;
 		a.first3D = first;
 		store.recordsDirty = true;
@@ -922,9 +945,13 @@ void SnowDeformation::TickBodyCoatStore()
 		for (size_t p = 0; p < a.parts.size(); ++p)
 			store.Slot(a.parts[p], walked, int(p) + 1, formID);
 		a.shapes.clear();
-		for (const auto& s : walked.skins)
+		a.skipped = std::move(walked.skipped);
+		for (const auto& s : walked.skins) {
 			if (s.frame >= 0)
 				a.shapes.push_back({ s.geometry, s.skin, uint32_t(s.frame), s.map.toAnchor });
+			else
+				a.skipped.push_back(s.geometry);
+		}
 	}
 	store.walksLast = walks;
 	store.missesLast = uint32_t(store.missed.size());
@@ -952,7 +979,9 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		return;
 	const auto it = store->recordOf.find(geometry);
 	if (it == store->recordOf.end() || store->recordSkin[it->second] != skin) {
-		// A skin the last walk did not see (an equip change): walk its actor next frame.
+		// A skin the last walk did not see (an equip change): walk its actor soon.
+		if (it == store->recordOf.end() && store->skippedOf.contains(geometry))
+			return;
 		if (auto* owner = geometry->GetUserData(); owner && owner->formType == RE::FormType::ActorCharacter && store->actors.contains(owner->formID))
 			store->missed.insert(owner->formID);
 		return;
