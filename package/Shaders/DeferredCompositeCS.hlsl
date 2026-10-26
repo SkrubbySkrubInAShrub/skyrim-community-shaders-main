@@ -220,13 +220,16 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 			float3 envSpecular, skySpecular;
 
 			if (SharedData::iblSettings.DALCMode >= 2) {
-				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
+				// Mode 2/3: DALC-normalized env where the sky is occluded, the reflected sky radiance where it is visible
 				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
 				envSpecular = ColorManagement::SceneToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-				skySpecular = ColorManagement::SceneToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				// EnvTexture excludes the sky, so the visible sky comes from the reflections cubemap at its own radiance
+				skySpecular = ColorManagement::SceneToLinear(fullSample);
 #		if defined(SKYLIGHTING)
-				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingVisibility : 1.0;
+				envSpecular *= ((SharedData::iblSettings.DALCMode == 3) ? skylightingVisibility : 1.0) * (1.0 - skylightingSpecular);
 				skySpecular *= skylightingSpecular;
+#		elif !defined(INTERIOR)
+				envSpecular = 0;
 #		endif
 			} else {
 				// Mode 0/1: IBL ratio-based

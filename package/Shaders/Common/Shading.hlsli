@@ -20,7 +20,7 @@ float SpecularAOLagarde(float NdotV, float ao, float roughness)
 
 float SpecularOcclusion(float NdotV, float alpha, float occlusion)
 {
-	return saturate(pow(abs(NdotV + occlusion), alpha) - 1.0 + occlusion);
+	return SpecularAOLagarde(NdotV, occlusion, alpha);
 }
 
 // a contact shadow approximation, totally not physically correct; a riff on "Chan 2018, "Material Advances in Call of Duty: WWII" and "The Technical Art of Uncharted 4" http://advances.realtimerendering.com/other/2016/naughty_dog/NaughtyDog_TechArt_Final.pdf (microshadowing)"

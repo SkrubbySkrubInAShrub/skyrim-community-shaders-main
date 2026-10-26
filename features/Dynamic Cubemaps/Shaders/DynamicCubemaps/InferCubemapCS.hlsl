@@ -11,6 +11,11 @@ RWTexture2DArray<float4> EnvInferredTexture : register(u0);
 
 SamplerState LinearSampler : register(s0);
 
+#if defined(REFLECTIONS)
+/** @brief Half-width, in direction z, of the blend between inferred ground and reflections-cubemap sky. */
+static const float HorizonBlend = 0.1;
+#endif
+
 [numthreads(8, 8, 1)] void main(uint3 ThreadID : SV_DispatchThreadID) {
 	uint width, height, depth;
 	EnvInferredTexture.GetDimensions(width, height, depth);
@@ -56,7 +61,9 @@ SamplerState LinearSampler : register(s0);
 	}
 
 #if defined(REFLECTIONS)
-	color.rgb = lerp(color.rgb, ColorManagement::SceneToLinear(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / 8.0));
+	// The reflections cubemap's LOD ground is far darker than the lit scene, so below the horizon keep the inferred capture
+	float skyWeight = color.a > 0.0001 ? smoothstep(-HorizonBlend, HorizonBlend, uv.z) : 1.0;
+	color.rgb = lerp(color.rgb, ColorManagement::SceneToLinear(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / 8.0) * skyWeight);
 #else
 	if (color.a <= 0.0001)
 		color.rgb = ColorManagement::SceneToLinear(Color::Ambient(max(0.0, SharedData::GetAmbient(uv))));
