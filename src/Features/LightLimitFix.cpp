@@ -2,6 +2,7 @@
 #include "CSEditor/EditorWindow.h"
 #include "Effects11.h"
 #include "LightLimitFix/Common.h"
+#include "LightLimitFix/LightAttach.h"
 #include "LinearLighting.h"
 
 #include "I18n/I18n.h"
@@ -26,9 +27,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LocalShadowSlots,
 	LocalShadowResolution,
 	LocalShadowSamples,
-	LocalShadowFilterScale)
+	LocalShadowFilterScale,
+	SkipRedundantLightAttach,
+	LightAttachRefreshFrames)
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 128;
+static constexpr int LIGHT_ATTACH_REFRESH_FRAMES_MIN = 1;
+static constexpr int LIGHT_ATTACH_REFRESH_FRAMES_MAX = 600;
 
 /** @brief Returns the index of the largest option not above a_value, or 0 when every option is above it. Options must be ascending. */
 template <size_t N>
@@ -89,11 +94,33 @@ void LightLimitFix::DrawLocalShadowSettings()
 	ImGui::Spacing();
 }
 
+void LightLimitFix::DrawLightAttachSettings()
+{
+	Util::DisableGuard disableUnsupported(!LightAttach::IsSupported());
+	ImGui::Checkbox(T(TKEY("skip_redundant_light_attach"), "Skip Redundant Light Updates"), &settings.SkipRedundantLightAttach);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s",
+			T(TKEY("skip_redundant_light_attach_tooltip"),
+				"The game re-checks every dynamic light's nearby geometry each frame, which costs milliseconds in scenes with hundreds of lights. "
+				"With this on, a light that has not moved or changed is only re-checked at the interval below."));
+	}
+
+	Util::DisableGuard disableInterval(!settings.SkipRedundantLightAttach);
+	ImGui::SliderInt(T(TKEY("light_attach_refresh_frames"), "Light Update Interval (frames)"), &settings.LightAttachRefreshFrames, LIGHT_ATTACH_REFRESH_FRAMES_MIN, LIGHT_ATTACH_REFRESH_FRAMES_MAX, "%d", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("light_attach_refresh_frames_tooltip"), "How many frames an unchanged light may go without being re-checked. Lower values track scene changes sooner at a small cost; a light that moves is always re-checked immediately."));
+	}
+}
+
 void LightLimitFix::DrawSettings()
 {
 	auto shaderCache = globals::shaderCache;
 
 	ImGui::Checkbox(T(TKEY("enable_particle_lights"), "Enable Particle Lights"), &settings.EnableParticleLights);
+
+	ImGui::Spacing();
+
+	DrawLightAttachSettings();
 
 	ImGui::Spacing();
 
@@ -288,6 +315,7 @@ void LightLimitFix::SaveSettings(json& o_json)
 void LightLimitFix::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.LightAttachRefreshFrames = std::clamp(settings.LightAttachRefreshFrames, LIGHT_ATTACH_REFRESH_FRAMES_MIN, LIGHT_ATTACH_REFRESH_FRAMES_MAX);
 }
 
 void LightLimitFix::RestoreDefaultSettings()
@@ -467,6 +495,7 @@ void LightLimitFix::PostPostLoad()
 {
 	particleLightConfigs.Load();
 	Hooks::Install();
+	LightAttach::Install();
 	if (settings.EnableLocalShadows) {
 		Hooks::InstallLocalShadows();
 		localShadowHooksInstalled = true;
