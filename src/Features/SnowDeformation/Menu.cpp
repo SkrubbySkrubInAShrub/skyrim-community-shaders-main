@@ -2045,7 +2045,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", "Not saved. How much snow the forced coat holds: low is a dusting the armour shows through, 1 is a full coat whose clumps go solid.");
 			ImGui::Combo("Coat Look", &debugBodyCoatLook, "Crust\0Flat Paint\0");
 			if (auto _ttLook = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. S2's A/B. Crust: opacity grows with the coat's thickness and its clumps, so a thin coat stays see-through and only clumps go solid. Flat Paint: opacity equals the coverage, for comparison.");
+				ImGui::Text("%s", "Not saved. S2's A/B. Crust: snow lies in opaque specks and patches whose share of the surface is the coverage, broken by noise and kept off the creases of the surface beneath, the way snow sits on a rock. Flat Paint: one even layer whose opacity equals the coverage, for comparison.");
 			ImGui::Combo("Body Coat View", &debugBodyCoatView, "Off\0Canonical Bands\0Slot Pattern\0Slots and Frames\0");
 			if (auto _ttView = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. Stage S1 of MD plans/BODY-SNOW-PLAN.md: paints every mapped skin of the player and the actors near them, so the coat's frames can be judged before any snow is written. Canonical Bands: coloured bands every 8 units of height and white lines every 16 across, in each actor's own rest frame; they must stay glued to the body and run unbroken from body to armour, boots, gloves and first person. Slot Pattern: the checks each actor's atlas slot holds, read back as the coat will read it; magenta means past the slot's bounds. Slots and Frames: one colour per slot, striped on a skin in a frame of its own (a bow, a tail). A view replaces the forced coat's look. Off, with Force Coat off too, empties the store.");

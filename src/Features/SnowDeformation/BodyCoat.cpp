@@ -365,6 +365,28 @@ struct SnowDeformation::BodyCoatStore
 		};
 		auto carried = [](int a_slot) { return a_slot >= int(RE::BIPED_OBJECTS::kEditorTotal) || a_slot == int(RE::BIPED_OBJECTS::kShield); };
 
+		// Eyes by their head part (section 5.5): an eye mod's eyes wear the
+		// environment-map material, not the eye one. A facegen head names each
+		// part's geometry after its editor ID: the NPC's own eyes, or its race's.
+		std::vector<const char*> eyeParts;
+		auto addEyes = [&](const RE::BGSHeadPart* a_part) {
+			if (a_part && a_part->type == RE::BGSHeadPart::HeadPartType::kEyes && a_part->formEditorID.c_str())
+				eyeParts.push_back(a_part->formEditorID.c_str());
+		};
+		if (auto* npc = a_actor->GetActorBase()) {
+			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kEyes));
+			if (const auto* race = a_actor->GetRace())
+				if (const auto* face = race->faceRelatedData[npc->GetSex() == RE::SEX::kFemale ? 1 : 0]; face && face->headParts)
+					for (const auto* part : *face->headParts)
+						addEyes(part);
+		}
+		auto isEye = [&](const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property) {
+			if (FeatureOf(a_property) == RE::BSShaderMaterial::Feature::kEye || a_property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kEyeReflect))
+				return true;
+			const char* name = NameOf(a_geometry);
+			return std::ranges::any_of(eyeParts, [&](const char* a_eye) { return _stricmp(name, a_eye) == 0; });
+		};
+
 		auto visit = [&](RE::BSGeometry* a_geometry, bool a_first) {
 			auto& runtime = a_geometry->GetGeometryRuntimeData();
 			auto* property = runtime.shaderProperty.get();
@@ -429,7 +451,7 @@ struct SnowDeformation::BodyCoatStore
 				return;
 			}
 			const auto feature = FeatureOf(property);
-			if (feature == RE::BSShaderMaterial::Feature::kEye) {
+			if (isEye(a_geometry, property)) {
 				a_out.eyes++;
 				skip();
 				return;
@@ -749,8 +771,9 @@ struct SnowDeformation::BodyCoatStore
 	// No writer before S3: a slot holds a pattern. The slot pattern view gets
 	// S1's checks (two voxels, the slot's colour, a white border); otherwise the
 	// forced coat in the atlas's own channels: R contact, G snowfall, B/A the
-	// deposit direction, octahedral (straight up). Each voxel's pattern is taken
-	// at its canonical centre, over a one-voxel ramp.
+	// deposit direction as GBuffer::EncodeNormal writes it (it encodes -n, so
+	// straight up is 1, 1). Each voxel's pattern is taken at its canonical
+	// centre, over a four-voxel ramp the shader's breakup turns ragged.
 	void FillSlot(const Frame& a_frame)
 	{
 		const int slot = a_frame.slot, half = a_frame.half;
@@ -761,7 +784,7 @@ struct SnowDeformation::BodyCoatStore
 		const uint32_t z0 = d * uint32_t(slot);
 		auto byte = [](float a_v) { return uint32_t(std::clamp(a_v, 0.0f, 1.0f) * 255.0f + 0.5f); };
 		auto pack = [&](float a_r, float a_g, float a_b, float a_a) { return byte(a_r) | (byte(a_g) << 8) | (byte(a_b) << 16) | (byte(a_a) << 24); };
-		auto ramp = [](float a_inside) { return std::clamp(0.5f + a_inside / kBodyCoatVoxel, 0.0f, 1.0f); };
+		auto ramp = [](float a_inside) { return std::clamp(0.5f + a_inside / (4.0f * kBodyCoatVoxel), 0.0f, 1.0f); };
 		const RE::NiPoint3 colour = SlotColour(slot, half);
 		const float knee = KneeHeight(a_frame);
 		const float midX = 0.5f * (a_frame.boundsMin[0] + a_frame.boundsMax[0]);
@@ -797,7 +820,7 @@ struct SnowDeformation::BodyCoatStore
 					default:
 						break;
 					}
-					texel = pack(contact * amount, fall * amount, 0.5f, 0.5f);
+					texel = pack(contact * amount, fall * amount, 1.0f, 1.0f);
 				}
 		const D3D11_BOX box{ x0, 0, z0, x0 + w, h, z0 + d };
 		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &box, texels.data(), w * 4, w * h * 4);
