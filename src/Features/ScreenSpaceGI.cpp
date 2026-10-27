@@ -749,12 +749,16 @@ void ScreenSpaceGI::DrawSSGI()
 		BSImagespaceShaderISSAOBlurH->enableSAO = settings.EnableVanillaSSAO;
 
 	if (!(settings.Enabled && ShadersOK())) {
-		FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
-		context->ClearUnorderedAccessViewFloat(texAo[outputAoIdx]->uav.get(), clr);
-		context->ClearUnorderedAccessViewFloat(texIlY[outputIlIdx]->uav.get(), clr);
-		context->ClearUnorderedAccessViewFloat(texIlCoCg[outputIlIdx]->uav.get(), clr);
+		if (!outputsCleared) {
+			FLOAT clr[4] = { 0.f, 0.f, 0.f, 0.f };
+			context->ClearUnorderedAccessViewFloat(texAo[outputAoIdx]->uav.get(), clr);
+			context->ClearUnorderedAccessViewFloat(texIlY[outputIlIdx]->uav.get(), clr);
+			context->ClearUnorderedAccessViewFloat(texIlCoCg[outputIlIdx]->uav.get(), clr);
+			outputsCleared = true;
+		}
 		return;
 	}
+	outputsCleared = false;
 
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "SSGI");
@@ -863,7 +867,7 @@ void ScreenSpaceGI::DrawSSGI()
 		// Prefilter radiance texture instead of using GenerateMips for proper dynamic resolution handling.
 		// radianceDisocc wrote mip 0 directly to texRadianceTemp above, so we can bind it
 		// as SRV input here without an intermediate CopySubresourceRegion.
-		{
+		if (settings.EnableGI) {
 			TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Radiance");
 
 			resetViews();

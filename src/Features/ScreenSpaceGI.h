@@ -56,6 +56,8 @@ public:
 	bool recompileFlag = false;
 	uint outputAoIdx = 0;
 	uint outputIlIdx = 0;
+	/// Set once the disabled path has cleared the outputs, so they are not cleared again every frame.
+	bool outputsCleared = false;
 
 	// Loading screen radiance decays at only 1/MaxAccumFrames per frame, bleeding the old scene
 	// into the new one for some frames.
