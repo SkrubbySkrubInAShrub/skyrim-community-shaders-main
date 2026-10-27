@@ -2455,6 +2455,7 @@ namespace SIE
 			std::unique_lock lockH{ hlslMapMutex };
 			hlslToShaderMap.clear();
 		}
+		ClearActiveShaderKeys();
 		compilationSet.Clear();
 		Util::ClearShaderCompileFailures();
 		globals::deferred->ClearShaderCache();
@@ -2552,6 +2553,7 @@ namespace SIE
 	void ShaderCache::Clear(RE::BSShader::Type a_type)
 	{
 		logger::debug("Clearing cache for {}", magic_enum::enum_name(a_type));
+		ClearActiveShaderKeys();
 		std::lock_guard lockGuardV(vertexShadersMutex);
 		{
 			for (auto& [id, shader] : vertexShaders[static_cast<size_t>(a_type)]) {
@@ -3644,8 +3646,14 @@ namespace SIE
 		if (!globals::state->IsDeveloperMode())
 			return;
 
-		auto key = SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true);
 		std::lock_guard lock(activeShadersMutex);
+
+		// Building the key formats and sorts the full defines list, so do it once per shader instead of every draw.
+		const auto taskId = ShaderCompilationTask::MakeId(shaderClass, shader.shaderType.get(), descriptor);
+		auto keyIt = activeShaderKeys.find(taskId);
+		if (keyIt == activeShaderKeys.end())
+			keyIt = activeShaderKeys.emplace(taskId, SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true)).first;
+		const auto& key = keyIt->second;
 
 		auto& info = activeShaders[key];
 		if (info.key.empty()) {
@@ -3662,6 +3670,12 @@ namespace SIE
 		info.isActive = true;
 		info.drawCalls++;
 		info.lastUsed = std::chrono::steady_clock::now();
+	}
+
+	void ShaderCache::ClearActiveShaderKeys()
+	{
+		std::lock_guard lock(activeShadersMutex);
+		activeShaderKeys.clear();
 	}
 
 	void ShaderCache::ResetFrameShaderTracking()
@@ -3843,10 +3857,15 @@ namespace SIE
 		}
 	}
 
+	size_t ShaderCompilationTask::MakeId(ShaderClass a_shaderClass, RE::BSShader::Type a_type, uint32_t a_descriptor)
+	{
+		return a_descriptor + (static_cast<size_t>(a_type) << 32) +
+		       (static_cast<size_t>(a_shaderClass) << 60);
+	}
+
 	size_t ShaderCompilationTask::GetId() const
 	{
-		return descriptor + (static_cast<size_t>(shader.shaderType.underlying()) << 32) +
-		       (static_cast<size_t>(shaderClass) << 60);
+		return MakeId(shaderClass, shader.shaderType.get(), descriptor);
 	}
 
 	std::string ShaderCompilationTask::GetString() const
