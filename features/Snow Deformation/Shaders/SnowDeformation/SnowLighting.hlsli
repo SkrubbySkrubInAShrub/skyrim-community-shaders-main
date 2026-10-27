@@ -821,18 +821,27 @@ namespace SnowLighting
 	static const uint kCoatFlatPaint = 1u;
 	static const uint kCoatLiving = 2u;
 	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
-	// The crust's estimates (section 2.6), for Josef to judge in S2. Breakup
-	// noise in rest space at three scales (patches 6 units, clumps 1.5, specks
-	// 0.5), stretched to fill 0-1; creases of the surface beneath stay bare
-	// three times as hard as its tilt; a patch's edge is bevelled 0.3 units
-	// high; living skin keeps a third of the coverage, since it melts what lands
-	// on it (D4).
-	static const float3 kCoatBreakupFreq = float3(1.0 / 6.0, 1.0 / 1.5, 1.0 / 0.5);
-	static const float3 kCoatBreakupWeight = float3(0.5, 0.3, 0.2);
-	static const float kCoatBreakupContrast = 1.6;
-	static const float kCoatCreaseBare = 3.0;
-	static const float kCoatBevelUnits = 0.3;
-	static const float kCoatSkinShare = 0.35;
+	// Round 3's estimates (section 5.10), for Josef to judge; the rest is from
+	// the snow-on-people study. Snowfall slides off slopes past 60 degrees and
+	// lies whole below 30 (Utah Avalanche Center; Fearing 2000), and the
+	// surface's relief (its normal map) steers half of it. The clumps' relief in
+	// rest space at three scales: patches 8 units across, clumps 2.5 (1-3 cm),
+	// flakes 0.5, stretched to fill 0-1. A full coat is 8 cm deep on an average
+	// crown, half that between crowns, thinning to nothing over a quarter of the
+	// relief at a clump's rim. Its opacity is that depth's reflectance over a
+	// black ground, r d / (1 + r d) with r = 1.4 per cm (Perovich 2007, fine
+	// snow). A clump's edge is never sharper than 0.05 of the relief or a pixel,
+	// and its rim rounds over 1 unit high, at most 45 degrees.
+	static const float2 kCoatRepose = float2(0.5, 0.87);
+	static const float kCoatReliefShare = 0.5;
+	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
+	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
+	static const float kCoatClumpContrast = 1.6;
+	static const float kCoatFullCm = 8.0;
+	static const float kCoatPerCm = 1.4;
+	static const float kCoatRimSpan = 0.25;
+	static const float kCoatEdge = 0.05;
+	static const float kCoatBevelUnits = 1.0;
 
 	float3 CoatDebugHue(float h)
 	{
@@ -868,19 +877,50 @@ namespace SnowLighting
 		return v * rsqrt(max(dot(v, v), 1e-16));
 	}
 
-	// S2's crust (section 2.6, round 2 after Josef's read in section 5.9). Snow
-	// lies in specks and patches, opaque where it lies, never a translucent
-	// film: coverage is the share of the surface a speck covers. A speck lies
-	// where the coverage beats a breakup noise in rest space, raised where the
-	// surface beneath creases, so seams, folds and embossing stay bare the way a
-	// snowy rock's cracks do. Snowfall reads the surface's own detail normal,
-	// carried into rest space through the two face frames, so it lands on every
-	// upturned ridge without crawling as the body moves. The material is the
-	// shell's own set in rest space: its albedo convention, grain and RMAOS, as
-	// projected snow takes them. TruePBR pixels blend the material; vanilla
-	// pixels hand the snow fraction to RelightProjected, which lights it as the
-	// ground's. Returns the opacity, for the glint and the SSS mask.
-	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3 vertexNormal, bool frontFace, float screenNoise,
+	// A vector's coefficients in a frame of rows, v = k.x F[0] + k.y F[1] + k.z F[2],
+	// up to scale: of the determinant only the sign is kept.
+	float3 CoatFrameSolve(float3x3 F, float3 v)
+	{
+		const float3 c0 = cross(F[1], F[2]);
+		return float3(dot(c0, v), dot(cross(F[2], F[0]), v), dot(cross(F[0], F[1]), v)) * (dot(F[0], c0) < 0.0 ? -1.0 : 1.0);
+	}
+
+	float CoatCorner(uint3 cell, float3 f, uint3 o)
+	{
+		return dot(Random::perlinGradient(Random::murmur3(cell + o, 0x578437ADu)), f - float3(o));
+	}
+
+	// Gradient noise on CS's hash with a quintic fade, smooth where cells meet, so
+	// a threshold on it draws no seams. Random::perlinNoise eases one cell edge
+	// linearly and the next cell's matching edge smoothly: it jumps between them.
+	float CoatNoise(float3 p)
+	{
+		const float3 i = floor(p);
+		const float3 f = p - i;
+		const uint3 cell = asuint(int3(i));
+		const float3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+		return lerp(
+			lerp(lerp(CoatCorner(cell, f, uint3(0, 0, 0)), CoatCorner(cell, f, uint3(1, 0, 0)), u.x),
+				lerp(CoatCorner(cell, f, uint3(0, 1, 0)), CoatCorner(cell, f, uint3(1, 1, 0)), u.x), u.y),
+			lerp(lerp(CoatCorner(cell, f, uint3(0, 0, 1)), CoatCorner(cell, f, uint3(1, 0, 1)), u.x),
+				lerp(CoatCorner(cell, f, uint3(0, 1, 1)), CoatCorner(cell, f, uint3(1, 1, 1)), u.x), u.y),
+			u.z);
+	}
+
+	// S2's coat, round 3 (section 5.10, after Josef's read in 5.9 and the study
+	// of snow on people). Smooth across triangles and glued to the body: the
+	// rest-space normals come from the bind pose's own tangent frame, which the
+	// coat's vertex shader passes down, the surface's shape straight and its
+	// relief (the shading normal) un-skinned through the world and bind frames.
+	// Snow lies in clumps over a relief of its own in rest space, as deep as the
+	// coverage and the clump's crown make it and as opaque as that depth, so
+	// thin rims let the cloth through and deep crowns do not: lumpy white, never
+	// an even grey film. The material is the shell's own set in rest space: its
+	// albedo convention, grain and RMAOS, as projected snow takes them. TruePBR
+	// pixels blend the material; vanilla pixels hand the snow fraction to
+	// RelightProjected, which lights it as the ground's. Returns the opacity, for
+	// the glint and the SSS mask.
+	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3x3 worldFrame, float3x3 bindFrame, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
 		float alpha = 0.0;
@@ -899,50 +939,58 @@ namespace SnowLighting
 				const float3 dcdy = ddy(c);
 				const float3 worldDx = ddx(worldPos);
 				const float3 worldDy = ddy(worldPos);
-				// World into rest space, through the two face frames.
-				const float3 worldFace = CoatSafeNormalize(-cross(worldDx, worldDy));
-				const float3 worldT = CoatSafeNormalize(worldDx);
-				const float3 restFace = CoatSafeNormalize(-cross(dcdx, dcdy));
-				const float3 restT = CoatSafeNormalize(dcdx);
-				const float3 detail = restT * dot(worldT, worldNormal) + cross(restFace, restT) * dot(cross(worldFace, worldT), worldNormal) + restFace * dot(worldFace, worldNormal);
+				const float3x3 toCanonical = float3x3(CoatModelToCanonical[0].xyz, CoatModelToCanonical[1].xyz, CoatModelToCanonical[2].xyz);
+				const float3x3 world = float3x3(CoatSafeNormalize(worldFrame[0]), CoatSafeNormalize(worldFrame[1]), CoatSafeNormalize(worldFrame[2]));
+				const float3x3 bind = float3x3(CoatSafeNormalize(bindFrame[0]), CoatSafeNormalize(bindFrame[1]), CoatSafeNormalize(bindFrame[2]));
+				const float3 restRelief = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, worldNormal), bind)));
+				// A back face's shading normal is turned to the viewer; its shape turns with it.
+				float3 restShape = CoatSafeNormalize(mul(toCanonical, bind[2]));
+				restShape = dot(restShape, restRelief) < 0.0 ? -restShape : restShape;
 				const float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
 				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
 				// Half a texel inside the slot, so the filter never reads a neighbour.
 				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5) / kCoatAtlasSize, 0);
-				const float side = smoothstep(0.0, 0.5, dot(detail, GBuffer::DecodeNormal(voxel.ba)));
-				float coverage = inside ? max(voxel.r, voxel.g * side) : 0.0;
-#	if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
-				coverage *= (CoatFlags & kCoatLiving) != 0 ? kCoatSkinShare : 1.0;
-#	endif
-				const float breakup = saturate(0.5 + kCoatBreakupContrast * dot(kCoatBreakupWeight,
-					float3(Random::perlinNoise(c * kCoatBreakupFreq.x), Random::perlinNoise(c * kCoatBreakupFreq.y), Random::perlinNoise(c * kCoatBreakupFreq.z))));
-				const float crease = (1.0 - saturate(dot(worldNormal, vertexNormal))) * kCoatCreaseBare;
-				const float level = coverage - breakup - crease;
-				// Crisp, antialiased by the level's own footprint; it fades out with the coverage.
-				const float speck = saturate(level / max(fwidth(level), 1e-4) + 0.5) * saturate(coverage * 20.0);
-				alpha = (CoatFlags & kCoatFlatPaint) != 0 ? coverage : speck * lerp(0.85, 1.0, saturate(level * 4.0));
-				const float bevel = alpha * kCoatBevelUnits;
+				const float facing = dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), GBuffer::DecodeNormal(voxel.ba));
+				const float coverage = inside ? max(voxel.r, voxel.g * smoothstep(kCoatRepose.x, kCoatRepose.y, facing)) : 0.0;
+				// The clumps. An octave fades once a pixel spans half of it, so far off
+				// the flakes fold into the coverage instead of shimmering.
+				const float footprint = max(length(dcdx), length(dcdy));
+				const float3 octaves = kCoatClumpWeight * saturate(1.0 - 2.0 * footprint * kCoatClumpFreq) *
+				                       float3(CoatNoise(c * kCoatClumpFreq.x), CoatNoise(c * kCoatClumpFreq.y), CoatNoise(c * kCoatClumpFreq.z));
+				const float clump = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y + octaves.z));
+				const float crown = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y));
+				// Snow lies where the coverage drowns the clumps, deepest on their crowns.
+				const float lie = coverage * (1.0 + kCoatEdge) - (1.0 - clump);
+				const float depthCm = kCoatFullCm * coverage * (0.5 + clump) * saturate(lie / kCoatRimSpan);
+				const float opacity = saturate(lie / max(fwidth(lie), kCoatEdge)) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm);
+				alpha = (CoatFlags & kCoatFlatPaint) != 0 ? coverage : opacity;
+				// A clump's rim rounds over at the clump scale; flakes stay flat.
+				const float bevel = kCoatBevelUnits * saturate((coverage * (1.0 + kCoatEdge) - (1.0 - crown)) / kCoatRimSpan);
 				const float bevelDx = ddx(bevel);
 				const float bevelDy = ddy(bevel);
 				const float3 setDx = dcdx / SnowDeformation::SnowUVTile;
 				const float3 setDy = dcdy / SnowDeformation::SnowUVTile;
 				[branch] if (alpha > 0.003)
 				{
-					const float3 weights = Triplanar::GetWeights(restFace, restFace);
-					// The snow's own surface: the shape beneath with the set's grain, over the armour's bump.
-					float3 snowNormal = vertexNormal;
+					const float3 weights = Triplanar::GetWeights(restShape, restShape);
+					// The snow's own surface in rest space, the shape beneath with the set's
+					// grain, carried back to world through the two frames.
+					float3 restSnow = restShape;
 					[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 					{
 						float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampColorSampler, c, weights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, setDx, setDy).xyz * 2.0 - 1.0;
-						SnowGrain(snowNormal, texN, weights, screenNoise, 1.0);
+						SnowGrain(restSnow, texN, weights, screenNoise, 1.0);
 					}
+					const float3 snowNormal = CoatSafeNormalize(mul(CoatFrameSolve(bind, mul(restSnow, toCanonical)), world));
 					worldNormal = normalize(lerp(worldNormal, snowNormal, 0.75 * alpha));
-					// A patch's edge stands up by its surface gradient (Mikkelsen 2010): from
-					// screen derivatives, so it does not depend on the mesh's uv layout.
-					const float3 r1 = cross(worldDy, vertexNormal);
-					const float3 r2 = cross(vertexNormal, worldDx);
+					// The rim stands up by its surface gradient (Mikkelsen 2010), from screen
+					// derivatives, so it does not depend on the mesh's uv layout; turned with
+					// a back face, and never past 45 degrees.
+					const float3 r1 = cross(worldDy, world[2]);
+					const float3 r2 = cross(world[2], worldDx);
 					const float det = dot(worldDx, r1);
-					const float3 surfaceGradient = (bevelDx * r1 + bevelDy * r2) * (det < 0.0 ? -1.0 : 1.0) / max(abs(det), 1e-8);
+					float3 surfaceGradient = (bevelDx * r1 + bevelDy * r2) * (det < 0.0 ? -1.0 : 1.0) / max(abs(det), 1e-8);
+					surfaceGradient *= (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) * rsqrt(max(1.0, dot(surfaceGradient, surfaceGradient)));
 					worldNormal = normalize(worldNormal - surfaceGradient);
 					const float3 setSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, c, weights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, setDx, setDy).xyz;
 					const float3 coatAlbedo = SnowColor::SetAlbedo(setSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);

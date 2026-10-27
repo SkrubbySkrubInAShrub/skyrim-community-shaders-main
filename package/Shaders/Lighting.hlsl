@@ -20,6 +20,11 @@
 #	define SKIN
 #endif
 
+// Snow on bodies reads the bind pose's tangent frame, which a model-space-normal skin lacks.
+#if defined(SNOW_BODY_COAT) && defined(MODELSPACENORMALS)
+#	undef SNOW_BODY_COAT
+#endif
+
 #if !defined(DYNAMIC_CUBEMAPS) && defined(IBL)
 #	undef IBL
 #endif
@@ -93,6 +98,12 @@ struct VS_OUTPUT
 	float4 FogParam: COLOR1;
 
 	float3 ModelPosition: TEXCOORD12;
+#if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT)
+	// Snow on bodies: the bind pose's tangent frame, for the coat's rest-space normals.
+	float3 CoatBindT: TEXCOORD13;
+	float3 CoatBindB: TEXCOORD14;
+	float3 CoatBindN: TEXCOORD15;
+#endif
 };
 #ifdef VSHADER
 
@@ -280,6 +291,11 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.FogParam.w = fogColorParam;
 
 	vsout.ModelPosition = input.Position.xyz;
+#	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT)
+	vsout.CoatBindT = tbn[0];
+	vsout.CoatBindB = tbn[1];
+	vsout.CoatBindN = tbn[2];
+#	endif
 
 	return vsout;
 }
@@ -1968,7 +1984,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
-	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz, tbnTr[2], frontFace, screenNoise,
+	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
+	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
+		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN), screenNoise,
 		projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		if defined(TRUE_PBR)
 	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);

@@ -710,7 +710,7 @@ namespace SIE
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
 			LandscapeSeams = 1 << 5,
-			SnowBodyCoat = 1 << 6,  // pixel key only, where vanilla's 6 to 8 are cleared
+			SnowBodyCoat = 1 << 6,  // pixel key, and the vertex key with it; vanilla's 6 to 8 reach neither
 			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,

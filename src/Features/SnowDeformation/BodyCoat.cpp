@@ -226,7 +226,7 @@ struct SnowDeformation::BodyCoatStore
 		std::vector<std::string> gearLines;
 		/** @brief Component halves a walk dropped: slot, half. */
 		std::vector<std::pair<int, int>> freed;
-		/** @brief Skinned geometry left out (overlays, proxies, decals, FX, eyes), so its draws are not taken for new gear. */
+		/** @brief Skinned geometry left out (overlays, proxies, decals, FX, eyes, brows, scars), so its draws are not taken for new gear. */
 		std::vector<const RE::BSGeometry*> skipped;
 		uint32_t owned = 0, unowned = 0, firstOwned = 0, firstUnowned = 0;
 		uint32_t decals = 0, fx = 0, eyes = 0, noNormals = 0;
@@ -368,13 +368,17 @@ struct SnowDeformation::BodyCoatStore
 		// Eyes by their head part (section 5.5): an eye mod's eyes wear the
 		// environment-map material, not the eye one. A facegen head names each
 		// part's geometry after its editor ID: the NPC's own eyes, or its race's.
+		// Brows and scars sit on the bare face with them (section 5.10).
 		std::vector<const char*> eyeParts;
 		auto addEyes = [&](const RE::BGSHeadPart* a_part) {
-			if (a_part && a_part->type == RE::BGSHeadPart::HeadPartType::kEyes && a_part->formEditorID.c_str())
+			using Type = RE::BGSHeadPart::HeadPartType;
+			if (a_part && (a_part->type == Type::kEyes || a_part->type == Type::kEyebrows || a_part->type == Type::kScar) && a_part->formEditorID.c_str())
 				eyeParts.push_back(a_part->formEditorID.c_str());
 		};
 		if (auto* npc = a_actor->GetActorBase()) {
 			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kEyes));
+			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kEyebrows));
+			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kScar));
 			if (const auto* race = a_actor->GetRace())
 				if (const auto* face = race->faceRelatedData[npc->GetSex() == RE::SEX::kFemale ? 1 : 0]; face && face->headParts)
 					for (const auto* part : *face->headParts)
@@ -1060,7 +1064,11 @@ void SnowDeformation::TickBodyCoatStore()
 		a.shapes.clear();
 		a.skipped = std::move(walked.skipped);
 		for (const auto& s : walked.skins) {
-			if (s.frame >= 0)
+			// Skin takes no coat until skin snow looks right (Josef, S2 round 2): facegen
+			// heads and tinted body skin, beast races' fur included. It still seeds and
+			// chains the frames, so gloves and boots map through the body's bones.
+			const bool bareSkin = s.feature == int(RE::BSShaderMaterial::Feature::kFaceGen) || s.feature == int(RE::BSShaderMaterial::Feature::kFaceGenRGBTint);
+			if (s.frame >= 0 && !bareSkin)
 				a.shapes.push_back({ s.geometry, s.skin, uint32_t(s.frame), s.map.toAnchor });
 			else
 				a.skipped.push_back(s.geometry);
@@ -1081,7 +1089,8 @@ bool SnowDeformation::BodyCoatPixelKey(uint32_t a_rawTechnique) const
 {
 	using Flags = SIE::ShaderCache::LightingShaderFlags;
 	using Technique = SIE::ShaderCache::LightingShaderTechniques;
-	return bodyCoatLive && (a_rawTechnique & uint32_t(Flags::Skinned)) != 0 &&
+	// Model-space-normal skins carry no bind frame for the coat to read (section 5.10): skin keeps its plain shader.
+	return bodyCoatLive && (a_rawTechnique & uint32_t(Flags::Skinned)) != 0 && (a_rawTechnique & uint32_t(Flags::ModelSpaceNormals)) == 0 &&
 	       static_cast<Technique>(0x3F & (a_rawTechnique >> 24)) != Technique::Eye;
 }
 
@@ -1272,7 +1281,7 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 
 		if (a_dump) {
 			const RE::NiPoint3 size = c.boundsMax - c.boundsMin;
-			dumpLine(std::format("{:08X} '{}' {:.1f} m{}{}: frame of '{}' ({}, root bone '{}', {} bind bones, {:.0f} x {:.0f} x {:.0f}); {} skins: {} in the body frame, {} in {} frames of their own; worst residual {:.2f}{}, {} outlier bones; left out {} eyes, {} FX, {} decals; slot {}, {} halves, {} records, {} skins past their bounds; gear {} (+{} skinned), rigid worn {}, sheaths {}, attached {}; {} lit geometries owned / {} not",
+			dumpLine(std::format("{:08X} '{}' {:.1f} m{}{}: frame of '{}' ({}, root bone '{}', {} bind bones, {:.0f} x {:.0f} x {:.0f}); {} skins: {} in the body frame, {} in {} frames of their own; worst residual {:.2f}{}, {} outlier bones; left out {} face parts, {} FX, {} decals; slot {}, {} halves, {} records, {} skins past their bounds; gear {} (+{} skinned), rigid worn {}, sheaths {}, attached {}; {} lit geometries owned / {} not",
 				c.formID, c.name, c.distance / kUnitsPerMeter, c.corpse ? " corpse" : "", c.weaponDrawn ? " weapon drawn" : "", c.seed,
 				c.sticky ? "kept by the store" : "made by this census", c.anchor, c.bindBones, size.x, size.y, size.z,
 				c.skinned, c.chained, c.componentSkins, c.components, c.worstResidual, c.worstShape.empty() ? "" : std::format(" ('{}')", c.worstShape), c.outlierBones,
@@ -1432,7 +1441,7 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			worst = std::max(worst, c.worstResidual);
 			rawOffset = std::max(rawOffset, c.rawOffsetMax);
 		}
-		lines.push_back(std::format("Census {:.0f} frames ago, {:.2f} ms: {} actors, {} skins, {} triangles in all; left out {} eyes, {} FX, {} engine decals.",
+		lines.push_back(std::format("Census {:.0f} frames ago, {:.2f} ms: {} actors, {} skins, {} triangles in all; left out {} face parts, {} FX, {} engine decals.",
 			double(globals::state->frameCount - bodyCoatCensusFrame), bodyCoatCensusMs, bodyCoatCensus.size(), skins, triangles, eyes, fx, decals));
 		lines.push_back(std::format("Frames through the bones: {} skins in their actor's body frame, {} in {} frames of their own; worst residual {:.2f} (a voxel is {:.1f}); {} outlier bones dropped by the vote; {} skins past their frame's bounds. Raw skin frames sit up to {:.1f} units apart.",
 			chained, componentSkins, components, worst, kBodyCoatVoxel, outliers, outside, rawOffset));
