@@ -475,6 +475,7 @@ public:
 		uint LocalShadowResolution = 0;
 		uint LocalShadowSamples = 8;
 		float LocalShadowFilterScale = 1.0f;
+		uint LocalShadowUpdatesPerFrame = 1;
 	};
 
 	uint clusterSize[3] = { 16 };

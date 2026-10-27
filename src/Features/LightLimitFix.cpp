@@ -26,7 +26,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LocalShadowSlots,
 	LocalShadowResolution,
 	LocalShadowSamples,
-	LocalShadowFilterScale)
+	LocalShadowFilterScale,
+	LocalShadowUpdatesPerFrame)
 
 static constexpr uint CLUSTER_MAX_LIGHTS = 128;
 
@@ -50,7 +51,7 @@ void LightLimitFix::DrawLocalShadowSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enable_local_shadows_tooltip"),
 							  "Keeps a cache of the shadow maps the game renders for shadow-casting lights and rotates which lights the game renders each frame.\n"
-							  "More than four lights can cast shadows at once at the same rendering cost as vanilla. Lights with characters inside their radius are refreshed every frame, nearest to the camera first."));
+							  "More than four lights can cast shadows at once for less than the vanilla rendering cost. Lights with characters inside their radius are refreshed first, nearest to the camera first."));
 	}
 
 	if (settings.EnableLocalShadows && !localShadowHooksInstalled)
@@ -62,6 +63,11 @@ void LightLimitFix::DrawLocalShadowSettings()
 		ImGui::SliderInt(T(TKEY("local_shadow_slots"), "Shadow Cache Slots"), (int*)&settings.LocalShadowSlots, MIN_LOCAL_SHADOW_SLOTS, MAX_LOCAL_SHADOW_SLOTS, slotsFormat.c_str(), ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("local_shadow_slots_tooltip"), "Maximum number of lights that can hold a cached shadow map at the same time. Each slot costs video memory at the cache resolution."));
+		}
+
+		ImGui::SliderInt(T(TKEY("local_shadow_updates"), "Shadow Updates Per Frame"), (int*)&settings.LocalShadowUpdatesPerFrame, 1, static_cast<int>(SHADOW_MASK_CHANNEL_COUNT - 1), "%d", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("local_shadow_updates_tooltip"), "Shadow maps the game renders each frame; the rest reuse their cached map.\nEach update redraws every object in the light's radius, so lower values are much faster in lit rooms but update moving shadows less often."));
 		}
 
 		const char* resolutionOptions[] = { T(TKEY("local_shadow_resolution_match_game"), "Match Game"), "512", "1024", "2048" };
@@ -1458,7 +1464,7 @@ void LightLimitFix::ScheduleLocalShadowCasters()
 	}
 	order.insert(order.end(), newcomers.begin(), newcomers.end());
 
-	localShadowEngineBudget = GetEngineLocalShadowBudget();
+	localShadowEngineBudget = std::min(GetEngineLocalShadowBudget(), std::clamp(settings.LocalShadowUpdatesPerFrame, 1u, SHADOW_MASK_CHANNEL_COUNT));
 	size_t engineCapacity = localShadowEngineBudget;
 	// The engine stops evaluating lights once its budget fills, so a sweep leaves one channel free to reach every light.
 	if (needsSweep && order.size() >= engineCapacity && engineCapacity > 1)
