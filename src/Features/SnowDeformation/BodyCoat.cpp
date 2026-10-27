@@ -284,6 +284,7 @@ struct SnowDeformation::BodyCoatStore
 	float amount = -1.0f;
 	uint32_t lookFlags = 0;
 	float glint[4] = {};
+	float look[4] = {};
 
 	winrt::com_ptr<ID3D11Texture3D> atlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> atlasSRV;
@@ -777,7 +778,9 @@ struct SnowDeformation::BodyCoatStore
 	// forced coat in the atlas's own channels: R contact, G snowfall, B/A the
 	// deposit direction as GBuffer::EncodeNormal writes it (it encodes -n, so
 	// straight up is 1, 1). Each voxel's pattern is taken at its canonical
-	// centre, over a four-voxel ramp the shader's breakup turns ragged.
+	// centre. Wading contact is whole to the ankle and thins up the shin, to
+	// about a sixth at the knee and none at 1.3 times its height (section 5.11);
+	// the left side ramps over four voxels.
 	void FillSlot(const Frame& a_frame)
 	{
 		const int slot = a_frame.slot, half = a_frame.half;
@@ -791,6 +794,11 @@ struct SnowDeformation::BodyCoatStore
 		auto ramp = [](float a_inside) { return std::clamp(0.5f + a_inside / (4.0f * kBodyCoatVoxel), 0.0f, 1.0f); };
 		const RE::NiPoint3 colour = SlotColour(slot, half);
 		const float knee = KneeHeight(a_frame);
+		const float sole = a_frame.boundsMin[2];
+		auto wade = [&](float a_z) {
+			const float t = std::clamp(((a_z - sole) / std::max(knee - sole, 1.0f) - 0.15f) / 1.15f, 0.0f, 1.0f);
+			return 1.0f - t * t * (3.0f - 2.0f * t);
+		};
 		const float midX = 0.5f * (a_frame.boundsMin[0] + a_frame.boundsMax[0]);
 		std::vector<uint32_t> texels(size_t(w) * h * d);
 		for (uint32_t z = 0; z < d; ++z)
@@ -810,7 +818,7 @@ struct SnowDeformation::BodyCoatStore
 					float contact = 0.0f, fall = 0.0f;
 					switch (force) {
 					case 1:
-						contact = ramp(knee - canonical[2]);
+						contact = wade(canonical[2]);
 						break;
 					case 2:
 						fall = 1.0f;
@@ -894,6 +902,7 @@ struct SnowDeformation::BodyCoatStore
 				r.Component = shape.frame;
 				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving);
 				r.Glint = float4(glint[0], glint[1], glint[2], glint[3]);
+				r.Look = float4(look[0], look[1], look[2], look[3]);
 				recordOf[shape.geometry] = uint32_t(records.size());
 				records.push_back(r);
 				recordSkin.push_back(shape.skin);
@@ -982,9 +991,17 @@ void SnowDeformation::TickBodyCoatStore()
 	const uint32_t lookFlags = debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u;
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
-	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0) {
+	// The cranks as the shader compares them: cosines of the slopes where
+	// snowfall starts sliding off, is gone (20 degrees on), and its grains end
+	// (graininess x 20 degrees further, never past vertical).
+	const float repose = std::clamp(debugBodyCoatRepose, 0.0f, 89.0f);
+	const float grain = std::clamp(debugBodyCoatGrain, 0.0f, 1.0f);
+	const float look[4] = { std::cos(DirectX::XMConvertToRadians(std::min(repose + 20.0f, 90.0f))), std::cos(DirectX::XMConvertToRadians(repose)),
+		std::cos(DirectX::XMConvertToRadians(std::min(repose + 20.0f + 20.0f * grain, 90.0f))), grain };
+	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0) {
 		store.lookFlags = lookFlags;
 		memcpy(store.glint, glint, sizeof(glint));
+		memcpy(store.look, look, sizeof(look));
 		store.recordsDirty = true;
 	}
 	auto* player = globals::game::player;

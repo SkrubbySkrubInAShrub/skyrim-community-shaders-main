@@ -812,6 +812,7 @@ namespace SnowLighting
 		uint CoatComponent;
 		uint CoatFlags;
 		float4 CoatGlint;
+		float4 CoatLook;
 	};
 	Texture3D<float4> CoatAtlas : register(t41);
 	// State.h ExtraFeatureDescriptors::SnowBodyCoat. Declared here rather than
@@ -821,27 +822,37 @@ namespace SnowLighting
 	static const uint kCoatFlatPaint = 1u;
 	static const uint kCoatLiving = 2u;
 	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
-	// Round 3's estimates (section 5.10), for Josef to judge; the rest is from
-	// the snow-on-people study. Snowfall slides off slopes past 60 degrees and
-	// lies whole below 30 (Utah Avalanche Center; Fearing 2000), and the
-	// surface's relief (its normal map) steers half of it. The clumps' relief in
-	// rest space at three scales: patches 8 units across, clumps 2.5 (1-3 cm),
-	// flakes 0.5, stretched to fill 0-1. A full coat is 8 cm deep on an average
-	// crown, half that between crowns, thinning to nothing over a quarter of the
-	// relief at a clump's rim. Its opacity is that depth's reflectance over a
-	// black ground, r d / (1 + r d) with r = 1.4 per cm (Perovich 2007, fine
-	// snow). A clump's edge is never sharper than 0.05 of the relief or a pixel,
-	// and its rim rounds over 1 unit high, at most 45 degrees.
-	static const float2 kCoatRepose = float2(0.5, 0.87);
+	// Round 4's estimates (section 5.11), for Josef to judge; the rest is from
+	// the snow-on-people study. CoatLook carries his cranks: the slope where
+	// snowfall starts sliding off, and the graininess. The shape and the relief
+	// (its normal map), half each, decide snowfall's clumps; the relief alone
+	// decides its grains, so the walls of folds and cracks shed first. Clumps lie
+	// over a relief of their own in rest space at three scales: patches 8 units
+	// across, clumps 2.5 (1-3 cm), flakes 0.5, stretched to fill 0-1. The
+	// coverage sets how many lie, not how thin they are: a clump is 8 cm deep on
+	// an average crown and half that at its foot, thinning to nothing over a
+	// tenth of the relief at its rim. Its opacity is that depth's reflectance
+	// over a black ground, r d / (1 + r d) with r = 1.4 per cm (Perovich 2007,
+	// fine snow). Grains 0.6 units across lie around the clumps, out to 0.6 of
+	// the relief at full graininess, on up to 60 % of the surface, 90 % opaque.
+	// An edge is never sharper than 0.05 of the relief or a pixel; a clump's
+	// rim rounds over 1 unit high across a quarter of the relief, at most 45
+	// degrees.
 	static const float kCoatReliefShare = 0.5;
 	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
 	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
 	static const float kCoatClumpContrast = 1.6;
 	static const float kCoatFullCm = 8.0;
 	static const float kCoatPerCm = 1.4;
-	static const float kCoatRimSpan = 0.25;
+	static const float kCoatRimSpan = 0.1;
 	static const float kCoatEdge = 0.05;
+	static const float kCoatGrainUnits = 0.6;
+	static const float kCoatGrainSpread = 0.6;
+	static const float kCoatGrainFill = 0.6;
+	static const float kCoatGrainOpacity = 0.9;
+	static const float kCoatGrainContrast = 1.8;
 	static const float kCoatBevelUnits = 1.0;
+	static const float kCoatBevelSpan = 0.25;
 
 	float3 CoatDebugHue(float h)
 	{
@@ -907,15 +918,15 @@ namespace SnowLighting
 			u.z);
 	}
 
-	// S2's coat, round 3 (section 5.10, after Josef's read in 5.9 and the study
-	// of snow on people). Smooth across triangles and glued to the body: the
-	// rest-space normals come from the bind pose's own tangent frame, which the
-	// coat's vertex shader passes down, the surface's shape straight and its
-	// relief (the shading normal) un-skinned through the world and bind frames.
-	// Snow lies in clumps over a relief of its own in rest space, as deep as the
-	// coverage and the clump's crown make it and as opaque as that depth, so
-	// thin rims let the cloth through and deep crowns do not: lumpy white, never
-	// an even grey film. The material is the shell's own set in rest space: its
+	// S2's coat, rounds 3 and 4 (sections 5.10-5.11, after Josef's reads and
+	// the study of snow on people). Smooth across triangles and glued to the
+	// body: the rest-space normals come from the bind pose's own tangent frame,
+	// which the coat's vertex shader passes down, the surface's shape straight
+	// and its relief (the shading normal) un-skinned through the world and bind
+	// frames. Snow lies in solid clumps over a relief of its own in rest space,
+	// as many as the coverage drowns, with loose grains around them, so less
+	// snow means fewer clumps and grains, never an even grey film. The
+	// material is the shell's own set in rest space: its
 	// albedo convention, grain and RMAOS, as projected snow takes them. TruePBR
 	// pixels blend the material; vanilla pixels hand the snow fraction to
 	// RelightProjected, which lights it as the ground's. Returns the opacity, for
@@ -950,8 +961,11 @@ namespace SnowLighting
 				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
 				// Half a texel inside the slot, so the filter never reads a neighbour.
 				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5) / kCoatAtlasSize, 0);
-				const float facing = dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), GBuffer::DecodeNormal(voxel.ba));
-				const float coverage = inside ? max(voxel.r, voxel.g * smoothstep(kCoatRepose.x, kCoatRepose.y, facing)) : 0.0;
+				const float3 deposit = GBuffer::DecodeNormal(voxel.ba);
+				const float clumpSide = smoothstep(CoatLook.x, CoatLook.y, dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), deposit));
+				const float grainSide = smoothstep(CoatLook.z, CoatLook.y, dot(restRelief, deposit));
+				const float coverage = inside ? max(voxel.r, voxel.g * clumpSide) : 0.0;
+				const float reach = inside ? max(voxel.r, voxel.g * grainSide) : 0.0;
 				// The clumps. An octave fades once a pixel spans half of it, so far off
 				// the flakes fold into the coverage instead of shimmering.
 				const float footprint = max(length(dcdx), length(dcdy));
@@ -959,13 +973,18 @@ namespace SnowLighting
 				                       float3(CoatNoise(c * kCoatClumpFreq.x), CoatNoise(c * kCoatClumpFreq.y), CoatNoise(c * kCoatClumpFreq.z));
 				const float clump = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y + octaves.z));
 				const float crown = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y));
-				// Snow lies where the coverage drowns the clumps, deepest on their crowns.
+				// Clumps lie where the coverage drowns the relief, deep however few.
 				const float lie = coverage * (1.0 + kCoatEdge) - (1.0 - clump);
-				const float depthCm = kCoatFullCm * coverage * (0.5 + clump) * saturate(lie / kCoatRimSpan);
-				const float opacity = saturate(lie / max(fwidth(lie), kCoatEdge)) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm);
-				alpha = (CoatFlags & kCoatFlatPaint) != 0 ? coverage : opacity;
-				// A clump's rim rounds over at the clump scale; flakes stay flat.
-				const float bevel = kCoatBevelUnits * saturate((coverage * (1.0 + kCoatEdge) - (1.0 - crown)) / kCoatRimSpan);
+				const float depthCm = kCoatFullCm * (0.5 + clump) * saturate(lie / kCoatRimSpan);
+				const float clumpAlpha = saturate(lie / max(fwidth(lie), kCoatEdge)) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm);
+				// Grains around them, thinning out over the graininess's spread, and
+				// for snowfall over the slope past the clumps.
+				const float grainField = saturate(0.5 + kCoatGrainContrast * dot(float2(0.65, 0.35), float2(CoatNoise(c / kCoatGrainUnits + 31.7), CoatNoise(c / (0.4 * kCoatGrainUnits) + 31.7))));
+				const float grainLie = grainField - 1.0 + kCoatGrainFill * saturate(1.0 + lie / max(kCoatGrainSpread * CoatLook.w, 1e-3)) * saturate(4.0 * reach);
+				const float grainAlpha = kCoatGrainOpacity * saturate(grainLie / max(fwidth(grainLie), kCoatEdge));
+				alpha = (CoatFlags & kCoatFlatPaint) != 0 ? coverage : max(clumpAlpha, grainAlpha);
+				// A clump's rim rounds over at the clump scale; flakes and grains stay flat.
+				const float bevel = kCoatBevelUnits * saturate((coverage * (1.0 + kCoatEdge) - (1.0 - crown)) / kCoatBevelSpan);
 				const float bevelDx = ddx(bevel);
 				const float bevelDy = ddy(bevel);
 				const float3 setDx = dcdx / SnowDeformation::SnowUVTile;

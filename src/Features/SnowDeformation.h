@@ -4954,6 +4954,8 @@ public:
 		uint Flags;
 		/** @brief The shell's glint, as Lighting's glintParameters: screen-space scale, 40 - log density, microfacet roughness, density randomization. */
 		float4 Glint;
+		/** @brief The look's cranks: the cosines of the slope where snowfall starts sliding off, where it is gone, and where its grains end; the graininess, 0 to 1. */
+		float4 Look;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
 	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
@@ -4982,7 +4984,7 @@ public:
 	void TickBodyCoat();
 	/** @brief Per Lighting pass, before the game's SetupGeometry: bit 25 and the record of a mapped skin's draw, the atlas once a frame. */
 	void SetBodyCoatBit(RE::BSRenderPass* a_pass);
-	/** @brief Per Lighting technique, from TruePBR's GetPixelTechnique: whether its pixel key takes SnowBodyCoat (skinned, not eyes, the coat live). The pixel key keeps Skinned only with model-space normals, so armour, clothing and hair otherwise share a static object's pixel shader. */
+	/** @brief Per Lighting technique, from TruePBR's GetPixelTechnique: whether its pixel key takes SnowBodyCoat (skinned with tangent-space normals, not eyes, the coat live). The pixel key keeps Skinned only with model-space normals, so armour, clothing and hair otherwise share a static object's pixel shader. */
 	[[nodiscard]] bool BodyCoatPixelKey(uint32_t a_rawTechnique) const;
 	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the t41 bind still holds. */
 	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
@@ -5003,6 +5005,10 @@ public:
 	float debugBodyCoatAmount = 1.0f;
 	/** @brief Runtime-only, S2's A/B: 0 the crust (opacity from thickness and clumps), 1 flat paint (opacity = coverage). */
 	int debugBodyCoatLook = 0;
+	/** @brief Runtime-only, S2: the slope in degrees where snowfall starts sliding off; it is gone 20 degrees steeper. */
+	float debugBodyCoatRepose = 50.0f;
+	/** @brief Runtime-only, S2: how far snow grains spread past the clumps and the slope, 0 to 1. */
+	float debugBodyCoatGrain = 0.5f;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */
