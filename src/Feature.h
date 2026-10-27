@@ -368,7 +368,10 @@ public:
 		for (auto* feature : GetFeatureList()) {
 			if (feature->loaded) {
 #ifdef TRACY_ENABLE
-				{
+				// Zones are only worth their name lookup while a Tracy client is recording.
+				if (!TracyIsConnected) {
+					callback(feature);
+				} else {
 					char zoneNameBuffer[128];
 					const auto* zoneName = FormatZoneName(zoneNameBuffer, feature->GetShortName(), methodName);
 					ZoneTransientN(___tracy_feature_zone, zoneName, true);
