@@ -1562,7 +1562,9 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 
 	float csPassesTime = globals::profiler->GetTotalTimeMs();
 	float csPercent = smoothedFrameTime > 0.0f ? (csPassesTime / smoothedFrameTime) * 100.0f : 0.0f;
-	float remainingOtherTime = std::max(0.0f, otherFrameTime - csPassesTime);
+	float presentTime = std::min(globals::state->smoothPresentTimeMs, std::max(0.0f, otherFrameTime));
+	float presentPercent = smoothedFrameTime > 0.0f ? (presentTime / smoothedFrameTime) * 100.0f : 0.0f;
+	float remainingOtherTime = std::max(0.0f, otherFrameTime - presentTime - csPassesTime);
 	float remainingOtherPercent = smoothedFrameTime > 0.0f ? (remainingOtherTime / smoothedFrameTime) * 100.0f : 0.0f;
 
 	std::optional<float> otherTestFrameTime, otherTestCostPerCall, totalTestFrameTime, totalTestCostPerCall;
@@ -1582,6 +1584,12 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 		std::string("GPU time spent in Community Shaders compute passes (profiled)."),
 		true, std::nullopt, std::nullopt
 	};
+	DrawCallRow presentRow = {
+		"Present:", magic_enum::enum_integer(SpecialShaderType::Present), kDrawCallsNotApplicable, presentTime, presentPercent,
+		0.0f,
+		std::string("CPU time blocked in Present waiting for the GPU and frame pacing.\nHigh means GPU-bound; near zero means CPU-bound."),
+		true, std::nullopt, std::nullopt
+	};
 	DrawCallRow otherRow = {
 		"Other:", magic_enum::enum_integer(SpecialShaderType::Other), kDrawCallsNotApplicable, remainingOtherTime, remainingOtherPercent,
 		0.0f,
@@ -1599,6 +1607,7 @@ std::pair<std::vector<DrawCallRow>, std::vector<DrawCallRow>> PerformanceOverlay
 	};
 	std::vector<DrawCallRow> summaryRows;
 	summaryRows.push_back(csPassesRow);
+	summaryRows.push_back(presentRow);
 	summaryRows.push_back(otherRow);
 	summaryRows.push_back(totalRow);
 	return { mainRows, summaryRows };
