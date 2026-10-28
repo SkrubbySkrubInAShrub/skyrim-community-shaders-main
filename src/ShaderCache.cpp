@@ -2486,6 +2486,7 @@ namespace SIE
 	}
 	bool ShaderCache::Clear(const std::string& a_path)
 	{
+		ClearActiveShaderKeys();
 		std::string lowerFilePath = Util::FixFilePath(a_path);
 
 		// Step 1: Lock hlslMapMutex to find and copy the relevant entries
