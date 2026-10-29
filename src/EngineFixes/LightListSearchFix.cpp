@@ -6,14 +6,15 @@ namespace
 {
 	// Prologue through the lightListFence load, identical on SE, AE and VR.
 	constexpr auto AddLightPrologue = REL::make_pattern<"48 89 54 24 10 41 56 48 83 EC 50 48 C7 44 24 30 FE FF FF FF 48 89 5C 24 60 48 89 74 24 70 48 89 7C 24 78 48 8B FA 48 8B D9 44 8B 51 18">();
+	// Engine sentinel for "not rebuilding": AddLight then only appends lights it does not find.
+	constexpr std::int32_t FenceUnset = -1;
 
 	struct AddLight
 	{
 		static void thunk(RE::BSShaderPropertyLightData* a_this, RE::BSLight* a_light)
 		{
 			const auto& lights = a_this->lights;
-			const bool listing = a_this->lightListFence < 0;
-			if (listing && Util::FindPointer(reinterpret_cast<const void* const*>(lights.data()), lights.size(), a_light) < lights.size())
+			if (a_this->lightListFence == FenceUnset && Util::ContainsPointer(reinterpret_cast<const void* const*>(lights.data()), lights.size(), a_light))
 				return;
 			func(a_this, a_light);
 		}
