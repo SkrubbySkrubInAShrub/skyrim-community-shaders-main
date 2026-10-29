@@ -94,10 +94,10 @@ ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.enabled);
 
 ### CI Validation
 
-pre-commit.ci fixes these on every PR by pushing a commit (the same hooks run locally under `pre-commit`):
+pre-commit.ci fixes these on PRs by pushing an autofix commit, except for commits made by bots (the same hooks run locally under `pre-commit`):
 
 - Regenerates `en.json` from source (`extract-i18n.py --write`)
-- Reorders translation files to match `en.json` and deletes keys no longer in it (`sort-i18n.py --write --prune-extra`)
+- Reorders translation files to match `en.json` (`sort-i18n.py --write`)
 
 The `pr-i18n.yaml` workflow then checks:
 

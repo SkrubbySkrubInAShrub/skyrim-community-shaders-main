@@ -31,8 +31,9 @@ repos:
             pass_filenames: false
             files: &i18n_files ^(src/.*\.(cpp|h)|package/SKSE/Plugins/CommunityShaders/Translations/.*\.json|tools/(extract|sort)-i18n\.py)$
           - id: sort-i18n
-            name: sort and prune translation keys
-            entry: python tools/sort-i18n.py --write --prune-extra
+            name: sort translation keys
+            # No --prune-extra: a missed extraction would silently delete translations.
+            entry: python tools/sort-i18n.py --write
             language: python
             pass_filenames: false
             files: *i18n_files

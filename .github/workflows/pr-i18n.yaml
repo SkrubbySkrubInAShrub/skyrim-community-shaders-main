@@ -29,7 +29,7 @@ jobs:
               with:
                   python-version: "3.11"
 
-            # pre-commit.ci regenerates en.json and sorts/prunes locales; this gates merges if the autofix didn't land.
+            # pre-commit.ci regenerates en.json and sorts locales; this gates merges if the autofix didn't land.
             - name: Check en.json is up to date
               run: python tools/extract-i18n.py --check
 
