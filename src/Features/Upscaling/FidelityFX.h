@@ -86,6 +86,6 @@ private:
 	uint32_t staleCameraFrames = 0;
 	uint32_t trackedCameraFrames = 0;
 
-	/** @brief Counts frame generation frames whose present-time PerFrame camera is not the world camera, logging a summary at debug level every StaleCameraLogInterval frames. */
-	void TrackStaleCamera();
+	/** @brief Counts frame generation frames whose present-time PerFrame camera differs from a_worldCamera, logging a summary at debug level every StaleCameraLogInterval frames. */
+	void TrackStaleCamera(const globals::FrameBufferCache& a_worldCamera);
 };

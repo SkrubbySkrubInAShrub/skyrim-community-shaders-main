@@ -335,7 +335,7 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	slConstants.cameraNear = *globals::game::cameraNear;
 	slConstants.cameraFar = *globals::game::cameraFar;
 
-	const auto& worldCamera = globals::game::worldFrameBufferCached;
+	const auto& worldCamera = globals::game::GetWorldFrameBuffer();
 	auto viewMatrix = worldCamera.GetCameraViewInverse().Transpose();
 	auto cameraViewToClip = worldCamera.GetCameraProjUnjittered().Transpose();
 

@@ -208,11 +208,11 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 		dispatchParameters.depth = ffxApiGetResourceDX12(swapChain.depthBufferShared12->resource.get());
 		dispatchParameters.motionVectors = ffxApiGetResourceDX12(swapChain.motionVectorBufferShared12->resource.get());
 
-		TrackStaleCamera();
+		const auto& worldCamera = globals::game::GetWorldFrameBuffer();
+		TrackStaleCamera(worldCamera);
 
 		ffx::DispatchDescFrameGenerationPrepareCameraInfo cameraConfig{};
 
-		const auto& worldCamera = globals::game::worldFrameBufferCached;
 		auto viewMatrix = worldCamera.GetCameraViewInverse().Transpose();
 
 		cameraConfig.cameraRight[0] = viewMatrix._11;
@@ -242,9 +242,10 @@ void FidelityFX::Present(bool a_useFrameGeneration, bool a_isHDR)
 	isFrameGenActive = a_useFrameGeneration;
 }
 
-void FidelityFX::TrackStaleCamera()
+void FidelityFX::TrackStaleCamera(const globals::FrameBufferCache& a_worldCamera)
 {
-	if (globals::game::frameBufferCached.GetCameraPosAdjust() != globals::game::worldFrameBufferCached.GetCameraPosAdjust())
+	const auto& presentCamera = globals::game::frameBufferCached;
+	if (presentCamera.GetCameraViewInverse() != a_worldCamera.GetCameraViewInverse() || presentCamera.GetCameraPosAdjust() != a_worldCamera.GetCameraPosAdjust())
 		staleCameraFrames++;
 
 	if (++trackedCameraFrames < StaleCameraLogInterval)
