@@ -1253,7 +1253,7 @@ namespace ENBExtender
 	static thread_local CompileRedirect* activeRedirect = nullptr;
 
 	/** @brief Rewrites a path under the root's enbseries to the preset's, if this thread has an active redirect. */
-	static std::optional<std::wstring> RedirectPath(LPCWSTR path, bool opensFile)
+	static std::optional<std::wstring> RedirectPath(LPCWSTR path)
 	{
 		if (!activeRedirect || !path)
 			return std::nullopt;
@@ -1263,10 +1263,13 @@ namespace ENBExtender
 		if (ec || full.size() < from.size() || _wcsnicmp(full.c_str(), from.c_str(), from.size()) != 0 ||
 			(full.size() > from.size() && full[from.size()] != L'\\'))
 			return std::nullopt;
-		if (opensFile)
-			++activeRedirect->opens;
 		return activeRedirect->to + full.substr(from.size());
 	}
+
+	/** @brief Whether a file-opening import's result means the file was opened. */
+	static bool Opened(HRESULT result) { return SUCCEEDED(result); }
+	static bool Opened(FILE* file) { return file != nullptr; }
+	static bool Opened(HANDLE handle) { return handle != INVALID_HANDLE_VALUE; }
 
 	/** @brief KiENBExtender import hook that redirects its leading path argument. */
 	template <class Signature, bool OpensFile>
@@ -1277,8 +1280,13 @@ namespace ENBExtender
 	{
 		static R Thunk(LPCWSTR path, Args... args)
 		{
-			auto redirected = RedirectPath(path, OpensFile);
-			return original(redirected ? redirected->c_str() : path, args...);
+			auto redirected = RedirectPath(path);
+			R result = original(redirected ? redirected->c_str() : path, args...);
+			if constexpr (OpensFile) {
+				if (redirected && Opened(result))
+					++activeRedirect->opens;
+			}
+			return result;
 		}
 		static inline R (*original)(LPCWSTR, Args...) = nullptr;
 	};
