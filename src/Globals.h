@@ -233,6 +233,8 @@ namespace globals
 
 		extern D3D11_MAPPED_SUBRESOURCE* mappedFrameBuffer;
 		extern FrameBufferCache frameBufferCached;
+		/** @brief Main world camera of the last rendered frame, unlike frameBufferCached which also sees screen-space and menu cameras. */
+		extern FrameBufferCache worldFrameBufferCached;
 	}
 
 	namespace rtti

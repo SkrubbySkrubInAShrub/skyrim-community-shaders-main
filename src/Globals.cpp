@@ -146,6 +146,7 @@ namespace globals
 
 		D3D11_MAPPED_SUBRESOURCE* mappedFrameBuffer = nullptr;
 		FrameBufferCache frameBufferCached{};
+		FrameBufferCache worldFrameBufferCached{};
 	}
 
 	static void RefreshTES()

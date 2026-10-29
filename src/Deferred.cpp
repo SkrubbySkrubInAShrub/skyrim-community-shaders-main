@@ -695,6 +695,10 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 
 	func(This, RenderFlags);
 
+	// World batches just drew with PerFrame, so it holds the main camera here
+	if (globals::state->inWorld)
+		globals::game::worldFrameBufferCached = globals::game::frameBufferCached;
+
 	deferred->EndDeferred();
 
 	// Copy depth from before water, unless DeferredPasses already did
