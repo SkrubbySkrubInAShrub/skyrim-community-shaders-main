@@ -270,6 +270,7 @@ namespace
 				if (target->loaded && !applied)
 					g_toggledOffFeatures.insert(target);
 				target->loaded = applied;
+				globals::shaderCache->ResetActiveShaderTracking();
 				if (auto* dvb = DevBenchAPI::GetDevBenchInterface001()) {
 					const std::string payload = json{ { "shortName", shortName }, { "enabled", applied } }.dump();
 					dvb->EmitEvent("communityshaders.feature.changed", payload.c_str());

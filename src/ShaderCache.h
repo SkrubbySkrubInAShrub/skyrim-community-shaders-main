@@ -901,13 +901,13 @@ namespace SIE
 		};
 
 		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> activeShaders;
-		/// Shader key per task id, so TrackActiveShader builds each key once. The key embeds feature defines, so Clear() drops it.
+		/// Shader key per task id, so TrackActiveShader builds each key once. The key embeds feature defines, so it is reset when they may change.
 		ankerl::unordered_dense::map<size_t, std::string> activeShaderKeys;
 		mutable std::mutex activeShadersMutex;
 
 		void TrackActiveShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
-		/** @brief Drops the cached active shader keys; called when a cache clear may change feature defines. */
-		void ClearActiveShaderKeys();
+		/** @brief Drops cached keys and tracked shaders; call when feature defines may change (cache clear, feature toggle). */
+		void ResetActiveShaderTracking();
 		void ResetFrameShaderTracking();
 		std::vector<ActiveShaderInfo> GetActiveShaders() const;
 

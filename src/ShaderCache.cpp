@@ -2468,7 +2468,7 @@ namespace SIE
 			std::unique_lock lockH{ hlslMapMutex };
 			hlslToShaderMap.clear();
 		}
-		ClearActiveShaderKeys();
+		ResetActiveShaderTracking();
 		compilationSet.Clear();
 		Util::ClearShaderCompileFailures();
 		globals::deferred->ClearShaderCache();
@@ -2499,7 +2499,7 @@ namespace SIE
 	}
 	bool ShaderCache::Clear(const std::string& a_path)
 	{
-		ClearActiveShaderKeys();
+		ResetActiveShaderTracking();
 		std::string lowerFilePath = Util::FixFilePath(a_path);
 
 		// Step 1: Lock hlslMapMutex to find and copy the relevant entries
@@ -2567,7 +2567,7 @@ namespace SIE
 	void ShaderCache::Clear(RE::BSShader::Type a_type)
 	{
 		logger::debug("Clearing cache for {}", magic_enum::enum_name(a_type));
-		ClearActiveShaderKeys();
+		ResetActiveShaderTracking();
 		std::lock_guard lockGuardV(vertexShadersMutex);
 		{
 			for (auto& [id, shader] : vertexShaders[static_cast<size_t>(a_type)]) {
@@ -2909,8 +2909,8 @@ namespace SIE
 				const std::wstring globalDefinesSuffix(globalDefinesSuffixNarrow.begin(), globalDefinesSuffixNarrow.end());
 				const std::wstring defineSlugW(defineSlug.begin(), defineSlug.end());
 				const std::wstring diskPath = defineSlug.empty() ?
-				                                  std::format(L"{}/{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, globalDefinesSuffix, cacheExt) :
-				                                  std::format(L"{}/{}_{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, defineSlugW, globalDefinesSuffix, cacheExt);
+			                                      std::format(L"{}/{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, globalDefinesSuffix, cacheExt) :
+			                                      std::format(L"{}/{}_{}{}{}", GetStandaloneComputeCacheDir(srcPath), cacheName, defineSlugW, globalDefinesSuffix, cacheExt);
 
 				ID3D11DeviceChild* shader = nullptr;
 				bool diskCacheOutdated = true;
@@ -3693,10 +3693,11 @@ namespace SIE
 		info.lastUsed = std::chrono::steady_clock::now();
 	}
 
-	void ShaderCache::ClearActiveShaderKeys()
+	void ShaderCache::ResetActiveShaderTracking()
 	{
 		std::lock_guard lock(activeShadersMutex);
 		activeShaderKeys.clear();
+		activeShaders.clear();
 	}
 
 	void ShaderCache::ResetFrameShaderTracking()
