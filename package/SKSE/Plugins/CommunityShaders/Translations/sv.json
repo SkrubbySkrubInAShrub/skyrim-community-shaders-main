@@ -4239,7 +4239,5 @@
     "ui.restore_saved_settings_confirm": "Du har osparade ändringar. Om du återställer de sparade inställningarna försvinner de. Det går inte att ångra.",
     "ui.restore_saved_settings_title": "Återställa sparade inställningar?",
     "ui.search": "Sök…",
-    "ui.search_features": "Sök funktioner…",
-    "feature.post_processing.motion_blur.a": "(?)",
-    "menu.features.sort_section": "Sortera"
+    "ui.search_features": "Sök funktioner…"
 }
