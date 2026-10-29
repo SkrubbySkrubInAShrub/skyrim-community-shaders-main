@@ -44,6 +44,10 @@ namespace Util
 			return std::find(a_data, a_data + a_size, a_needle) != a_data + a_size;
 		}
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#	pragma warning(push)
+#	pragma warning(disable: 4752)  // AVX2 is gated at runtime by HasAvx2, not by /arch
+#endif
 		/** @brief AVX2 form of ContainsPointer. Callers must check HasAvx2 first. */
 		[[nodiscard]] CS_TARGET_AVX2 inline bool ContainsPointerAvx2(const void* const* a_data, std::uint32_t a_size, const void* a_needle)
 		{
@@ -57,6 +61,9 @@ namespace Util
 			}
 			return ContainsPointerScalar(a_data + i, a_size - i, a_needle);
 		}
+#if defined(_MSC_VER) && !defined(__clang__)
+#	pragma warning(pop)
+#endif
 	}
 
 	/** @brief True when a_needle is one of the a_size pointers in a_data. */
