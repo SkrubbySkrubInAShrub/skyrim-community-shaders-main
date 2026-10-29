@@ -4,11 +4,11 @@ If you would like to contribute to Community Shaders, you can do so by raising a
 
 ## What is considered a useful contribution
 
--   New Community Shader features
--   Bug fixes
--   Performance improvements
--   Documentation
--   Code refactors
+- New Community Shader features
+- Bug fixes
+- Performance improvements
+- Documentation
+- Code refactors
 
 New features should offer functionality to end-users. Backend systems for other features are not considered features.
 
@@ -16,8 +16,8 @@ All contributions fall under this project's license, GPL-3.0 with the exceptions
 
 ## AI Usage
 
--   AI-assisted work is accepted by this project, but vibecoding is not.
--   You must understand your own contribution. If a maintainer asks what your code does or why, you need to be able to explain and defend it. If you can't, it isn't ready to PR.
+- AI-assisted work is accepted by this project, but vibecoding is not.
+- You must understand your own contribution. If a maintainer asks what your code does or why, you need to be able to explain and defend it. If you can't, it isn't ready to PR.
 
 ## PR Guidelines
 
