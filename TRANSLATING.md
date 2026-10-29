@@ -94,12 +94,15 @@ ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.enabled);
 
 ### CI Validation
 
-The `pr-i18n.yaml` workflow checks:
+pre-commit.ci fixes these on every PR by pushing a commit (the same hooks run locally under `pre-commit`):
+
+-   Regenerates `en.json` from source (`extract-i18n.py --write`)
+-   Reorders translation files to match `en.json` and deletes keys no longer in it (`sort-i18n.py --write --prune-extra`)
+
+The `pr-i18n.yaml` workflow then checks:
 
 -   `en.json` is in sync with source code (`--check`)
--   No orphaned keys exist (`--orphans`)
--   Translation file key order matches `en.json` (`sort-i18n.py --check`)
--   Translation files have valid JSON format
+-   Translation files have valid JSON format and no keys missing from `en.json`
 -   Placeholders `{name}` are consistent across languages
 
 ### Translation Key Ordering

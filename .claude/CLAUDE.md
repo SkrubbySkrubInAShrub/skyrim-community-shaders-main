@@ -139,13 +139,11 @@ ui.<component>                  Utility UI
 weather_editor.<item>           Weather editor
 ```
 
-After adding or changing strings (CI checks all of these):
+After adding or changing strings, regenerate locally (pre-commit.ci also runs both on PRs and pushes the fix):
 
 ```bash
-python tools/extract-i18n.py --write    # regenerate en.json
-python tools/extract-i18n.py --check
-python tools/extract-i18n.py --orphans
-python tools/sort-i18n.py --check       # if it fails: python tools/sort-i18n.py --write
+python tools/extract-i18n.py --write                 # regenerate en.json
+python tools/sort-i18n.py --write --prune-extra      # reorder locales, drop keys removed from en.json
 ```
 
 When editing non-English files: translate values only, never keys; keep placeholders (`{count}`), format specifiers (`%s`, `%.1f`) and anything after `##` unchanged.

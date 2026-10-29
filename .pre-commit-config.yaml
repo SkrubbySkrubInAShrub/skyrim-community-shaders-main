@@ -17,6 +17,22 @@ repos:
             files: \.(h|hpp|c|cpp|hlsl|hlsli)$
             exclude: ^(extern|include)/
 
+    # Before prettier so the regenerated translation files get formatted.
+    - repo: local
+      hooks:
+          - id: extract-i18n
+            name: regenerate en.json
+            entry: python tools/extract-i18n.py --write
+            language: python
+            pass_filenames: false
+            files: &i18n_files ^(src/.*\.(cpp|h)|package/SKSE/Plugins/CommunityShaders/Translations/.*\.json|tools/(extract|sort)-i18n\.py)$
+          - id: sort-i18n
+            name: sort and prune translation keys
+            entry: python tools/sort-i18n.py --write --prune-extra
+            language: python
+            pass_filenames: false
+            files: *i18n_files
+
     - repo: https://github.com/pre-commit/mirrors-prettier
       rev: v4.0.0-alpha.8
       hooks:
