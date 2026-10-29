@@ -479,7 +479,6 @@ public:
 
 		// Light attach gate: skips the engine's per-frame attach walk for unchanged dynamic lights.
 		bool SkipRedundantLightAttach = true;
-		int LightAttachRefreshFrames = 60;
 	};
 
 	uint clusterSize[3] = { 16 };
