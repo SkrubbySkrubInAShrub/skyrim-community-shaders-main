@@ -1194,7 +1194,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (SharedData::extendedMaterialSettings.EnableParallaxWarpingFix
 #			if defined(LANDSCAPE)
-		&& LANDSCAPE_PARALLAX_ENABLED
+	    && LANDSCAPE_PARALLAX_ENABLED
 #			endif
 	) {
 		float3 ndx = ddx(vertexNormal);
@@ -2467,7 +2467,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(VOLUMETRIC_SHADOWS)
 	if (inWorld && !inReflection && ShadowSampling::HasDirectionalShadows()
 #		if defined(DEFERRED)
-		&& !UseSkylightingShadowVisibility()
+	    && !UseSkylightingShadowVisibility()
 #		endif
 	) {
 		const float lightingShadow = ShadowSampling::GetLightingShadow(input.WorldPosition.xyz, dirVSMDetailedShadow);
@@ -3088,7 +3088,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	if (any(indirectLobeWeights.specular > 0)
 #		if defined(WETNESS_EFFECTS)
-		|| any(wetnessReflectance > 0)
+	    || any(wetnessReflectance > 0)
 #		endif
 	)
 #		if defined(DYNAMIC_CUBEMAPS)
@@ -3340,7 +3340,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// for pixels that do not write to this RT (sky, water, grass, effects).
 	psout.Masks2 = float4(1.0 - vertexAO, 0, 0, psout.Diffuse.w);
 
-	float stochasticBlend = (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
+	// Additive layers (e.g. weapon blood sheen) only add light, so keep the normals and glossiness beneath them
+	const bool additiveLighting = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting;
+	float stochasticBlend = !additiveLighting && (screenNoise * screenNoise) < psout.Diffuse.w ? 1.0 : 0.0;
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 
