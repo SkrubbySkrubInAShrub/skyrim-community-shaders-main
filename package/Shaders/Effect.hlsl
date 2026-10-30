@@ -488,16 +488,6 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 		color = sceneAmbientColor + ShadowSampling::GetDirectionalLighting();
 	}
 
-#		if defined(SKYLIGHTING)
-	float skylightingDiffuse = 1.0;
-	if (!SharedData::InInterior) {
-		float3 positionMSSkylight = worldPosition;
-
-		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(positionMSSkylight));
-	}
-#		endif
-
 	float3 dirColor;
 	float3 ambientColor;
 	ShadowSampling::ExtractLighting(color, sceneAmbientColor, dirColor, ambientColor);
@@ -533,9 +523,16 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 
 #		if defined(SKYLIGHTING)
 #			if defined(IBL)
-	if (!SharedData::iblSettings.EnableIBL)
+	[branch] if (!SharedData::iblSettings.EnableIBL)
 #			endif
 	{
+		float skylightingDiffuse = 1.0;
+		if (!SharedData::InInterior) {
+			float3 positionMSSkylight = worldPosition;
+
+			sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
+			skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(positionMSSkylight));
+		}
 		ambientColor = ColorManagement::SceneColor::ScaleByLinear(ambientColor, skylightingDiffuse);
 	}
 #		endif

@@ -325,7 +325,8 @@ float TerrainParallaxSoftShadow(PS_INPUT input, float2 coords, float mipLevels[6
 	float occlusion = 0.0;
 	[unroll] for (uint i = 0; i < 4; i++)
 	{
-		[branch] if (i < tapCount)
+		// Occlusion only grows, so stop tapping once the shadow is fully saturated.
+		[branch] if (i < tapCount && occlusion * shadowStrength < 1.0)
 		{
 			float heights[6] = { 0, 0, 0, 0, 0, 0 };
 			float shi = TERRAIN_HEIGHT_AT(coords + rayDir * multipliers[i], mipLevels, 1.0, heights);

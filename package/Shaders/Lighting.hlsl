@@ -2301,14 +2301,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal);
 #			endif
 #		else
-	sh2 skylightingSH = inWorld ? Skylighting::Sample(positionMSSkylight, worldNormal
+	sh2 skylightingSH = Skylighting::UNIT_SH;
+	[branch] if (inWorld)
+		skylightingSH = Skylighting::Sample(positionMSSkylight, worldNormal
 #			if defined(SKYLIGHTING_SHADOW_VIS)
-									  ,
-									  skylightingShadowVisibility,
-									  false
+			,
+			skylightingShadowVisibility,
+			false
 #			endif
-									  ) :
-	                              Skylighting::UNIT_SH;
+		);
 #		endif
 #		if defined(SKYLIGHTING_SHADOW_VIS) && !defined(DEFERRED)
 	// Height clamped so shadow visibility stays valid above the volume, unlike the diffuse SH fade
@@ -2962,7 +2963,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(WETNESS_EFFECTS)
 #		if defined(DYNAMIC_CUBEMAPS)
-	float3 wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
+	// At roughness 1 the wetness lobe has zero weight and leaves the lobe weights untouched.
+	float3 wetnessReflectance = 0.0;
+	[branch] if (waterRoughnessSpecular < 1)
+		wetnessReflectance = GetWetnessIndirectLobeWeights(indirectLobeWeights, wetnessNormal, waterRoughnessSpecular, indirectContext);
 #		else
 	float3 wetnessReflectance = 0.0;
 #		endif
