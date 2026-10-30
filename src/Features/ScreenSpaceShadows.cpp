@@ -232,13 +232,18 @@ void ScreenSpaceShadows::Prepass()
 {
 	auto context = globals::d3d::context;
 
-	float white[4] = { 1, 1, 1, 1 };
-	context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
+	auto sky = globals::game::sky;
+	const bool drawShadows = sky && bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull;
 
-	if (auto sky = globals::game::sky)
-		if (bendSettings.Enable && sky->mode.get() == RE::Sky::Mode::kFull) {
-			DrawShadows();
-		}
+	// Without shadows the texture only needs to be white, so clear it once rather than every frame
+	if (drawShadows || !shadowTextureCleared) {
+		float white[4] = { 1, 1, 1, 1 };
+		context->ClearUnorderedAccessViewFloat(screenSpaceShadowsTexture->uav.get(), white);
+	}
+	shadowTextureCleared = !drawShadows;
+
+	if (drawShadows)
+		DrawShadows();
 
 	auto view = screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(45, 1, &view);

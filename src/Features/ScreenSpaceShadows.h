@@ -63,6 +63,8 @@ public:
 	ID3D11ComputeShader* raymarchCS = nullptr;
 
 	Texture2D* screenSpaceShadowsTexture = nullptr;
+	/** @brief True while the shadow texture holds a clear (white) result, so idle frames can skip clearing it again. */
+	bool shadowTextureCleared = false;
 
 	/** @brief Creates the raymarch constant buffer, point border sampler, and shadow output texture. */
 	virtual void SetupResources() override;

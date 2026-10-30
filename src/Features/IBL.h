@@ -27,6 +27,7 @@ public:
 
 	Texture2D* envIBLTexture = nullptr;
 	Texture2D* skyIBLTexture = nullptr;
+	bool envIBLWritten = true;
 	ID3D11ComputeShader* diffuseIBLCS = nullptr;
 
 	virtual void RestoreDefaultSettings() override;

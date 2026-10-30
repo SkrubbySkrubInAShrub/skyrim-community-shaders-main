@@ -1220,6 +1220,19 @@ void HDRDisplay::ApplyHDR()
 			return;
 		}
 
+		auto* wrappedBackBuffer = upscaling.d3d12SwapChainActive ? upscaling.dx12SwapChain.swapChainBufferWrapped : nullptr;
+		if (wrappedBackBuffer && wrappedBackBuffer->uav && wrappedBackBuffer->resource11) {
+			D3D11_TEXTURE2D_DESC backBufferDesc{};
+			wrappedBackBuffer->resource11->GetDesc(&backBufferDesc);
+			const auto& outputDesc = outputTexture->desc;
+			if (backBufferDesc.Width == outputDesc.Width && backBufferDesc.Height == outputDesc.Height && backBufferDesc.Format == outputDesc.Format) {
+				DispatchHDROutput(sceneSRV, uiSRV, wrappedBackBuffer->uav);
+				RestoreCleanScene();
+				state->EndPerfEvent();
+				return;
+			}
+		}
+
 		DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
 	}
 

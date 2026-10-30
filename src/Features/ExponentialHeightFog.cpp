@@ -414,46 +414,16 @@ void ExponentialHeightFog::EnsureVolumetricResources()
 	lightScattering = make3D(gridSize, "ExponentialHeightFog::LightScattering", DXGI_FORMAT_R32G32B32A32_FLOAT);
 	integratedLightScattering = make3D(gridSize, "ExponentialHeightFog::IntegratedLightScattering");
 
-	conservativeDepthHistory = std::make_unique<Texture2D>(conservativeDepth->desc, "ExponentialHeightFog::ConservativeDepthHistory");
-	{
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = conservativeDepth->desc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MipLevels = 1;
-		conservativeDepthHistory->CreateSRV(srvDesc);
-	}
-
-	lightScatteringHistory = std::make_unique<Texture3D>(lightScattering->desc, "ExponentialHeightFog::LightScatteringHistory");
-	{
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = lightScattering->desc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
-		srvDesc.Texture3D.MipLevels = 1;
-		lightScatteringHistory->CreateSRV(srvDesc);
-	}
+	conservativeDepthHistory = make2D(gridSize, "ExponentialHeightFog::ConservativeDepthHistory");
+	lightScatteringHistory = make3D(gridSize, "ExponentialHeightFog::LightScatteringHistory", DXGI_FORMAT_R32G32B32A32_FLOAT);
 
 	vBufferAFar = make3D(farGridSize, "ExponentialHeightFog::VBufferAFar");
 	conservativeDepthFar = make2D(farGridSize, "ExponentialHeightFog::ConservativeDepthFar");
 	lightScatteringFar = make3D(farGridSize, "ExponentialHeightFog::LightScatteringFar", DXGI_FORMAT_R32G32B32A32_FLOAT);
 	integratedLightScatteringFar = make3D(farGridSize, "ExponentialHeightFog::IntegratedLightScatteringFar");
 
-	conservativeDepthFarHistory = std::make_unique<Texture2D>(conservativeDepthFar->desc, "ExponentialHeightFog::ConservativeDepthFarHistory");
-	{
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = conservativeDepthFar->desc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-		srvDesc.Texture2D.MipLevels = 1;
-		conservativeDepthFarHistory->CreateSRV(srvDesc);
-	}
-
-	lightScatteringFarHistory = std::make_unique<Texture3D>(lightScatteringFar->desc, "ExponentialHeightFog::LightScatteringFarHistory");
-	{
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = lightScatteringFar->desc.Format;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
-		srvDesc.Texture3D.MipLevels = 1;
-		lightScatteringFarHistory->CreateSRV(srvDesc);
-	}
+	conservativeDepthFarHistory = make2D(farGridSize, "ExponentialHeightFog::ConservativeDepthFarHistory");
+	lightScatteringFarHistory = make3D(farGridSize, "ExponentialHeightFog::LightScatteringFarHistory", DXGI_FORMAT_R32G32B32A32_FLOAT);
 
 	hasLightScatteringHistory = false;
 	hasConservativeDepthHistory = false;
@@ -985,19 +955,19 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	if (temporalReprojection) {
-		context->CopyResource(lightScatteringHistory->resource.get(), lightScattering->resource.get());
+		std::swap(lightScattering, lightScatteringHistory);
 		hasLightScatteringHistory = true;
 		if (depthSrv) {
-			context->CopyResource(conservativeDepthHistory->resource.get(), conservativeDepth->resource.get());
+			std::swap(conservativeDepth, conservativeDepthHistory);
 			hasConservativeDepthHistory = true;
 		} else {
 			hasConservativeDepthHistory = false;
 		}
 		if (farGridEnabled) {
-			context->CopyResource(lightScatteringFarHistory->resource.get(), lightScatteringFar->resource.get());
+			std::swap(lightScatteringFar, lightScatteringFarHistory);
 			hasLightScatteringFarHistory = true;
 			if (depthSrv) {
-				context->CopyResource(conservativeDepthFarHistory->resource.get(), conservativeDepthFar->resource.get());
+				std::swap(conservativeDepthFar, conservativeDepthFarHistory);
 				hasConservativeDepthFarHistory = true;
 			} else {
 				hasConservativeDepthFarHistory = false;

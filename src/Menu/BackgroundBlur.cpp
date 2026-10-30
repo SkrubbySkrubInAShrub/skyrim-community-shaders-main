@@ -662,14 +662,17 @@ namespace BackgroundBlur
 		}
 
 		// Snapshot the clean scene before the in-place HDR blur, for clean captures.
-		if (hdrActive) {
-			hdr->SnapshotCleanScene();
-		}
+		bool cleanSceneSnapshotPending = hdrActive;
+		const auto snapshotCleanScene = [&]() {
+			if (std::exchange(cleanSceneSnapshotPending, false))
+				hdr->SnapshotCleanScene();
+		};
 
 		// CS editor mode: single fullscreen blur pass (better perf than per-window)
 		if (csEditorActive) {
 			ImVec2 screenMin = { 0, 0 };
 			ImVec2 screenMax = { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
+			snapshotCleanScene();
 			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), screenMin, screenMax, 0.0f, uiBuffer.srv, uiBuffer.rtv);
 			return;
 		}
@@ -721,6 +724,7 @@ namespace BackgroundBlur
 
 			// Perform blur for this window area with rounded corners
 			// Pass UI buffer SRV/RTV for compositing and clearing during upscaling gameplay
+			snapshotCleanScene();
 			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), windowMin, windowMax, cornerRadius, uiBuffer.srv, uiBuffer.rtv);
 		}
 	}
