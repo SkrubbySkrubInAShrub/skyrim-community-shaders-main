@@ -28,6 +28,11 @@ if("cli-tools" IN_LIST FEATURES OR "gui-tools" IN_LIST FEATURES)
     list(APPEND TOOLS_OPTIONS "-DPKG_CONFIG_EXECUTABLE=${PKGCONFIG}")
 endif()
 
+if("gui-tools" IN_LIST FEATURES)
+    vcpkg_find_acquire_program(PYTHON3)
+    list(APPEND TOOLS_OPTIONS "-DPython3_EXECUTABLE=${PYTHON3}")
+endif()
+
 vcpkg_cmake_configure(
     SOURCE_PATH ${SOURCE_PATH}
     OPTIONS
