@@ -475,11 +475,13 @@ void Effects11Editor::DrawNoPreset()
 	ImGui::PopTextWrapPos();
 
 	ImGui::Spacing();
-	ImGui::PushTextWrapPos(0.0f);
-	Util::TextUnformattedDisabled(T(TKEY("looking_for"), "Looking for:"));
-	ImGui::TextUnformatted(presetPaths.missingPath.c_str());
-	ImGui::PopTextWrapPos();
-	ImGui::Spacing();
+	if (!mainEffect.IsFilePresent()) {
+		ImGui::PushTextWrapPos(0.0f);
+		Util::TextUnformattedDisabled(T(TKEY("looking_for"), "Looking for:"));
+		ImGui::TextUnformatted(presetPaths.missingPath.c_str());
+		ImGui::PopTextWrapPos();
+		ImGui::Spacing();
+	}
 
 	if (Util::Button(T(TKEY("reload_shaders"), "Reload Shaders")))
 		ReloadShaders();
@@ -1427,10 +1429,19 @@ void Effects11Editor::RefreshPresetPaths()
 	presetPaths.iniFull = iniPath.string();
 	presetPaths.iniDisplay = DisplayPath(iniPath);
 
-	const auto seriesPath = presetManager.GetENBSeriesPath();
-	if (!std::filesystem::exists(iniPath)) {
+	// An incomplete Data layout makes the legacy lookup fall back to the game root, so report against Data
+	auto layoutRoot = iniPath.parent_path();
+	if (presetManager.IsLegacyActive() && !presetManager.HasLegacyInstall()) {
+		const auto dataRoot = std::filesystem::absolute("Data");
+		if (std::filesystem::exists(dataRoot / PresetManager::kEnbSeriesIniName) || std::filesystem::exists(dataRoot / PresetManager::kEnbSeriesDirName))
+			layoutRoot = dataRoot;
+	}
+
+	const auto layoutIniPath = layoutRoot / PresetManager::kEnbSeriesIniName;
+	const auto seriesPath = layoutRoot / PresetManager::kEnbSeriesDirName;
+	if (!std::filesystem::exists(layoutIniPath)) {
 		presetPaths.missing = PresetPaths::Missing::IniFile;
-		presetPaths.missingPath = presetPaths.iniFull;
+		presetPaths.missingPath = layoutIniPath.string();
 	} else if (!std::filesystem::is_directory(seriesPath)) {
 		presetPaths.missing = PresetPaths::Missing::SeriesFolder;
 		presetPaths.missingPath = seriesPath.string();
