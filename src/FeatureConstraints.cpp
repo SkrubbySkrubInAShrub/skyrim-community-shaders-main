@@ -30,7 +30,8 @@ namespace FeatureConstraints
 						static std::unordered_set<std::string> loggedConflicts;
 						std::scoped_lock lock(loggedConflictsMutex);
 						if (loggedConflicts.insert(std::format("{}.{}|{}|{}|{}", setting.featureShortName, setting.settingPath, feature->GetShortName(),
-								FormatConstraintValue(constraint.forcedValue), FormatConstraintValue(result.forcedValue))).second)
+													   FormatConstraintValue(constraint.forcedValue), FormatConstraintValue(result.forcedValue)))
+								.second)
 							logger::warn("[FeatureConstraints] Conflict on {}.{}: {} wants {}, but {} already forced {}",
 								setting.featureShortName, setting.settingPath,
 								feature->GetName(), FormatConstraintValue(constraint.forcedValue),
