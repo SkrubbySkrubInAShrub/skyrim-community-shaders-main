@@ -1206,8 +1206,14 @@ void Upscaling::TimerSleepQPC(int64_t targetQPC)
 	if (timer && remaining > spinTicks) {
 		LARGE_INTEGER due;
 		due.QuadPart = -((remaining - spinTicks) * 10000000LL / frequency);
-		if (SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0))
-			WaitForSingleObject(timer, 100);
+		if (SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0)) {
+			// Due time is relative to arming, so a preemption before it would overshoot the target
+			QueryPerformanceCounter(&currentQPC);
+			if (targetQPC - currentQPC.QuadPart <= spinTicks)
+				CancelWaitableTimer(timer);
+			else
+				WaitForSingleObject(timer, 100);
+		}
 	}
 
 	do {
