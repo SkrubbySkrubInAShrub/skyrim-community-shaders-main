@@ -98,15 +98,11 @@ float4 ComputeBoxBounds(float2 dims)
 };
 
 [numthreads(256, 1, 1)] void CS_Average(uint gidx : SV_GroupIndex) {
-	histogramShared[gidx] = RWBufferHistogram[gidx];
-	RWBufferHistogram[gidx] = 0;
-	GroupMemoryBarrierWithGroupSync();
-
 	if (gidx == 0) {
 		float totalWeight = 0.0;
 		[loop] for (uint i = FirstLuminanceBin; i < HistogramBins; ++i)
 		{
-			totalWeight += (float)histogramShared[i];
+			totalWeight += (float)RWBufferHistogram[i];
 		}
 
 		float avgLum = max(1e-5, RWBufferAdaptation[0]);
@@ -118,7 +114,7 @@ float4 ComputeBoxBounds(float2 dims)
 
 			[loop] for (uint bin = FirstLuminanceBin; bin < HistogramBins; ++bin)
 			{
-				float binWeight = (float)histogramShared[bin];
+				float binWeight = (float)RWBufferHistogram[bin];
 
 				float lowDiscard = min(binWeight, lowCut);
 				binWeight -= lowDiscard;
@@ -136,6 +132,11 @@ float4 ComputeBoxBounds(float2 dims)
 
 			if (keptWeight > 0.0)
 				avgLum = exp2(weightedLogLum / keptWeight);
+		}
+
+		[loop] for (uint clearBin = 0; clearBin < HistogramBins; ++clearBin)
+		{
+			RWBufferHistogram[clearBin] = 0;
 		}
 
 		float adaptedLum = lerp(max(1e-5, RWBufferAdaptation[0]), avgLum, AdaptLerp);
