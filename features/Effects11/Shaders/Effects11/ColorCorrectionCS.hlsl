@@ -5,6 +5,9 @@ cbuffer ColorCorrectionParams : register(b0)
 	uint FrameCount;
 };
 
+#if defined(COPY_SOURCE)
+Texture2D<float4> SourceTexture : register(t0);
+#endif
 RWTexture2D<float4> OutputTexture : register(u0);
 
 uint3 pcg3d(uint3 v)
@@ -34,7 +37,11 @@ float3 TriDither(float2 screenPos, uint frameCount)
 		return;
 	}
 
+#if defined(COPY_SOURCE)
+	float4 color = SourceTexture[id.xy];
+#else
 	float4 color = OutputTexture[id.xy];
+#endif
 	color.rgb = pow(abs(color.rgb), GammaCurve);
 	color.rgb *= Brightness;
 	color.rgb += TriDither(float2(id.xy), FrameCount) / 1023.0;

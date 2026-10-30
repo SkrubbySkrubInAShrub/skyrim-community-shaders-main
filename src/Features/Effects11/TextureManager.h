@@ -36,7 +36,7 @@ public:
 	void SwapTextures(const std::string& name1, const std::string& name2);
 
 	// Downsampled texture methods
-	void UpdateDownsampledTexture(ID3D11ShaderResourceView* source);
+	void UpdateDownsampledTexture(ID3D11ShaderResourceView* source, bool a_generateMips);
 	ID3D11ShaderResourceView* GetDownsampleTexture() const;
 	ID3D11ShaderResourceView* GetDownsampleTextureBlurry() const;
 
@@ -47,7 +47,7 @@ public:
 private:
 	void CreateDownsampleResources();
 	static DownsampleTexture CreateDownsampleTexture(DXGI_FORMAT format);
-	void DownsampleToFixed(ID3D11ShaderResourceView* source, DownsampleTexture& texture);
+	void DownsampleToFixed(ID3D11ShaderResourceView* source, DownsampleTexture& texture, bool a_generateMips);
 
 	std::unordered_map<std::string, Texture> commonTextureCache;
 

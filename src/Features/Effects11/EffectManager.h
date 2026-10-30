@@ -81,6 +81,8 @@ public:
 
 	// Color correction compute shader resources
 	winrt::com_ptr<ID3D11ComputeShader> colorCorrectionComputeShader;
+	/** @brief COPY_SOURCE variant: reads the frame from t0 and writes the corrected result, replacing the input copy. */
+	winrt::com_ptr<ID3D11ComputeShader> colorCorrectionCopyComputeShader;
 	winrt::com_ptr<ID3D11Buffer> colorCorrectionConstantBuffer;
 
 	static std::string LoadShaderFile(const char* path);
@@ -159,8 +161,12 @@ public:
 	/** @brief Copies source into distinct destination with CopyResource when full layouts match, else via CopyTexture, leaving no RTV bound. */
 	void CopyToTarget(ID3D11Texture2D* source, ID3D11ShaderResourceView* sourceSRV, ID3D11Texture2D* destination, ID3D11RenderTargetView* destinationRTV);
 
-	// Color correction using compute shader
-	void ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV);
+	/**
+	 * @brief Applies colour correction to textureUAV in place, or from a_source when given.
+	 * @param a_source Optional frame to read instead of textureUAV; it must match the destination's format and size.
+	 * @return false if nothing was dispatched (missing shader, mismatched source or failed map).
+	 */
+	bool ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV, ID3D11ShaderResourceView* a_source = nullptr);
 
 	void ReloadShaders();
 

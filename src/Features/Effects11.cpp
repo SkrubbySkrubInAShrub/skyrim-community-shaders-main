@@ -903,9 +903,11 @@ void Effects11::DrawVolumetricRays()
 		return;
 
 	// The apply pass lights the rays with SunColor, which is premultiplied by the sun's visibility,
-	// so with the sun faded out (overcast, rain, fog, night) the passes would only add black
+	// so with the sun faded out (overcast, rain, fog, night) the passes would only add black.
+	// The same holds when the time-of-day intensity, which scales the applied rays, is zero.
 	auto& settingManager = SettingManager::GetSingleton();
-	if (!settingManager.GetValue<bool>("EnableVolumetricRays", "EFFECT") || EffectManager::GetSunVisibility(sky->sun) <= 0.0f)
+	if (!settingManager.GetValue<bool>("EnableVolumetricRays", "EFFECT") || EffectManager::GetSunVisibility(sky->sun) <= 0.0f ||
+		settingManager.GetInterpolatedTimeOfDayValue("Intensity", "VOLUMETRICRAYS") == 0.0f)
 		return;
 
 	auto& effectManager = EffectManager::GetSingleton();
@@ -1207,6 +1209,8 @@ void Effects11::DrawSunRays()
 	data.lightDirection = { light.direction.x, light.direction.y, light.direction.z };
 	data.lightBillboardTan = light.billboardTan;
 	data.raysColor = GetSunRaysColor(light, lightPeak, perFrame.VolumetricRaysSkyColor);
+	if (data.raysColor.x == 0.0f && data.raysColor.y == 0.0f && data.raysColor.z == 0.0f)
+		return;
 	data.maskBrightness = lightPeak;
 	data.maskExponent = light.maskExponent;
 	data.invScreenWidth = 1.0f / std::max(resolution.x, 1.0f);

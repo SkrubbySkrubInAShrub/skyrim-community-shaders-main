@@ -268,7 +268,7 @@ TextureManager::DownsampleTexture TextureManager::CreateDownsampleTexture(DXGI_F
 	return fixedTexture;
 }
 
-void TextureManager::DownsampleToFixed(ID3D11ShaderResourceView* source, DownsampleTexture& texture)
+void TextureManager::DownsampleToFixed(ID3D11ShaderResourceView* source, DownsampleTexture& texture, bool a_generateMips)
 {
 	if (!source || !texture.rtv || !downsampleVS || !downsamplePS || !linearSampler || !texture.srvChain) {
 		return;
@@ -301,12 +301,13 @@ void TextureManager::DownsampleToFixed(ID3D11ShaderResourceView* source, Downsam
 	context->Draw(4, 0);
 	globals::profiler->EndPass();
 
-	context->GenerateMips(texture.srvChain.get());
+	if (a_generateMips)
+		context->GenerateMips(texture.srvChain.get());
 }
 
-void TextureManager::UpdateDownsampledTexture(ID3D11ShaderResourceView* source)
+void TextureManager::UpdateDownsampledTexture(ID3D11ShaderResourceView* source, bool a_generateMips)
 {
-	DownsampleToFixed(source, sharedDownsampleTexture);
+	DownsampleToFixed(source, sharedDownsampleTexture, a_generateMips);
 }
 
 ID3D11ShaderResourceView* TextureManager::GetDownsampleTexture() const

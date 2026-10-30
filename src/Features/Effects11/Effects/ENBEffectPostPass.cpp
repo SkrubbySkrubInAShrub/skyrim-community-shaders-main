@@ -20,7 +20,7 @@ void ENBEffectPostPass::Execute()
 	if (executed && inOutput) {
 		textureManager.SwapTextures("TextureSDRTemp", "TextureSDRTemp2");
 	} else if (executed && inTemp) {
-		globals::d3d::context->CopyResource(textureSDRTemp->texture.get(), textureScratch.texture.get());
+		std::swap(*textureSDRTemp, textureScratch);
 	}
 }
 
@@ -32,7 +32,7 @@ void ENBEffectPostPass::UpdateEffectVariables()
 
 void ENBEffectPostPass::CreateEffectTextures()
 {
-	// Match TextureSDRTemp exactly, since Execute copies the scratch result into it with CopyResource
+	// Match TextureSDRTemp exactly, since Execute swaps the scratch result into it
 	auto* textureSDRTemp = TextureManager::GetSingleton().GetCommonTexture("TextureSDRTemp");
 	if (!textureSDRTemp || !textureSDRTemp->texture)
 		return;
