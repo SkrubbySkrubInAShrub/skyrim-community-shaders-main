@@ -629,6 +629,14 @@ namespace
 			CorrectTransition(a_graded.green, a_target.green, a_blended.green),
 			CorrectTransition(a_graded.blue, a_target.blue, a_blended.blue) };
 	}
+
+	/** @brief Sun scattering tint from a sun colour before SunIntensity, which only scales the sun itself. */
+	float3 SunScatteringTint(const float3& a_sunColor)
+	{
+		// Normalized only when brighter than 1: a dim sun (e.g. at dusk) keeps the scattering dim
+		const float sunColorPeak = std::max({ a_sunColor.x, a_sunColor.y, a_sunColor.z, 1.0f });
+		return { std::max(a_sunColor.x, 0.0f) / sunColorPeak, std::max(a_sunColor.y, 0.0f) / sunColorPeak, std::max(a_sunColor.z, 0.0f) / sunColorPeak };
+	}
 }
 
 float3 Effects11::GradeSkyColors(std::span<RE::NiColor, RE::TESWeather::ColorTypes::kTotal> a_colors) const
@@ -718,10 +726,7 @@ float3 Effects11::GradeSkyColors(std::span<RE::NiColor, RE::TESWeather::ColorTyp
 			sunColorF3 = Desaturation(sunColorF3, settingManager.GetInterpolatedTimeOfDayValue("SunDesaturation", "SKY"));
 			sunColorF3 = ColorFilter(sunColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("SunColorFilter", "SKY"), 0.0f);
 
-			// Normalized only when brighter than 1: a dim sun (e.g. at dusk) keeps the scattering dim.
-			// SunIntensity is left out, as it only scales the sun itself.
-			const float sunColorPeak = std::max({ sunColorF3.x, sunColorF3.y, sunColorF3.z, 1.0f });
-			sunTint = { std::max(sunColorF3.x, 0.0f) / sunColorPeak, std::max(sunColorF3.y, 0.0f) / sunColorPeak, std::max(sunColorF3.z, 0.0f) / sunColorPeak };
+			sunTint = SunScatteringTint(sunColorF3);
 
 			sunColorF3 = Intensity(sunColorF3, settingManager.GetInterpolatedTimeOfDayValue("SunIntensity", "SKY"));
 
@@ -868,8 +873,13 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 	auto& colors = a_sky->skyColor;
 	const float3 ungradedDirLightColor = NiToF3(colors[(uint)RE::TESWeather::ColorTypes::kSunlight]);
 
-	const float3 sunTint = GradeSkyColors(colors);
+	float3 sunTint = GradeSkyColors(colors);
 	BlendGradedWeathers(a_sky, colors);
+
+	// The transition correction rescales kSun, so derive the tint from the corrected colour
+	const float sunIntensity = settingManager.GetInterpolatedTimeOfDayValue("SunIntensity", "SKY");
+	if (enableEffect && sunIntensity > minColorMean)
+		sunTint = SunScatteringTint(NiToF3(colors[(uint)RE::TESWeather::ColorTypes::kSun]) / sunIntensity);
 
 	// The game lights its VL with this colour too, but ENB presets tune [GAMEVOLUMETRICRAYS] against the ungraded sunlight
 	{
