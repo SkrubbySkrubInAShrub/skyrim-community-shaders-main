@@ -316,11 +316,9 @@ void DoF::SetupResources()
 	logger::debug("Creating buffers...");
 	{
 		dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>(), "DoF::Constants");
-		proceduralBokehSamples = eastl::make_unique<StructuredBuffer>(
-			StructuredBufferDesc<BokehResources::ShapeSample>((uint64_t)BokehResources::GATHER_SAMPLE_COUNT, false, true),
-			BokehResources::GATHER_SAMPLE_COUNT,
+		proceduralBokehSamples = eastl::make_unique<ConstantBuffer>(
+			ConstantBufferDesc<std::array<BokehResources::ShapeSample, BokehResources::GATHER_SAMPLE_COUNT>>(),
 			"DoF::ProceduralBokehSamples");
-		proceduralBokehSamples->CreateSRV();
 		UpdateProceduralBokehSamples(settings.BokehBladeCount, settings.BokehBladeRoundness, true);
 	}
 
@@ -656,17 +654,17 @@ void DoF::Draw(TextureInfo& inout_tex)
 	const int requestedBokehMode = std::clamp(renderSettings.BokehMode, 0, 1);
 	int customShapeIndex = 0;
 	ID3D11ShaderResourceView* customShapeSRV = nullptr;
-	ID3D11ShaderResourceView* customShapeSampleSRV = nullptr;
+	ID3D11Buffer* customShapeSampleCB = nullptr;
 	if (owner && requestedBokehMode == 1) {
 		customShapeIndex = std::clamp(renderSettings.HighlightShape - 1, 0, std::max(owner->bokehResources.GetTotalShapeCount() - 1, 0));
 		customShapeSRV = owner->bokehResources.GetShapeSRV(customShapeIndex);
-		customShapeSampleSRV = owner->bokehResources.GetShapeSampleSRV(customShapeIndex);
+		customShapeSampleCB = owner->bokehResources.GetShapeSampleCB(customShapeIndex);
 	}
-	const uint bokehMode = requestedBokehMode == 1 && customShapeSRV && customShapeSampleSRV ? 1u : 0u;
-	ID3D11ShaderResourceView* bokehSampleSRV = bokehMode == 1 ? customShapeSampleSRV : proceduralBokehSamples->SRV();
+	const uint bokehMode = requestedBokehMode == 1 && customShapeSRV && customShapeSampleCB ? 1u : 0u;
+	ID3D11Buffer* bokehSampleCB = bokehMode == 1 ? customShapeSampleCB : proceduralBokehSamples->CB();
 	const float customShapeRadiusScale = bokehMode == 1 ? owner->bokehResources.GetShapeSampleRadiusScale(customShapeIndex) : 1.0f;
 	const float bokehMaxRadius = bokehMode == 1 ? owner->bokehResources.GetShapeSampleMaxRadius(customShapeIndex) : proceduralBokehMaxRadius;
-	const bool adaptiveGatherReady = bokehSampleSRV &&
+	const bool adaptiveGatherReady = bokehSampleCB &&
 	                                 AllShadersReady({ &DownsampleCS, &ReduceColorCoCCS, &ReduceColorCS,
 										 &FarGatherCS[gatherQuality], &NearGatherCS[gatherQuality] });
 	const bool useAdaptiveGather = renderSettings.UseAdaptiveGather && adaptiveGatherReady;
@@ -716,7 +714,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 	std::array<ID3D11ShaderResourceView*, 20> srvs = {};
 	std::array<ID3D11UnorderedAccessView*, 4> uavs = {};
 	std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
-	auto cb = dofCB->CB();
+	std::array<ID3D11Buffer*, 2> cbs = { dofCB->CB(), bokehSampleCB };
 	auto resetViews = [&]() {
 		srvs.fill(nullptr);
 		uavs.fill(nullptr);
@@ -725,7 +723,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 	};
 
-	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetConstantBuffers(1, (uint)cbs.size(), cbs.data());
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	uint dispatchWidth = ((uint)res.x + 7) >> 3;
 	uint dispatchHeight = ((uint)res.y + 7) >> 3;
@@ -794,7 +792,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	// CoC-aware color pyramid for the fixed gather. Each tap can cover a footprint comparable to
 	// the spacing between samples instead of always reading a single half-resolution texel.
-	if (useAdaptiveGather) {
+	if (useAdaptiveGather && !(renderSettings.FarPlaneMaxBlur <= 0.0f)) {
 		globals::profiler->BeginPass("PostProcessing::DoF::GatherReduce");
 		state->BeginPerfEvent("Gather Reduce");
 		for (size_t i = 0; i < texGatherColor.size(); ++i) {
@@ -867,7 +865,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 				srvs.at(12 + i) = texGatherColor[i]->srv.get();
 				srvs.at(15 + i) = texGatherCoC[i]->srv.get();
 			}
-			srvs.at(19) = bokehSampleSRV;
 			if (bokehMode == 1)
 				srvs.at(8) = customShapeSRV;
 		} else if (bokehMode == 1) {
@@ -888,7 +885,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(0) = texFarBlurred->srv.get();
 		srvs.at(9) = texCoCHalf->srv.get();
 		srvs.at(11) = texCoCTileDilated->srv.get();
-		if (useAdaptiveGather) {
+		if (useAdaptiveGather && !(nearBlur <= 0.0f)) {
 			// The near layer gathers the already resolved far result, so give it a matching color-only
 			// pyramid while reusing the setup CoC pyramid for footprint selection.
 			globals::profiler->BeginPass("PostProcessing::DoF::GatherReduceNear");
@@ -912,7 +909,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 				srvs.at(12 + i) = texGatherColor[i]->srv.get();
 				srvs.at(15 + i) = texGatherCoC[i]->srv.get();
 			}
-			srvs.at(19) = bokehSampleSRV;
 			if (bokehMode == 1)
 				srvs.at(8) = customShapeSRV;
 		} else if (bokehMode == 1) {
@@ -1011,9 +1007,9 @@ void DoF::Draw(TextureInfo& inout_tex)
 	}
 
 	samplers.fill(nullptr);
-	cb = nullptr;
+	cbs.fill(nullptr);
 
-	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetConstantBuffers(1, (uint)cbs.size(), cbs.data());
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
 

@@ -148,7 +148,10 @@ Texture2D<float> TexReduceCoCInput : register(t18);
 // xy = shaped sample position, z = radial accumulation weight, w = canonical disc distance.
 // Keeping w separate is essential for polygon corners: shaped xy may extend beyond unit radius,
 // but its intersection distance still belongs to the same canonical gather ring.
-StructuredBuffer<float4> BokehSamples : register(t19);
+cbuffer DoFBokehSamplesCB : register(b2)
+{
+	float4 BokehSamples[120];
+};
 
 cbuffer DoFCB : register(b1)
 {
@@ -1035,25 +1038,43 @@ float4 Median9(float4 samples[9])
 		min(high[0], min(high[1], high[2])));
 }
 
-float4 GatherMedianAt(Texture2D<float4> inputTexture, uint2 pixel)
+#define POSTFILTER_TILE 10
+groupshared float4 PostfilterFar[POSTFILTER_TILE * POSTFILTER_TILE];
+groupshared float4 PostfilterNear[POSTFILTER_TILE * POSTFILTER_TILE];
+
+float4 MedianFromTile(bool nearLayer, uint2 groupThreadID)
 {
 	float4 samples[9];
 	[unroll] for (int i = 0; i < 9; ++i)
 	{
-		int2 offset = int2(i % 3, i / 3) - 1;
-		samples[i] = inputTexture[ClampToHalfRes(int2(pixel) + offset)];
+		uint index = (groupThreadID.y + i / 3) * POSTFILTER_TILE + groupThreadID.x + i % 3;
+		samples[i] = nearLayer ? PostfilterNear[index] : PostfilterFar[index];
 	}
 	return Median9(samples);
 }
 
-[numthreads(8, 8, 1)] void CS_GatherPostfilter(uint2 DTid : SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void CS_GatherPostfilter(uint2 DTid : SV_DispatchThreadID, uint2 Gid : SV_GroupID, uint2 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex) {
+	const int2 tileOrigin = int2(Gid) * 8 - 1;
+	// 100 tile texels over 64 threads: two fixed strides keep the loop unrollable.
+	[unroll] for (uint k = 0; k < 2; ++k)
+	{
+		uint t = GI + k * 64;
+		[branch] if (t < POSTFILTER_TILE * POSTFILTER_TILE)
+		{
+			int2 p = ClampToHalfRes(tileOrigin + int2(t % POSTFILTER_TILE, t / POSTFILTER_TILE));
+			PostfilterFar[t] = TexColor[p];
+			PostfilterNear[t] = TexNearBlur[p];
+		}
+	}
+	GroupMemoryBarrierWithGroupSync();
+
 	if (any(DTid >= HalfResDim))
 		return;
 
 	// u3 is the otherwise idle tile UAV slot. Filtering both layers in one dispatch avoids adding a
 	// second postfilter dispatch while giving near and far identical outlier rejection.
-	RWTexOut[DTid] = GatherMedianAt(TexColor, DTid);
-	RWTexCoCTile[DTid] = GatherMedianAt(TexNearBlur, DTid);
+	RWTexOut[DTid] = MedianFromTile(false, GTid);
+	RWTexCoCTile[DTid] = MedianFromTile(true, GTid);
 }
 
 	[numthreads(8, 8, 1)] void CS_Combiner(uint2 DTid : SV_DispatchThreadID)

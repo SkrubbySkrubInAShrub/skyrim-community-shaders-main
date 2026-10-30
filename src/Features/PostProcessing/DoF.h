@@ -82,7 +82,7 @@ struct DoF : public PostProcessFeature
 	static_assert(sizeof(DoFCB) == 128, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
 
 	eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
-	eastl::unique_ptr<StructuredBuffer> proceduralBokehSamples = nullptr;
+	eastl::unique_ptr<ConstantBuffer> proceduralBokehSamples = nullptr;
 	int cachedBokehBladeCount = -1;
 	float cachedBokehBladeRoundness = -1.0f;
 	float proceduralBokehMaxRadius = 1.0f;

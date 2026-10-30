@@ -29,7 +29,7 @@ struct BokehResources
 	// Importance-sampled positions generated once when each texture is loaded. The shader still
 	// samples the source texture for continuous coverage and colour; this table prevents sparse
 	// silhouettes from throwing away most of the fixed gather taps.
-	std::array<eastl::unique_ptr<StructuredBuffer>, MAX_SHAPES> shapeSampleBuffers = {};
+	std::array<eastl::unique_ptr<ConstantBuffer>, MAX_SHAPES> shapeSampleBuffers = {};
 	std::array<float, MAX_SHAPES> shapeSampleRadiusScales = {};
 	std::array<float, MAX_SHAPES> shapeSampleMaxRadii = {};
 	int numLoadedShapes = NUM_BUILTIN_SHAPES;
@@ -51,7 +51,7 @@ struct BokehResources
 	void Setup();
 	bool LoadCustomShape(const std::string& filePath, int slotIndex);
 	ID3D11ShaderResourceView* GetShapeSRV(int shapeIndex) const;
-	ID3D11ShaderResourceView* GetShapeSampleSRV(int shapeIndex) const;
+	ID3D11Buffer* GetShapeSampleCB(int shapeIndex) const;
 	float GetShapeSampleRadiusScale(int shapeIndex) const;
 	float GetShapeSampleMaxRadius(int shapeIndex) const;
 	int GetTotalShapeCount() const { return numLoadedShapes; }

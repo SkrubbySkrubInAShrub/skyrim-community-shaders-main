@@ -202,9 +202,7 @@ bool BokehResources::BuildShapeSamples(const DirectX::ScratchImage& image, int i
 	}
 
 	auto bufferName = std::format("BokehResources::ShapeSamples{}", index);
-	shapeSampleBuffers[index] = eastl::make_unique<StructuredBuffer>(
-		StructuredBufferDesc<ShapeSample>((uint64_t)GATHER_SAMPLE_COUNT, false, true), GATHER_SAMPLE_COUNT, bufferName.c_str());
-	shapeSampleBuffers[index]->CreateSRV();
+	shapeSampleBuffers[index] = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<decltype(samples)>(false), bufferName.c_str());
 	shapeSampleBuffers[index]->Update(samples.data(), sizeof(samples));
 	const float apertureArea = 4.0f * coverageSum / float(source->width * source->height);
 	shapeSampleRadiusScales[index] = std::clamp(
@@ -253,11 +251,11 @@ ID3D11ShaderResourceView* BokehResources::GetShapeSRV(int shapeIndex) const
 	return texBokehShapes[shapeIndex]->srv.get();
 }
 
-ID3D11ShaderResourceView* BokehResources::GetShapeSampleSRV(int shapeIndex) const
+ID3D11Buffer* BokehResources::GetShapeSampleCB(int shapeIndex) const
 {
 	if (shapeIndex < 0 || shapeIndex >= MAX_SHAPES || !shapeSampleBuffers[shapeIndex])
 		return nullptr;
-	return shapeSampleBuffers[shapeIndex]->SRV();
+	return shapeSampleBuffers[shapeIndex]->CB();
 }
 
 float BokehResources::GetShapeSampleRadiusScale(int shapeIndex) const
