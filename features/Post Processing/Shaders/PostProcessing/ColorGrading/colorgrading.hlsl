@@ -861,10 +861,14 @@ float4 PSColorGrading(FullscreenTriangleVSOutput input) : SV_Target
 	color = LinearContrast(color, cinematic.z, 0.18);
 
 	// Apply LUT or direct Color Grading
+#if defined(LUT_GRADING)
+	color = ApplyLUT(color);
+#else
 	if (skipLUT)
 		color = ColorGrading(color);
 	else
 		color = ApplyLUT(color);
+#endif
 
 	color = pow(abs(color), inOutGamma.w);
 

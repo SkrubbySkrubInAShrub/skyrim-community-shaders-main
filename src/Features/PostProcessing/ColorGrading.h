@@ -89,6 +89,7 @@ struct ColorGrading : public PostProcessFeature
 	std::array<float3, 3> tonemapToOutputMatrix = { float3{ 1.0f, 0.0f, 0.0f }, float3{ 0.0f, 1.0f, 0.0f }, float3{ 0.0f, 0.0f, 1.0f } };
 	std::array<float3, 3> workingToXYZMatrix = { float3{ 1.0f, 0.0f, 0.0f }, float3{ 0.0f, 1.0f, 0.0f }, float3{ 0.0f, 0.0f, 1.0f } };
 	std::array<float3, 3> xyzToWorkingMatrix = { float3{ 1.0f, 0.0f, 0.0f }, float3{ 0.0f, 1.0f, 0.0f }, float3{ 0.0f, 0.0f, 1.0f } };
+	std::array<int, 6> colorSpaceTransformKey = { -1, -1, -1, -1, -1, -1 };
 
 	int tonemapperType = 10;
 
@@ -155,6 +156,7 @@ struct ColorGrading : public PostProcessFeature
 	bool recompileFlag = true;
 	bool saveImagesFlag = false;
 	winrt::com_ptr<ID3D11PixelShader> colorgradingPS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> colorgradingLutPS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> lutgenCS = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
