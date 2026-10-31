@@ -1225,6 +1225,8 @@
     "feature.exp_height_fog.local_light_scattering_intensity": "Local Light Scattering Intensity",
     "feature.exp_height_fog.near_fade_in_distance": "Near Fade In Distance",
     "feature.exp_height_fog.original_fog_color_amount": "Original Fog Color Amount",
+    "feature.exp_height_fog.original_fog_color_override": "Original Fog Color Override",
+    "feature.exp_height_fog.original_fog_color_override_tooltip": "Replaces the weather's fog colour used by Original Fog Color Amount.\nAlpha blends from the weather colour (0) to this colour (1).",
     "feature.exp_height_fog.sample_jitter_multiplier": "Sample Jitter Multiplier",
     "feature.exp_height_fog.sample_jitter_multiplier_tooltip": "Adds per-voxel random offset on top of the Halton sequence.",
     "feature.exp_height_fog.second_fog_layer": "Second Fog Layer",
