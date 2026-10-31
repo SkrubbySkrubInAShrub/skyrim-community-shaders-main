@@ -177,6 +177,8 @@ namespace SIE
 
 		/** @brief Returns a unique hash identifying this shader class, type, and descriptor combo. */
 		size_t GetId() const;
+		/** @brief Returns the id GetId() would give a task for this shader class, type, and descriptor. */
+		static size_t MakeId(ShaderClass a_shaderClass, RE::BSShader::Type a_type, uint32_t a_descriptor);
 		/** @brief Returns a human-readable string describing this task (shader file, class, defines). */
 		std::string GetString() const;
 
@@ -906,9 +908,13 @@ namespace SIE
 		};
 
 		ankerl::unordered_dense::map<std::string, ActiveShaderInfo> activeShaders;
+		/// Shader key per task id, so TrackActiveShader builds each key once. The key embeds feature defines, so it is reset when they may change.
+		ankerl::unordered_dense::map<size_t, std::string> activeShaderKeys;
 		mutable std::mutex activeShadersMutex;
 
 		void TrackActiveShader(ShaderClass shaderClass, const RE::BSShader& shader, uint32_t descriptor);
+		/** @brief Drops cached keys and tracked shaders; call when feature defines may change (cache clear, feature toggle). */
+		void ResetActiveShaderTracking();
 		void ResetFrameShaderTracking();
 		std::vector<ActiveShaderInfo> GetActiveShaders() const;
 
