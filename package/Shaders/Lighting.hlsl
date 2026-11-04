@@ -1987,9 +1987,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 localShadowPosition = input.WorldPosition.xyz;
 #	if defined(DEFERRED) && !defined(LANDSCAPE) && defined(TERRAIN_BLENDING_OBJECTS)
-	// Terrain Blending fades terrain over the part of an object below the terrain surface, where the scene
-	// depth holds the terrain. Light that part like the terrain it fades into: bend its normal up, and take
-	// local shadows at the visible surface, since terrain occludes the buried point in the shadow maps.
+	// Terrain Blending fades terrain over object parts below its surface, and terrain occludes those parts
+	// in the local shadow maps, so take local shadows at the visible surface the scene depth holds.
 	[branch] if (SharedData::terrainBlendingSettings.Enabled)
 	{
 		const float visibleRawDepth = SharedData::DepthTexture.Load(int3(input.Position.xy, 0)).x;
@@ -1997,13 +1996,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		// Objects read the 16-bit blended depth, so ignore differences within one of its steps.
 		const float depthStep = SharedData::GetScreenDepth(visibleRawDepth + 1.0 / 65535.0) - visibleDepth;
 		const float buriedDepth = max(viewPosition.z - visibleDepth - depthStep, 0.0);
-		[branch] if (buriedDepth > 0.0)
-		{
-			// A downward normal passes through zero halfway, so fall back to up there instead of normalizing it
-			const float3 blendedNormal = lerp(worldNormal, float3(0, 0, 1), saturate(buriedDepth / 10.0));
-			worldNormal = dot(blendedNormal, blendedNormal) > 1e-6 ? normalize(blendedNormal) : float3(0, 0, 1);
-			localShadowPosition *= 1.0 - buriedDepth / viewPosition.z;
-		}
+		localShadowPosition *= 1.0 - buriedDepth / viewPosition.z;
 	}
 #	endif
 
