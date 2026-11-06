@@ -481,10 +481,11 @@ namespace SharedData
 		uint Enable;
 		float MotionStretch;
 		float MotionTransparency;
-		float pad0;
+		float WidthScale;
 		float4 TextureBounds;
 		float2 TextureRadiusScale;
-		float2 pad1;
+		float LengthScale;
+		float pad1;
 	};
 
 	struct ProceduralSunSettings

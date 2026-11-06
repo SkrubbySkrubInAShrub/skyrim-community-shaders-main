@@ -14,7 +14,8 @@
 namespace Raindrop
 {
 	static const float Radius = 0.003 / GAME_UNIT_TO_M;
-	static const float MinimumRadiusPixels = 1.0;  // Smaller drops widen to this and fade by the area they gained
+	static const float MinimumRadiusPixels = 1.0;   // Smaller drops widen to this and fade by the area they gained
+	static const float CoverageFadeExponent = 0.5;  // Below 1 keeps widened sub-pixel drops more visible than strict area conservation
 }
 #endif
 
@@ -107,14 +108,14 @@ VS_OUTPUT main(VS_INPUT input)
 	if (SharedData::rainRefractionSettings.Enable) {
 		// Physically sized drop, centered on the vanilla streak and stretched along its motion
 		float2 corner = sign(input.TexCoord1.xy);
-		float3 motion = Velocity.xyz * abs(input.TexCoord1.y) * SharedData::rainRefractionSettings.MotionStretch;
+		float3 motion = Velocity.xyz * abs(input.TexCoord1.y) * SharedData::rainRefractionSettings.LengthScale * SharedData::rainRefractionSettings.MotionStretch;
 		float4 center = msPosition - float4(Velocity.xyz * 0.5, 0);
 		float4 leading = mul(WorldViewProj, center + float4(motion * 0.5, 0));
 		float4 trailing = mul(WorldViewProj, center - float4(motion * 0.5, 0));
 		float4 dropPosition = lerp(trailing, leading, corner.y * 0.5 + 0.5);
 
 		float2 renderSize = SharedData::BufferDim.xy * FrameBuffer::DynamicResolutionParams1.xy;
-		float2 radiusClip = Raindrop::Radius * SharedData::rainRefractionSettings.TextureRadiusScale * abs(float2(FrameBuffer::CameraProj[0][0], FrameBuffer::CameraProj[1][1]));
+		float2 radiusClip = Raindrop::Radius * SharedData::rainRefractionSettings.TextureRadiusScale * float2(SharedData::rainRefractionSettings.WidthScale, 1.0) * abs(float2(FrameBuffer::CameraProj[0][0], FrameBuffer::CameraProj[1][1]));
 		float2 radiusPixels = radiusClip * renderSize * 0.5 / max(abs(dropPosition.w), EPSILON_DIVISION);
 		float rasterScale = max(1.0, Raindrop::MinimumRadiusPixels / max(min(radiusPixels.x, radiusPixels.y), EPSILON_DIVISION));
 		float2 motionPixels = (leading.xy / max(abs(leading.w), EPSILON_DIVISION) - trailing.xy / max(abs(trailing.w), EPSILON_DIVISION)) * renderSize * 0.5;
@@ -125,7 +126,7 @@ VS_OUTPUT main(VS_INPUT input)
 		float motionLength = length(motionPixels);
 		float dropArea = Math::PI * radius * radius + 2.0 * radius * motionLength;
 		float rasterArea = Math::PI * rasterRadius * rasterRadius + 2.0 * rasterRadius * motionLength;
-		vsout.RaindropData.z = saturate(dropArea / max(rasterArea, EPSILON_DIVISION));
+		vsout.RaindropData.z = pow(saturate(dropArea / max(rasterArea, EPSILON_DIVISION)), Raindrop::CoverageFadeExponent);
 
 		vsout.Position = dropPosition;
 		vsout.Position.xy += corner * radiusClip * rasterScale;

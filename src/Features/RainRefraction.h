@@ -30,6 +30,8 @@ public:
 
 	static constexpr float kMinMotionStretch = 0.01f;
 	static constexpr float kMaxMotionStretch = 3.0f;
+	static constexpr float kReferenceParticleSizeX = 0.8f;  ///< Particle Size X at which a drop keeps its physical width
+	static constexpr float kReferenceParticleSizeY = 3.0f;  ///< Particle Size Y at which Effects 11's MotionStretch alone sets the streak length
 
 	/** @brief User settings, used while Effects 11 is not active; mirrors the preset's [RAIN] Enable, MotionStretch and MotionTransparency. */
 	struct Settings
@@ -45,10 +47,11 @@ public:
 		uint Enable;
 		float MotionStretch;
 		float MotionTransparency;
-		float pad0;
+		float WidthScale = 1.0f;             ///< Drop width relative to the reference form's Particle Size X; 1 unless managed by Effects 11
 		float4 TextureBounds{ 0, 0, 1, 1 };  ///< UV rectangle of the raindrop texture's alpha coverage
 		float2 TextureRadiusScale{ 1, 1 };   ///< Billboard half-extents per unit drop radius
-		float2 pad1{};
+		float LengthScale = 1.0f;            ///< Multiplies the vertex Particle Size Y in the streak length; 1 / reference size Y while managed by Effects 11
+		float pad1{};
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 

@@ -87,6 +87,16 @@ namespace
 		logger::info("[Rain Refraction] Loaded raindrop texture: {} ({}x{}, BC7, {} mips)", a_path.string(), metadata.width, metadata.height, metadata.mipLevels);
 		return result;
 	}
+
+	/** @brief Current weather's Particle Size X relative to RainRefraction::kReferenceParticleSizeX; 1 when it has no precipitation. */
+	float GetFormWidthScale()
+	{
+		auto* weather = globals::game::sky ? globals::game::sky->currentWeather : nullptr;
+		auto* precipitation = weather ? weather->precipitationData : nullptr;
+		if (!precipitation)
+			return 1.0f;
+		return precipitation->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleSizeX).f / RainRefraction::kReferenceParticleSizeX;
+	}
 }
 
 #define I18N_KEY_PREFIX "feature.rain_refraction."
@@ -191,6 +201,8 @@ RainRefraction::PerFrame RainRefraction::GetCommonBufferData()
 		data.Enable = settingManager.GetValue<bool>(EffectManager::GetSingleton().ids.enableRain);
 		data.MotionStretch = settingManager.GetInterpolatedTimeOfDayValue("MotionStretch", "RAIN");
 		data.MotionTransparency = settingManager.GetInterpolatedTimeOfDayValue("MotionTransparency", "RAIN");
+		data.WidthScale = GetFormWidthScale();
+		data.LengthScale = 1.0f / kReferenceParticleSizeY;
 	}
 	data.Enable = data.Enable && GetRaindropSRV() && alphaBlendState;
 	const auto& footprint = IsManagedByENB() && presetRaindrops.srv ? presetRaindrops.footprint : defaultRaindrops.footprint;
