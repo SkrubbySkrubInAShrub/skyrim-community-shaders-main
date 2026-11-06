@@ -244,7 +244,9 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(OFFSET_DEPTH)
-	vsout.PositionCS.z += 10.0;
+	// Push terrain a fixed view distance back, past Terrain Blending's 10-unit fade; a constant clip-z offset scales with distance
+	static const float TerrainDepthOffset = 20.0;
+	vsout.PositionCS.z -= FrameBuffer::CameraProj[2][3] * TerrainDepthOffset / (vsout.PositionCS.w + TerrainDepthOffset);
 #	endif
 
 	return vsout;

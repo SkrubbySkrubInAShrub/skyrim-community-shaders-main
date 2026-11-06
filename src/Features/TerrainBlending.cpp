@@ -103,6 +103,10 @@ void TerrainBlending::SetupResources()
 		uavDesc.Format = texDesc.Format;
 		blendedDepthTexture->CreateUAV(uavDesc);
 
+		prepassDepthTexture = new Texture2D(texDesc, "TerrainBlending::PrepassDepth");
+		prepassDepthTexture->CreateSRV(srvDesc);
+		prepassDepthTexture->CreateUAV(uavDesc);
+
 		texDesc.Format = DXGI_FORMAT_R16_UNORM;
 		srvDesc.Format = texDesc.Format;
 		uavDesc.Format = texDesc.Format;
@@ -207,7 +211,7 @@ void TerrainBlending::BlendPrepassDepths()
 		ID3D11ShaderResourceView* views[2] = { depthSRVBackup, terrainDepth.depthSRV };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11UnorderedAccessView* uavs[2] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get() };
+		ID3D11UnorderedAccessView* uavs[3] = { blendedDepthTexture->uav.get(), blendedDepthTexture16->uav.get(), prepassDepthTexture->uav.get() };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		context->CSSetShader(GetDepthBlendShader(), nullptr, 0);
@@ -220,7 +224,7 @@ void TerrainBlending::BlendPrepassDepths()
 	ID3D11ShaderResourceView* views[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
-	ID3D11UnorderedAccessView* uavs[2] = { nullptr, nullptr };
+	ID3D11UnorderedAccessView* uavs[3] = { nullptr, nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 	ID3D11ComputeShader* shader = nullptr;
@@ -229,12 +233,9 @@ void TerrainBlending::BlendPrepassDepths()
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
 	stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
-	auto renderer = globals::game::renderer;
-	auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-
-	globals::profiler->BeginPass("TerrainBlending::CopyDepth");
-	context->CopyResource(terrainDepth.texture, mainDepth.texture);
-	globals::profiler->EndPass();
+	// Bound before the main pass, since far terrain renders in the vanilla batch
+	auto prepassDepthSRV = prepassDepthTexture->srv.get();
+	context->PSSetShaderResources(55, 1, &prepassDepthSRV);
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
@@ -302,6 +303,12 @@ void TerrainBlending::Hooks::Main_RenderDepth::thunk(bool a1, bool a2)
 	}
 }
 
+bool TerrainBlending::IsNearTerrain(const RE::BSRenderPass* a_pass) const
+{
+	const auto geometry = a_pass->geometry;
+	return !geometry || geometry->worldBound.center.GetDistance(eyePosition) - geometry->worldBound.radius <= NEAR_TERRAIN_DISTANCE;
+}
+
 void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::BSRenderPass* a_pass, uint32_t a_technique, bool a_alphaTest, uint32_t a_renderFlags)
 {
 	auto& singleton = globals::features::terrainBlending;
@@ -310,13 +317,7 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 	if (shaderCache->IsEnabled() && singleton.settings.Enabled) {
 		if (singleton.renderDepth) {
 			// Entering or exiting terrain depth section
-			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
-
-			if (inTerrain && a_pass->geometry) {
-				if ((a_pass->geometry->worldBound.center.GetDistance(singleton.eyePosition) - a_pass->geometry->worldBound.radius) > 1024.0f) {
-					inTerrain = false;
-				}
-			}
+			bool inTerrain = a_pass->shaderProperty && a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape) && singleton.IsNearTerrain(a_pass);
 
 			if (singleton.renderTerrainDepth != inTerrain) {
 				if (!inTerrain)
@@ -333,9 +334,12 @@ void TerrainBlending::Hooks::BSBatchRenderer__RenderPassImmediately::thunk(RE::B
 			if (auto shaderProperty = a_pass->shaderProperty) {
 				if (a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
 					if (shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape)) {
-						RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
-						singleton.terrainRenderPasses.push_back(call);
-						return;
+						// Far terrain has no depth offset, so it always resolves opaque: leave it in the vanilla batch
+						if (singleton.IsNearTerrain(a_pass)) {
+							RenderPass call{ a_pass, a_technique, a_alphaTest, a_renderFlags };
+							singleton.terrainRenderPasses.push_back(call);
+							return;
+						}
 					}
 
 					// Detect meshes which should not get terrain blending using an unused flag (kNoTransparencyMultiSample)
@@ -373,8 +377,6 @@ void TerrainBlending::RenderTerrainBlendingPasses()
 	auto context = globals::d3d::context;
 	auto shadowState = globals::game::shadowState;
 	auto stateUpdateFlags = globals::game::stateUpdateFlags;
-
-	context->PSSetShaderResources(55, 1, &terrainDepth.depthSRV);
 
 	const uint64_t terrainPassCount = static_cast<uint64_t>(terrainRenderPasses.size());
 	const uint64_t noBlendPassCount = static_cast<uint64_t>(renderPasses.size());

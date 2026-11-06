@@ -68,6 +68,12 @@ public:
 
 	RE::NiPoint3 eyePosition;
 
+	/** @brief Terrain within this distance of the eye gets the depth offset and blends; beyond it terrain renders opaque. */
+	static constexpr float NEAR_TERRAIN_DISTANCE = 1024.0f;
+
+	/** @brief Returns whether a terrain pass is close enough to the eye to blend with objects. */
+	bool IsNearTerrain(const RE::BSRenderPass* a_pass) const;
+
 	struct RenderPass
 	{
 		RE::BSRenderPass* a_pass;
@@ -86,11 +92,13 @@ public:
 	void ResetDepth();
 	/** @brief Restores the original vertex shader and marks render targets dirty after terrain depth rendering. */
 	void ResetTerrainDepth();
-	/** @brief Blends the main and terrain depth buffers using a compute shader dispatch. */
+	/** @brief Blends the main and terrain depth buffers and copies the prepass depth for the terrain shader, in one compute dispatch. */
 	void BlendPrepassDepths();
 
 	Texture2D* blendedDepthTexture = nullptr;
 	Texture2D* blendedDepthTexture16 = nullptr;
+	/** @brief Prepass depth (objects and offset near terrain) the terrain shader blends against, written by the blend CS. */
+	Texture2D* prepassDepthTexture = nullptr;
 
 	RE::BSGraphics::DepthStencilData terrainDepth;
 
