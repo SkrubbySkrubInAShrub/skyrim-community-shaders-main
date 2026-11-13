@@ -333,7 +333,6 @@ void HistogramAutoExposure::ClearShaderCache()
 			}
 	}
 
-	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/HistogramAutoExposure");
 	CompileComputeShaders();
 }
 
