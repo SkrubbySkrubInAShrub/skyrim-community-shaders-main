@@ -550,7 +550,8 @@ bool ViewAtmosphere::CompositeEnabled()
 		return false;
 	const auto& sky = globals::features::physicalSky;
 	const auto& fog = globals::features::exponentialHeightFog;
-	if (!(sky.loaded && sky.cbData.enabled) && !(fog.loaded && fog.settings.enabled))
+	// Without Physical Sky, height fog keeps its in-shader composition
+	if (!sky.IsRendering())
 		return false;
 	if (!mediumShaderRequested) {
 		mediumShaderRequested = true;

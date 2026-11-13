@@ -8,6 +8,7 @@
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
 #include "Globals.h"
+#include "PhysicalSky.h"
 
 #include "../I18n/I18n.h"
 #include <DDSTextureLoader.h>
@@ -87,13 +88,16 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("use_static_ibl_tooltip"), "Uses pre-baked static IBL cubemap textures for objects rendered outside the game world (e.g. inventory items, loading screens)."));
 	}
-	ImGui::Checkbox(T(TKEY("enable_reflection_fallback"), "Reflection Cubemap Distance Fallback"), (bool*)&settings.EnableReflectionFallback);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("enable_reflection_fallback_tooltip"), "Fades the dynamic environment IBL toward the ReflectionsCubemap-only IBL at distance, matching Water's reflection cubemap distance fallback."));
-	}
-	ImGui::SliderFloat(T(TKEY("reflection_fallback_distance"), "Reflection Fallback Distance"), &settings.ReflectionFallbackDistance, 0.0f, 100000.0f, "%.0f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("reflection_fallback_distance_tooltip"), "Distance at which IBL is fully transitioned to the ReflectionsCubemap-only contribution."));
+	{
+		auto _ = Util::DisableGuard(!globals::features::physicalSky.IsRendering());
+		ImGui::Checkbox(T(TKEY("enable_reflection_fallback"), "Reflection Cubemap Distance Fallback"), (bool*)&settings.EnableReflectionFallback);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("enable_reflection_fallback_tooltip"), "Fades the dynamic environment IBL toward the ReflectionsCubemap-only IBL at distance, matching Water's reflection cubemap distance fallback."));
+		}
+		ImGui::SliderFloat(T(TKEY("reflection_fallback_distance"), "Reflection Fallback Distance"), &settings.ReflectionFallbackDistance, 0.0f, 100000.0f, "%.0f");
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("reflection_fallback_distance_tooltip"), "Distance at which IBL is fully transitioned to the ReflectionsCubemap-only contribution."));
+		}
 	}
 	ImGui::SliderFloat(T(TKEY("fog_mix"), "Fog Mix"), &settings.FogAmount, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -144,7 +148,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.SkyIBLSaturation = settings.SkyIBLSaturation,
 		.FogAmount = settings.FogAmount,
 		.DALCMode = settings.DALCMode,
-		.EnableReflectionFallback = settings.EnableReflectionFallback,
+		.EnableReflectionFallback = settings.EnableReflectionFallback && globals::features::physicalSky.IsRendering(),
 		.ReflectionFallbackDistance = settings.ReflectionFallbackDistance,
 		.ENBSkyFalloff = globals::features::effects11.OwnsFeature(E11Handoff::Feature::IBL)
 	};

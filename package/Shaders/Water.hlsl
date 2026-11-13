@@ -967,7 +967,9 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 		return fresnel * SharedData::enbSettings.WaterReflectionAmount;
 	}
 
-	return GetWaterFresnel(dot(-viewDirection, actualNormal));
+	if (SharedData::physSkyData.enabled)
+		return GetWaterFresnel(dot(-viewDirection, actualNormal));
+	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
 }
 
 struct DiffuseOutput
@@ -1068,13 +1070,12 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 	if (Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)
 		return 0.0.xxx;
 
-	float lightDistribution = GetWaterDeltaLightDistributionFromCos(normal, viewDirection, SunDir.xyz, GetWaterSunDiskCos());
-
 	float3 sunColor = Color::DirectionalLight(ColorManagement::SRGBToWorking(SunColor.xyz)) * SunDir.w * (1.0 - exp(-DeepColor.w));
 #				if defined(PHYSICAL_SKY)
-	if (SharedData::physSkyData.enabled)
+	if (SharedData::physSkyData.enabled) {
 		sunColor *= PhysSky::SampleTr(normalize(reflect(viewDirection, normal)), DepthSampler);
-	sunColor *= PhysSky::GetDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust.xyz, DepthSampler, true);
+		sunColor *= PhysSky::GetDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust.xyz, DepthSampler, true);
+	}
 #				endif
 
 #				if defined(EXP_HEIGHT_FOG)
@@ -1082,7 +1083,12 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
 #				endif
-	return lightDistribution * sunColor * GetWaterDirectSpecularScale();
+	if (SharedData::physSkyData.enabled)
+		return GetWaterDeltaLightDistributionFromCos(normal, viewDirection, SunDir.xyz, GetWaterSunDiskCos()) * sunColor * GetWaterDirectSpecularScale();
+
+	float3 reflectionDirection = reflect(viewDirection, normal);
+	float reflectionMul = VarAmounts.x > 0 ? exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz)))) : 1.0;
+	return reflectionMul * sunColor;
 #			endif
 }
 #		endif
